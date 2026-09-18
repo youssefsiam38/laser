@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-18T08:25:00+03:00 · orchestrator-2026-09-18 · HEAD: f5d4b2dd
+**Last updated:** 2026-09-18T08:35:00+03:00 · orchestrator-2026-09-18 · HEAD: 0ca84b64
 **Current focus:** M16 — finish every agreed repair before publishing 0.9.2; 0.9.1 is public and verified.
 
 | Milestone | State |
@@ -29,7 +29,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none confirmed; release awaits measured interaction evidence and independent review, not configuration assertions.
-**In flight:** T76 reviewed/integrated (full gate pending); T74 image/body accounting review corrections; T75 scope-foundation review corrections; T70 independent review/final-byte browser proof; T77 tool recovery/ordinary-turn corrections (speculative contention dropped, D-290). Ownership and exact write boundaries: `STATUS_DETAILED.md`.
+**In flight:** T76 reviewed/integrated (full gate pending); T74 image/body accounting review corrections; T75 scope-foundation review corrections; T70 review corrections (full-UI/search/header/focus regressions); T77 tool recovery/ordinary-turn corrections (speculative contention dropped, D-290). Ownership and exact write boundaries: `STATUS_DETAILED.md`.
 **Next up:** T78 pristine agent selection after model choice (same driver owner after T77); remaining T75 routed services and Agents. T79 release waits for the complete batch.
 **Recently done:** T73 packaged native spelling (`d0bbc680`, pointer replacement + dictionary after-state proof); T72 history paging gate (`015d2ff3`); T71 deterministic naming gate (`f7113316`); T69 geometric auto-follow (`73eec455`); T68 autonomous goal policy (`bc5531a2`).
 
