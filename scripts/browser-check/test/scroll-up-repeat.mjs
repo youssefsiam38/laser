@@ -33,10 +33,28 @@ export default async function scrollUpRepeat(check) {
   }
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('textbox', { name: 'Message', exact: true }).waitFor();
-  if (phone) await page.getByRole('button', { name: 'Sessions', exact: true }).click();
-  await page.locator('[data-slot=aui_thread-list-item-trigger]').filter({ hasText: name }).first().click();
-  await page.getByRole('main').getByRole('heading', { name, exact: true }).waitFor();
+  await page.evaluate(() => { window.__laserScrollTrace = []; });
+  const openSession = async (title) => {
+    if (phone) await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+    await page.locator('[data-slot=aui_thread-list-item-trigger]').filter({ hasText: title }).first().click();
+    await page.getByRole('main').getByRole('heading', { name: title, exact: true }).waitFor();
+  };
+  await openSession(name);
   if (real) await page.waitForTimeout(1500); else await page.getByText('Checkpoint 1000 is complete.', { exact: true }).waitFor();
+  // A person's second visit paints from this device's cache before the
+  // authoritative window answers (RP-11): open something else and come back,
+  // so the estimate is first made from a provisional view and then re-made.
+  const cadence = /^(\d+):(\d+)$/.exec(process.env.CADENCE ?? '');
+  if (cadence) {
+    const other = (await check.rpc('pi/session/list', { cwd: seeded.project })).sessions.find(s => s.path !== seeded.path && !s.path.includes('real-'))?.path;
+    if (other) {
+      await check.rpc('pi/session/rename', { path: other, name: `Other ${label}` });
+      await openSession(`Other ${label}`);
+      await page.waitForTimeout(500);
+      await openSession(name);
+      await page.waitForTimeout(1500);
+    }
+  }
   const viewport = page.locator('[data-slot=thread-viewport]');
   const initialGeometry = await viewport.evaluate(el => {
     const reserveHeight = document.querySelector('[data-slot="history-reserve"]')?.getBoundingClientRect().height ?? 0;
@@ -163,7 +181,71 @@ export default async function scrollUpRepeat(check) {
   // the page to arrive and the viewport's reading window to close (SLOW=1),
   // or the trackpad bursts the blank-window check uses.
   const slow = process.env.SLOW === '1';
-  for (let round = 0; round < (slow || real ? 400 : 120) && !pageErrors.length; round++) {
+  const notches = [];
+  const drainTrace = () => page.evaluate(() => { const t = window.__laserScrollTrace ?? []; window.__laserScrollTrace = []; return t.map(w => ({ ...w, stack: String(w.stack).split('\n').slice(1, 6).map(l => l.trim().replace(/^at /, '').replace(/\s*\(.*$/, '')).join(' < ') })); });
+  const historyBefore = () => page.evaluate(() => {
+    const element = document.querySelector('[data-slot="thread-viewport"]');
+    const key = element && Object.keys(element).find(n => n.startsWith('__reactFiber$'));
+    let fiber = key ? element[key] : undefined;
+    while (fiber) {
+      const store = fiber.memoizedProps?.value;
+      try { const snap = store && typeof store.getSnapshot === 'function' ? store.getSnapshot() : undefined; const view = snap?.current ? snap.open?.[snap.current] : undefined; if (view) return { before: view.history?.before ?? null, userOffset: view.history?.userOffset ?? null, complete: view.history?.complete ?? null }; } catch { /* other provider */ }
+      fiber = fiber.return;
+    }
+    return undefined;
+  });
+  if (cadence) {
+    // The person's own cadence: one plain notch, then the pause in which the
+    // app does whatever it does. Between the two samples nothing but the app
+    // moved the viewport, and the notch itself only ever moved it up.
+    const step = Number(cadence[1]), pause = Number(cadence[2]);
+    await drainTrace();
+    for (let round = 0; round < 400 && !pageErrors.length; round++) {
+      const before = await geometry();
+      const history = await historyBefore();
+      const busyBefore = await page.evaluate(() => window.__earlierHistory.pages);
+      await upward(step);
+      // The notch itself lands within a frame; from `mid` on, only the app moves anything.
+      await page.waitForTimeout(40);
+      const mid = await geometry();
+      await page.waitForTimeout(pause - 40);
+      const after = await geometry();
+      const busyAfter = await page.evaluate(() => window.__earlierHistory.pages);
+      const writes = await drainTrace();
+      const record = { round, before: { top: Math.round(before.top), height: Math.round(before.height), reserve: Math.round(before.reserve) }, mid: { top: Math.round(mid.top), height: Math.round(mid.height), reserve: Math.round(mid.reserve) }, after: { top: Math.round(after.top), height: Math.round(after.height), reserve: Math.round(after.reserve) }, history, pages: busyAfter - busyBefore, writes: writes.map(w => `${Math.round(w.from)}->${Math.round(w.to)} r${Math.round(w.reserve)}${w.following ? ' F' : ''}${w.page ? ' P' : ''} :: ${w.stack}`), row: await visible() };
+      notches.push(record);
+      if (process.env.TRACE) console.log(`notch ${round}: ${record.before.top}/${record.before.height} r${record.before.reserve} -> ${record.mid.top} -> ${record.after.top}/${record.after.height} r${record.after.reserve} pages=${record.pages} row=${record.row}${record.writes.length ? '\n    ' + record.writes.join('\n    ') : ''}`);
+      // A local host can land the page inside the notch's own frame; then the
+      // only allowed increase is, again, the range the page added above.
+      assert.ok(mid.top <= before.top + Math.max(0, mid.height - before.height) + 1, `notch ${round}: the notch itself moved the reader down (${record.before.top}/${record.before.height} -> ${record.mid.top}/${record.mid.height})`);
+      if (mid.top > before.top + 1) record.surplusInNotch = Math.round(mid.height - before.height);
+      const app = after.top - mid.top;
+      const surplus = Math.max(0, after.height - mid.height);
+      // Scrolling up never moves the reader down. A page taller than the
+      // estimate it replaces grows the range and moves the *thumb* by exactly
+      // that growth while the row on screen stays put (invariant 2); anything
+      // else is the app throwing the reader.
+      const held = after.anchorId && after.anchorId === mid.anchorId ? Math.abs(after.anchorScreen - mid.anchorScreen) <= 1 : undefined;
+      if (app > 1) record.surplus = Math.round(surplus);
+      if (app > 1) assert.ok(Math.abs(app - surplus) <= 1 && held !== false,
+        `notch ${round}: the app moved the reader down ${Math.round(app)}px (range +${Math.round(surplus)}px, row ${after.anchorId} ${held === undefined ? 'changed' : held ? 'held' : 'moved'}) (${record.mid.top}/${record.mid.height} r${record.mid.reserve} -> ${record.after.top}/${record.after.height} r${record.after.reserve})\n  ${record.writes.join('\n  ')}`);
+      if (held === false) assert.fail(`notch ${round}: the row on screen moved ${Math.round(after.anchorScreen - mid.anchorScreen)}px on its own\n  ${record.writes.join('\n  ')}`);
+      // A notch at the top of the range with earlier history remaining asks for it.
+      if (before.top <= 0 && history?.before) assert.ok(record.pages > 0 || after.reserve !== before.reserve || after.height !== before.height,
+        `notch ${round}: at the top with earlier history remaining, nothing was asked for (${JSON.stringify(history)})`);
+      const mounted = await rows();
+      const seen = mounted.map(r => r.n).filter(Boolean);
+      const now = await visible();
+      if (now && trail.length && Number(now) > Number(trail.at(-1)) + 1) problems.push(`notch ${round}: view jumped back from checkpoint ${trail.at(-1)} to ${now}`);
+      trail.push(now);
+      oldest = seen[0];
+      if (placeholderShot) await placeholderShot;
+      if (after.top <= 0 && !history?.before && after.reserve === 0) break;
+    }
+    writeFileSync(join(check.root, `cadence-${label}.json`), JSON.stringify(notches, null, 2));
+    console.log('cadence evidence:', JSON.stringify({ notches: notches.length, pages: notches.reduce((n, r) => n + r.pages, 0), thumbMovedBySurplus: notches.filter(r => r.surplus !== undefined || r.surplusInNotch !== undefined).map(r => ({ round: r.round, surplus: r.surplus ?? r.surplusInNotch })), first: trail[0], last: trail.at(-1) }));
+  }
+  for (let round = 0; round < (cadence ? 0 : slow || real ? 400 : 120) && !pageErrors.length; round++) {
     if (slow || real) {
       const before = await geometry();
       await upward(500);
@@ -251,7 +333,7 @@ export default async function scrollUpRepeat(check) {
   await check.shot(`scroll-repeat-${label}`);
   assert.equal(pageErrors.length, 0, pageErrors.join('\n'));
   assert.deepEqual(problems, [], problems.join('\n'));
-  if (real) {
+  if (real && !cadence) {
     assert.ok(initialGeometry.reserveHeight > 0, 'the real conversation did not expose unloaded-history range');
     assert.ok(initialGeometry.height > initialGeometry.loadedHeight, 'the real thumb described only loaded rows');
     assert.equal(finalGeometry.top, 0, 'the real conversation did not reach its beginning');
@@ -262,7 +344,7 @@ export default async function scrollUpRepeat(check) {
     assert.ok(initialGeometry.height > finalGeometry.height * 0.2, `real initial range ${initialGeometry.height}px understated loaded history ${finalGeometry.height}px beyond the documented bound`);
     assert.ok(initialGeometry.height < finalGeometry.height * 8, `real initial range ${initialGeometry.height}px overstated loaded history ${finalGeometry.height}px beyond the documented bound`);
   }
-  if (!real && !slow) {
+  if (!real && !slow && !cadence) {
     assert.equal(oldest, '1');
     assert.equal(finalGeometry.top, 0, 'the scrollbar reaches the real beginning');
     assert.equal(finalGeometry.reserve, 0, 'no unloaded range remains at the real beginning');
@@ -278,6 +360,7 @@ export default async function scrollUpRepeat(check) {
     assert.ok(mark.afterBusyMs !== null && mark.afterBusyMs >= finalGeometry.motionSlow - 20,
       `the overdue mark appeared ${mark.afterBusyMs}ms into a page, before the ${finalGeometry.motionSlow}ms threshold`);
   }
+  if (cadence) { assert.deepEqual(problems, [], problems.join('\n')); assert.equal(finalGeometry.top, 0, 'the cadence lane reached the beginning'); assert.equal(finalGeometry.reserve, 0, 'no unloaded range remains at the beginning'); }
   if (slow && !real) assert.ok(trail.length > 100 && Number(trail.at(-1)) < 500, `paced reading covered ${trail.length} notches down to checkpoint ${trail.at(-1)}`);
   const worstAnchor = anchorDeltas.reduce((worst, delta) => Math.max(worst, Math.abs(delta)), 0);
   console.log('scroll-up evidence:', JSON.stringify({ rounds: trail.length, first: trail[0], last: trail.at(-1), arrivals: arrivals.length,

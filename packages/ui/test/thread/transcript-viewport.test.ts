@@ -1083,15 +1083,16 @@ describe("upward reading geometry", () => {
     let ids = [...options.ids];
     const heights = new Map<string, number>();
     const heightOf = (id: string) => heights.get(id) ?? options.height(id);
-    Object.defineProperties(viewport, { clientHeight: { value: options.clientHeight }, scrollHeight: { get: () => controller.reserveHeight + controller.heights.total } });
+    let above = 0;
+    Object.defineProperties(viewport, { clientHeight: { value: options.clientHeight }, scrollHeight: { get: () => above + controller.reserveHeight + controller.heights.total } });
     viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, options.clientHeight);
-    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, controller.reserveHeight + controller.heights.total);
+    content.getBoundingClientRect = () => new DOMRect(0, above - viewport.scrollTop, 600, controller.reserveHeight + controller.heights.total);
     content.style.fontSize = "14px"; content.style.lineHeight = "21px"; content.style.paddingTop = "20px";
     viewport.append(content); document.body.append(viewport); controller.content = content;
     controller.configure(options.path);
     const mount = (id: string) => {
       const row = document.createElement("div"); row.dataset.windowMessage = id;
-      row.getBoundingClientRect = () => new DOMRect(0, controller.reserveHeight + controller.heights.offset(ids.indexOf(id)) - viewport.scrollTop, 600, heightOf(id));
+      row.getBoundingClientRect = () => new DOMRect(0, above + controller.reserveHeight + controller.heights.offset(ids.indexOf(id)) - viewport.scrollTop, 600, heightOf(id));
       content.append(row); nodes.set(id, row); controller.register(id, row);
     };
     controller.setIds(ids);
@@ -1108,6 +1109,8 @@ describe("upward reading geometry", () => {
         arrived.forEach(mount);
       },
       setHeight(id: string, height: number) { heights.set(id, height); },
+      /** What sits above the transcript inside the scroller (the history controls). */
+      setAbove(height: number) { above = height; },
       screenTop: (id: string) => nodes.get(id)!.getBoundingClientRect().top,
       readUp(to: number) {
         viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
@@ -1226,6 +1229,29 @@ describe("upward reading geometry", () => {
       // surplus, never to 0.
       expect(scope.viewport.scrollTop).toBeCloseTo(before - reserve + 1800, -1);
       expect(scope.viewport.scrollTop).toBeGreaterThan(0);
+    } finally { scope.dispose(); }
+  });
+
+  it("invariant 1: the controls above the transcript going away moves nothing on screen", async () => {
+    const scope = rig({ path: "/controls-above", ids: ["a", "b", "c"], height: () => 400, clientHeight: 300 });
+    scope.setAbove(44);
+    scope.controller.setHistoryWindow(2, 2, "cursor-a");
+    try {
+      await scope.step();
+      scope.readUp(44 + scope.controller.reserveHeight + 500);
+      const anchorScreen = scope.screenTop("b");
+      const before = { top: scope.viewport.scrollTop, reserve: scope.controller.reserveHeight };
+      // The last page arrived and the "Load earlier messages" row above the
+      // transcript unmounts in the same commit the cursor goes.
+      scope.controller.beginEarlierPage();
+      scope.setAbove(0);
+      scope.controller.setHistoryWindow(0, 3, undefined);
+      scope.controller.finishEarlierPage(); scope.controller.committed();
+      await scope.step(); await scope.step();
+      expect(Math.abs(scope.screenTop("b") - anchorScreen)).toBeLessThanOrEqual(1);
+      // Both the estimate and the control row left from above the reader.
+      expect(scope.controller.reserveHeight).toBe(0);
+      expect(scope.viewport.scrollTop).toBeCloseTo(before.top - 44 - before.reserve, 0);
     } finally { scope.dispose(); }
   });
 

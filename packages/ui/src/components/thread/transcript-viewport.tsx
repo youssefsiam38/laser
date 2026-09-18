@@ -87,6 +87,12 @@ export class TranscriptViewport {
   /** The last id change kept no part of the previous window: a replacement, not a page. */
   private replacedWindow = false;
   /**
+   * Where the transcript starts inside the scroller, last frame. Whatever sits
+   * above it (the history controls appearing or going) is above the reader
+   * too, and its height change moves them exactly like a row's would.
+   */
+  private contentOffset: number | undefined;
+  /**
    * Compensation the clamp at scrollTop 0 could not spend. Content above the
    * reader can be removed in one commit and replaced in the next — the estimate
    * going before the last page's rows arrive — and without this the truncated
@@ -163,6 +169,7 @@ export class TranscriptViewport {
     }
     this.path = path;
     this.replacedWindow = false;
+    this.contentOffset = undefined;
     this.clampDebt = 0;
     this.deferredRootCollapse = undefined;
     this.reserve.reset();
@@ -330,9 +337,27 @@ export class TranscriptViewport {
     this.clampDebt = target < 0 ? target : 0;
     this.scroll(Math.max(0, target));
   }
+  /**
+   * The height change, since the last frame, of everything above the
+   * transcript inside the scroller. Measured from the DOM, because none of it
+   * is in this controller's model; compensated like any change above the reader.
+   */
+  private aboveTranscriptShift(): number {
+    if (!this.viewport || !this.content) return 0;
+    const now = this.content.getBoundingClientRect().top - this.viewport.getBoundingClientRect().top + this.viewport.scrollTop;
+    const before = this.contentOffset;
+    this.contentOffset = now;
+    if (before === undefined || this.place.following) return 0;
+    const delta = now - before;
+    return Math.abs(delta) >= 0.5 ? delta : 0;
+  }
   private scroll(top: number) {
     if (!this.viewport) return;
     const before = this.viewport.scrollTop;
+    // Read-only attribution for the browser harness: it sets the array, and
+    // every write this controller makes is recorded with its call path.
+    const trace = (globalThis as { __laserScrollTrace?: unknown[] }).__laserScrollTrace;
+    if (Array.isArray(trace)) trace.push({ at: performance.now(), from: before, to: top, reserve: this.reserve.height, following: this.place.following, reading: Boolean(this.reading), page: Boolean(this.earlierPage), anchor: this.place.anchor?.messageId, stack: new Error().stack });
     this.viewport.scrollTop = top;
     if (Math.abs(this.viewport.scrollTop - before) >= 0.5) this.expectedTop = this.viewport.scrollTop;
   }
@@ -464,14 +489,15 @@ export class TranscriptViewport {
     // mounted row is right only when the person is still and no page is settling.
     const anchorRow = this.place.anchor ? this.nodes.get(this.place.anchor.messageId) : undefined;
     const readerHeld = this.viewport && !this.target && !this.place.following;
+    const above = this.aboveTranscriptShift();
     let compensated = false;
     if (readerHeld && anchorIndex !== undefined && anchorBefore !== undefined
-      && (Boolean(this.reading) || !anchorRow || pageDelta !== undefined || this.clampDebt !== 0)) {
+      && (Boolean(this.reading) || !anchorRow || pageDelta !== undefined || this.clampDebt !== 0 || above !== 0)) {
       compensated = true;
-      this.shiftBy(this.globalOffset(anchorIndex) - anchorBefore);
-    } else if (readerHeld && anchorIndex === undefined && (pageDelta !== undefined || Math.abs(this.reserve.height - reserveBefore) >= 0.5)) {
+      this.shiftBy(this.globalOffset(anchorIndex) - anchorBefore + above);
+    } else if (readerHeld && anchorIndex === undefined && (pageDelta !== undefined || above !== 0 || Math.abs(this.reserve.height - reserveBefore) >= 0.5)) {
       compensated = true;
-      this.shiftBy(this.reserve.height - reserveBefore + (pageDelta ?? 0));
+      this.shiftBy(this.reserve.height - reserveBefore + (pageDelta ?? 0) + above);
     }
     if (changed || this.windowDirty) {
       this.windowDirty = false;
@@ -593,11 +619,13 @@ export class TranscriptViewport {
     // pixels the estimate was holding, so the estimate goes in this same frame,
     // compensated, rather than leaving a range that claims unloaded history.
     if (this.collapseDeferredRoot("commit")) this.windowDirty = true;
-    const shift = this.structuralShift;
+    const above = this.aboveTranscriptShift();
+    const shift = this.structuralShift === undefined && above === 0 ? undefined : (this.structuralShift ?? 0) + above;
     this.structuralShift = undefined;
-    // Rows arrived above the anchor in this commit: move by what they take up
-    // now, before anyone sees the frame. `measure` refines that estimate; an
-    // absolute `restore` is safe only after active input has settled.
+    // Rows arrived above the anchor in this commit, or the controls above the
+    // transcript changed: move by what they take up now, before anyone sees
+    // the frame. `measure` refines that estimate; an absolute `restore` is
+    // safe only after active input has settled.
     if (shift !== undefined && this.viewport && !this.target) this.shiftBy(shift);
     // Browser default scrolling updates scrollTop before its scroll event lets
     // capture() move the anchor. A layout commit can land in that gap. Never
