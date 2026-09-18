@@ -192,10 +192,46 @@ describe("a trim while somebody is reading", () => {
     const store = createStateStore(opened());
     hydrateThrough(store, undefined);
     await mount(store, store.presentation);
+    const guidance = [...container.querySelectorAll("span")].find(node => node.textContent?.trim() === "Earlier messages load as you scroll");
+    expect(guidance).toBeDefined();
+    expect(guidance!.closest('[aria-hidden="true"]')).toBeNull();
     const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages");
     expect(button).toBeDefined();
     await act(async () => { button!.click(); await Promise.resolve(); });
     expect(stable.actions.loadEarlierEntries).toHaveBeenCalledOnce();
+  });
+
+  it("exposes one accessible busy status while an earlier page is pending", async () => {
+    const store = createStateStore(opened());
+    hydrateThrough(store, undefined);
+    let settle!: (loaded: boolean) => void;
+    stable.actions.loadEarlierEntries.mockImplementationOnce(() => new Promise<boolean>(resolve => { settle = resolve; }));
+    await mount(store, store.presentation);
+    const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages")!;
+
+    await act(async () => { button.click(); await Promise.resolve(); });
+    const card = container.querySelector('[data-slot="history-reserve-loading"]')!;
+    expect(card).not.toBeNull();
+    const exposed = [...card.querySelectorAll('[role="status"]')].filter(node => !node.closest('[aria-hidden="true"]'));
+    expect(exposed).toHaveLength(1);
+    expect(exposed[0]!.textContent).toContain("Loading earlier messages…");
+    await act(async () => { settle(false); await Promise.resolve(); await Promise.resolve(); });
+  });
+
+  it("releases failed and rejected earlier-page requests so the person can retry", async () => {
+    const store = createStateStore(opened());
+    hydrateThrough(store, undefined);
+    const controller = await mount(store, store.presentation);
+    const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages")!;
+
+    stable.actions.loadEarlierEntries.mockResolvedValueOnce(false);
+    await act(async () => { button.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(controller.loadingEarlier).toBe(false);
+
+    stable.actions.loadEarlierEntries.mockRejectedValueOnce(new Error("fixture transport refusal"));
+    await act(async () => { button.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(controller.loadingEarlier).toBe(false);
+    expect(stable.actions.loadEarlierEntries).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the active logical transcript, focus, place, draft and action identity above soft targets", async () => {

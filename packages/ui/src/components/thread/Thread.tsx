@@ -242,8 +242,14 @@ function EntriesRefresh() {
   return null;
 }
 
+export interface HeldHistoryRecovery {
+  explanation: string;
+  actionLabel: string;
+  reread: () => void | Promise<void>;
+}
+
 /** History is explicit, and upward reading fetches the next complete turn page. */
-export function HistoryControls() {
+export function HistoryControls({ recovery }: { recovery?: HeldHistoryRecovery } = {}) {
   const { actions } = useLaserStable();
   const controller = useTranscriptViewport();
   // While this window is short of memory it will not start a whole-transcript
@@ -252,7 +258,7 @@ export function HistoryControls() {
   const wholeTranscript = useThreadWholeTranscriptRefusal();
   const history = useLaserState(s => s.current ? s.open[s.current]?.history : undefined);
   const root = useRef<HTMLDivElement>(null);
-  const pending = useRef<{ focused?: Element | null } | undefined>(undefined);
+  const pending = useRef<{ focused?: Element | null; page: boolean } | undefined>(undefined);
   const busy = useRef(false);
   const requestedHistory = useRef(false);
   const interacted = useRef(false);
@@ -265,15 +271,27 @@ export function HistoryControls() {
     requestedHistory.current = true;
     setLoading(all ? "all" : "earlier");
     // The controller holds this surface's place across the page it is about to
-    // commit; nothing else needs to remember where the person was reading.
-    controller.capture();
-    pending.current = { focused: root.current?.contains(document.activeElement) ? document.activeElement : null };
+    // commit; nothing else may restore from estimates while that page arrives.
+    if (!all) controller.beginEarlierPage();
+    pending.current = { focused: root.current?.contains(document.activeElement) ? document.activeElement : null, page: !all };
+    let loaded = false;
     try {
-      const loaded = all ? await actions.loadAllEntries() : await actions.loadEarlierEntries();
+      loaded = all ? await actions.loadAllEntries() : await actions.loadEarlierEntries();
       if (loaded) setAnnouncement(all ? "Other versions loaded." : "Earlier messages loaded.");
+    } catch {
+      // The action already owns the person-facing transport error. Locally this
+      // request is a cancellation: release its geometry fence and stay retryable.
+      loaded = false;
     } finally {
       busy.current = false;
       setLoading(null);
+      if (!all) {
+        if (loaded) controller.finishEarlierPage();
+        else {
+          pending.current = undefined;
+          controller.cancelEarlierPage();
+        }
+      }
     }
   }, [actions, controller, deferred, history?.before, history?.branchesUnloaded]);
   useLayoutEffect(() => {
@@ -282,7 +300,11 @@ export function HistoryControls() {
     pending.current = undefined;
     controller.committed();
     if (anchor.focused && !anchor.focused.isConnected && document.activeElement === document.body) root.current?.querySelector("button")?.focus({ preventScroll: true });
-  }, [controller, history?.anchor, history?.complete]);
+    // A deep thumb drag intentionally pages sequentially. Staying inside the
+    // reserve asks for the next page; moving back to loaded rows cancels it.
+    const frame = requestAnimationFrame(() => { if (interacted.current && controller.isReadingHistoryReserve()) void load(); });
+    return () => cancelAnimationFrame(frame);
+  }, [controller, history?.anchor, history?.before, history?.complete, history?.userOffset, load]);
   useEffect(() => {
     const viewport = root.current?.closest<HTMLElement>("[data-slot=thread-viewport]");
     if (!viewport || (!history?.before && !deferred)) return;
@@ -292,39 +314,42 @@ export function HistoryControls() {
       const top = viewport.scrollTop;
       const upwards = top < lastTop;
       lastTop = top;
-      if (upwards && interacted.current && top < viewport.clientHeight / 2) void load();
+      if (interacted.current && upwards && (controller.isReadingHistoryReserve() || (deferred && top < viewport.clientHeight / 2))) void load();
     };
     // Already at the top, the viewport cannot scroll, so no scroll event
     // arrives: reading upwards there produces only the wheel (or a swipe, or
     // the keys). That is the person asking for what comes before.
-    const wheel = (event: WheelEvent) => { note(); if (event.deltaY < 0 && viewport.scrollTop <= 0) void load(); };
+    const wheel = (event: WheelEvent) => { note(); if (event.deltaY < 0 && (controller.isReadingHistoryReserve() || viewport.scrollTop <= 0)) void load(); };
     let touchY: number | undefined;
     const touchstart = (event: TouchEvent) => { touchY = event.touches?.[0]?.clientY; };
     const touchmove = (event: TouchEvent) => {
       note();
       const y = event.touches?.[0]?.clientY;
-      if (y !== undefined && touchY !== undefined && y > touchY + 8 && viewport.scrollTop <= 0) void load();
+      if (y !== undefined && touchY !== undefined && y > touchY + 8 && (controller.isReadingHistoryReserve() || viewport.scrollTop <= 0)) void load();
       touchY = y;
     };
     const keydown = (event: KeyboardEvent) => {
       note();
-      if ((event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home") && viewport.scrollTop <= 0) void load();
+      if ((event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home") && (controller.isReadingHistoryReserve() || viewport.scrollTop <= 0)) void load();
     };
+    viewport.addEventListener("pointerdown", note, { passive: true });
     viewport.addEventListener("wheel", wheel, { passive: true });
     viewport.addEventListener("touchstart", touchstart, { passive: true });
     viewport.addEventListener("touchmove", touchmove, { passive: true });
     viewport.addEventListener("keydown", keydown);
     viewport.addEventListener("scroll", scroll, { passive: true });
     return () => {
+      viewport.removeEventListener("pointerdown", note);
       viewport.removeEventListener("wheel", wheel);
       viewport.removeEventListener("touchstart", touchstart);
       viewport.removeEventListener("touchmove", touchmove);
       viewport.removeEventListener("keydown", keydown);
       viewport.removeEventListener("scroll", scroll);
     };
-  }, [deferred, history?.before, load]);
-  if (!history && !deferred) return null;
-  if (!deferred && !history?.before && !history?.branchesUnloaded && !requestedHistory.current) return null;
+  }, [controller, deferred, history?.before, load]);
+  useEffect(() => () => controller.cancelEarlierPage(), [controller]);
+  if (!history && !deferred && !recovery) return null;
+  if (!deferred && !history?.before && !history?.branchesUnloaded && !requestedHistory.current && !recovery) return null;
   return <div ref={root} className="flex flex-wrap items-center justify-center gap-2 py-2 text-sm text-ink-2" aria-busy={loading !== null}>
     {(deferred || history?.before) && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load()}>
       {loading === "earlier" ? "Loading earlier messages…" : "Load earlier messages"}
@@ -332,6 +357,12 @@ export function HistoryControls() {
     {/* Earlier messages arrive by scrolling up (and through the button above,
         which is the same thing for a keyboard). Only other versions of a prompt
         need asking for: no amount of scrolling reaches a branch. */}
+    {recovery && <span className="flex flex-wrap items-center justify-center gap-2">
+      <span>{recovery.explanation}</span>
+      <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" onClick={() => void recovery.reread()}>
+        {recovery.actionLabel}
+      </Button>
+    </span>}
     {history?.branchesUnloaded && (wholeTranscript.paused
       ? <span data-slot="versions-paused">{wholeTranscript.explanation}</span>
       : <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load(true)}>

@@ -2,6 +2,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { TranscriptViewport } from "../../src/components/thread/transcript-viewport.js";
 import { HeightIndex } from "../../src/components/thread/transcript-window.js";
+import {
+  HistoryReserveModel,
+  estimateHistoryReserve,
+  transitionEarlierPage,
+} from "../../src/components/thread/history-reserve.js";
 
 describe("scoped transcript destinations", () => {
   it("settles cancellation without waiting for an unloaded-entry request", async () => {
@@ -644,6 +649,124 @@ describe("scoped transcript destinations", () => {
     } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); vi.useRealTimers(); }
   });
 
+  it("sizes unloaded history from producer prompt counts and the loaded turn average", async () => {
+    const frames = new Map<number, FrameRequestCallback>(); let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
+    const step = async () => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); await Promise.resolve(); };
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: () => controller.reserveHeight + controller.heights.total } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 600);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, controller.reserveHeight + controller.heights.total);
+    content.style.fontSize = "14px"; content.style.lineHeight = "21px"; content.style.paddingTop = "20px";
+    viewport.append(content); document.body.append(viewport); controller.content = content;
+    controller.configure("/reserve"); controller.setHistoryWindow(6, 2, "before-6"); controller.setIds(["a", "b", "c", "d"]);
+    const detach = controller.attach(viewport);
+    try {
+      await step(); await step();
+      expect(controller.reserveHeight).toBeCloseTo(controller.heights.total / 2 * 6, 5);
+      expect(viewport.scrollHeight).toBeGreaterThan(controller.heights.total);
+    } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); }
+  });
+
+  it("exchanges arrived page height with reserve space without moving the anchor", async () => {
+    const frames = new Map<number, FrameRequestCallback>(); let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
+    const step = async () => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); await Promise.resolve(); };
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    let ids = ["old-a", "old-b", "old-c", "old-d"];
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: () => controller.reserveHeight + controller.heights.total } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 600);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, controller.reserveHeight + controller.heights.total);
+    content.style.fontSize = "14px"; content.style.lineHeight = "21px"; content.style.paddingTop = "20px";
+    viewport.append(content); document.body.append(viewport); controller.content = content;
+    controller.configure("/reserve-page"); controller.setHistoryWindow(8, 2, "before-8"); controller.setIds(ids);
+    const detach = controller.attach(viewport);
+    try {
+      await step(); await step();
+      viewport.scrollTop = controller.reserveHeight; viewport.dispatchEvent(new Event("scroll"));
+      controller.beginEarlierPage();
+      const beforeTop = viewport.scrollTop, beforeTotal = viewport.scrollHeight, beforeReserve = controller.reserveHeight;
+      // The history cursor settles before assistant-ui projects the prepended
+      // messages. The page transaction must span both commits.
+      controller.finishEarlierPage(); controller.committed();
+      expect(controller.loadingEarlier).toBe(true);
+      ids = ["new-a", "new-b", ...ids];
+      controller.setHistoryWindow(6, 3, "before-6"); controller.setIds(ids);
+      const arrived = controller.heights.offset(2);
+      expect(controller.reserveHeight).toBeCloseTo(beforeReserve - arrived, 5);
+      controller.committed(); await step();
+      expect(controller.loadingEarlier).toBe(false);
+      expect(viewport.scrollTop).toBeCloseTo(beforeTop, 5);
+      expect(viewport.scrollHeight).toBeCloseTo(beforeTotal, 5);
+      controller.setHistoryWindow(0, 4, undefined); controller.setIds(ids); controller.committed();
+      expect(controller.reserveHeight).toBe(0);
+    } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); }
+  });
+
+  it("keeps a measured root-page anchor within one pixel on every committed frame", async () => {
+    const frames = new Map<number, FrameRequestCallback>(); let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
+    const step = async () => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); await Promise.resolve(); };
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    let ids = ["old-a", "old-b", "old-c"], heights: Record<string, number> = { "old-a": 120, "old-b": 140, "old-c": 160, "new-a": 80, "new-b": 220 };
+    Object.defineProperties(viewport, { clientHeight: { value: 300 }, scrollHeight: { get: () => controller.reserveHeight + controller.heights.total } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 300);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, viewport.scrollHeight);
+    content.style.fontSize = "14px"; content.style.lineHeight = "21px"; content.style.paddingTop = "20px";
+    viewport.append(content); document.body.append(viewport); controller.content = content;
+    controller.configure("/measured-root"); controller.setIds(ids); controller.setHistoryWindow(1, 1, "cursor");
+    const nodes = new Map<string, HTMLElement>();
+    const mount = (id: string) => {
+      const row = document.createElement("div"); row.dataset.windowMessage = id;
+      row.getBoundingClientRect = () => new DOMRect(0, controller.reserveHeight + controller.heights.offset(ids.indexOf(id)) - viewport.scrollTop, 600, heights[id]!);
+      content.append(row); nodes.set(id, row); controller.register(id, row);
+    };
+    ids.forEach(mount);
+    const detach = controller.attach(viewport);
+    try {
+      await step();
+      viewport.scrollTop = controller.reserveHeight - 40;
+      viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 })); viewport.dispatchEvent(new Event("scroll"));
+      const anchor = controller.capture().anchor!.messageId;
+      const screen = () => nodes.get(anchor)!.getBoundingClientRect().top;
+      const frameTops = [screen()];
+      controller.beginEarlierPage();
+      ids = ["new-a", "new-b", ...ids]; controller.setIds(ids); mount("new-a"); mount("new-b");
+      controller.setHistoryWindow(0, 2, undefined); controller.finishEarlierPage(); controller.committed();
+      frameTops.push(screen());
+      await step(); frameTops.push(screen());
+      for (let index = 1; index < frameTops.length; index++) expect(Math.abs(frameTops[index]! - frameTops[index - 1]!)).toBeLessThanOrEqual(1);
+      expect(controller.loadingEarlier).toBe(false);
+      expect(controller.earlierPageFallbackCount).toBe(0);
+      expect(controller.reserveHeight).toBe(0);
+    } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); }
+  });
+
+  it("never runs absolute restore while an earlier page is committing at root", async () => {
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    let ids = Array.from({ length: 40 }, (_, index) => `old-${index}`);
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: () => controller.reserveHeight + controller.heights.total } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 600);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, controller.reserveHeight + controller.heights.total);
+    content.style.fontSize = "14px"; content.style.lineHeight = "21px"; content.style.paddingTop = "20px";
+    viewport.append(content); document.body.append(viewport); controller.content = content;
+    controller.configure("/page-root"); controller.setHistoryWindow(1, 1, "before-root"); controller.setIds(ids);
+    const detach = controller.attach(viewport);
+    try {
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      viewport.scrollTop = 120; viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+      viewport.scrollTop = 0; viewport.dispatchEvent(new Event("scroll"));
+      controller.beginEarlierPage();
+      ids = [...Array.from({ length: 40 }, (_, index) => `new-${index}`), ...ids];
+      controller.setIds(ids); controller.committed();
+      expect(viewport.scrollTop).toBeLessThanOrEqual(1);
+      expect(controller.capture().following).toBe(false);
+    } finally { detach(); viewport.remove(); }
+  });
+
   it("does not alternate mounted windows when a phone version target evicts the old reading anchor", async () => {
     const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
     const ids = Array.from({ length: 100 }, (_, i) => `row-${i}`), nodes = new Map<string, HTMLElement>();
@@ -743,5 +866,155 @@ describe("scoped transcript destinations", () => {
     const beamPending = beam.ensureVisible({ messageId: "missing" }, { reason: "find", locate: () => new Promise<void>(done => { finish = done; }) });
     main.cancel(); expect(await mainPending).toBe("cancelled");
     finish(); expect(await beamPending).toBe("missing");
+  });
+
+  it("makes cancellation idempotent and accepts settlement before or after the store commit", () => {
+    let cancelled = transitionEarlierPage(undefined, { type: "begin", before: "cursor-a" }).state;
+    const first = transitionEarlierPage(cancelled, { type: "cancel" });
+    expect(first.released).toBe(true);
+    cancelled = first.state;
+    expect(transitionEarlierPage(cancelled, { type: "cancel" }).released).toBe(false);
+
+    for (const order of [["store-change", "commit", "settled"], ["settled", "store-change", "commit"]] as const) {
+      let state = transitionEarlierPage(undefined, { type: "begin", before: "cursor-a" }).state;
+      let released = false;
+      for (const type of order) {
+        const next = transitionEarlierPage(state, { type });
+        state = next.state; released ||= next.released;
+      }
+      expect(released, order.join(" → ")).toBe(true);
+      expect(state, order.join(" → ")).toBeUndefined();
+    }
+  });
+
+  it("pushes a top reader by the exact unabsorbed height of a merged page", async () => {
+    const frames = new Map<number, FrameRequestCallback>(); let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
+    const step = async () => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); await Promise.resolve(); };
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    let ids = ["old-head", "tail"];
+    controller.configure("/merged-page-push"); controller.setIds(ids); controller.setHistoryWindow(1, 1, "cursor-a");
+    Object.defineProperties(viewport, { clientHeight: { value: 300 }, scrollHeight: { get: () => controller.reserveHeight + controller.heights.total } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 300);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, viewport.scrollHeight);
+    content.style.fontSize = "14px"; content.style.lineHeight = "21px"; content.style.paddingTop = "20px";
+    viewport.append(content); document.body.append(viewport); controller.content = content;
+    const detach = controller.attach(viewport);
+    try {
+      await step();
+      viewport.scrollTop = 1; viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
+      viewport.scrollTop = 0; viewport.dispatchEvent(new Event("scroll"));
+      controller.beginEarlierPage();
+      ids = ["page-a", "page-b", "page-c", ...ids]; controller.setIds(ids);
+      controller.setHistoryWindow(1, 1, "cursor-b"); controller.finishEarlierPage(); controller.committed(); await step();
+      expect(controller.reserveHeight).toBe(1);
+
+      viewport.scrollTop = 0; viewport.dispatchEvent(new Event("scroll")); controller.capture();
+      const before = { top: viewport.scrollTop, height: viewport.scrollHeight };
+      controller.beginEarlierPage();
+      ids = ["merged-head", "tail"]; controller.setIds(ids);
+      const merged = document.createElement("div");
+      merged.getBoundingClientRect = () => new DOMRect(0, controller.reserveHeight - viewport.scrollTop, 600, 900);
+      content.append(merged); controller.register("merged-head", merged);
+      controller.setHistoryWindow(0, 1, undefined); controller.finishEarlierPage(); controller.committed();
+      await step();
+      const after = { top: viewport.scrollTop, height: viewport.scrollHeight };
+      expect(after.height).toBeGreaterThanOrEqual(before.height - 1);
+      expect(Math.abs((after.top - before.top) - (after.height - before.height))).toBeLessThanOrEqual(1);
+      expect(controller.earlierPageFallbackCount).toBe(0);
+    } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); }
+  });
+
+  it("releases after page commits that merge, replace, retain a cursor, or change metadata", () => {
+    for (const shape of ["merged", "replacement", "same-cursor", "metadata"] as const) {
+      const controller = new TranscriptViewport();
+      controller.configure(`/release-${shape}`);
+      controller.setIds(["old-head", "old-tail"]);
+      controller.setHistoryWindow(1, 1, "cursor-a");
+      controller.beginEarlierPage();
+      if (shape === "merged") controller.setIds(["merged-head", "old-tail"]);
+      else if (shape === "replacement") controller.setIds(["replacement-head"]);
+      else if (shape === "same-cursor") controller.setIds(["new-head", "old-head", "old-tail"]);
+      controller.setHistoryWindow(shape === "metadata" ? 2 : 1, shape === "metadata" ? 2 : 1, shape === "merged" || shape === "replacement" ? "cursor-b" : "cursor-a");
+      controller.finishEarlierPage();
+      controller.committed();
+      expect(controller.loadingEarlier, shape).toBe(false);
+      expect(controller.earlierPageFallbackCount, shape).toBe(0);
+    }
+  });
+
+  it("cancels an earlier-page transaction on explicit cancellation, path change and unmount", () => {
+    const controller = new TranscriptViewport(), viewport = document.createElement("div");
+    controller.configure("/cancel"); controller.beginEarlierPage(); controller.cancelEarlierPage();
+    expect(controller.loadingEarlier).toBe(false);
+    controller.beginEarlierPage(); controller.configure("/path");
+    expect(controller.loadingEarlier).toBe(false);
+    const detach = controller.attach(viewport);
+    controller.beginEarlierPage(); detach();
+    expect(controller.loadingEarlier).toBe(false);
+    expect(controller.earlierPageFallbackCount).toBe(0);
+  });
+
+  it("keeps the geometric live edge while an earlier page arrives above", () => {
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    let ids = ["old-a", "old-b", "old-c", "old-d"];
+    controller.configure("/live-page"); controller.setIds(ids); controller.setHistoryWindow(1, 1, "cursor-a");
+    controller.heights = new HeightIndex(ids.map(() => 300));
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, scrollHeight: { get: () => controller.reserveHeight + controller.heights.total } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 600);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, viewport.scrollHeight);
+    viewport.append(content); document.body.append(viewport);
+    controller.content = content; viewport.scrollTop = viewport.scrollHeight - viewport.clientHeight;
+    const detach = controller.attach(viewport);
+    try {
+      controller.beginEarlierPage();
+      ids = ["new-a", "new-b", ...ids]; controller.setIds(ids);
+      controller.setHistoryWindow(0, 2, "cursor-b");
+      controller.finishEarlierPage(); controller.committed();
+      expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThanOrEqual(1);
+      expect(controller.capture().following).toBe(true);
+      expect(controller.earlierPageFallbackCount).toBe(0);
+    } finally { detach(); viewport.remove(); }
+  });
+
+  it("keeps a nonzero page-based reserve while a cursor remains with one prompt", () => {
+    const estimate = estimateHistoryReserve({ hasBefore: true, userOffset: 1, loadedUserTurns: 1, loadedHeight: 400, rowEstimate: 100, lastPageHeight: 0 });
+    expect(estimate).toBe(400);
+    const reserve = new HistoryReserveModel();
+    reserve.configure({ hasBefore: true, userOffset: 1, loadedUserTurns: 1, loadedHeight: 400, rowEstimate: 100, rows: 4 });
+    reserve.startReading();
+    const initial = reserve.height;
+    const initialRange = initial + 400;
+    const arrivedHeight = initial * 2;
+    reserve.arrived(arrivedHeight);
+    expect(reserve.height).toBe(1);
+    expect(reserve.height + 400 + arrivedHeight).toBeGreaterThanOrEqual(initialRange);
+    reserve.configure({ hasBefore: false, userOffset: 0, loadedUserTurns: 2, loadedHeight: 400 + arrivedHeight, rowEstimate: 100, rows: 8 });
+    expect(reserve.height).toBe(0);
+    expect(400 + arrivedHeight).toBeGreaterThanOrEqual(initialRange - 1);
+  });
+
+  it("does not exchange reserve for streaming or disclosure growth outside an arrived page", async () => {
+    const frames = new Map<number, FrameRequestCallback>(); let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
+    const step = async () => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); await Promise.resolve(); };
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div"), row = document.createElement("div");
+    let rowHeight = 100;
+    controller.configure("/unrelated-growth"); controller.setIds(["row"]); controller.setHistoryWindow(4, 1, "cursor");
+    Object.defineProperties(viewport, { clientHeight: { value: 60 }, scrollHeight: { get: () => controller.reserveHeight + controller.heights.total } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 60);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, viewport.scrollHeight);
+    content.style.fontSize = "14px"; content.style.lineHeight = "21px";
+    row.getBoundingClientRect = () => new DOMRect(0, controller.reserveHeight - viewport.scrollTop, 600, rowHeight);
+    viewport.append(content); content.append(row); document.body.append(viewport); controller.content = content; controller.register("row", row);
+    const detach = controller.attach(viewport);
+    try {
+      await step(); const before = controller.reserveHeight;
+      viewport.scrollTop = 10; viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -10 }));
+      rowHeight = 350; controller.schedule(); await step();
+      expect(controller.reserveHeight).toBe(before);
+    } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); }
   });
 });
