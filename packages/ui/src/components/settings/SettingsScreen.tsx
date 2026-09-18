@@ -35,8 +35,8 @@ import { AdvancedTab, type AdvancedView } from "./AdvancedTab.js";
 
 type Tab = "general" | "advanced" | "appearance" | "features" | "mcp" | "models" | "usage" | "keyboard" | "projects" | "trust" | "device";
 
-type TabRoute = "scope" | "legacy" | "none";
-type NeutralRouteUse = "global-scope" | "legacy-fallback" | "feature-write" | "none";
+type TabRoute = "scope" | "neutral" | "none";
+type NeutralRouteUse = "global-scope" | "always" | "feature-write" | "none";
 interface TabPolicy {
   route: TabRoute;
   settingsData: boolean;
@@ -53,17 +53,14 @@ const NO_ROUTE: TabPolicy = {
   needsProject: false,
 };
 
-// Stage one migrates General, Advanced Configuration and Features. Legacy
-// routes remain explicit here so each later migration is one policy change,
-// not another ambient-project fallback hidden in render logic.
 const TAB_POLICY: Record<Exclude<Tab, "advanced">, TabPolicy> = {
   general: { route: "scope", settingsData: true, scopeControls: true, neutralRoute: "global-scope", needsProject: false },
   appearance: NO_ROUTE,
   features: { route: "none", settingsData: false, scopeControls: true, neutralRoute: "feature-write", needsProject: false },
-  mcp: { route: "legacy", settingsData: false, scopeControls: false, neutralRoute: "legacy-fallback", needsProject: true },
-  models: { route: "legacy", settingsData: true, scopeControls: false, neutralRoute: "legacy-fallback", needsProject: true },
+  mcp: { route: "scope", settingsData: false, scopeControls: true, neutralRoute: "global-scope", needsProject: false },
+  models: { route: "scope", settingsData: true, scopeControls: true, neutralRoute: "always", needsProject: false },
   usage: NO_ROUTE,
-  keyboard: { route: "legacy", settingsData: false, scopeControls: false, neutralRoute: "none", needsProject: false },
+  keyboard: { route: "neutral", settingsData: false, scopeControls: false, neutralRoute: "always", needsProject: false },
   projects: NO_ROUTE,
   trust: NO_ROUTE,
   device: NO_ROUTE,
@@ -84,12 +81,10 @@ const TABS: Array<{ id: Tab; label: string }> = [
 ];
 
 export interface SettingsScreenProps {
-  /** Ambient app project retained only for not-yet-migrated Settings tabs. */
-  ambientCwd?: string | undefined;
   initialTab?: Tab | undefined;
 }
 
-export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) {
+export function SettingsScreen({ initialTab }: SettingsScreenProps) {
   const { client, actions, projects } = useLaserStable();
   const { settingsScope } = useWorkbench();
   const settingsRead = useCapability("pi/settings/get");
@@ -137,13 +132,59 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
   useEffect(() => {
     const strip = tabStrip.current;
     if (!strip) return;
-    const reveal = () => strip.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView({
+    let keepSelectedVisible = true;
+    let activating = false;
+    let releaseActivation: number | undefined;
+    const selectedTab = () => strip.querySelector<HTMLElement>('[aria-current="page"]');
+    const selectedIsVisible = () => {
+      const selected = selectedTab();
+      if (!selected) return false;
+      const stripRect = strip.getBoundingClientRect();
+      const selectedRect = selected.getBoundingClientRect();
+      return selectedRect.left >= stripRect.left && selectedRect.right <= stripRect.right;
+    };
+    const reveal = () => selectedTab()?.scrollIntoView({
       block: "nearest", inline: "nearest", behavior: "auto",
     });
+    const beginActivation = () => {
+      if (releaseActivation !== undefined) window.clearTimeout(releaseActivation);
+      releaseActivation = undefined;
+      activating = true;
+    };
+    const releaseAfterActivation = () => {
+      if (releaseActivation !== undefined) window.clearTimeout(releaseActivation);
+      releaseActivation = window.setTimeout(() => {
+        releaseActivation = undefined;
+        activating = false;
+      }, 0);
+    };
+    const finishActivation = () => {
+      if (releaseActivation !== undefined) window.clearTimeout(releaseActivation);
+      releaseActivation = undefined;
+      activating = false;
+    };
+    const trackSelectedVisibility = () => {
+      keepSelectedVisible = selectedIsVisible();
+    };
     reveal();
-    const observer = new ResizeObserver(reveal);
+    const observer = new ResizeObserver(() => {
+      if (!activating && keepSelectedVisible) reveal();
+    });
     observer.observe(strip);
-    return () => observer.disconnect();
+    strip.addEventListener("scroll", trackSelectedVisibility, { passive: true });
+    strip.addEventListener("pointerdown", beginActivation, true);
+    strip.addEventListener("pointerup", releaseAfterActivation, true);
+    strip.addEventListener("pointercancel", finishActivation, true);
+    strip.addEventListener("click", finishActivation, true);
+    return () => {
+      observer.disconnect();
+      if (releaseActivation !== undefined) window.clearTimeout(releaseActivation);
+      strip.removeEventListener("scroll", trackSelectedVisibility);
+      strip.removeEventListener("pointerdown", beginActivation, true);
+      strip.removeEventListener("pointerup", releaseAfterActivation, true);
+      strip.removeEventListener("pointercancel", finishActivation, true);
+      strip.removeEventListener("click", finishActivation, true);
+    };
   }, [shownTab]);
 
   const resolvedAdvancedView: AdvancedView = advancedView === "resources" && diagnostics.state !== "available"
@@ -162,17 +203,17 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
   const scopedCwd = settingsScope.view === "global" ? neutralRouteCwd : explicitProjectCwd;
   const routeCwd = policy.route === "scope"
     ? scopedCwd
-    : policy.route === "legacy"
-      ? ambientCwd ?? neutralRouteCwd
+    : policy.route === "neutral"
+      ? neutralRouteCwd
       : undefined;
   const settingsCwd = policy.settingsData ? routeCwd : undefined;
   const currentLoadKey = policy.settingsData && settingsCwd
-    ? `${policy.route === "scope" ? `scope:${settingsScope.view}` : "legacy"}:${settingsCwd}`
+    ? `scope:${settingsScope.view}:${settingsCwd}`
     : "";
   const needsNeutralRoute = policy.neutralRoute === "global-scope"
     ? settingsScope.view === "global"
-    : policy.neutralRoute === "legacy-fallback"
-      ? !ambientCwd
+    : policy.neutralRoute === "always"
+      ? true
       : policy.neutralRoute === "feature-write"
         ? settingsScope.view === "global" && featureWrite.state === "available"
         : false;
@@ -281,14 +322,13 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
   const explicitScopeMissing = policy.scopeControls
     && settingsScope.view !== "global"
     && !selectedProjectKnown;
-  const legacyNeedsProject = policy.needsProject && !routeCwd && !neutralRouteLoading && !neutralRouteError;
   const neutralRoutePending = needsNeutralRoute
     && policy.neutralRoute !== "feature-write"
-    && !routeCwd
+    && !neutralRouteCwd
     && !neutralRouteError;
   const neutralRouteFailure = needsNeutralRoute
     && policy.neutralRoute !== "feature-write"
-    && !routeCwd
+    && !neutralRouteCwd
     ? neutralRouteError
     : undefined;
   const switchingTarget = Boolean(
@@ -369,11 +409,6 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
                 onRetry={retryNeutralRoute}
               />
             </div>
-          ) : legacyNeedsProject ? (
-            <Empty
-              title="Open a project first"
-              body={`This tab has not moved to the explicit Settings target yet. Pick a project in the rail, or add one. General, Features, Appearance, Help and shortcuts, Trust and This device remain available without one.`}
-            />
           ) : (
             <>
               {shownTab === "general" && settingsCwd && catalog && snapshot && snapshotKey === currentLoadKey ? (
@@ -406,11 +441,19 @@ export function SettingsScreen({ ambientCwd, initialTab }: SettingsScreenProps) 
                   {...(mcp.state === "available" ? { onManageServers: () => setTab("mcp") } : {})}
                 />
               ) : null}
-              {shownTab === "mcp" && routeCwd ? <McpServersTab cwd={routeCwd} projectOpen={Boolean(ambientCwd)} decision={mcpWrite} /> : null}
-              {shownTab === "models" && settingsCwd ? <ModelsTab cwd={settingsCwd} snapshot={snapshotKey === currentLoadKey ? snapshot : undefined} onApply={apply} /> : null}
+              {shownTab === "mcp" && routeCwd ? <McpServersTab routeCwd={routeCwd} view={settingsScope.view} decision={mcpWrite} /> : null}
+              {shownTab === "models" && settingsCwd && neutralRouteCwd ? (
+                <ModelsTab
+                  settingsRouteCwd={settingsCwd}
+                  neutralRouteCwd={neutralRouteCwd}
+                  view={settingsScope.view}
+                  snapshot={snapshotKey === currentLoadKey ? snapshot : undefined}
+                  onApply={apply}
+                />
+              ) : null}
               {shownTab === "usage" ? <UsageTab /> : null}
-              {shownTab === "keyboard" ? <KeyboardTab cwd={routeCwd} decision={keybindingsWrite} /> : null}
-              {shownTab === "projects" ? <ProjectsTab activeCwd={ambientCwd} /> : null}
+              {shownTab === "keyboard" && neutralRouteCwd ? <KeyboardTab neutralRouteCwd={neutralRouteCwd} decision={keybindingsWrite} /> : null}
+              {shownTab === "projects" ? <ProjectsTab /> : null}
               {shownTab === "trust" ? <TrustTab decision={trustWrite} /> : null}
               {shownTab === "device" ? <DeviceTab /> : null}
             </>

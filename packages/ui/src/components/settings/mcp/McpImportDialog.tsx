@@ -15,8 +15,10 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SettingsSwitch } from "@/components/assistant-ui/elements/settings-panel";
 import { useLaserStable } from "@/runtime";
+import type { ScopeDraft } from "../ScopeDraftGuard.js";
+import { useCommittedTargetLifetime } from "../useCommittedTargetLifetime.js";
 
-import { ScopeChoice } from "./McpServerForm.js";
+import { useMcpDialogFocusReturn, type McpDialogFocusTarget } from "./dialog-focus.js";
 import { scopeLabel, transportSummary } from "./model.js";
 
 /** Translate the import wire's field paths without exposing its vocabulary. */
@@ -38,7 +40,7 @@ export function importSummary(sources: readonly McpImportSource[]): string | und
   return `Found ${count} ${count === 1 ? "server" : "servers"} configured for ${list}.`;
 }
 
-export function McpImportBanner({ sources, onOpen }: { sources: readonly McpImportSource[]; onOpen: () => void }) {
+export function McpImportBanner({ sources, onOpen }: { sources: readonly McpImportSource[]; onOpen: (trigger: HTMLButtonElement) => void }) {
   const summary = importSummary(sources);
   if (!summary) return null;
   return (
@@ -50,7 +52,7 @@ export function McpImportBanner({ sources, onOpen }: { sources: readonly McpImpo
         <FolderInput aria-hidden="true" className="size-4 shrink-0 text-ink-3" />
         {summary}
       </p>
-      <Button type="button" size="sm" variant="secondary" onClick={onOpen}>
+      <Button type="button" size="sm" variant="secondary" onClick={(event) => onOpen(event.currentTarget)}>
         Import
       </Button>
     </section>
@@ -62,23 +64,27 @@ export function McpImportDialog({
   open,
   onOpenChange,
   sources,
-  defaultScope = "global",
-  allowProject = true,
+  scope,
+  onDraftChange,
+  focusReturn,
+  focusFallback,
   onImported,
 }: {
   cwd: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sources: readonly McpImportSource[];
-  defaultScope?: McpScope;
-  allowProject?: boolean;
+  scope: McpScope;
+  onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
+  focusReturn?: McpDialogFocusTarget | undefined;
+  focusFallback?: (() => HTMLElement | null) | undefined;
   onImported: (servers: McpServerState[], imported: string[]) => void;
 }) {
   const { client } = useLaserStable();
+  const restoreFocus = useMcpDialogFocusReturn(open, focusReturn, focusFallback);
   const available = useMemo(() => sources.filter((source) => source.servers.length > 0), [sources]);
   const [sourceId, setSourceId] = useState<string>();
   const [chosen, setChosen] = useState<Set<string>>(() => new Set());
-  const [scope, setScope] = useState<McpScope>(defaultScope);
   const [replace, setReplace] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -87,12 +93,12 @@ export function McpImportDialog({
     if (!open) return;
     setSourceId(available[0]?.id);
     setChosen(new Set());
-    setScope(defaultScope);
     setReplace(false);
     setError(undefined);
-  }, [open, available, defaultScope]);
+  }, [open, available]);
 
   const source = available.find((entry) => entry.id === sourceId) ?? available[0];
+  const lifetime = useCommittedTargetLifetime(`${cwd}:${scope}:${source?.id ?? "none"}:${open ? "open" : "closed"}`);
   const importable = (source?.servers ?? []).filter((server) => !server.unsupported);
   const conflicting = importable.some((server) => chosen.has(server.name) && server.conflicts.includes(scope));
 
@@ -103,8 +109,10 @@ export function McpImportDialog({
     setChosen(next);
   };
 
-  const apply = async () => {
-    if (!source || !chosen.size) return;
+  const apply = async (): Promise<boolean> => {
+    if (!source || !chosen.size) return false;
+    const lease = lifetime.capture();
+    if (!lease) return false;
     setBusy(true);
     setError(undefined);
     try {
@@ -115,22 +123,38 @@ export function McpImportDialog({
         scope,
         ...(replace ? { replace: true } : {}),
       });
+      if (!lifetime.isCurrent(lease)) return false;
       onImported(result.servers, result.imported);
       onOpenChange(false);
+      return true;
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      if (lifetime.isCurrent(lease)) setError(failure instanceof Error ? failure.message : String(failure));
+      return false;
     } finally {
-      setBusy(false);
+      if (lifetime.isCurrent(lease)) setBusy(false);
     }
   };
 
+  useEffect(() => {
+    if (!open || !source || chosen.size === 0) {
+      onDraftChange?.(undefined);
+      return;
+    }
+    onDraftChange?.({
+      id: "mcp-import",
+      label: "MCP import selection",
+      save: apply,
+      discard: () => onOpenChange(false),
+    });
+    return () => onDraftChange?.(undefined);
+  }, [chosen, onDraftChange, open, replace, scope, source, sourceId]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* One bounded, scrolling body: the source picker, the list, the scope
           and the replace switch all live inside it, so nothing is stranded
           above the fold on a short screen. */}
-      <DialogContent data-slot="mcp-import-dialog" className="flex max-h-[90dvh] min-h-0 flex-col sm:max-w-160">
+      <DialogContent data-slot="mcp-import-dialog" className="flex max-h-[90dvh] min-h-0 flex-col sm:max-w-160" onCloseAutoFocus={restoreFocus}>
         <DialogHeader className="shrink-0">
           <DialogTitle>Import servers</DialogTitle>
           <DialogDescription>
@@ -215,7 +239,7 @@ export function McpImportDialog({
               </>
             )}
 
-            <ScopeChoice scope={scope} onChange={setScope} allowProject={allowProject} label="Import into" />
+            <p className="text-sm text-ink-2">Import into <span className="font-medium text-ink">{scope === "global" ? "Global settings" : "Project settings"}</span>.</p>
 
             {conflicting && (
               <div className="flex items-start gap-3">

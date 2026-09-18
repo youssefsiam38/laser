@@ -52,7 +52,7 @@ export function BeamModelDialog() {
     let live = true;
     setCatalog(null);
     void Promise.all([
-      client.request("pi/models/catalog", { cwd }),
+      client.request("pi/models/catalog", { cwd, settingsView: "effective" }),
       client.request("pi/providers/list", { cwd }).then(({ providers }) => providers, () => undefined),
     ])
       .then(([result, providers]) => {

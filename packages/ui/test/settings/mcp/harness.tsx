@@ -3,6 +3,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { expect } from "vitest";
 import type { McpInspection, McpServerState, McpToolInfo } from "@lasercode/protocol";
+import { WorkbenchProvider } from "../../../src/components/workbench/workbench-context.js";
+import { deviceStore } from "../../../src/runtime/device-storage.js";
+import { testDescriptor } from "../../runtime/environment-fixture.js";
 
 export function serverState(partial: Partial<McpServerState> & Pick<McpServerState, "config">): McpServerState {
   return { scope: "global", status: "unknown", ...partial };
@@ -64,6 +67,14 @@ export async function clickElement(element: HTMLElement): Promise<void> {
   await act(async () => element.click());
 }
 
+/** Radix restores focus at the end of its close lifecycle, after content leaves. */
+export async function expectFocus(element: HTMLElement): Promise<void> {
+  for (let attempt = 0; attempt < 20 && document.activeElement !== element; attempt++) {
+    await act(async () => { await new Promise<void>((resolve) => setTimeout(resolve, 0)); });
+  }
+  expect(document.activeElement).toBe(element);
+}
+
 export function field(label: string): HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement {
   const byAria = document.body.querySelector<HTMLInputElement>(`[aria-label="${label}"]`);
   if (byAria) return byAria;
@@ -105,4 +116,9 @@ export async function render(node: React.ReactNode): Promise<{ root: Root; conta
   const root = createRoot(container);
   await act(async () => root.render(node));
   return { root, container };
+}
+
+export async function renderInWorkbench(node: React.ReactNode): Promise<{ root: Root; container: HTMLDivElement }> {
+  if (!deviceStore.status().active) deviceStore.activate(testDescriptor());
+  return render(<WorkbenchProvider>{node}</WorkbenchProvider>);
 }

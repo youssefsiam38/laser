@@ -21,10 +21,11 @@ import { Input } from "@/components/ui/input";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
+import { useCommittedTargetLifetime } from "@/components/settings/useCommittedTargetLifetime.js";
 import type { ProviderAuthInfo, ProviderLoginEvent, ProviderLoginMethod, ProviderLoginPrompt } from "@lasercode/protocol";
 
 export interface ProviderSignInProps {
-  cwd: string;
+  routeCwd: string;
   provider: ProviderAuthInfo;
   method: ProviderLoginMethod;
   onDone: () => void;
@@ -58,7 +59,7 @@ const fresh = (): Flow => ({
   prompt: undefined,
 });
 
-export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, className }: ProviderSignInProps) {
+export function ProviderSignIn({ routeCwd, provider, method, onDone, onCancel, className }: ProviderSignInProps) {
   const { client } = useLaserStable();
   const [flow, setFlow] = useState<Flow>(fresh);
   const [answer, setAnswer] = useState("");
@@ -69,9 +70,12 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
   /** Events that arrived before `start` answered with the id. */
   const early = useRef<Array<{ id: string; event: ProviderLoginEvent }>>([]);
   const doneRef = useRef(false);
+  const attemptRef = useRef(0);
+  const target = useCommittedTargetLifetime(`${routeCwd}:${provider.id}:${method}`);
   const copy = useCopy();
 
   const apply = useCallback((event: ProviderLoginEvent) => {
+    if (!target.capture()) return;
     setFlow((current) => {
       switch (event.type) {
         case "auth_url":
@@ -97,7 +101,7 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
           return { ...current, status: "cancelled", prompt: undefined, progress: undefined };
       }
     });
-  }, []);
+  }, [target]);
 
   // Subscribe before starting so a prompt the worker emits before it answers
   // `start` is not lost; it is parked until the id is known.
@@ -106,7 +110,7 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
       client.subscribe((notificationMethod, params) => {
         if (notificationMethod !== "pi/providers/login/event") return;
         const { id, event, provider: providerId, cwd: eventCwd } = params as { cwd: string; id: string; provider: string; event: ProviderLoginEvent };
-        if (eventCwd !== cwd || providerId !== provider.id) return;
+        if (eventCwd !== routeCwd || providerId !== provider.id) return;
         const mine = flowRef.current.id;
         if (mine === undefined) {
           early.current.push({ id, event });
@@ -114,47 +118,70 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
         }
         if (id === mine) apply(event);
       }),
-    [apply, client, cwd, provider.id],
+    [apply, client, provider.id, routeCwd],
   );
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (attempt: number) => {
+    const lease = target.capture();
+    if (!lease) return;
     setFlow(fresh());
     setAnswer("");
     setSubmitted(false);
     early.current = [];
     doneRef.current = false;
     try {
-      const { id } = await client.request("pi/providers/login/start", { cwd, provider: provider.id, method });
+      const { id } = await client.request("pi/providers/login/start", { cwd: routeCwd, provider: provider.id, method });
+      if (attemptRef.current !== attempt || !target.isCurrent(lease)) {
+        await client.request("pi/providers/login/cancel", { cwd: routeCwd, id }).catch(() => undefined);
+        return;
+      }
       setFlow((current) => ({ ...current, id, status: current.status === "starting" ? "waiting" : current.status }));
       for (const parked of early.current) if (parked.id === id) apply(parked.event);
       early.current = [];
     } catch (startError) {
-      setFlow((current) => ({ ...current, status: "error", error: startError instanceof Error ? startError.message : String(startError) }));
+      if (attemptRef.current === attempt && target.isCurrent(lease)) {
+        setFlow((current) => ({ ...current, status: "error", error: startError instanceof Error ? startError.message : String(startError) }));
+      }
     }
-  }, [apply, client, cwd, method, provider.id]);
+  }, [apply, client, method, provider.id, routeCwd, target]);
 
   useEffect(() => {
-    void start();
+    const attempt = ++attemptRef.current;
+    void start(attempt);
+    return () => {
+      attemptRef.current += 1;
+      const current = flowRef.current;
+      if (current.id && (current.status === "starting" || current.status === "waiting")) {
+        void client.request("pi/providers/login/cancel", { cwd: routeCwd, id: current.id }).catch(() => undefined);
+      }
+    };
     // Only on mount and when the provider or method changes; `start` is stable for those.
-  }, [start]);
+  }, [client, routeCwd, start]);
 
   useEffect(() => {
     if (flow.status === "done" && !doneRef.current) {
+      const lease = target.capture();
+      if (!lease) return undefined;
       doneRef.current = true;
-      const handle = setTimeout(onDone, 900);
+      const handle = setTimeout(() => {
+        if (target.isCurrent(lease)) onDone();
+      }, 900);
       return () => clearTimeout(handle);
     }
     return undefined;
-  }, [flow.status, onDone]);
+  }, [flow.status, onDone, target]);
 
   const cancel = useCallback(() => {
+    if (!target.capture()) return;
     const id = flowRef.current.id;
-    if (id && flowRef.current.status === "waiting") void client.request("pi/providers/login/cancel", { cwd, id }).catch(() => undefined);
+    if (id && flowRef.current.status === "waiting") void client.request("pi/providers/login/cancel", { cwd: routeCwd, id }).catch(() => undefined);
     onCancel();
-  }, [client, cwd, onCancel]);
+  }, [client, onCancel, routeCwd, target]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    const lease = target.capture();
+    if (!lease) return;
     const prompt = flow.prompt;
     if (!prompt || !flow.id || sending) return;
     const value = answer.trim();
@@ -162,28 +189,31 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
     setSending(true);
     setSubmitted(true);
     try {
-      await client.request("pi/providers/login/answer", { cwd, id: flow.id, promptId: prompt.id, value });
+      await client.request("pi/providers/login/answer", { cwd: routeCwd, id: flow.id, promptId: prompt.id, value });
+      if (!target.isCurrent(lease)) return;
       setAnswer("");
       setFlow((current) => (current.status === "waiting" && current.prompt?.id === prompt.id ? { ...current, prompt: undefined } : current));
     } catch (answerError) {
-      setFlow((current) => ({ ...current, status: "error", error: answerError instanceof Error ? answerError.message : String(answerError) }));
+      if (target.isCurrent(lease)) setFlow((current) => ({ ...current, status: "error", error: answerError instanceof Error ? answerError.message : String(answerError) }));
     } finally {
-      setSending(false);
+      if (target.isCurrent(lease)) setSending(false);
     }
   };
 
   const choose = async (optionId: string) => {
+    const lease = target.capture();
+    if (!lease) return;
     const prompt = flow.prompt;
     if (!prompt || !flow.id || sending) return;
     setSending(true);
     setSubmitted(true);
     try {
-      await client.request("pi/providers/login/answer", { cwd, id: flow.id, promptId: prompt.id, value: optionId });
-      setFlow((current) => (current.status === "waiting" && current.prompt?.id === prompt.id ? { ...current, prompt: undefined } : current));
+      await client.request("pi/providers/login/answer", { cwd: routeCwd, id: flow.id, promptId: prompt.id, value: optionId });
+      if (target.isCurrent(lease)) setFlow((current) => (current.status === "waiting" && current.prompt?.id === prompt.id ? { ...current, prompt: undefined } : current));
     } catch (answerError) {
-      setFlow((current) => ({ ...current, status: "error", error: answerError instanceof Error ? answerError.message : String(answerError) }));
+      if (target.isCurrent(lease)) setFlow((current) => ({ ...current, status: "error", error: answerError instanceof Error ? answerError.message : String(answerError) }));
     } finally {
-      setSending(false);
+      if (target.isCurrent(lease)) setSending(false);
     }
   };
 
@@ -313,7 +343,7 @@ export function ProviderSignIn({ cwd, provider, method, onDone, onCancel, classN
         </p>
       )}
 
-      {flow.status === "error" && <ErrorState title={`Could not sign in to ${provider.name}`} detail={flow.error} onRetry={() => void start()} retryLabel="Try again" />}
+      {flow.status === "error" && <ErrorState title={`Could not sign in to ${provider.name}`} detail={flow.error} onRetry={() => void start(++attemptRef.current)} retryLabel="Try again" />}
 
       {flow.status === "cancelled" && <p className="text-sm text-ink-2">Sign-in was cancelled.</p>}
 

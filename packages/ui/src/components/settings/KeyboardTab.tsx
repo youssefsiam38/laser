@@ -92,7 +92,7 @@ function groups(mod: string): BindingGroup[] {
   ];
 }
 
-export function KeyboardTab({ cwd, decision }: { cwd?: string | undefined; decision?: CapabilityDecision | undefined }) {
+export function KeyboardTab({ neutralRouteCwd, decision }: { neutralRouteCwd: string; decision?: CapabilityDecision | undefined }) {
   const writable = decision?.state === "available" || decision === undefined;
   const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
   const mod = modKey();
@@ -143,7 +143,8 @@ export function KeyboardTab({ cwd, decision }: { cwd?: string | undefined; decis
         ))}
 
         {!writable && readOnlyExplanation ? <CapabilityNotice explanation={readOnlyExplanation} /> : null}
-        <AgentKeys cwd={cwd} environmentWritable={writable} />
+        <p className="text-xs leading-5 text-ink-3">Agent keybindings are global and stay in force for every project.</p>
+        <AgentKeys routeCwd={neutralRouteCwd} environmentWritable={writable} />
       </div>
     </ScrollArea>
   );
@@ -218,48 +219,53 @@ function baseKeyOf(key: string): string | undefined {
   return undefined;
 }
 
-function AgentKeys({ cwd, environmentWritable }: { cwd?: string | undefined; environmentWritable: boolean }) {
+function AgentKeys({ routeCwd, environmentWritable }: { routeCwd: string; environmentWritable: boolean }) {
   const { client } = useLaserStable();
   const [snapshot, setSnapshot] = useState<KeybindingsSnapshot>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [capturing, setCapturing] = useState<string>();
+  const generation = useRef(0);
 
   useEffect(() => {
-    if (!cwd) return;
-    let cancelled = false;
+    const request = ++generation.current;
+    setSnapshot(undefined);
+    setBusy(false);
+    setCapturing(undefined);
     client
-      .request("pi/keybindings/get", { cwd })
+      .request("pi/keybindings/get", { cwd: routeCwd })
       .then((result) => {
-        if (!cancelled) {
+        if (request === generation.current) {
           setSnapshot(result.keybindings);
           setError(undefined);
         }
       })
       .catch((reason: unknown) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+        if (request === generation.current) setError(reason instanceof Error ? reason.message : String(reason));
       });
     return () => {
-      cancelled = true;
+      generation.current += 1;
     };
-  }, [client, cwd]);
+  }, [client, routeCwd]);
 
   const apply = useCallback(
     async (change: { id: string; op: "set"; keys: string[] } | { id: string; op: "reset" }) => {
-      if (!cwd) return;
+      const request = generation.current;
       setBusy(true);
       setError(undefined);
       try {
-        const result = await client.request("pi/keybindings/set", { cwd, changes: [change] });
-        setSnapshot(result.keybindings);
+        const result = await client.request("pi/keybindings/set", { cwd: routeCwd, changes: [change] });
+        if (request === generation.current) setSnapshot(result.keybindings);
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        if (request === generation.current) setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
-        setBusy(false);
-        setCapturing(undefined);
+        if (request === generation.current) {
+          setBusy(false);
+          setCapturing(undefined);
+        }
       }
     },
-    [client, cwd],
+    [client, routeCwd],
   );
 
   const sections = useMemo(() => {
@@ -271,20 +277,6 @@ function AgentKeys({ cwd, environmentWritable }: { cwd?: string | undefined; env
     }
     return [...bySection].sort(([a], [b]) => (a === "app" ? -1 : b === "app" ? 1 : a < b ? -1 : 1));
   }, [snapshot]);
-
-  // Keyboard settings are the agent's, not a project's — but only a running
-  // worker can read the agent's own table, and a worker belongs to a project.
-  if (!cwd) {
-    return (
-      <Note>
-        <p className="font-medium text-ink">The agent&rsquo;s keys need a project open.</p>
-        <p className="mt-0.5 text-ink-3">
-          They are the same on every project — the agent keeps one file — but reading them means asking the agent, and
-          the agent runs inside a project. Open one and come back.
-        </p>
-      </Note>
-    );
-  }
 
   if (error && !snapshot) {
     return (

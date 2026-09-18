@@ -478,7 +478,7 @@ export class ModelsAdapter {
     return (await this.providers()).providers;
   }
 
-  async catalog(refresh = false): Promise<ModelCatalogResult> {
+  async catalog(refresh: boolean, settingsView: "global" | "effective"): Promise<ModelCatalogResult> {
     const runtime = await this.models;
     const errors: string[] = [];
     if (refresh) {
@@ -489,7 +489,8 @@ export class ModelsAdapter {
     }
 
     await this.settings.refresh();
-    const effective = this.settings.snapshot().effective;
+    const snapshot = this.settings.snapshot();
+    const effective = settingsView === "global" ? snapshot.global.values : snapshot.effective;
     const patterns = Array.isArray(effective["enabledModels"])
       ? (effective["enabledModels"] as unknown[]).filter((p): p is string => typeof p === "string")
       : null;

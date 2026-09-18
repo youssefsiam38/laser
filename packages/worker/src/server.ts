@@ -383,7 +383,7 @@ export class WorkerServer {
       model: () => this.definitions.namerModel(),
       instructions: () => this.definitions.namerInstructions(),
       catalog: async () => {
-        const [catalog, providers] = await Promise.all([this.modelCatalog().catalog(false), this.modelCatalog().providers()]);
+        const [catalog, providers] = await Promise.all([this.modelCatalog().catalog(false, "effective"), this.modelCatalog().providers()]);
         return { models: catalog.models, configuredProviders: new Set(providers.providers.filter((p) => p.configured).map((p) => p.id)) };
       },
     });
@@ -1076,7 +1076,7 @@ export class WorkerServer {
       // ------------------------------------------------- M14 MCP servers ---
       case "mcp/list":
         this.assertCwd(req.params.cwd);
-        return (await this.mcp().list()) satisfies Result<"mcp/list">;
+        return (await this.mcp().list(req.params.view)) satisfies Result<"mcp/list">;
       case "mcp/save":
         this.assertCwd(req.params.cwd);
         return (await this.mcp().save(req.params)) satisfies Result<"mcp/save">;
@@ -1106,7 +1106,7 @@ export class WorkerServer {
         return (await this.mcp().authLogout(req.params)) satisfies Result<"mcp/auth/logout">;
       case "mcp/import/detect":
         this.assertCwd(req.params.cwd);
-        return (await this.mcp().importDetect()) satisfies Result<"mcp/import/detect">;
+        return (await this.mcp().importDetect(req.params.scope)) satisfies Result<"mcp/import/detect">;
       case "mcp/import/apply":
         this.assertCwd(req.params.cwd);
         return (await this.mcp().importApply(req.params)) satisfies Result<"mcp/import/apply">;
@@ -1131,7 +1131,7 @@ export class WorkerServer {
         return { providers: await this.modelCatalog().logout(req.params.provider) } satisfies Result<"pi/providers/logout">;
       case "pi/models/catalog":
         this.assertCwd(req.params.cwd);
-        return (await this.modelCatalog().catalog(req.params.refresh ?? false)) satisfies Result<"pi/models/catalog">;
+        return (await this.modelCatalog().catalog(req.params.refresh ?? false, req.params.settingsView)) satisfies Result<"pi/models/catalog">;
 
       // ------------------------------------------------------ M13 agents ---
       case "agents/sync":

@@ -201,7 +201,7 @@ function useThinkingDefaults(): {
     let live = true;
     let pending = catalogCache.get(cwd);
     if (!pending) {
-      pending = client.request("pi/models/catalog", { cwd });
+      pending = client.request("pi/models/catalog", { cwd, settingsView: "effective" });
       // A failed fetch must not poison the cache: the next mount retries.
       void pending.catch(() => catalogCache.delete(cwd));
       catalogCache.set(cwd, pending);
