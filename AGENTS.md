@@ -521,6 +521,12 @@ list). Checking that files exist, that `require.resolve` succeeds, or that Pi's
 compiled top-level module imports is insufficient. The distribution must also
 carry the project's legal files; the same packaged gate verifies them.
 
+Packaged probes must explicitly isolate the product home, state and agent
+directories as well as `HOME`/XDG paths; inherited state pins can otherwise adopt
+the person's installed host. Adoption refreshes that host's environment even
+without UI interaction. Use the shared isolated harness, verify the selected
+host record before connecting, and never stop a host a probe did not start.
+
 ---
 
 ## 6. Upstream contributions
