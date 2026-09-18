@@ -25,6 +25,9 @@ describe("history windows", () => {
     const older = historyWindow(snapshot, { before: tail.window.before! }, scope);
     expect(older.entries).toEqual(entries.slice(1920, 1960));
     expect(older.window.userOffset).toBe(960);
+    const anchored = historyWindow(snapshot, { beforeEntry: "e1960", limit: 40 }, scope);
+    expect(anchored.entries).toEqual(older.entries);
+    expect(anchored.window.before).toBe(older.window.before);
     expect(historyWindow(snapshot, { from: older.window.anchor! }, scope).entries).toEqual(entries.slice(1920));
     expect(historyWindow(snapshot, { all: true }, scope)).toMatchObject({ entries, window: { complete: true, userOffset: 0 } });
   });
@@ -59,7 +62,10 @@ describe("history windows", () => {
     const entries = history(12);
     const before = historyWindow({ entries, leafId: "e11" }, { tail: 4 }, scope).window.before!;
     expect(historyWindow({ entries: history(14), leafId: "e13" }, { before, limit: 4 }, scope).entries).toEqual(entries.slice(4, 8));
+    expect(historyWindow({ entries: history(14), leafId: "e13" }, { beforeEntry: "e8", limit: 4 }, scope).entries).toEqual(entries.slice(4, 8));
     expect(() => historyWindow({ entries, leafId: "e7" }, { before }, scope)).toThrow("history changed");
+    expect(() => historyWindow({ entries, leafId: "e7" }, { beforeEntry: "e8" }, scope)).toThrow("history changed");
+    expect(() => historyWindow({ entries, leafId: "e11" }, { beforeEntry: "missing" }, scope)).toThrow("history changed");
     // A restart no longer invalidates a page: the cursor binds to the session
     // and its branch lineage, which is what actually decides whether the page
     // still exists. Another session, and an older cursor shape, are refused.
@@ -108,6 +114,15 @@ describe("history windows", () => {
       return plan.entryIndices.length <= 40;
     });
     expect(fitted?.entryIndices).toEqual(entries.slice(-40).map((_, index) => 360 + index));
+    expect(plans).toBeLessThanOrEqual(9);
+
+    plans = 0;
+    const recovered = fitHistoryWindowPlan(nodes, "e399", { beforeEntry: "e360", limit: 200 }, { ...scope, selection: { kind: "replace" } }, plan => {
+      plans++;
+      return plan.entryIndices.length <= 40;
+    });
+    expect(recovered?.entryIndices).toEqual(entries.slice(320, 360).map((_, index) => 320 + index));
+    expect(recovered?.window.before).toBeTypeOf("string");
     expect(plans).toBeLessThanOrEqual(9);
 
     const huge = [
@@ -174,7 +189,7 @@ describe("history windows", () => {
   });
 
   it("round-trips every request variant, authority and base revision, and refuses invalid values", () => {
-    for (const window of [{ tail: 40 }, { before: "cursor", limit: 40 }, { from: "entry" }, { all: true }]) {
+    for (const window of [{ tail: 40 }, { before: "cursor", limit: 40 }, { beforeEntry: "entry", limit: 40 }, { from: "entry" }, { all: true }]) {
       const request = { jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path: PATH, window, authority: "any", baseRevision: scope.revision } };
       expect(parseClientRequest(JSON.parse(JSON.stringify(request)))).toEqual(request);
     }
@@ -182,6 +197,10 @@ describe("history windows", () => {
       { path: PATH, window: { tail: 0 } },
       { path: PATH, window: { tail: 1000 } },
       { path: PATH, window: { tail: 40, all: true } },
+      { path: PATH, window: { before: "cursor" } },
+      { path: PATH, window: { beforeEntry: "entry" } },
+      { path: PATH, window: { beforeEntry: "entry", before: "cursor" }, baseRevision: scope.revision },
+      { path: PATH, window: { beforeEntry: "" }, baseRevision: scope.revision },
       { path: PATH, authority: "durable" },
       { path: PATH, baseRevision: "" },
     ]) {

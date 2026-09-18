@@ -21,7 +21,7 @@ import { reduce, type Action, type AppState, type SessionView } from "../store.j
  * never reach this window. Its own reads arrive through `owner.dispatch`.
  */
 const LOADED_BY_ONE_SURFACE = new Set<Action["type"]>([
-  "historyBegin", "historyReset", "historyEnd", "historySnapshot", "historyPrepend", "historyMetadata", "hydrate", "entries",
+  "historyBegin", "historyReset", "historyEnd", "historySnapshot", "historyPrepend", "historyRecover", "historyPageRefused", "hydrate", "entries",
   "views/reconcile", "views/reconcileFailed",
 ]);
 

@@ -56,6 +56,12 @@ export class SessionProjection {
       const revision = this.options.revisions.revisionOf(index);
       const base = baseRevision === undefined ? undefined : this.options.revisions.resolveBase(index, baseRevision);
       const request = requested ?? { tail: 40 };
+      // An older page is merged into a client-held window. Its base must still
+      // be this exact state or a cryptographically proved canonical prefix;
+      // an anchor/cursor alone cannot detect rewritten content with reused ids.
+      if (("before" in request || "beforeEntry" in request) && !base?.state) {
+        return { kind: "refuse", error: unavailable("This conversation changed since that page was read. Reload it and try again.") };
+      }
       const common = {
         sessionId: index.header.id,
         epoch: DURABLE_HISTORY_EPOCH,

@@ -160,6 +160,19 @@ export type { EvictionReason, SessionViewSummary, ValidatedRevision } from "./vi
 export { awake, dehydrateView, hasUnsentWork, hydrationEpochOf, isDormantView, summaryOfView, viewFirstUserText, viewHasHistory, viewHasUserMessage } from "./view-summary.js";
 import type { EvictionReason, SessionViewSummary, ValidatedRevision } from "./view-summary.js";
 
+export interface HistoryRefusal {
+  cause: "stale-base";
+  message: string;
+}
+
+/** Producer window plus UI-only state for bounded upward recovery. */
+export type HistoryViewState = Omit<HistoryWindow, "live"> & {
+  /** Exclusive entry boundary of a missing active-lineage island. */
+  gapBefore?: string | undefined;
+  /** A page base moved past a barrier; rows stay until explicit re-read. */
+  refusal?: HistoryRefusal | undefined;
+};
+
 export interface SessionView {
   path: string;
   state: SessionState;
@@ -201,7 +214,7 @@ export interface SessionView {
    * bounded prompt text is retained; they are never presented as entries (RP-5b).
    */
   stubs?: EntryStub[];
-  history?: Omit<HistoryWindow, "live"> | undefined;
+  history?: HistoryViewState | undefined;
   /** Owner-local accepted recent-tail replacement, not a worker generation. */
   historyRevision?: string | undefined;
   /** Accepted updates buffered only while an authoritative window read is in flight. */
@@ -683,8 +696,9 @@ export function reduce(state: AppState, action: Action): AppState {
     case "historyEnd":
     case "historySnapshot":
     case "historyDelta":
-    case "historyMetadata":
+    case "historyPageRefused":
     case "historyPrepend":
+    case "historyRecover":
       return updateView(state, action.path, v => reduceHistory(v, action, historyFold));
     case "views/reconcile":
       return updateView(state, action.path, (v) => {

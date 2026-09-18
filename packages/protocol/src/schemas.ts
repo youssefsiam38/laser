@@ -750,6 +750,7 @@ export const clientParamsSchemas = {
     window: z.union([
       z.object({ tail: z.number().int().min(1).max(200) }).strict(),
       z.object({ before: z.string().min(1).max(8192), limit: z.number().int().min(1).max(200).optional() }).strict(),
+      z.object({ beforeEntry: z.string().min(1).max(1024), limit: z.number().int().min(1).max(200).optional() }).strict(),
       z.object({ from: z.string().min(1).max(1024) }).strict(),
       z.object({ all: z.literal(true) }).strict(),
     ]).optional(),
@@ -758,7 +759,11 @@ export const clientParamsSchemas = {
     // RP-5b: a caller that cannot hold a large body asks for the page without
     // it. No record is rewritten — an oversized one is listed in `elided`.
     bodyLimit: z.number().int().min(1024).max(HISTORY_PAGE_BYTE_LIMIT).optional(),
-  }).strict(),
+  }).strict().superRefine((value, context) => {
+    if (value.window && ("before" in value.window || "beforeEntry" in value.window) && value.baseRevision === undefined) {
+      context.addIssue({ code: "custom", path: ["baseRevision"], message: "Older history pages require the revision already held by the caller." });
+    }
+  }),
   // RP-5b: one body of one entry, bound to the revision the caller read it at.
   "session/entry_range": z.object({
     path: sessionPath,

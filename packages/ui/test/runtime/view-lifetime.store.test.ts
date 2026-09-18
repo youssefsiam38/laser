@@ -296,20 +296,11 @@ describe("a released record never claims a state it does not hold", () => {
     expect(second.revision).not.toBe(first.revision);
   });
 
-  it("adopts a merged page's window only when it is the same revision", () => {
-    const older = [{ id: "e0", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text: "older" }] } }];
-    // Same revision: the merged set is one describable state, so the tuple is
-    // taken, with the window's own sequence.
-    let same = hydrated();
-    same = reduce(same, { type: "historyMetadata", path: PATH, from: "e2", revision: same.open[PATH]!.historyRevision,
-      entries: older, leafId: "e2", window: window({ seq: 9 }) });
-    expect(same.open[PATH]!.validated).toMatchObject({ revision: "r1.env.abc", seq: 9, sessionId: SESSION_ID });
-
-    // A different revision: the merge spans two states and names neither.
-    let moved = hydrated();
-    moved = reduce(moved, { type: "historyMetadata", path: PATH, from: "e2", revision: moved.open[PATH]!.historyRevision,
-      entries: older, leafId: "e2", window: window({ seq: 9, revision: "r1.env.other" }) });
-    expect(moved.open[PATH]!.validated).toBeUndefined();
-    expect(captureViewTail(moved.open[PATH]!, AT).omitted).toBe("no-revision");
+  it("keeps the sealed revision while a refused page waits for explicit reread", () => {
+    const before = hydrated();
+    const refused = reduce(before, { type: "historyPageRefused", path: PATH, cause: "stale-base", message: "Conversation moved." });
+    expect(refused.open[PATH]!.validated).toBe(before.open[PATH]!.validated);
+    expect(refused.open[PATH]!.history?.refusal).toEqual({ cause: "stale-base", message: "Conversation moved." });
+    expect(captureViewTail(refused.open[PATH]!, AT)).toMatchObject({ revision: "r1.env.abc", seq: 7 });
   });
 });

@@ -202,6 +202,8 @@ export interface LaserActions {
   expandCatalog(): () => void;
   refreshEntries(options?: { tail?: boolean }): Promise<void>;
   loadEarlierEntries(): Promise<boolean>;
+  /** Explicitly accept a bounded current-tail re-read after an old page base is refused. */
+  rereadHistory(): Promise<void>;
   loadAllEntries(): Promise<boolean>;
   /** Refresh cross-app allowance for the session's account provider. */
   refreshAccountUsage(): Promise<void>;
@@ -1584,7 +1586,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
           dispatch({ type: "toast", level: "warning", text: "A feature stopped that change." });
           return false;
         }
-        await history.read(path);
+        await history.reread(path, () => true);
         reconcileAfterAction.current(path);
         if (editorTextOmitted) {
           // The move has already happened — this is the conversation's own
@@ -1701,6 +1703,11 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         const epoch = openEpochs.current.get(path);
         return history.earlier(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
       }).then(Boolean),
+      rereadHistory: () => guard(async () => {
+        const path = requireCurrent();
+        const epoch = openEpochs.current.get(path);
+        await history.reread(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
+      }).then(() => undefined),
       refreshAccountUsage: () =>
         guard(async () => {
           const { delivered } = await client.request("pi/account-usage/refresh", { path: requireCurrent() }).catch(error => { throw accountUsageRefreshError(error); });

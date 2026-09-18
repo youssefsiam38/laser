@@ -27,6 +27,8 @@ import type { BodyComponent, BodyRegion, ElidedEntry, EntryRegionsResult, Persis
 export type HistoryWindowRequest =
   | { tail: number }
   | { before: string; limit?: number }
+  /** A bounded page ending immediately before this active-ancestry entry. */
+  | { beforeEntry: string; limit?: number }
   | { from: string }
   | { all: true };
 
@@ -1388,8 +1390,9 @@ export interface ClientRequests {
       authority?: "live" | "any";
       /**
        * On an omitted/default-tail or explicit `tail` read, a proved canonical
-       * prefix may be answered as a delta. `before`, `from` and `all` always
-       * keep their requested page/tree semantics and return a replacement.
+       * prefix may be answered as a delta. `before` and `beforeEntry` require
+       * this field and merge only when it is still current or a proved prefix;
+       * `from` and `all` keep replacement semantics.
        */
       baseRevision?: string;
       /**

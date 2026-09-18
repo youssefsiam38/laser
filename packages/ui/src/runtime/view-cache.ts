@@ -13,6 +13,10 @@
  * What is never released:
  *
  * - the session a person is looking at, the Beam bubble, and every scope;
+ *
+ * Visible and user-owned views may exceed the ordinary cache share. Their
+ * logical conversation is not a reconstructible inactive cache, so soft byte
+ * targets are reported rather than enforced by deleting rows from that view.
  * - a session with a question, an approval or anything else waiting for them;
  * - a session with work running: a turn, a queue, an agent run, a command;
  * - a session holding words they wrote and nobody else has yet — a composer
@@ -130,13 +134,11 @@ export interface RendererViewCounters {
   readonly tailsDropped: number;
   readonly limits: ViewCacheLimits;
   /**
-   * A state in passing, never a settled one (RP-5b): a pass has not brought
-   * every view inside the bounds yet, and the next one continues. No view ever
-   * settles above its bound, so there is no value here that means "allowed to
-   * hold more" — the old `pinned`/`drafts` overflow was exactly that, and it
-   * is gone.
+   * `transition`: reclaimable state is still being released. `protected`:
+   * visible/user-owned logical history honestly exceeds a soft cache target;
+   * maintenance must not repeatedly trim it to manufacture compliance.
    */
-  readonly overflow?: "transition";
+  readonly overflow?: "transition" | "protected";
   readonly calibration: { model: string; fittedAt: string };
 }
 
@@ -395,6 +397,21 @@ export function holdsTranscript(pin: PinReason | undefined): boolean {
       const exhaustive: never = pin;
       return exhaustive;
     }
+  }
+}
+
+/** Soft cache targets never destructively trim these user-owned surfaces. */
+export function protectsLogicalHistory(pin: PinReason | undefined): boolean {
+  switch (pin) {
+    case "current":
+    case "destination":
+    case "scope":
+    case "draft":
+    case "unsent":
+    case "action":
+      return true;
+    default:
+      return false;
   }
 }
 
@@ -674,11 +691,13 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
 
   const plan = (state: AppState, effective: ViewCacheLimits): { paths: Array<{ path: string; bytes: number; reason: EvictionReason }>; trims: Map<string, number>; refused: Array<{ path: string; pin: PinReason }>; overflow: RendererViewCounters["overflow"] } => {
     const { held, bytes, pinnedBytes, drafts } = survey(state);
-    // RP-5b: the per-view bound is a bound, not a trigger. Every hydrated view
-    // over it — pinned, current, running, holding a draft — releases its older
-    // settled turns. Nothing is evicted for it and no work is touched.
+    // Inactive/reconstructible views still obey their ordinary share. A view
+    // the person can see, or whose unsent operation they own, keeps its logical
+    // history even when that exceeds the soft target (D-295).
     const trims = new Map<string, number>();
-    for (const row of held) if (row.bytes > effective.viewBytes) trims.set(row.path, effective.viewBytes);
+    for (const row of held) {
+      if (row.bytes > effective.viewBytes && !protectsLogicalHistory(row.pin)) trims.set(row.path, effective.viewBytes);
+    }
     const candidates = held
       .filter((row) => row.pin === undefined)
       .sort((a, b) => (used.get(a.path) ?? 0) - (used.get(b.path) ?? 0));
@@ -717,13 +736,13 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       count -= 1;
     }
 
-    // The total binds every view too, pinned or not. What eviction cannot
-    // reach — a conversation somebody is using — is brought inside it by
-    // releasing its older settled turns, largest first.
+    // After inactive eviction, reclaim older rows only from non-visible views.
+    // Protected bytes remain fully counted; exceeding the soft aggregate is an
+    // honest state, not permission to delete the conversation being used.
     let projected = 0;
     for (const row of held) if (!taken.has(row.path)) projected += Math.min(row.bytes, trims.get(row.path) ?? row.bytes);
     if (projected > effective.bytes) {
-      for (const row of [...held].sort((a, b) => b.bytes - a.bytes)) {
+      for (const row of [...held].filter(row => !protectsLogicalHistory(row.pin)).sort((a, b) => b.bytes - a.bytes)) {
         if (projected <= effective.bytes) break;
         if (taken.has(row.path)) continue;
         const current = Math.min(row.bytes, trims.get(row.path) ?? row.bytes);
@@ -734,21 +753,20 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     }
     for (const path of taken) trims.delete(path);
 
-    // The total and the per-view share still count everything hydrated,
-    // pinned or not: they are about memory, not about the cache's own slots.
-    const over = total > effective.bytes || count > effective.views || trims.size > 0;
+    const protectedOverView = held.some(row => !taken.has(row.path)
+      && protectsLogicalHistory(row.pin) && row.bytes > effective.viewBytes);
+    const unresolved = projected > effective.bytes || count > effective.views || protectedOverView;
+    const actionable = chosen.length > 0 || trims.size > 0;
+    const over = actionable || unresolved;
     const refused = over
       ? held.filter((row) => row.pin !== undefined).map((row) => ({ path: row.path, pin: row.pin! }))
       : [];
-    // Being over is a state in passing: this pass releases and trims, and the
-    // next one measures what it left. `drafts`/`pinnedBytes` are still surveyed
-    // for the counters, never as permission to stay over.
-    void drafts; void pinnedBytes;
+    void total; void drafts; void pinnedBytes;
     return {
       paths: chosen,
       trims,
       refused,
-      overflow: over ? "transition" : undefined,
+      overflow: actionable ? "transition" : unresolved ? "protected" : undefined,
     };
   };
 
@@ -758,8 +776,8 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
     const state = options.read();
     const { paths, trims: overSized, refused, overflow: over } = plan(state, limits);
     const outcome = release(paths);
-    // Views the release did not let go of are brought inside the per-view
-    // bound in the same pass, so nothing settles above it.
+    // Reclaimable views the release did not let go of are brought inside the
+    // ordinary per-view share. Protected logical history is not in this map.
     const trimmed = trim(overSized);
     if (trimmed) {
       const after = plan(options.read(), limits);
@@ -859,7 +877,8 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
         case "entries":
         case "historySnapshot":
         case "historyPrepend":
-        case "historyMetadata":
+        case "historyRecover":
+        case "historyPageRefused":
         case "historyReset":
         case "historyBegin":
         case "historyEnd":
@@ -926,8 +945,8 @@ export function createViewCache(options: ViewCacheOptions): ViewCache {
       const state = options.read();
       const { paths, trims: overSized, refused, overflow: over } = plan(state, effective);
       const outcome = release(paths.map((row) => ({ ...row, reason: "pressure" as const })));
-      // Under pressure the per-view share is tighter, and it still binds every
-      // view: a conversation somebody is reading keeps its newest turns.
+      // Pressure tightens reclaimable cache shares; it still cannot erase the
+      // logical history of a visible or user-owned conversation.
       if (trim(overSized)) {
         overflow = plan(options.read(), effective).overflow;
         snapshot = undefined;

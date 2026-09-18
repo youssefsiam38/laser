@@ -712,7 +712,7 @@ export class WorkerServer {
           for (;;) {
             const seq = live.seq;
             const baseline = live.preAcceptance;
-            const snapshot = baseline ?? await live.driver.entries({ live: !("before" in req.params.window) });
+            const snapshot = baseline ?? await live.driver.entries({ live: !("before" in req.params.window) && !("beforeEntry" in req.params.window) });
             if (this.runtimes.get(live.path) !== live) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation was closed. Open it again.");
             if (seq !== live.seq || baseline !== live.preAcceptance) continue;
             const active = "live" in snapshot ? snapshot.live : undefined;
@@ -724,11 +724,22 @@ export class WorkerServer {
             const common = {
               sessionId: this.sessionIdOf(live), epoch: live.historyEpoch, seq, revision, environmentKey,
               authority: "live" as const,
-              ...("before" in req.params.window ? {} : { live: active ?? { running: baseline?.state.isStreaming ?? live.driver.state().isStreaming, tools: [] } }),
+              ...("before" in req.params.window || "beforeEntry" in req.params.window ? {} : { live: active ?? { running: baseline?.state.isStreaming ?? live.driver.state().isStreaming, tools: [] } }),
             };
             const resolved = req.params.baseRevision === undefined
               ? undefined
               : live.revisions.resolve(req.params.baseRevision, this.revisionHeader(live), snapshot.entries, snapshot.leafId);
+            // Older pages merge into rows the client already holds. Require the
+            // existing revision service to prove those rows are still the
+            // current state or a byte-identical prefix; cursor/entry identity
+            // alone cannot detect a same-id rewrite or compaction barrier.
+            if (("before" in req.params.window || "beforeEntry" in req.params.window)
+              && !resolved?.state) {
+              throw new ProtocolError(
+                ErrorCodes.RevisionUnavailable,
+                "This conversation changed since that page was read. Reload it and try again.",
+              );
+            }
             // Only a live-edge tail can be spliced onto a cached revision.
             // Older-page, search-anchor and all-history requests retain their
             // exact tree semantics even when the base is current or a prefix.
