@@ -83,6 +83,7 @@ beforeEach(() => {
   localStorage.clear();
   deviceStore.activate(testDescriptor());
   mocks.request.mockReset();
+  mocks.stable.projects.splice(0, mocks.stable.projects.length, "/app-project", "/settings-one", "/settings-two");
   mocks.stable.setCurrentProject.mockReset();
   mocks.stable.actions.toast.mockReset();
   mocks.request.mockImplementation(async (method: string, params: { cwd?: string } = {}) => {
@@ -91,6 +92,15 @@ beforeEach(() => {
     if (method === "pi/settings/get") return { snapshot: snapshot(params.cwd ?? "missing") };
     if (method === "pi/models/catalog") return { models: [], enabledPatterns: null, refreshedAt: "", errors: [] };
     if (method === "pi/providers/list") return { providers: [] };
+    if (method === "pi/keybindings/get") return {
+      keybindings: {
+        path: "/agent/keybindings.json",
+        engineVersion: "1.0.0",
+        bindings: [{ id: "app.interrupt", description: "Interrupt", defaultKeys: ["ctrl+c"], keys: ["ctrl+c"], overridden: false, section: "app" }],
+        conflicts: [],
+        writable: true,
+      },
+    };
     if (method === "feature/list") return { features: [feature(params.cwd ?? "Global feature")] };
     return {};
   });
@@ -109,13 +119,13 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function mount(initialTab: "general" | "features" = "general") {
+async function mount(initialTab: "general" | "features" | "keyboard" = "general") {
   act(() => root.render(
     <LaserStoreProvider store={store}>
       <TooltipProvider>
         <WorkbenchProvider>
           <Probe />
-          <SettingsScreen ambientCwd="/app-project" initialTab={initialTab} />
+          <SettingsScreen initialTab={initialTab} />
         </WorkbenchProvider>
       </TooltipProvider>
     </LaserStoreProvider>,
@@ -221,6 +231,15 @@ describe("shared explicit Settings scope", () => {
     await flush();
     expect(setupAttempts).toBe(2);
     expect(calls("pi/settings/get")).toContainEqual({ cwd: "/neutral-settings-route" });
+  });
+
+  it("loads global keybindings through the neutral route with no project selected", async () => {
+    mocks.stable.projects.splice(0);
+    await mount("keyboard");
+    expect(calls("pi/keybindings/get")).toEqual([{ cwd: "/neutral-settings-route" }]);
+    expect(container.textContent).toContain("Agent keybindings are global and stay in force for every project.");
+    expect(container.textContent).toContain("Interrupt");
+    expect(container.textContent).not.toContain("need a project open");
   });
 
   it("routes a Global Feature write through the neutral service route", async () => {

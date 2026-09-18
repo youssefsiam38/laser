@@ -25,7 +25,7 @@ vi.mock("../../../src/runtime/index.js", () => {
 
 import { McpServersTab } from "../../../src/components/settings/mcp/McpServersTab.js";
 import { TooltipProvider } from "../../../src/components/ui/tooltip.js";
-import { click, render, serverState, text } from "./harness.js";
+import { click, findButton, render, serverState, text } from "./harness.js";
 
 let root: Root;
 let servers: McpServerState[];
@@ -81,10 +81,10 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-async function mount(props: { projectOpen?: boolean } = {}) {
+async function mount(view: "global" | "project" | "effective" = "project") {
   ({ root } = await render(
     <TooltipProvider>
-      <McpServersTab cwd="/project" {...props} />
+      <McpServersTab routeCwd="/project" view={view} />
     </TooltipProvider>,
   ));
 }
@@ -136,15 +136,12 @@ it("marks counts as historical at expiry without polling or claiming a retained 
   expect(mocks.request.mock.calls).toHaveLength(requests);
 });
 
-it("filters by scope without hiding the other one behind a guess", async () => {
-  await mount();
-  await click("This project");
-  expect([...document.querySelectorAll<HTMLElement>('[data-slot="mcp-server-row"]')].map((row) => row.dataset["server"])).toEqual([
-    "project:memory",
-    "project:playwright",
-  ]);
-  await click("Every project");
-  expect(document.querySelectorAll('[data-slot="mcp-server-row"]').length).toBe(5);
+it("uses the shared Settings scope without a second MCP scope filter", async () => {
+  await mount("project");
+  expect(findButton("All")).toBeUndefined();
+  expect(findButton("This project")).toBeUndefined();
+  expect(findButton("Every project")).toBeUndefined();
+  expect(document.querySelectorAll('[data-slot="mcp-server-row"]').length).toBe(7);
 });
 
 it("offers the gallery and the import banner instead of an empty page", async () => {
@@ -195,10 +192,43 @@ it("looks for other tools' configurations when it opens and when asked, never on
   expect(detects()).toBe(2);
 });
 
-it("is the every-project list when no project is open", async () => {
-  await mount({ projectOpen: false });
-  expect(text()).toContain("No project is open, so this is the every-project list");
+it("renders Effective as a read-only resolved list", async () => {
+  await mount("effective");
+  expect(findButton("Add a server")).toBeUndefined();
+  expect(findButton("Import")).toBeUndefined();
+  expect(mocks.request.mock.calls.some(([method]) => method === "mcp/import/detect")).toBe(false);
+  expect(mocks.request).toHaveBeenCalledWith("mcp/list", { cwd: "/project", view: "effective" });
+  expect(text()).toContain("Effective settings are a read-only preview");
+});
+
+it("shows the global projection without requiring a project", async () => {
+  servers = servers.filter((server) => server.scope === "global");
+  await mount("global");
   expect([...document.querySelectorAll("button")].some((button) => button.textContent === "This project")).toBe(false);
+  expect(mocks.request).toHaveBeenCalledWith("mcp/list", { cwd: "/project", view: "global" });
+  expect(mocks.request).toHaveBeenCalledWith("mcp/import/detect", { cwd: "/project", scope: "global" });
+});
+
+it("ignores a delayed list from the previous Settings view", async () => {
+  let resolveGlobal!: (value: { servers: McpServerState[] }) => void;
+  const globalRows = servers.filter((entry) => entry.scope === "global");
+  const projectRows = [servers.find((entry) => entry.scope === "project")!];
+  mocks.request.mockImplementation(async (method: string, params: { view?: string }) => {
+    if (method === "mcp/list" && params.view === "global") return await new Promise(resolve => { resolveGlobal = resolve; });
+    if (method === "mcp/list") return { servers: projectRows };
+    if (method === "mcp/import/detect") return { sources: [] };
+    throw new Error(`unexpected ${method}`);
+  });
+  ({ root } = await render(
+    <TooltipProvider><McpServersTab routeCwd="/project" view="global" /></TooltipProvider>,
+  ));
+  await act(async () => root.render(
+    <TooltipProvider><McpServersTab routeCwd="/project" view="project" /></TooltipProvider>,
+  ));
+  expect(text()).toContain("memory");
+  await act(async () => resolveGlobal({ servers: globalRows }));
+  expect(text()).toContain("memory");
+  expect(text()).not.toContain("github");
 });
 
 it("ignores a change in another project", async () => {

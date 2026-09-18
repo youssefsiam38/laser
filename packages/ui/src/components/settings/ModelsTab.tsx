@@ -12,7 +12,8 @@ import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { Tabs } from "radix-ui";
 import { WebSearchTab } from "./WebSearchTab.js";
 import { FallbackChainsTab } from "./fallback/FallbackChainsTab.js";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ScopeDraftGuard, type ScopeDraft } from "./ScopeDraftGuard.js";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronRight, ChevronsUpDown, Eye, Loader2, Mic2, RefreshCw, Sparkles } from "lucide-react";
 
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
@@ -36,7 +37,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
-import { useCapability, useLaserStable } from "@/runtime";
+import { useCapability, useLaserStable, type SettingsScopeView } from "@/runtime";
 import type {
   ModelCatalogEntry,
   ProviderAuthInfo,
@@ -55,7 +56,6 @@ import {
   modelOfferState,
   offerStateCounts,
   patternForModel,
-  settingsListScope,
   withModelOffered,
   withModelsSwitchedOff,
   withModelsSwitchedOn,
@@ -75,7 +75,9 @@ const MODEL_VIEWS: ReadonlyArray<{ id: ModelView; label: string; hint: string }>
 ];
 
 export interface ModelsTabProps {
-  cwd: string;
+  settingsRouteCwd: string;
+  neutralRouteCwd: string;
+  view: SettingsScopeView;
   snapshot: SettingsSnapshot | undefined;
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
 }
@@ -84,22 +86,59 @@ export function ModelsTab(props: ModelsTabProps) {
   const webSearch = useCapability("web-search/status");
   const settingsWrite = useCapability("pi/settings/set", { presentation: "explained" });
   const searchWrite = useCapability("web-search/configure", { presentation: "explained" });
+  const [drafts, setDrafts] = useState<Record<string, ScopeDraft>>({});
+  const reportDraft = useCallback((slot: string, draft: ScopeDraft | undefined) => {
+    setDrafts((current) => {
+      if (!draft && !(slot in current)) return current;
+      const next = { ...current };
+      if (draft) next[slot] = draft;
+      else delete next[slot];
+      return next;
+    });
+  }, []);
+  const reportProviderDraft = useCallback((draft: ScopeDraft | undefined) => reportDraft("provider", draft), [reportDraft]);
+  const reportFallbackDraft = useCallback((draft: ScopeDraft | undefined) => reportDraft("fallback", draft), [reportDraft]);
+  const reportSearchDraft = useCallback((draft: ScopeDraft | undefined) => reportDraft("search", draft), [reportDraft]);
+  const activeDrafts = useMemo(() => Object.values(drafts), [drafts]);
   return (
     <Tabs.Root defaultValue="models" className="flex h-full min-h-0 flex-col">
+      <ScopeDraftGuard drafts={activeDrafts} />
       <Tabs.List aria-label="Provider settings" className="flex shrink-0 gap-1 border-b border-line px-4 py-2">
         <Tabs.Trigger value="models" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Models and dictation</Button></Tabs.Trigger>
         <Tabs.Trigger value="fallback" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Fallback chains</Button></Tabs.Trigger>
         {webSearch.state === "available" ? <Tabs.Trigger value="search" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Web search</Button></Tabs.Trigger> : null}
       </Tabs.List>
-      <Tabs.Content value="models" className="min-h-0 flex-1"><ModelConnectionsTab {...props} decision={settingsWrite} /></Tabs.Content>
-      <Tabs.Content value="fallback" className="min-h-0 flex-1"><FallbackChainsTab {...props} decision={settingsWrite} /></Tabs.Content>
-      {webSearch.state === "available" ? <Tabs.Content value="search" className="min-h-0 flex-1"><WebSearchTab key={props.cwd} cwd={props.cwd} decision={searchWrite} /></Tabs.Content> : null}
+      <Tabs.Content forceMount value="models" className="min-h-0 flex-1 data-[state=inactive]:hidden"><ModelConnectionsTab {...props} decision={settingsWrite} onDraftChange={reportProviderDraft} /></Tabs.Content>
+      <Tabs.Content forceMount value="fallback" className="min-h-0 flex-1 data-[state=inactive]:hidden">
+        <FallbackChainsTab
+          cwd={props.neutralRouteCwd}
+          snapshot={props.snapshot}
+          onApply={props.onApply}
+          scopeView={props.view}
+          decision={settingsWrite}
+          onDraftChange={reportFallbackDraft}
+        />
+      </Tabs.Content>
+      {webSearch.state === "available" ? (
+        <Tabs.Content forceMount value="search" className="min-h-0 flex-1 data-[state=inactive]:hidden">
+          <WebSearchTab
+            neutralRouteCwd={props.neutralRouteCwd}
+            view={props.view}
+            {...(props.view !== "global" ? { projectCwd: props.settingsRouteCwd } : {})}
+            decision={searchWrite}
+            onDraftChange={reportSearchDraft}
+          />
+        </Tabs.Content>
+      ) : null}
     </Tabs.Root>
   );
 }
 
-function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProps & { decision: import("@/runtime/environment-capabilities").CapabilityDecision }) {
-  const writable = decision.state === "available";
+function ModelConnectionsTab({ settingsRouteCwd, neutralRouteCwd, view: scopeView, snapshot, onApply, decision, onDraftChange }: ModelsTabProps & {
+  decision: import("@/runtime/environment-capabilities").CapabilityDecision;
+  onDraftChange: (draft: ScopeDraft | undefined) => void;
+}) {
+  const writable = decision.state === "available" && scopeView !== "effective";
   const readOnlyExplanation = decision.state === "explained" ? decision.explanation : undefined;
   const { client } = useLaserStable();
   const [providers, setProviders] = useState<ProviderAuthInfo[]>([]);
@@ -121,17 +160,32 @@ function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProp
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
   const [offered, setOffered] = useState<Set<string>>(() => new Set());
   const [note, setNote] = useState<string>();
+  const generation = useRef(0);
+  const targetKey = `${scopeView}:${settingsRouteCwd}:${neutralRouteCwd}`;
+  const targetRef = useRef(targetKey);
+  targetRef.current = targetKey;
+  const applyHere = useCallback(async (scope: SettingsScope, changes: SettingChange[]) => {
+    const target = targetKey;
+    const ok = await onApply(scope, changes);
+    return ok && targetRef.current === target;
+  }, [onApply, targetKey]);
 
   const load = useCallback(
     async (refresh: boolean) => {
+      const request = ++generation.current;
       if (refresh) setRefreshing(true);
       else setLoading(true);
       try {
         const [providerResult, catalogResult, dictationResult] = await Promise.all([
-          client.request("pi/providers/list", { cwd }),
-          client.request("pi/models/catalog", { cwd, refresh }),
-          client.request("pi/transcribe/status", { cwd }),
+          client.request("pi/providers/list", { cwd: neutralRouteCwd }),
+          client.request("pi/models/catalog", {
+            cwd: settingsRouteCwd,
+            settingsView: scopeView === "global" ? "global" : "effective",
+            refresh,
+          }),
+          client.request("pi/transcribe/status", { cwd: neutralRouteCwd }),
         ]);
+        if (request !== generation.current) return;
         setProviders(providerResult.providers);
         setModels(catalogResult.models);
         setPatterns(catalogResult.enabledPatterns);
@@ -140,13 +194,15 @@ function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProp
         setErrors([...(providerResult.error ? [providerResult.error] : []), ...catalogResult.errors]);
         setFatal(undefined);
       } catch (loadError) {
-        setFatal(loadError instanceof Error ? loadError.message : String(loadError));
+        if (request === generation.current) setFatal(loadError instanceof Error ? loadError.message : String(loadError));
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (request === generation.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
-    [client, cwd],
+    [client, neutralRouteCwd, scopeView, settingsRouteCwd],
   );
 
   const handleProviderConfigured = useCallback(() => {
@@ -154,15 +210,19 @@ function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProp
   }, [load]);
 
   useEffect(() => {
+    setModels([]);
+    setBusy(new Set());
+    setOffered(new Set());
+    setNote(undefined);
     void load(false);
+    return () => { generation.current += 1; };
   }, [load]);
 
   const connected = useMemo(() => connectedProviderIds(providers), [providers]);
   const offerState = useCallback((model: ModelCatalogEntry): ModelOfferState => modelOfferState(model, connected), [connected]);
   const counts = useMemo(() => offerStateCounts(models, connected), [models, connected]);
   const hiddenByList = counts["hidden-by-list"];
-  const listScope = settingsListScope(snapshot, "enabledModels");
-  const switchScope = settingsListScope(snapshot, "disabledModels");
+  const writeScope: SettingsScope = scopeView === "project" ? "project" : "global";
 
   const matching = useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -199,7 +259,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProp
     }, {});
     if (level) current[`${model.provider}/${model.id}`] = level;
     else delete current[`${model.provider}/${model.id}`];
-    void onApply("global", [
+    void applyHere(writeScope, [
       Object.keys(current).length === 0
         ? { path: "modelThinkingLevels", op: "unset" }
         : { path: "modelThinkingLevels", op: "set", value: current },
@@ -241,7 +301,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProp
   const switchOff = (targets: ModelCatalogEntry[], what: string) => {
     const keys = targets.map(patternForModel);
     void whileBusy(keys, () =>
-      onApply(switchScope, [{ path: "disabledModels", op: "set", value: withModelsSwitchedOff(disabledList, targets) }]).then((ok) => {
+      applyHere(writeScope, [{ path: "disabledModels", op: "set", value: withModelsSwitchedOff(disabledList, targets) }]).then((ok) => {
         if (!ok) return false;
         setOffered((current) => {
           const next = new Set(current);
@@ -267,7 +327,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProp
     void whileBusy(keys, async () => {
       if (switchedOff.length > 0) {
         const next = withModelsSwitchedOn(disabledList, switchedOff);
-        const ok = await onApply(switchScope, [
+        const ok = await applyHere(writeScope, [
           next.length === 0 ? { path: "disabledModels", op: "unset" } : { path: "disabledModels", op: "set", value: next },
         ]);
         if (!ok) return false;
@@ -275,13 +335,13 @@ function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProp
       if (hiddenByPattern.length > 0) {
         let next = patterns;
         for (const model of hiddenByPattern) next = withModelOffered(next, model);
-        const ok = await onApply(listScope, [{ path: "enabledModels", op: "set", value: next ?? [] }]);
+        const ok = await applyHere(writeScope, [{ path: "enabledModels", op: "set", value: next ?? [] }]);
         if (!ok) return false;
       }
       setOffered((current) => new Set([...current, ...keys]));
       setNote(
         hiddenByPattern.length > 0 && switchedOff.length === 0
-          ? `Added ${hiddenByPattern.map(patternForModel).join(", ")} to Enabled models in your ${listScope} settings. ${hiddenByPattern.length === 1 ? "It is" : "They are"} in the pickers now.`
+          ? `Added ${hiddenByPattern.map(patternForModel).join(", ")} to Enabled models in your ${writeScope} settings. ${hiddenByPattern.length === 1 ? "It is" : "They are"} in the pickers now.`
           : `Switched on ${what}.`,
       );
       await load(false);
@@ -339,7 +399,12 @@ function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProp
             Which providers are signed in, and how. {writable ? "Pick one to sign in with an account or an API key, or to sign out. " : "Provider changes must be made from a connection with settings access. "}
             {PRODUCT_DISPLAY_NAME} never reads the credential itself.
           </p>
-          <ProviderStep cwd={cwd} onConfigured={handleProviderConfigured} />
+          <ProviderStep
+            routeCwd={neutralRouteCwd}
+            writable={scopeView !== "effective"}
+            onConfigured={handleProviderConfigured}
+            onDraftChange={onDraftChange}
+          />
           <div className="flex items-start gap-3 rounded-xl border border-line bg-surface px-3 py-3">
             <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[color-mix(in_oklab,var(--live)_12%,var(--surface))] text-live">
               <Mic2 className="size-4" aria-hidden="true" />
@@ -383,7 +448,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProp
           <p className="text-xs leading-5 text-ink-2">
             Every model below has a switch. Off takes it out of every picker; on puts it back. A provider’s{" "}
             <span className="font-medium text-ink">Enable all</span> and <span className="font-medium text-ink">Disable all</span> do the
-            same for its whole section. A model the provider adds later starts switched on. Written to your {switchScope} settings.
+            same for its whole section. A model the provider adds later starts switched on. Written to your {writeScope} settings.
           </p>
           {note && (
             <p role="status" data-slot="offer-note" className="flex items-center gap-1.5 text-xs leading-5 text-ok">
@@ -427,14 +492,14 @@ function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProp
               <p className="text-xs leading-5 text-ink-2">
                 Patterns in <code dir="ltr" className="font-mono">enabledModels</code> are an allow-list: when set, only what matches is offered, and a
                 pattern written before a model existed hides every newer one. The switches never edit this list. Leave it empty to offer
-                every model. Written to your {listScope} settings.
+                every model. Written to your {writeScope} settings.
               </p>
               <ProviderModelMultiPicker
                 models={models}
                 values={patterns ?? []}
                 disabled={!writable || snapshot === undefined}
                 onValuesChange={(value) =>
-                  void onApply(listScope, [
+                  void applyHere(writeScope, [
                     value.length === 0
                       ? { path: "enabledModels", op: "unset" }
                       : { path: "enabledModels", op: "set", value },
@@ -446,7 +511,7 @@ function ModelConnectionsTab({ cwd, snapshot, onApply, decision }: ModelsTabProp
               {patterns && patterns.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5">
                   {patterns.map((pattern) => <Badge key={pattern} variant="outline" className="font-mono">{pattern}</Badge>)}
-                  <Button variant="ghost" size="xs" disabled={!writable} onClick={() => void onApply(listScope, [{ path: "enabledModels", op: "unset" }]).then((ok) => ok && void load(false))}>
+                  <Button variant="ghost" size="xs" disabled={!writable} onClick={() => void applyHere(writeScope, [{ path: "enabledModels", op: "unset" }]).then((ok) => ok && void load(false))}>
                     Offer every model
                   </Button>
                 </div>

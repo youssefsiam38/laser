@@ -66,7 +66,7 @@ it("hides host-backed settings sections before they can issue a denied request",
     "pi/account-usage/refresh", "pi/project/list", "resource/snapshot",
   ]);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
-  ({ root } = await render(<TooltipProvider><WorkbenchProvider><SettingsScreen ambientCwd="/project" initialTab="general" /></WorkbenchProvider></TooltipProvider>));
+  ({ root } = await render(<TooltipProvider><WorkbenchProvider><SettingsScreen initialTab="general" /></WorkbenchProvider></TooltipProvider>));
   await act(async () => { await Promise.resolve(); });
   const tabs = [...document.querySelectorAll('[aria-current], button')].map((node) => node.textContent?.trim()).filter(Boolean);
   expect(tabs).toContain("Appearance");

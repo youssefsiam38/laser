@@ -62,7 +62,7 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 async function mount(tab: Tab) {
-  act(() => root.render(<LaserStoreProvider store={store}><TooltipProvider><WorkbenchProvider><SettingsScreen ambientCwd="/repo" initialTab={tab} /></WorkbenchProvider></TooltipProvider></LaserStoreProvider>));
+  act(() => root.render(<LaserStoreProvider store={store}><TooltipProvider><WorkbenchProvider><SettingsScreen initialTab={tab} /></WorkbenchProvider></TooltipProvider></LaserStoreProvider>));
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
 }
 

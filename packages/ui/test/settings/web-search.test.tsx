@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { WEB_SEARCH_PROVIDERS, type WebSearchChange, type WebSearchStatus } from "@lasercode/protocol";
+import type { ScopeDraft } from "../../src/components/settings/ScopeDraftGuard.js";
 const mocks = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("../../src/runtime/index.js", () => { const stable = { client: { request: mocks.request } }; return { useLaserStable: () => stable }; });
 import { WebSearchTab } from "../../src/components/settings/WebSearchTab.js";
@@ -26,7 +27,11 @@ beforeEach(() => {
   });
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
-async function render() { await act(async () => root.render(<TooltipProvider><WebSearchTab cwd="/project" /></TooltipProvider>)); }
+async function render(view: "global" | "project" | "effective" = "global", onDraftChange?: (draft: ScopeDraft | undefined) => void) {
+  await act(async () => root.render(
+    <TooltipProvider><WebSearchTab neutralRouteCwd="/project" view={view} onDraftChange={onDraftChange} /></TooltipProvider>,
+  ));
+}
 async function click(text: string) {
   const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === text || button.getAttribute("aria-label") === text)!;
   expect(button, text).toBeDefined(); await act(async () => button.click());
@@ -50,6 +55,31 @@ it("changes availability without changing any saved connection", async () => {
   expect(mocks.request).toHaveBeenCalledWith("feature/set", { id: "web-search", scope: "global", enabled: true, cwd: "/project" });
   expect(mocks.request.mock.calls.some(([method]) => method === "web-search/configure")).toBe(false);
 });
+it("keeps the global service on its neutral route in Project and makes Effective read-only", async () => {
+  await render("project");
+  expect(mocks.request).toHaveBeenCalledWith("web-search/status", { cwd: "/project" });
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await render("effective");
+  expect([...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.getAttribute("aria-label") === "Enable web search")?.disabled).toBe(true);
+  expect(container.textContent).toContain("Effective settings are a read-only preview");
+});
+
+it("reports and discards a typed connection draft", async () => {
+  let draft: ScopeDraft | undefined;
+  await render("global", (next) => { draft = next; });
+  await act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.textContent?.startsWith("SearXNG"))!.click());
+  const address = container.querySelector<HTMLInputElement>('input[placeholder="https://search.example.com"]')!;
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    setter.call(address, "https://search.local");
+    address.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(draft?.label).toContain("SearXNG");
+  await act(async () => { await draft?.discard(); });
+  expect(address.value).toBe("");
+});
+
 it("has a retryable initial failure instead of an empty screen", async () => {
   mocks.request.mockRejectedValueOnce(new Error("Connection unavailable"));
   await render(); expect(container.textContent).toContain("Could not load web search");

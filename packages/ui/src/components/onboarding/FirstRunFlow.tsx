@@ -145,7 +145,7 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
       try {
         const [providerResult, catalog] = await Promise.all([
           client.request("pi/providers/list", { cwd }),
-          client.request("pi/models/catalog", { cwd }),
+          client.request("pi/models/catalog", { cwd, settingsView: "global" }),
         ]);
         const configured = providerResult.providers.filter((p) => p.configured).length;
         const ref = catalog.defaultProvider && catalog.defaultModel ? `${catalog.defaultProvider}/${catalog.defaultModel}` : undefined;
@@ -296,7 +296,7 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
         card(
           STEP_TITLES.provider,
           "The company whose models the agent will use. Sign in with an account you already have, or paste an API key. You can add more later in Settings.",
-          <ProviderStep cwd={cwd} onConfigured={onConfigured} onBusyChange={setSigningIn} />,
+          <ProviderStep routeCwd={cwd} onConfigured={onConfigured} onBusyChange={setSigningIn} />,
           <>
             {back}
             {!signingIn && next((providersConfigured ?? 0) > 0)}
