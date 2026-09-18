@@ -398,7 +398,36 @@ export default async function liveHistoryRetention(check) {
   await check.rpc('pi/session/rename', { path: holding.state.path, name: holdingTitle });
   await selectSession(holdingTitle);
   await selectSession(title);
-  const explicitRereadInvoked = await page.evaluate(async () => {
+  // Compaction moves the conversation past the base this window holds, so the
+  // producer refuses its earlier pages. The person's way back is the control
+  // that says so; this lane presses the visible control rather than calling the
+  // action behind it, and only falls back when no refusal was raised.
+  const refusalRegion = page.locator('[data-slot="history-refusal"]');
+  const refusalControl = page.getByRole('main').getByRole('button', { name: 'Reload recent messages', exact: true });
+  await refusalControl.waitFor({ timeout: 30_000 }).catch(() => undefined);
+  let refusalControlUsed = false;
+  let refusalSentence;
+  let refusalControlHeight;
+  if (await refusalControl.count()) {
+    refusalSentence = (await refusalRegion.innerText()).trim();
+    assert(refusalSentence.length > 0 && !/-?\d{4,}|stale-base/.test(refusalSentence),
+      `the refusal is written for a person: ${JSON.stringify(refusalSentence)}`);
+    const controlBox = await refusalControl.boundingBox();
+    assert(controlBox, 'the re-read control is on screen');
+    refusalControlHeight = Math.round(controlBox.height);
+    if (touch) {
+      assert(controlBox.height >= 44, `the re-read control keeps a 44px touch target: ${controlBox.height}px`);
+      await refusalControl.tap();
+    } else {
+      await refusalControl.focus();
+      assert.equal(await refusalControl.evaluate(node => node === document.activeElement), true, 'the re-read control takes keyboard focus');
+      await refusalControl.press('Enter');
+    }
+    await page.getByRole('main').locator('[role="status"]').filter({ hasText: 'Recent messages reloaded.' }).waitFor({ timeout: 30_000 });
+    await refusalRegion.waitFor({ state: 'detached', timeout: 30_000 });
+    refusalControlUsed = true;
+  }
+  const explicitRereadInvoked = refusalControlUsed || await page.evaluate(async () => {
     const element = document.querySelector('[data-slot="thread-viewport"]');
     const key = element && Object.keys(element).find(name => name.startsWith('__reactFiber$'));
     let fiber = key ? element[key] : undefined;
@@ -414,7 +443,7 @@ export default async function liveHistoryRetention(check) {
     }
     return false;
   });
-  assert.equal(explicitRereadInvoked, true, 'the mounted history action performs the bounded explicit re-read');
+  assert.equal(explicitRereadInvoked, true, 'the bounded explicit re-read runs, through the visible control when one is offered');
   await page.getByText('Streaming line 40:', { exact: false }).first().waitFor();
   await viewport.evaluate(element => { element.scrollTop = 0; });
   await settleRender();
@@ -460,6 +489,9 @@ export default async function liveHistoryRetention(check) {
     compactionPreserved: true,
     postCompactionWithoutReload: true,
     explicitRereadInvoked,
+    refusalControlUsed,
+    refusalSentence,
+    refusalControlHeight,
     retainedBytes,
     cacheText,
     viewport: check.state.width,

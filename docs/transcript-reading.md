@@ -18,6 +18,31 @@ merges the page into the oldest turn, replaces ids or produces no new message.
 A one-frame fallback prevents a broken producer contract from wedging the
 viewport; acceptance tests require that fallback count to remain zero.
 
+## The reader never moves on their own
+
+One rule covers every arrival: **anything that changes above the reader moves
+the viewport by exactly that amount, once, in the same frame.** Its corollaries
+are what acceptance measures.
+
+- A page is attributed to unloaded history whenever it changes the head of the
+  id list while a cursor still points before it. It is not gated on the page
+  transaction: an accepted page commits over several React commits, and the
+  later ones land after the transaction has released. Growth *inside* an
+  existing row is not a head change and never counts.
+- A page that folds the anchored row into an older group leaves the reader
+  where they are. The row's id is gone, but the conversation is the same, so
+  the place is re-taken from what is on screen. Only a genuine window
+  *replacement* — a reloaded recent tail, a branch that dropped the message —
+  still falls back to the newest turn, and only when the surface is already
+  arriving there.
+- The producer's "there is nothing before this" can commit before the rows that
+  prove it. Removing the estimate then would take pixels from above the reader
+  while their replacement is still arriving, so the estimate is held until that
+  page's own commit, and removed with its compensation in one frame.
+- Compensation that the clamp at `scrollTop` 0 cannot spend stays owed, with
+  its sign, until content above the reader exists again. Without that, a reader
+  at the top of the window loses the movement and stays pinned there.
+
 ## What the scrollbar means
 
 A virtual reserve above the loaded rows represents history that still has a
@@ -48,3 +73,24 @@ and push the viewport by exactly their unabsorbed height. Real-session
 acceptance permits a wider initial/final range ratio for this reason and still
 requires a nonzero reserve, visible loading state, continuous anchors and zero
 reserve at the true root.
+
+## What acceptance measures
+
+`scripts/browser-check/test/scroll-up-repeat.mjs` reads geometry from the DOM,
+not from the controller, so it measures the pixels the person sees. Between
+settle samples — intervals with no input of their own — the row the reader is
+on may not move by more than one pixel, upward reading may not end at the live
+edge, and `scrollTop` 0 is only reached when no earlier history is claimed. A
+late notch of the person's own wheel is recognised by its signature (the row
+moves by exactly the scroll, with no change of range or reserve) and is not
+counted against the app.
+
+## When the base is refused
+
+A compaction or a branch can move the conversation past the base a window is
+holding. The producer then refuses its earlier pages, and `history.refusal`
+carries the sentence for the person. The transcript keeps every row it has;
+upward reading stops asking the question that was just refused; and the history
+controls replace "Load earlier messages" with that sentence and one action,
+"Reload recent messages", which performs the bounded current-tail re-read. The
+accepted window carries no refusal, so the ordinary control returns by itself.

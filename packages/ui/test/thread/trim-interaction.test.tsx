@@ -42,6 +42,7 @@ const stable = vi.hoisted(() => ({
   actions: {
     listModels: vi.fn(async () => []), send: vi.fn(), openSession: vi.fn(),
     loadEarlierEntries: vi.fn(async () => true), loadAllEntries: vi.fn(async () => true),
+    rereadHistory: vi.fn(async () => {}),
   },
 }));
 vi.mock("@/runtime", async original => ({
@@ -335,6 +336,59 @@ describe("a trim while somebody is reading", () => {
     expect(standingRows(SESSION)?.focusedEntryId).toBe(knownEntry);
 
     cache.dispose();
+  });
+
+  it("offers the producer's sentence and one re-read when a page base is refused", async () => {
+    const store = createStateStore(opened());
+    hydrateThrough(store, undefined);
+    await mount(store, store.presentation);
+    expect(container.textContent).toContain("Load earlier messages");
+
+    // The conversation moved past the base this window holds: the producer
+    // refuses its earlier pages and says why, for a person.
+    const message = "This conversation changed since that page was read. Re-read recent messages to continue.";
+    await act(async () => {
+      store.dispatch({ type: "historyPageRefused", path: SESSION, cause: "stale-base", message } as never);
+    });
+
+    expect(container.textContent).toContain(message);
+    expect(container.textContent).not.toContain("Load earlier messages");
+    // The range still describes the history that is there, but nothing promises
+    // that scrolling into it loads anything until the re-read happens.
+    expect(container.textContent).not.toContain("Earlier messages load as you scroll");
+    const actions = [...container.querySelectorAll("button")].filter(node => /reload recent messages/i.test(node.textContent ?? ""));
+    expect(actions).toHaveLength(1);
+
+    // Reading upwards no longer asks the producer the question it just refused.
+    const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]')!;
+    Object.defineProperty(viewport, "scrollTop", { value: 0, configurable: true, writable: true });
+    await act(async () => { viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true })); await Promise.resolve(); });
+    expect(stable.actions.loadEarlierEntries).not.toHaveBeenCalled();
+
+    // The keyboard path is the same path: focus the control and press Enter.
+    const control = actions[0]!;
+    await act(async () => {
+      control.focus();
+      control.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      control.click();
+      await Promise.resolve();
+    });
+    expect(stable.actions.rereadHistory).toHaveBeenCalledOnce();
+    await act(async () => { await Promise.resolve(); });
+    const status = container.querySelector('[role="status"]')!;
+    expect(status.textContent).toContain("Recent messages reloaded.");
+
+    // An accepted window carries no refusal, so the ordinary control returns.
+    await act(async () => {
+      store.dispatch({ type: "historyBegin", path: SESSION, token: "after" } as never);
+      store.dispatch({ type: "historySnapshot", path: SESSION, token: "after", leafId: "e23",
+        entries: Array.from({ length: 24 }, (_, index) => entry(index)), window: {
+          epoch: "w1", seq: 40, revision: "r3.env.40", environmentKey: "k", userOffset: 0, complete: false,
+          branchesUnloaded: false, hasHistory: true, context: [], priorGoalIds: [], anchor: "e0", before: "cursor-older",
+        } } as never);
+    });
+    expect(container.textContent).not.toContain(message);
+    expect(container.textContent).toContain("Load earlier messages");
   });
 
   it("refuses an unsafe replacement and keeps every route to Load earlier messages working", async () => {

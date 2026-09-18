@@ -33,8 +33,12 @@ function ReserveCard({ loading }: { loading: boolean }) {
  * virtual height. While a request is live, a zero-height sticky sibling keeps
  * the designed state in view without changing transcript geometry; the
  * unloaded-range card itself remains ordinary readable content.
+ *
+ * `guidance` is false when reading upwards cannot load anything right now (the
+ * producer refused this window's base): the range stays, because the history is
+ * real, and the promise goes, because it is not true until the person re-reads.
  */
-export function HistoryReserve({ height, loading }: { height: number; loading: boolean }) {
+export function HistoryReserve({ height, loading, guidance = true }: { height: number; loading: boolean; guidance?: boolean }) {
   if (height < 1 && !loading) return null;
   return (
     <>
@@ -50,7 +54,7 @@ export function HistoryReserve({ height, loading }: { height: number; loading: b
           style={{ height, flexShrink: 0 }}
           className="relative"
         >
-          {!loading && <div className="sticky top-4"><ReserveCard loading={false} /></div>}
+          {!loading && guidance && <div className="sticky top-4"><ReserveCard loading={false} /></div>}
         </div>
       )}
     </>

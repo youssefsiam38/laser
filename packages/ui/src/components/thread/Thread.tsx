@@ -242,14 +242,8 @@ function EntriesRefresh() {
   return null;
 }
 
-export interface HeldHistoryRecovery {
-  explanation: string;
-  actionLabel: string;
-  reread: () => void | Promise<void>;
-}
-
 /** History is explicit, and upward reading fetches the next complete turn page. */
-export function HistoryControls({ recovery }: { recovery?: HeldHistoryRecovery } = {}) {
+export function HistoryControls() {
   const { actions } = useLaserStable();
   const controller = useTranscriptViewport();
   // While this window is short of memory it will not start a whole-transcript
@@ -257,16 +251,26 @@ export function HistoryControls({ recovery }: { recovery?: HeldHistoryRecovery }
   // button that answers with a refusal; reading upwards is unaffected.
   const wholeTranscript = useThreadWholeTranscriptRefusal();
   const history = useLaserState(s => s.current ? s.open[s.current]?.history : undefined);
+  // The conversation moved on past the page this window was holding (a
+  // compaction, a branch): the producer will not serve earlier pages from that
+  // base any more. The rows on screen stay, and the way forward is to read the
+  // recent messages again — said in the producer's own sentence, with the one
+  // action that answers it.
+  const refusal = history?.refusal;
   const root = useRef<HTMLDivElement>(null);
   const pending = useRef<{ focused?: Element | null; page: boolean } | undefined>(undefined);
   const busy = useRef(false);
   const requestedHistory = useRef(false);
   const interacted = useRef(false);
   const [loading, setLoading] = useState<"earlier" | "all" | null>(null);
+  const [rereading, setRereading] = useState(false);
   const [announcement, setAnnouncement] = useState("");
   const deferred = useLaserState(s => Boolean(s.current && s.open[s.current]?.trimmed));
   const load = useCallback(async (all = false) => {
-    if (busy.current || (!all && !deferred && !history?.before) || (all && !history?.branchesUnloaded)) return;
+    // A refused base serves no page, upwards or in recovery: reading on would
+    // ask the producer the same impossible question over and over. The one way
+    // forward is the explicit re-read beside the sentence below.
+    if (busy.current || (!all && refusal) || (!all && !deferred && !history?.before) || (all && !history?.branchesUnloaded)) return;
     busy.current = true;
     requestedHistory.current = true;
     setLoading(all ? "all" : "earlier");
@@ -293,7 +297,7 @@ export function HistoryControls({ recovery }: { recovery?: HeldHistoryRecovery }
         }
       }
     }
-  }, [actions, controller, deferred, history?.before, history?.branchesUnloaded]);
+  }, [actions, controller, deferred, history?.before, history?.branchesUnloaded, refusal]);
   useLayoutEffect(() => {
     const anchor = pending.current;
     if (!anchor) return;
@@ -347,22 +351,36 @@ export function HistoryControls({ recovery }: { recovery?: HeldHistoryRecovery }
       viewport.removeEventListener("scroll", scroll);
     };
   }, [controller, deferred, history?.before, load]);
+  const reread = useCallback(async () => {
+    if (rereading) return;
+    setRereading(true);
+    try {
+      await actions.rereadHistory();
+      setAnnouncement("Recent messages reloaded.");
+    } catch {
+      // The action already puts the transport failure in front of the person;
+      // this control stays exactly as it was, and stays usable.
+    } finally {
+      setRereading(false);
+    }
+  }, [actions, rereading]);
   useEffect(() => () => controller.cancelEarlierPage(), [controller]);
-  if (!history && !deferred && !recovery) return null;
-  if (!deferred && !history?.before && !history?.branchesUnloaded && !requestedHistory.current && !recovery) return null;
-  return <div ref={root} className="flex flex-wrap items-center justify-center gap-2 py-2 text-sm text-ink-2" aria-busy={loading !== null}>
-    {(deferred || history?.before) && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load()}>
-      {loading === "earlier" ? "Loading earlier messages…" : "Load earlier messages"}
-    </Button>}
+  if (!history && !deferred) return null;
+  if (!deferred && !history?.before && !history?.branchesUnloaded && !requestedHistory.current && !refusal) return null;
+  return <div ref={root} className="flex flex-wrap items-center justify-center gap-2 py-2 text-sm text-ink-2" aria-busy={loading !== null || rereading}>
+    {refusal
+      ? <span data-slot="history-refusal" className="flex max-w-(--measure-prose) flex-wrap items-center justify-center gap-2 text-center">
+          <span>{refusal.message}</span>
+          <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={rereading} onClick={() => void reread()}>
+            {rereading ? "Reloading recent messages…" : "Reload recent messages"}
+          </Button>
+        </span>
+      : (deferred || history?.before) && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load()}>
+        {loading === "earlier" ? "Loading earlier messages…" : "Load earlier messages"}
+      </Button>}
     {/* Earlier messages arrive by scrolling up (and through the button above,
         which is the same thing for a keyboard). Only other versions of a prompt
         need asking for: no amount of scrolling reaches a branch. */}
-    {recovery && <span className="flex flex-wrap items-center justify-center gap-2">
-      <span>{recovery.explanation}</span>
-      <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" onClick={() => void recovery.reread()}>
-        {recovery.actionLabel}
-      </Button>
-    </span>}
     {history?.branchesUnloaded && (wholeTranscript.paused
       ? <span data-slot="versions-paused">{wholeTranscript.explanation}</span>
       : <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load(true)}>

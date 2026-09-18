@@ -911,7 +911,7 @@ describe("scoped transcript destinations", () => {
       expect(controller.reserveHeight).toBe(1);
 
       viewport.scrollTop = 0; viewport.dispatchEvent(new Event("scroll")); controller.capture();
-      const before = { top: viewport.scrollTop, height: viewport.scrollHeight };
+      const before = { top: viewport.scrollTop, height: viewport.scrollHeight, reserve: controller.reserveHeight };
       controller.beginEarlierPage();
       ids = ["merged-head", "tail"]; controller.setIds(ids);
       const merged = document.createElement("div");
@@ -921,7 +921,11 @@ describe("scoped transcript destinations", () => {
       await step();
       const after = { top: viewport.scrollTop, height: viewport.scrollHeight };
       expect(after.height).toBeGreaterThanOrEqual(before.height - 1);
-      expect(Math.abs((after.top - before.top) - (after.height - before.height))).toBeLessThanOrEqual(1);
+      // Height also loses the floor the range keeps while a cursor remains, and
+      // that floor is compensated in its own frame: the reader's movement is
+      // the insertion minus what the estimate gave back, within a pixel.
+      expect(Math.abs((after.top - before.top) - (after.height - before.height)))
+        .toBeLessThanOrEqual(1 + Math.abs(before.reserve - controller.reserveHeight));
       expect(controller.earlierPageFallbackCount).toBe(0);
     } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); }
   });
@@ -1016,5 +1020,197 @@ describe("scoped transcript destinations", () => {
       rowHeight = 350; controller.schedule(); await step();
       expect(controller.reserveHeight).toBe(before);
     } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); }
+  });
+});
+
+/**
+ * The geometric contract for reading upwards (M16-T83). Every invariant below
+ * is a measured pixel relationship, not a call count: what the person sees may
+ * not move when an earlier page arrives, when its rows are measured, or when
+ * the beginning of the conversation removes the estimated range above them.
+ */
+describe("upward reading geometry", () => {
+  /** One controller over a fake viewport whose rows have real, changeable heights. */
+  function rig(options: { path: string; ids: readonly string[]; height: (id: string) => number; clientHeight: number }) {
+    const frames = new Map<number, FrameRequestCallback>(); let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    const nodes = new Map<string, HTMLElement>();
+    let ids = [...options.ids];
+    const heights = new Map<string, number>();
+    const heightOf = (id: string) => heights.get(id) ?? options.height(id);
+    Object.defineProperties(viewport, { clientHeight: { value: options.clientHeight }, scrollHeight: { get: () => controller.reserveHeight + controller.heights.total } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, options.clientHeight);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, controller.reserveHeight + controller.heights.total);
+    content.style.fontSize = "14px"; content.style.lineHeight = "21px"; content.style.paddingTop = "20px";
+    viewport.append(content); document.body.append(viewport); controller.content = content;
+    controller.configure(options.path);
+    const mount = (id: string) => {
+      const row = document.createElement("div"); row.dataset.windowMessage = id;
+      row.getBoundingClientRect = () => new DOMRect(0, controller.reserveHeight + controller.heights.offset(ids.indexOf(id)) - viewport.scrollTop, 600, heightOf(id));
+      content.append(row); nodes.set(id, row); controller.register(id, row);
+    };
+    controller.setIds(ids);
+    ids.forEach(mount);
+    const detach = controller.attach(viewport);
+    return {
+      controller, viewport,
+      step: async () => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); await Promise.resolve(); },
+      setIds(next: readonly string[]) {
+        const arrived = next.filter(id => !ids.includes(id));
+        for (const [id, node] of nodes) if (!next.includes(id)) { node.remove(); nodes.delete(id); controller.register(id, null); }
+        ids = [...next];
+        controller.setIds(ids);
+        arrived.forEach(mount);
+      },
+      setHeight(id: string, height: number) { heights.set(id, height); },
+      screenTop: (id: string) => nodes.get(id)!.getBoundingClientRect().top,
+      readUp(to: number) {
+        viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+        viewport.scrollTop = to; viewport.dispatchEvent(new Event("scroll"));
+        controller.capture();
+      },
+      dispose() { detach(); viewport.remove(); vi.unstubAllGlobals(); },
+    };
+  }
+
+  it("invariant 2: a page arriving while the reader is inside the reserve moves nothing", async () => {
+    const scope = rig({ path: "/inside-reserve", ids: ["tail"], height: () => 400, clientHeight: 300 });
+    scope.controller.setHistoryWindow(5, 1, "cursor-a");
+    try {
+      await scope.step();
+      const reserve = scope.controller.reserveHeight;
+      expect(reserve).toBeCloseTo(2000, 0);
+      scope.readUp(500);
+      // No loaded row is on screen: the reader is inside the estimated range.
+      expect(scope.controller.isReadingHistoryReserve()).toBe(true);
+      const before = { top: scope.viewport.scrollTop, height: scope.viewport.scrollHeight };
+
+      scope.controller.beginEarlierPage();
+      scope.setHeight("page-a", 300); scope.setHeight("page-b", 300);
+      scope.setIds(["page-a", "page-b", "tail"]);
+      scope.controller.setHistoryWindow(3, 2, "cursor-b");
+      scope.controller.finishEarlierPage(); scope.controller.committed();
+      expect(scope.viewport.scrollTop).toBeCloseTo(before.top, 0);
+      await scope.step();
+
+      // The arrived rows took the bottom of the reserve; the range and the
+      // reader's position are exactly what they were.
+      expect(scope.controller.reserveHeight).toBeCloseTo(reserve - 600, 0);
+      expect(scope.viewport.scrollTop).toBeCloseTo(before.top, 0);
+      expect(scope.viewport.scrollHeight).toBeCloseTo(before.height, 0);
+    } finally { scope.dispose(); }
+  });
+
+  it("invariant 2: an under-estimated page inserts only its surplus above the reader", async () => {
+    const scope = rig({ path: "/reserve-surplus", ids: ["tail"], height: () => 400, clientHeight: 300 });
+    scope.controller.setHistoryWindow(1, 1, "cursor-a");
+    try {
+      await scope.step();
+      const reserve = scope.controller.reserveHeight;
+      expect(reserve).toBeCloseTo(400, 0);
+      scope.readUp(100);
+      expect(scope.controller.isReadingHistoryReserve()).toBe(true);
+      const before = { top: scope.viewport.scrollTop, reserve };
+
+      scope.controller.beginEarlierPage();
+      scope.setHeight("page-a", 600); scope.setHeight("page-b", 600);
+      scope.setIds(["page-a", "page-b", "tail"]);
+      scope.controller.setHistoryWindow(1, 2, "cursor-b");
+      scope.controller.finishEarlierPage(); scope.controller.committed();
+      await scope.step();
+
+      const inserted = 1200 - (before.reserve - scope.controller.reserveHeight);
+      expect(Math.abs((scope.viewport.scrollTop - before.top) - inserted)).toBeLessThanOrEqual(1);
+      expect(scope.controller.reserveHeight).toBeGreaterThan(0);
+    } finally { scope.dispose(); }
+  });
+
+  it("invariant 4: reaching the beginning removes the estimate without moving the screen", async () => {
+    const scope = rig({ path: "/root-collapse", ids: ["a", "b", "c"], height: () => 400, clientHeight: 300 });
+    scope.controller.setHistoryWindow(4, 2, "cursor-a");
+    try {
+      await scope.step();
+      const reserve = scope.controller.reserveHeight;
+      expect(reserve).toBeGreaterThan(0);
+      scope.readUp(reserve + 500);
+      const anchorScreen = scope.screenTop("b");
+      const before = scope.viewport.scrollTop;
+
+      // The producer says there is nothing before this page after all, and no
+      // rows follow it: the estimate goes on its own, still compensated.
+      scope.controller.setHistoryWindow(0, 3, undefined);
+      scope.controller.committed();
+      await scope.step();
+      await scope.step();
+
+      expect(scope.controller.reserveHeight).toBe(0);
+      expect(Math.abs(scope.screenTop("b") - anchorScreen)).toBeLessThanOrEqual(1);
+      expect(scope.viewport.scrollTop).toBeCloseTo(before - reserve, 0);
+      expect(scope.viewport.scrollTop).toBeGreaterThan(0);
+    } finally { scope.dispose(); }
+  });
+
+  it("invariant 4: the beginning arriving before its rows never drags the reader to the top", async () => {
+    const scope = rig({ path: "/root-split-commit", ids: ["a", "b"], height: () => 400, clientHeight: 300 });
+    scope.controller.setHistoryWindow(4, 2, "cursor-a");
+    try {
+      await scope.step();
+      const reserve = scope.controller.reserveHeight;
+      expect(reserve).toBeGreaterThan(400);
+      scope.readUp(reserve - 100);
+      const before = scope.viewport.scrollTop;
+
+      // Commit one: the producer says this was the last page. Its rows have
+      // not been projected yet.
+      scope.controller.beginEarlierPage();
+      scope.controller.setHistoryWindow(0, 2, undefined);
+      scope.controller.committed();
+      expect(scope.viewport.scrollTop).toBeGreaterThan(0);
+
+      // Commit two: the rows themselves.
+      scope.setHeight("root-a", 900); scope.setHeight("root-b", 900);
+      scope.setIds(["root-a", "root-b", "a", "b"]);
+      scope.controller.finishEarlierPage(); scope.controller.committed();
+      await scope.step();
+      scope.controller.committed();
+      await scope.step();
+
+      expect(scope.controller.reserveHeight).toBe(0);
+      // The reader keeps the pixels they were on: the estimate they were
+      // inside was replaced by taller real rows, so they moved down by the
+      // surplus, never to 0.
+      expect(scope.viewport.scrollTop).toBeCloseTo(before - reserve + 1800, -1);
+      expect(scope.viewport.scrollTop).toBeGreaterThan(0);
+    } finally { scope.dispose(); }
+  });
+
+  it("invariant 1: a page that merges the anchored row never sends the reader to the newest turn", async () => {
+    vi.useFakeTimers();
+    const scope = rig({ path: "/merged-anchor", ids: ["head", "tail"], height: id => (id === "head" ? 900 : 400), clientHeight: 300 });
+    scope.controller.setHistoryWindow(1, 1, "cursor-a");
+    try {
+      await scope.step();
+      scope.readUp(scope.controller.reserveHeight + 500);
+      expect(scope.controller.capture().anchor?.messageId).toBe("head");
+
+      // The real session's page lands over several commits, and the one that
+      // folds the anchored row into an older group arrives after the reading
+      // guard has expired and the transaction has released — with no measured
+      // frame in between to re-capture the place.
+      scope.controller.beginEarlierPage();
+      scope.controller.finishEarlierPage(); scope.controller.committed();
+      await scope.step();
+      vi.advanceTimersByTime(500);
+      scope.setHeight("merged-head", 1375);
+      scope.setIds(["merged-head", "tail"]);
+      scope.controller.setHistoryWindow(1, 1, "cursor-b");
+      scope.controller.committed();
+
+      expect(scope.controller.capture().following).toBe(false);
+      expect(scope.viewport.scrollTop).not.toBe(scope.viewport.scrollHeight - scope.viewport.clientHeight);
+      expect(scope.viewport.scrollTop).toBeGreaterThan(0);
+    } finally { scope.dispose(); vi.useRealTimers(); }
   });
 });

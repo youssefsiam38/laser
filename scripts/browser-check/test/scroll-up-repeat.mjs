@@ -118,8 +118,27 @@ export default async function scrollUpRepeat(check) {
     }
     return undefined;
   });
+  // What the reader is actually looking at: the first mounted row whose bottom
+  // is below the viewport's top, and where that row sits on screen. Geometry
+  // read from the DOM, so it measures the same pixels the person sees rather
+  // than the controller's own account of them.
+  const geometry = () => viewport.evaluate(el => {
+    const top = el.getBoundingClientRect().top;
+    const rows = [...el.querySelectorAll('[data-window-message]')];
+    const anchor = rows.find(row => row.getBoundingClientRect().bottom > top);
+    return {
+      top: el.scrollTop,
+      height: el.scrollHeight,
+      client: el.clientHeight,
+      reserve: document.querySelector('[data-slot="history-reserve"]')?.getBoundingClientRect().height ?? 0,
+      loading: Boolean(document.querySelector('[data-slot="history-reserve-loading"]')),
+      anchorId: anchor?.getAttribute('data-window-message'),
+      anchorScreen: anchor ? anchor.getBoundingClientRect().top - top : undefined,
+    };
+  });
   const trail = [];
   const arrivals = [];
+  const anchorDeltas = [];
   let priorRange = initialGeometry.height;
   // Paced like a person reading: a wheel notch, then a pause long enough for
   // the page to arrive and the viewport's reading window to close (SLOW=1),
@@ -127,23 +146,51 @@ export default async function scrollUpRepeat(check) {
   const slow = process.env.SLOW === '1';
   for (let round = 0; round < (slow || real ? 400 : 120) && !pageErrors.length; round++) {
     if (slow || real) {
-      const before = await viewport.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight }));
+      const before = await geometry();
       await upward(500);
-      const samples = [await viewport.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight }))];
-      for (const wait of [60, 150, 250, 200]) { await page.waitForTimeout(wait); samples.push(await viewport.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight })); }
+      // The wheel is applied asynchronously; give it a frame so the samples
+      // below contain only what the app did, never the person's own movement.
+      await page.waitForTimeout(40);
+      const samples = [await geometry()];
+      for (const wait of [60, 150, 250, 200]) { await page.waitForTimeout(wait); samples.push(await geometry()); }
       for (let index = 0; index < samples.length; index += 1) {
         const sample = samples[index];
-        if (real) assert.ok(sample.height + 1 >= priorRange, `scroll range collapsed ${Math.round(priorRange)}→${Math.round(sample.height)} during upward reading`);
+        assert.ok(sample.height + 1 >= priorRange, `scroll range collapsed ${Math.round(priorRange)}→${Math.round(sample.height)} during upward reading`);
         const previous = index > 0 ? samples[index - 1] : undefined;
-        if (previous && sample.height > previous.height + 0.5) {
-          const rangeDelta = sample.height - previous.height;
-          const topDelta = sample.top - previous.top;
-          arrivals.push({ rangeDelta, topDelta });
-          if (real) assert.ok(Math.abs(topDelta - rangeDelta) <= 1, `arrived page moved the reading anchor by ${Math.round(topDelta - rangeDelta)}px (${Math.round(previous.top)}/${Math.round(previous.height)}→${Math.round(sample.top)}/${Math.round(sample.height)})`);
+        if (previous) {
+          // Nothing but the person moves the reader between settle samples: the
+          // row they are on holds its place on screen through an arriving page,
+          // its measurement, and the removal of the estimated range at the root
+          // (M16-T83 invariants 1–4).
+          if (sample.anchorId && sample.anchorId === previous.anchorId) {
+            const moved = sample.anchorScreen - previous.anchorScreen;
+            // A late notch of the person's own wheel moves the row on screen by
+            // exactly the scroll and changes nothing else; that is them, not us.
+            const ownMovement = Math.abs(sample.top - previous.top) > 1
+              && Math.abs(sample.height - previous.height) <= 0.5
+              && Math.abs(sample.reserve - previous.reserve) <= 0.5
+              && Math.abs(moved + (sample.top - previous.top)) <= 1;
+            if (!ownMovement) anchorDeltas.push(Math.round(moved));
+            assert.ok(ownMovement || Math.abs(moved) <= 1,
+              `the reading anchor moved ${Math.round(moved)}px on its own (${Math.round(previous.top)}/${Math.round(previous.height)}→${Math.round(sample.top)}/${Math.round(sample.height)}, row ${sample.anchorId})`);
+          }
+          // Reading upwards never ends at the newest turn.
+          assert.ok(sample.top < sample.height - sample.client - 2 || previous.top >= previous.height - previous.client - 2,
+            `upward reading was thrown back to the live edge (${Math.round(previous.top)}/${Math.round(previous.height)}→${Math.round(sample.top)}/${Math.round(sample.height)})`);
+          // The top of the range means the beginning of the conversation.
+          if (sample.top === 0 && previous.top > 1) {
+            assert.ok(sample.reserve === 0 && !sample.loading,
+              `upward reading was written to the top while ${Math.round(sample.reserve)}px of earlier history was still claimed`);
+          }
+          // A page arrives either as new range or as estimate it took the place
+          // of; both are arrivals the assertions above had to hold across.
+          if (sample.height > previous.height + 0.5 || previous.reserve - sample.reserve > 0.5) {
+            arrivals.push({ rangeDelta: Math.round(sample.height - previous.height), reserveDelta: Math.round(previous.reserve - sample.reserve), topDelta: Math.round(sample.top - previous.top) });
+          }
         }
         priorRange = sample.height;
       }
-      if (process.env.TRACE) console.log(`wheel ${round}: before ${Math.round(before.top)}/${Math.round(before.height)} → ${samples.map(sample => `${Math.round(sample.top)}/${Math.round(sample.height)}`).join(' → ')} · top row ${await visible()}`);
+      if (process.env.TRACE) console.log(`wheel ${round}: before ${Math.round(before.top)}/${Math.round(before.height)} → ${samples.map(sample => `${Math.round(sample.top)}/${Math.round(sample.height)} res=${Math.round(sample.reserve)}`).join(' → ')} · top row ${await visible()}`);
     }
     else { for (let step = 0; step < 12; step++) { await upward(900); await page.waitForTimeout(30); } await page.waitForTimeout(250); }
     const mounted = await rows();
@@ -200,6 +247,8 @@ export default async function scrollUpRepeat(check) {
   assert.ok(loadingShot, 'the earlier-history loading state was not captured');
   await loadingShot;
   if (slow && !real) assert.ok(trail.length > 100 && Number(trail.at(-1)) < 500, `paced reading covered ${trail.length} notches down to checkpoint ${trail.at(-1)}`);
-  console.log('scroll-up evidence:', JSON.stringify({ rounds: trail.length, first: trail[0], last: trail.at(-1), arrivals: arrivals.length, statusSignals: finalGeometry.statusSignals, input, real: Boolean(real) }));
+  const worstAnchor = anchorDeltas.reduce((worst, delta) => Math.max(worst, Math.abs(delta)), 0);
+  console.log('scroll-up evidence:', JSON.stringify({ rounds: trail.length, first: trail[0], last: trail.at(-1), arrivals: arrivals.length,
+    anchorSamples: anchorDeltas.length, worstAnchorDelta: worstAnchor, statusSignals: finalGeometry.statusSignals, input, real: Boolean(real) }));
   return { ok: true };
 }

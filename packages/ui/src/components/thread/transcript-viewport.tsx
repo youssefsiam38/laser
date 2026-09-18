@@ -24,6 +24,8 @@ export type LocateResult = "visible" | "cancelled" | "missing";
 type Anchor = { messageId: string; landmark?: number; toolCallId?: string; offset: number; messageOffset: number };
 type Place = { anchor?: Anchor; following: boolean; revision?: string | undefined };
 const LANDMARKS = ".md-body > *, [data-slot=collapsible-trigger]";
+/** How many head rows a producer page may fold into one merged group. */
+const MERGED_HEAD_SCAN = 8;
 const COMPONENTS = { Message: ThreadMessage };
 
 /** One instance per rendered thread scope. It never retains a SessionView or an old DOM tree. */
@@ -85,6 +87,21 @@ export class TranscriptViewport {
   private earlierLoadingTimer: ReturnType<typeof setTimeout> | undefined;
   /** Only this arrived prefix may exchange later first-frame measurements. */
   private arrivedPage: { ids: readonly string[]; removedHeight: number; exchangedHeight: number; refine: boolean } | undefined;
+  /** The last id change kept no part of the previous window: a replacement, not a page. */
+  private replacedWindow = false;
+  /**
+   * Compensation the clamp at scrollTop 0 could not spend. Content above the
+   * reader can be removed in one commit and replaced in the next — the estimate
+   * going before the last page's rows arrive — and without this the truncated
+   * movement is lost and the reader stays pinned to the top of the window.
+   */
+  private clampDebt = 0;
+  /**
+   * Root arrived before the page's rows did. The estimate waits for the commit
+   * that brings them, so both compensations happen in one frame; once the page
+   * has settled it goes whether or not any row came with it.
+   */
+  private deferredRootCollapse: { rows: number } | undefined;
   /** Disclosure anchoring starts at animationstart, after the open state committed. */
   private disclosureTargets = new Set<Element>();
   private disclosureFrame = 0;
@@ -148,6 +165,9 @@ export class TranscriptViewport {
       clearAnchoredMessages(this.path);
     }
     this.path = path;
+    this.replacedWindow = false;
+    this.clampDebt = 0;
+    this.deferredRootCollapse = undefined;
     this.reserve.reset();
     this.historyUserOffset = 0;
     this.loadedUserTurns = 0;
@@ -201,26 +221,25 @@ export class TranscriptViewport {
     // A page can prepend cleanly or merge into the oldest projected group. Find
     // the preserved suffix and exchange only the positive height inserted above
     // it; a replacement with no preserved suffix is not attributed to history.
+    //
+    // Not gated on the page transaction: an accepted page commits over several
+    // React commits, and the later ones land after the transaction has
+    // released. Prefix growth while a cursor still points at unloaded history
+    // is that history arriving, whichever commit carries it (M16-T83). Growth
+    // *inside* an existing row — streaming, disclosure, an image — is not a
+    // prefix change and never reaches here.
+    const boundary = previous.length && ids.length ? this.preservedSuffix(previous, ids) : undefined;
+    this.replacedWindow = previous.length > 0 && boundary === undefined;
     let pageAttributed = false;
-    if (this.earlierPage && previous.length && ids.length) {
-      let previousStart = -1, nextStart = -1;
-      for (let old = 0; old < previous.length && nextStart < 0; old++) {
-        for (let next = 0; next < ids.length; next++) {
-          if (previous.length - old !== ids.length - next) continue;
-          if (!previous.slice(old).every((id, offset) => ids[next + offset] === id)) continue;
-          previousStart = old; nextStart = next; break;
-        }
-      }
-      if (nextStart > 0) {
-        pageAttributed = true;
-        const removedHeight = previousHeights.offset(previousStart);
-        const insertedHeight = Math.max(0, this.heights.offset(nextStart) - removedHeight);
-        const reserveBefore = this.reserve.height;
-        this.reserve.arrived(insertedHeight);
-        const globalShift = insertedHeight + this.reserve.height - reserveBefore;
-        if (Math.abs(globalShift) >= 0.5) this.structuralShift = (this.structuralShift ?? 0) + globalShift;
-        this.arrivedPage = { ids: ids.slice(0, nextStart), removedHeight, exchangedHeight: insertedHeight, refine: true };
-      }
+    if (boundary && boundary.nextStart > 0 && (this.historyBefore !== undefined || this.deferredRootCollapse !== undefined)) {
+      pageAttributed = true;
+      const removedHeight = previousHeights.offset(boundary.previousStart);
+      const insertedHeight = Math.max(0, this.heights.offset(boundary.nextStart) - removedHeight);
+      const reserveBefore = this.reserve.height;
+      this.reserve.arrived(insertedHeight);
+      const globalShift = insertedHeight + this.reserve.height - reserveBefore;
+      if (Math.abs(globalShift) >= 0.5) this.structuralShift = (this.structuralShift ?? 0) + globalShift;
+      this.arrivedPage = { ids: ids.slice(0, boundary.nextStart), removedHeight, exchangedHeight: insertedHeight, refine: true };
     }
     if (!pageAttributed && anchor && anchorBefore !== undefined) {
       const index = this.positions.get(anchor.messageId);
@@ -229,6 +248,25 @@ export class TranscriptViewport {
     }
     // A branch replacement cancels a pending destination; appends/prepends do not.
     if (previous.length && previous.some(id => !this.positions.has(id))) this.cancel("structure");
+  }
+  /**
+   * Where a new id list keeps a suffix of the old one, or nothing when the
+   * window was replaced. A page either prepends whole rows or folds the oldest
+   * ones into a merged group, so the search is bounded to the few head rows a
+   * merge can consume rather than comparing every alignment of two long lists.
+   */
+  private preservedSuffix(previous: readonly string[], ids: readonly string[]): { previousStart: number; nextStart: number } | undefined {
+    const shift = ids.length - previous.length;
+    const limit = Math.min(previous.length, MERGED_HEAD_SCAN);
+    for (let start = 0; start < limit; start++) {
+      const nextStart = start + shift;
+      if (nextStart < 0 || nextStart > ids.length) continue;
+      if (previous.length - start !== ids.length - nextStart) continue;
+      let same = true;
+      for (let offset = 0; same && offset < previous.length - start; offset++) same = ids[nextStart + offset] === previous[start + offset];
+      if (same) return { previousStart: start, nextStart };
+    }
+    return undefined;
   }
   private rebuild() { this.heights = new HeightIndex(this.ids.map(id => this.measured.get(this.cacheKey(id)) ?? this.estimate)); }
   get reserveHeight() { return this.reserve.height; }
@@ -285,6 +323,16 @@ export class TranscriptViewport {
     if (!viewport) return false;
     return direction === "up" ? viewport.scrollTop > 0 : this.edgeGap() > 2;
   }
+  /** Move by exactly what changed above the reader, surviving the clamp at 0. */
+  private shiftBy(delta: number) {
+    if (!this.viewport) return;
+    const target = this.viewport.scrollTop + delta + this.clampDebt;
+    // Above the content there is nowhere to go: the part of the movement the
+    // clamp cannot spend stays owed, with its sign, until content above the
+    // reader exists again.
+    this.clampDebt = target < 0 ? target : 0;
+    this.scroll(Math.max(0, target));
+  }
   private scroll(top: number) {
     if (!this.viewport) return;
     const before = this.viewport.scrollTop;
@@ -336,9 +384,14 @@ export class TranscriptViewport {
       // Leave the position alone; measure() shifts by exactly what changes.
       if (this.reading) return;
       if (index !== undefined) { this.scroll(viewport.scrollTop + this.heights.offset(index) - this.loadedTop() - anchor.messageOffset); return; }
-      // The transcript this place belonged to is not loaded here any more —
-      // a reloaded recent tail, or a branch that dropped the message. Latest
-      // is the honest answer; the top of an arbitrary window is not.
+      // The transcript this place belonged to is not loaded here any more.
+      // When the window was *replaced* — a reloaded recent tail, a branch that
+      // dropped the message — latest is the honest answer. When it was not,
+      // this row was folded into an older group by a page that arrived above
+      // (M16-T83): the conversation is the same, the reader is still in it,
+      // and taking them to the newest turn is the loop this controller exists
+      // to prevent. Re-anchor on what is on screen and leave them there.
+      if (!this.replacedWindow && !this.arriving) { this.capture(); return; }
       this.place = { following: true };
       this.arriving = true;
       this.scroll(Math.max(0, viewport.scrollHeight - viewport.clientHeight));
@@ -368,6 +421,9 @@ export class TranscriptViewport {
     this.frame = 0;
     if (this.disposed) return;
     let changed = this.layout();
+    // A held root estimate is removed on the first measured frame after its
+    // page settles, whether or not another commit follows.
+    if (this.collapseDeferredRoot("now")) changed = true;
     // Where the anchor sits before this pass. When measured rows replace
     // estimates above it, the person must not feel it: shift by exactly what
     // changed above the anchor, never re-place it from a fresh absolute.
@@ -408,19 +464,50 @@ export class TranscriptViewport {
       this.windowDirty = false;
       const mounted = this.reading && anchorIndex !== undefined && anchorBefore !== undefined && this.viewport && !this.target && this.nodes.has(this.place.anchor!.messageId);
       if (pageRefinementShift !== undefined && !this.place.following && this.viewport && !this.target) {
-        if (Math.abs(pageRefinementShift) >= 0.5) this.scroll(this.viewport.scrollTop + pageRefinementShift);
+        if (Math.abs(pageRefinementShift) >= 0.5 || this.clampDebt > 0) this.shiftBy(pageRefinementShift);
       } else if (mounted) {
         const shift = this.globalOffset(anchorIndex) - anchorBefore;
-        if (Math.abs(shift) >= 0.5) this.scroll(this.viewport!.scrollTop + shift);
+        if (Math.abs(shift) >= 0.5 || this.clampDebt > 0) this.shiftBy(shift);
       } else this.restore();
       this.publish();
     }
     this.capture();
   };
   schedule = () => { if (!this.frame && !this.disposed) this.frame = requestAnimationFrame(this.measure); };
+  /**
+   * Bracket any change to the estimated range, which sits above everything, so
+   * the reader's pixels do not move with it: compensate by how far the anchor
+   * moved, or — when no anchor row is placed — by the change itself.
+   */
+  private withReserveCompensation(change: () => void, apply: "commit" | "now" = "commit") {
+    const anchorIndex = !this.place.following && this.place.anchor ? this.positions.get(this.place.anchor.messageId) : undefined;
+    const anchorBefore = anchorIndex !== undefined ? this.globalOffset(anchorIndex) : undefined;
+    const reserveBefore = this.reserve.height;
+    change();
+    if (this.place.following) return;
+    const shift = anchorIndex !== undefined && anchorBefore !== undefined
+      ? this.globalOffset(anchorIndex) - anchorBefore
+      : this.reserve.height - reserveBefore;
+    if (Math.abs(shift) < 0.5) return;
+    // Inside a commit the shift joins the one this frame already owes; on a
+    // measured frame nothing else will consume it, so it is applied here.
+    if (apply === "commit" || !this.viewport || this.target) this.structuralShift = (this.structuralShift ?? 0) + shift;
+    else this.shiftBy(shift);
+  }
+  /** Remove a held root estimate once the page that reached it has committed. */
+  private collapseDeferredRoot(apply: "commit" | "now"): boolean {
+    const held = this.deferredRootCollapse;
+    if (!held) return false;
+    // While the page is still committing, its rows may still be on their way.
+    if (this.ids.length === held.rows && this.earlierPage) return false;
+    this.deferredRootCollapse = undefined;
+    const before = this.reserve.height;
+    this.withReserveCompensation(() => this.configureReserve(), apply);
+    return Math.abs(this.reserve.height - before) >= 0.5;
+  }
   private configureReserve() {
     this.reserve.configure({
-      hasBefore: this.historyBefore !== undefined,
+      hasBefore: this.historyBefore !== undefined || this.deferredRootCollapse !== undefined,
       userOffset: this.historyUserOffset,
       loadedUserTurns: this.loadedUserTurns,
       loadedHeight: this.heights.total,
@@ -431,16 +518,17 @@ export class TranscriptViewport {
   setHistoryWindow(userOffset: number, loadedUserTurns: number, before: string | undefined) {
     const changed = this.historyUserOffset !== userOffset || this.loadedUserTurns !== loadedUserTurns || this.historyBefore !== before;
     const pageChanged = Boolean(this.earlierPage && changed);
-    const anchorIndex = !this.place.following && this.place.anchor ? this.positions.get(this.place.anchor.messageId) : undefined;
-    const anchorBefore = anchorIndex !== undefined ? this.globalOffset(anchorIndex) : undefined;
     this.historyUserOffset = Math.max(0, userOffset);
     this.loadedUserTurns = Math.max(0, loadedUserTurns);
     this.historyBefore = before;
-    this.configureReserve();
-    if (anchorIndex !== undefined && anchorBefore !== undefined) {
-      const shift = this.globalOffset(anchorIndex) - anchorBefore;
-      if (Math.abs(shift) >= 0.5) this.structuralShift = (this.structuralShift ?? 0) + shift;
-    }
+    // The producer's "there is nothing before this" can commit before the rows
+    // of the page that proved it. Removing the estimate then takes pixels from
+    // above the reader while their replacement is still arriving, and drags
+    // them to the top of the conversation (M16-T83 invariant 4). Hold the
+    // estimate until the page this belongs to has finished committing.
+    if (before === undefined && changed && this.earlierPage && this.reserve.height > 0) this.deferredRootCollapse ??= { rows: this.ids.length };
+    if (before !== undefined) this.deferredRootCollapse = undefined;
+    this.withReserveCompensation(() => this.configureReserve());
     if (pageChanged) this.applyEarlierTransition({ type: "store-change" });
     if (changed) this.windowDirty = true;
   }
@@ -509,12 +597,16 @@ export class TranscriptViewport {
   get earlierPageFallbackCount() { return this.earlierFallbacks; }
   committed() {
     if (this.layout()) this.windowDirty = true;
+    // The page that reached the beginning has committed: its rows now hold the
+    // pixels the estimate was holding, so the estimate goes in this same frame,
+    // compensated, rather than leaving a range that claims unloaded history.
+    if (this.collapseDeferredRoot("commit")) this.windowDirty = true;
     const shift = this.structuralShift;
     this.structuralShift = undefined;
     // Rows arrived above the anchor in this commit: move by what they take up
     // now, before anyone sees the frame. `measure` refines that estimate; an
     // absolute `restore` is safe only after active input has settled.
-    if (shift !== undefined && this.viewport && !this.target) this.scroll(this.viewport.scrollTop + shift);
+    if (shift !== undefined && this.viewport && !this.target) this.shiftBy(shift);
     // Browser default scrolling updates scrollTop before its scroll event lets
     // capture() move the anchor. A layout commit can land in that gap. Never
     // restore the stale mounted anchor over active wheel/touch/key movement;
@@ -608,7 +700,7 @@ export class TranscriptViewport {
     } finally { options.signal?.removeEventListener("abort", abort); }
   }
   latest = () => {
-    this.cancel(); this.place.following = true; this.publish();
+    this.cancel(); this.clampDebt = 0; this.place.following = true; this.publish();
     if (this.viewport) this.scroll(Math.max(0, this.viewport.scrollHeight - this.viewport.clientHeight));
     // `scroll()` owns an event only when this placement actually moved.
     // Follow geometry handles later growth when latest was already in place.
@@ -728,6 +820,8 @@ export class TranscriptViewport {
     const user = (direction?: "up" | "down") => {
       if (direction === undefined || !this.canMove(direction)) return false;
       this.cancel(); this.arriving = false; this.expectedTop = undefined;
+      // A deliberate movement settles whatever the clamp still owed.
+      this.clampDebt = 0;
       this.place.following = false;
       this.stopDisclosureHold();
       markReading();
@@ -919,6 +1013,10 @@ export function WindowedMessages() {
   const userOffset = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.history?.userOffset ?? 0 : 0; });
   const before = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.history?.before : undefined; });
   const loadedUserTurns = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.blocks.filter(block => block.kind === "user" && !block.optimistic).length ?? 0 : 0; });
+  // While the producer refuses this window's base, scrolling up loads nothing:
+  // the range still describes the history that is there, but the card must not
+  // promise a thing that cannot happen. The history controls say what can.
+  const refused = useLaserState(s => { const path = visibleSessionPath(s); return Boolean(path && s.open[path]?.history?.refusal); });
   // Ids/heights must exist before unloaded-history geometry can become ready.
   controller.setIds(ids);
   controller.setHistoryWindow(userOffset, loadedUserTurns, before);
@@ -927,7 +1025,7 @@ export function WindowedMessages() {
   useLayoutEffect(() => { controller.committed(); });
   let cursor = 0;
   return <div ref={node => { controller.setContent(node); }} data-slot="thread-messages" className="flex flex-col pt-5 empty:hidden" style={{ overflowAnchor: "none" }}>
-    <HistoryReserve height={controller.reserveHeight} loading={controller.showEarlierLoading} />
+    <HistoryReserve height={controller.reserveHeight} loading={controller.showEarlierLoading} guidance={!refused} />
     {ranges.flatMap(range => {
       const gap = controller.heights.offset(range.start) - controller.heights.offset(cursor); cursor = range.end;
       return [
