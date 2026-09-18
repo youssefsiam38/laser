@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { entryBody, REASONING_SEGMENT_SEPARATOR } from "@lasercode/protocol";
 import { HistorySnapshotAccumulator } from "../src/history-snapshot.js";
 
 it("retains only the latest accepted partial output, independently of the replay buffer", () => {
@@ -32,4 +33,21 @@ it("keeps streaming identity and reasoning stable, and clears an ended or cancel
   expect(tracker.snapshot()).toEqual({ running: true, tools: [] });
   tracker.note({ kind: "agent_settled" });
   expect(tracker.snapshot()).toEqual({ running: false, tools: [] });
+});
+
+it("gives a live snapshot the same reasoning body the entry will be served as", () => {
+  const tracker = new HistorySnapshotAccumulator();
+  tracker.note({ kind: "message_start", role: "assistant" });
+  tracker.note({ kind: "thinking_delta", delta: "**First**", contentIndex: 0 });
+  tracker.note({ kind: "thinking_delta", delta: " pass", contentIndex: 0 });
+  // An empty segment is not a paragraph and spends no blank line.
+  tracker.note({ kind: "thinking_delta", delta: "", contentIndex: 1 });
+  tracker.note({ kind: "thinking_delta", delta: "**Second**", contentIndex: 2 });
+  const thinking = `**First** pass${REASONING_SEGMENT_SEPARATOR}**Second**`;
+  expect(tracker.snapshot().message?.value).toMatchObject({ content: [{ type: "thinking", thinking }] });
+  // The body a reader of the persisted entry would see, byte for byte.
+  expect(thinking).toBe(entryBody({ type: "message", message: { role: "assistant", content: [
+    { type: "thinking", thinking: "**First** pass" },
+    { type: "thinking", thinking: "**Second**" },
+  ] } }, { kind: "reasoning" }));
 });

@@ -36,7 +36,7 @@ import type {
 import { activePathIds } from "./components/thread/entries.js";
 import { appendLive, BODY_EXCERPT_MAX_BYTES, excerptHead, excerptLiveTail, headIndex, LIVE_TAIL_MAX_BYTES, type BodyRef } from "./runtime/body-excerpt.js";
 import { retainEntries, stubOfElided, retainedRows, type EntryStub } from "./runtime/retained-entries.js";
-import { boundedBodyText, sameBodyComponent, utf8ByteLength, type BodyComponent } from "@lasercode/protocol";
+import { boundedBodyText, joinReasoningSegments, REASONING_SEGMENT_SEPARATOR, sameBodyComponent, utf8ByteLength, type BodyComponent } from "@lasercode/protocol";
 import { blockBytes, entryBytes, entryStubBytes, imageMeasure, UNKNOWN_IMAGE_DECODED_BYTES } from "./runtime/view-measure.js";
 import { initialMainDestination, mainPath, pendingSessionPath, type MainDestination } from "./runtime/main-destination.js";
 import { receiveHistoryUpdate, reduceHistory, type HistoryAction } from "./runtime/history-loader.js";
@@ -136,6 +136,15 @@ export type Block =
       speaker?: MessageSpeaker;
       /** Bodies too large to hold; the excerpt above says what is shown. */
       bodies?: BlockBodies;
+      /**
+       * While this turn streams: the `contentIndex` of the reasoning segment
+       * the last thinking delta belonged to. A summary arrives as separate
+       * segments, and only their indices say where one ends and the next
+       * begins — the blank line between them is written when that number
+       * changes, so the live body reads, and measures, as the persisted one
+       * will. Absent once the turn is rebuilt from its entry.
+       */
+      thinkingIndex?: number;
       /** The persisted entry this turn is, when it has been written (RP-5b). */
       entryId?: string;
     }
@@ -1322,16 +1331,30 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
     }
     case "thinking_delta": {
       const a = lastAssistant(v.blocks);
+      // An empty delta is not a segment: the persisted body drops it, so the
+      // live one must not spend a blank line on it either.
+      if (u.delta === "") return v;
+      // A reasoning summary arrives as separate segments, each with a
+      // `contentIndex` of its own; an older worker sends none, and then this
+      // turn is one segment, exactly as it was before.
+      const segment = typeof u.contentIndex === "number" ? u.contentIndex : undefined;
       if (!a) {
         const opened = excerptLiveTail(u.delta, { component: { kind: "reasoning" } });
         const openedBodies = blockBodies({ thinking: opened.ref });
         return { ...v, blocks: [...v.blocks, { kind: "assistant", id: nextBlockId(), text: "", thinking: opened.text, streaming: true,
-          ...(openedBodies ? { bodies: openedBodies } : {}) }] };
+          ...(segment !== undefined ? { thinkingIndex: segment } : {}), ...(openedBodies ? { bodies: openedBodies } : {}) }] };
       }
-      const grown = appendLive(a.thinking, u.delta, a.bodies?.thinking, { entryId: a.entryId, component: { kind: "reasoning" } });
+      // A new index is a new segment: it starts a paragraph of its own, exactly
+      // where `entryBodies` will write one when this turn is persisted —
+      // including in the byte count the live reference carries.
+      const started = a.thinking !== "" || (a.bodies?.thinking?.totalBytes ?? 0) > 0;
+      const boundary = started && segment !== undefined && a.thinkingIndex !== undefined && a.thinkingIndex !== segment;
+      const grown = appendLive(a.thinking, boundary ? REASONING_SEGMENT_SEPARATOR + u.delta : u.delta,
+        a.bodies?.thinking, { entryId: a.entryId, component: { kind: "reasoning" } });
       const bodies = blockBodies({ ...a.bodies, thinking: grown.ref });
       const { bodies: _previous, ...rest } = a;
-      return { ...v, blocks: replaceLast(v.blocks, { ...rest, thinking: grown.text, ...(bodies ? { bodies } : {}) }) };
+      return { ...v, blocks: replaceLast(v.blocks, { ...rest, thinking: grown.text,
+        ...(segment !== undefined ? { thinkingIndex: segment } : {}), ...(bodies ? { bodies } : {}) }) };
     }
     case "message_end": {
       const msg = u.message as { role?: string; content?: unknown } | undefined;
@@ -1413,7 +1436,7 @@ export function applyUpdate(v: SessionView, u: SessionUpdate): SessionView {
         const settled = textOf(msg.content);
         const finalText = settled ? excerptLiveTail(settled, { entryId: a.entryId, component: { kind: "assistant_text" } }) : undefined;
         const bodies = settleBodies(blockBodies({ ...a.bodies, ...(finalText ? { text: finalText.ref } : {}) }), u.entry as PersistedEntry | undefined);
-        const { bodies: _previous, ...restAssistant } = a;
+        const { bodies: _previous, thinkingIndex: _cursor, ...restAssistant } = a;
         return {
           ...v,
           blocks: replaceLast(v.blocks, {
@@ -1510,7 +1533,11 @@ function customBlock(
 
 function closeStreaming(blocks: Block[]): Block[] {
   const a = lastAssistant(blocks);
-  return a ? replaceLast(blocks, { ...a, streaming: false }) : blocks;
+  if (!a) return blocks;
+  // The segment cursor belongs to a turn in flight. A settled row is the same
+  // row a reload builds from the entry, so it carries nothing extra.
+  const { thinkingIndex: _cursor, ...rest } = a;
+  return replaceLast(blocks, { ...rest, streaming: false });
 }
 
 /** A cancelled turn never wrote this transient user placeholder. */
@@ -2012,7 +2039,11 @@ export function blocksFromEntries(entries: unknown[], leafId?: string | null, na
     } else if (m.role === "assistant") {
       const parts = Array.isArray(m.content) ? (m.content as Array<{ type?: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: unknown }>) : [];
       const text = parts.filter((p) => p.type === "text").map((p) => p.text ?? "").join("");
-      const thinking = parts.filter((p) => p.type === "thinking").map((p) => p.thinking ?? "").join("");
+      // Separate summary segments read as separate paragraphs, and this join is
+      // the body the host serves for this entry: it has to be the same string,
+      // byte for byte, or the reference minted below points at a body that is
+      // not the one that comes back.
+      const thinking = joinReasoningSegments(parts.filter((p) => p.type === "thinking").map((p) => p.thinking ?? ""));
       // A turn that ended short belongs in the transcript even when it said
       // nothing: without this, an authentication failure reloads as a bare
       // question with no answer under it and nothing to explain the silence.

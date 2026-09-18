@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { HistoryLiveSnapshot, SessionUpdate } from "@lasercode/protocol";
+import { REASONING_SEGMENT_SEPARATOR, type HistoryLiveSnapshot, type SessionUpdate } from "@lasercode/protocol";
 
 const wireCopy = <T>(value: T): T => {
   const json = JSON.stringify(value);
@@ -11,7 +11,7 @@ const wireCopy = <T>(value: T): T => {
  * delivered. Reading that object with the current seq would replay them twice. */
 export class HistorySnapshotAccumulator {
   private running = false;
-  private message: { id: string; text: string; thinking: string; speaker?: NonNullable<HistoryLiveSnapshot["message"]>["speaker"] } | undefined;
+  private message: { id: string; text: string; thinking: string; thinkingIndex?: number; speaker?: NonNullable<HistoryLiveSnapshot["message"]>["speaker"] } | undefined;
   private tools = new Map<string, HistoryLiveSnapshot["tools"][number]>();
 
   note(update: SessionUpdate): void {
@@ -25,10 +25,19 @@ export class HistorySnapshotAccumulator {
         this.message ??= { id: randomUUID(), text: "", thinking: "" };
         this.message.text += update.delta;
         return;
-      case "thinking_delta":
+      // A reasoning summary arrives as separate segments, one `contentIndex`
+      // each, and reads as separate paragraphs. The blank line between two of
+      // them is written here as well, so a view that joins this snapshot sees
+      // the body the entry will be served as, to the byte.
+      case "thinking_delta": {
+        if (update.delta === "") return;
         this.message ??= { id: randomUUID(), text: "", thinking: "" };
-        this.message.thinking += update.delta;
+        const boundary = this.message.thinking !== "" && this.message.thinkingIndex !== undefined
+          && this.message.thinkingIndex !== update.contentIndex;
+        this.message.thinking += (boundary ? REASONING_SEGMENT_SEPARATOR : "") + update.delta;
+        this.message.thinkingIndex = update.contentIndex;
         return;
+      }
       case "message_end":
         if (update.role === "assistant" || (update.message as { role?: string } | null)?.role === "assistant" || update.speaker) this.message = undefined;
         return;
