@@ -260,6 +260,7 @@ describe("the durable state", () => {
     const second = entryFor({ event: "switched", at: iso(NOW), state, from: sonnet, to: deepseek });
     expect(restoreFallbackState([...entry(first), ...entry(second)]).activation!.position).toBe(1);
     expect(restoreFallbackState(entry({ version: 2, event: "switched" }))).toEqual(EMPTY_FALLBACK_STATE);
+    expect(restoreFallbackState([...entry(second), ...entry({ version: 2, event: "switched" })])).toEqual(EMPTY_FALLBACK_STATE);
     expect(restoreFallbackState([{ type: "message" }])).toEqual(EMPTY_FALLBACK_STATE);
     expect(restoreFallbackState([])).toEqual(EMPTY_FALLBACK_STATE);
   });

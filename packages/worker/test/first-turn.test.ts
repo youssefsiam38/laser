@@ -102,6 +102,8 @@ describe("first-turn admission", () => {
     ["mismatched target", activatedSetup({ to: B })],
     ["missing activation", activatedSetup({ activation: null })],
     ["activation on clear", clearedSetup({ activation })],
+    ["model memory on clear", clearedSetup({ models: { [modelKey(A)]: { cooldownUntil: AT } } })],
+    ["failure on clear", clearedSetup({ failure: { class: "provider_down", at: AT } })],
     ["malformed fallback", { type: "custom", customType: SESSION_FALLBACK_ENTRY_TYPE, data: { event: "activated" } }],
   ])("rejects fallback history shaped as %s", (_label, entry) => {
     expect(() => assertFirstTurnAdmission(admission({ entries: [entry] }))).toThrow("already started");

@@ -42,6 +42,15 @@ export interface EntryOptions {
   failure?: { class: ProviderFailureClass; at: string } | undefined;
 }
 
+/** Validate a persisted envelope once for both restoration and admission. */
+function fallbackEntryData(raw: unknown): SessionFallbackEntry | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const envelope = raw as { type?: unknown; customType?: unknown; data?: unknown };
+  if (envelope.type !== "custom" || envelope.customType !== SESSION_FALLBACK_ENTRY_TYPE) return undefined;
+  const parsed = sessionFallbackEntrySchema.safeParse(envelope.data);
+  return parsed.success ? parsed.data as unknown as SessionFallbackEntry : undefined;
+}
+
 /**
  * Whether one retained session entry proves only a person's pre-turn model setup.
  *
@@ -51,12 +60,8 @@ export interface EntryOptions {
  * shape; the canonical model helpers own identity comparisons.
  */
 export function isSetupOnlyFallbackEntry(raw: unknown): boolean {
-  if (!raw || typeof raw !== "object") return false;
-  const envelope = raw as { type?: unknown; customType?: unknown; data?: unknown };
-  if (envelope.type !== "custom" || envelope.customType !== SESSION_FALLBACK_ENTRY_TYPE) return false;
-  const parsed = sessionFallbackEntrySchema.safeParse(envelope.data);
-  if (!parsed.success) return false;
-  const entry = parsed.data as unknown as SessionFallbackEntry;
+  const entry = fallbackEntryData(raw);
+  if (!entry) return false;
   if (
     !entry.to
     || entry.from !== undefined
@@ -66,6 +71,8 @@ export function isSetupOnlyFallbackEntry(raw: unknown): boolean {
   ) return false;
   if (entry.event === "cleared") return entry.activation === null;
   if (entry.event !== "activated" || !entry.activation || entry.activation.position !== 0) return false;
+  // Persisted records are not necessarily current app writes. Refuse a chain
+  // our setup path cannot produce, even if its fields pass the wire schema.
   if (validateFallbackChains([{ models: entry.activation.models }]).length > 0) return false;
   const first = entry.activation.models[0];
   return Boolean(
@@ -116,10 +123,10 @@ export function restoreFallbackState(entries: readonly unknown[], options?: { at
       const candidate = entry as { type?: unknown; customType?: unknown } | null;
       return candidate?.type === "custom" && candidate.customType === SESSION_FALLBACK_ENTRY_TYPE;
     }) as { data?: unknown } | undefined;
-  if (!raw) return EMPTY_FALLBACK_STATE;
-  const parsed = sessionFallbackEntrySchema.safeParse(raw.data);
-  if (!parsed.success) return EMPTY_FALLBACK_STATE;
-  const entry = parsed.data as unknown as SessionFallbackEntry;
+  // Validate the last matching record, not the last valid record: a corrupt
+  // tail must never resurrect an older traversal.
+  const entry = fallbackEntryData(raw);
+  if (!entry) return EMPTY_FALLBACK_STATE;
   const failover = entry.failover && entry.failover.ended === undefined
     ? { ...entry.failover, ended: "aborted" as const, endedAt: options?.at ?? new Date().toISOString() }
     : entry.failover;
