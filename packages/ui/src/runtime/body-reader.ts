@@ -243,9 +243,16 @@ export class BodyRevisionFence {
     if (!this.initial) this.initial = this.revisionOf ? this.revisionOf(this.path) : Promise.resolve("");
     const pending = this.initial;
     const generation = this.generation;
-    const revision = await pending;
-    if (generation === this.generation && this.initial === pending) this.currentValue = revision;
-    return revision;
+    try {
+      const revision = await pending;
+      if (generation === this.generation && this.initial === pending) this.currentValue = revision;
+      return revision;
+    } catch (failure) {
+      // A failed lookup is not a revision. Keep an explicit retry possible,
+      // without letting an old generation clear a successor's in-flight ask.
+      if (generation === this.generation && this.initial === pending) this.initial = undefined;
+      throw failure;
+    }
   }
 
   private refresh(from: string): Promise<string> {

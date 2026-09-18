@@ -360,6 +360,29 @@ describe("the bounded window over one body", () => {
     await expect(window.more()).rejects.toThrow(BodyReplyRefused);
   });
 
+  it("allows explicit retry after the initial live revision lookup fails", async () => {
+    const text = "same body";
+    const digest = await digestOf(text);
+    const revisionOf = vi.fn()
+      .mockRejectedValueOnce(new Error("Connection interrupted"))
+      .mockResolvedValue("r2.env.2");
+    const request = vi.fn(async (params: Record<string, unknown>) => ({
+      authority: "durable", revision: params.revision, entryId: params.entryId,
+      component: params.component, totalBytes: text.length, offset: 0,
+      bytes: text.length, truncated: false, sliceDigest: digest, contentDigest: digest, text,
+    }));
+    const window = new BodyWindow(request as never, SESSION,
+      { entryId: "e1", component: { kind: "assistant_text" }, totalBytes: text.length,
+        contentDigest: digest, excerpt: { offset: 0, bytes: 0 } } as never,
+      128 * 1024, "env", revisionOf);
+    await expect(window.more()).rejects.toThrow("Connection interrupted");
+    expect(request).not.toHaveBeenCalled();
+    await window.more();
+    expect(revisionOf).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(window.getSnapshot().slices[0]?.text).toBe(text);
+  });
+
   it("refreshes one stale revision and validates the original body identity", async () => {
     const text = "same body";
     const digest = await digestOf(text);
