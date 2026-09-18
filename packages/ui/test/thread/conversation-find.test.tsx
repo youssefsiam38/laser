@@ -132,8 +132,8 @@ it("keeps labelled-row index occurrences aligned with paintable DOM ranges", () 
   const message = {
     id: "labelled", role: "assistant",
     content: [
-      { type: "tool-call", toolName: "bash", toolCallId: "a", args: { command: "pnpm test packages/ui", activity_label: "Checking the test suite" }, result: "test run ok" },
-      { type: "tool-call", toolName: "bash", toolCallId: "b", args: { command: "pnpm test packages/host", activity_label: "Verifying another test" }, result: "host test ok" },
+      { type: "tool-call", toolName: "bash", toolCallId: "a", args: { command: "pnpm test packages/ui", activity_label: "checking-the-test-suite" }, result: "test run ok" },
+      { type: "tool-call", toolName: "bash", toolCallId: "b", args: { command: "pnpm test packages/host", activity_label: "verifying_another_test" }, result: "host test ok" },
     ],
   } as never;
   container.innerHTML = `
@@ -159,6 +159,8 @@ it("keeps labelled-row index occurrences aligned with paintable DOM ranges", () 
     "label-a", "command-a", "output-a", "label-b", "command-b", "output-b",
   ]);
   expect(findTextRanges(container, "Checking the test suite").map(range => range.toString())).toEqual(["Checking the test suite"]);
+  expect(createConversationSearch()([message], "Checking the test suite")).toHaveLength(1);
+  expect(createConversationSearch()([message], "checking-the-test-suite")).toHaveLength(0);
 });
 it("opens the excerpt's source instead of an earlier lower-priority mention", async () => {
   await act(async () => root.render(<Fixture data={[messages[1]!, messages[0]!]} />));

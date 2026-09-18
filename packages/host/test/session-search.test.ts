@@ -59,10 +59,12 @@ describe("full-history search", () => {
   it("excludes tool keys and metadata but finds labels and visible input/output", async () => {
     const call = (id: string, command: string, activity_label?: string) => message("assistant", [{ type: "toolCall", id, name: "bash", arguments: { command, timeout: 123456, ...(activity_label ? { activity_label } : {}) } }]);
     save("keys-only", [call("a", "echo hello"), { type: "message", message: { role: "toolResult", toolCallId: "a", toolName: "bash", content: [{ type: "text", text: "hello" }], details: { command: "hidden command" } } }]);
-    const visible = save("visible", [call("b", "command -v node", "Checking saved history"), { type: "message", message: { role: "toolResult", toolCallId: "b", toolName: "bash", content: [{ type: "text", text: "command found" }] } }, call("c", "command -v git", "Checking unfinished call")]);
+    const visible = save("visible", [call("b", "command -v node", "checking-saved-history"), { type: "message", message: { role: "toolResult", toolCallId: "b", toolName: "bash", content: [{ type: "text", text: "command found" }] } }, call("c", "command -v git", "checking_unfinished_call")]);
     const sessions = new SessionCatalog(dir).list();
     expect((await searchSessions(sessions, "command")).hits).toEqual([{ path: visible, count: 3, source: "tool", excerpt: "command -v node" }]);
     expect((await searchSessions(sessions, "Checking")).hits).toEqual([{ path: visible, count: 2, source: "tool", excerpt: "Checking saved history" }]);
+    expect((await searchSessions(sessions, "Checking saved history")).hits).toEqual([{ path: visible, count: 1, source: "tool", excerpt: "Checking saved history" }]);
+    expect((await searchSessions(sessions, "checking-saved-history")).hits).toEqual([]);
     expect((await searchSessions(sessions, "123456")).hits).toEqual([]);
     expect((await searchSessions(sessions, "bash")).hits).toEqual([]);
   });

@@ -85,6 +85,7 @@ export function ToolCall({
       open={open}
       onOpenChange={onOpenChange}
       tone={tone}
+      visibleSearchText={label}
       className={cn(className)}
     >
       <ToolFallbackTrigger

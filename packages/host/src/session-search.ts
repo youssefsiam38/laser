@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { setImmediate as yieldToIO } from "node:timers/promises";
-import { goalPromptId, toolCallLabel, toolSearchContent, toolOutputText, type SearchableTool, type ClientRequests, type SessionSummary } from "@lasercode/protocol";
+import { goalPromptId, toolDisplayLabel, toolSearchContent, toolOutputText, type SearchableTool, type ClientRequests, type SessionSummary } from "@lasercode/protocol";
 
 type Source = "user" | "assistant" | "reasoning" | "tool";
 // Saved JSONL has tool calls but no SessionState snapshot, so host indexing can
@@ -9,7 +9,7 @@ type Source = "user" | "assistant" | "reasoning" | "tool";
 // session's collision map and hides dynamically chosen names.
 export const sourceRank = (source: Source) => source === "user" ? 0 : source === "assistant" ? 1 : 2;
 const searchableTool = (call: SearchableTool): string[] => {
-  const label = toolCallLabel(call.name, call.args);
+  const label = toolDisplayLabel(call);
   const content = toolSearchContent(call);
   return label ? [label, ...content] : content;
 };

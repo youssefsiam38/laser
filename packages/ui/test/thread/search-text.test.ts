@@ -29,7 +29,7 @@ describe("conversation search semantics", () => {
     expect(partSearchContent({
       type: "tool-call",
       toolName: "bash",
-      args: { command: "pnpm test", activity_label: "Tracing activity labels" },
+      args: { command: "pnpm test", activity_label: "tracing-activity-labels" },
       result: "passed",
     })).toEqual(["Tracing activity labels", "pnpm test", "passed"]);
   });

@@ -13,8 +13,8 @@ import { ToolGroup } from "../../src/components/assistant-ui/elements/tool-group
 import { ReasoningContent, ReasoningRoot, ReasoningTrigger } from "../../src/components/assistant-ui/elements/reasoning.js";
 import { projectMessages } from "../../src/runtime/projection.js";
 import type { Block } from "../../src/store.js";
-import { activityRow, activityTrigger } from "../../src/components/assistant-ui/elements/surfaces.js";
-import { SearchMessageContext } from "../../src/components/thread/search-state.js";
+import { activityDisclosure, activityRow, activityTrigger } from "../../src/components/assistant-ui/elements/surfaces.js";
+import { FindQueryContext, SearchMessageContext } from "../../src/components/thread/search-state.js";
 import { ToolRow } from "../../src/components/thread/ToolRow.js";
 import { activateTestEnvironment } from "../../test/runtime/environment-fixture.js";
 
@@ -58,10 +58,15 @@ afterEach(async () => {
 });
 
 describe("activity disclosures", () => {
-  it("pads the trigger contents, not the outer row, so the beam reaches both edges", () => {
+  it("keeps row layout passive and puts pointer affordances on the disclosure button", () => {
     expect(activityRow).not.toMatch(/\bp[xslr]-/);
     expect(activityTrigger).toContain("px-2");
     expect(activityTrigger).toContain("w-full");
+    expect(activityTrigger).not.toContain("cursor-pointer");
+    expect(activityTrigger).not.toContain("active:bg-");
+    expect(activityDisclosure).toContain("cursor-pointer");
+    expect(activityDisclosure).toContain("pointer-coarse:size-11");
+    expect(activityDisclosure).toContain("focus-visible:outline-live");
   });
   it("does not synthesize thinking after a tool call in the real transcript", () => {
     const source = readFileSync(new NodeURL("../../src/components/thread/messages.tsx", import.meta.url), "utf8");
@@ -146,10 +151,12 @@ describe("activity disclosures", () => {
     ] as const;
     await act(async () => render(<ToolGroupRoot><ToolGroupTrigger label="Completed 40 steps" breakdown={breakdown} /><ToolGroupContent>All 40 steps</ToolGroupContent></ToolGroupRoot>));
     const trigger = container.querySelector('button')!;
-    expect(trigger.textContent).toContain('Completed 40 steps');
+    const row = trigger.closest<HTMLElement>('[data-slot="tool-group-trigger-row"]')!;
+    expect(row.textContent).toContain('Completed 40 steps');
     expect(container.querySelectorAll('[data-slot="tool-group-breakdown-item"]')).toHaveLength(2);
     expect(container.querySelector('[data-slot="tool-group-breakdown-more"]')?.textContent).toBe('+2 types');
     expect(trigger.getAttribute('aria-label')).toContain('Edited 8 files, Ran 5 commands');
+    expect(row.querySelector('[data-slot="tool-group-trigger-label"]')?.closest('button')).toBeNull();
     expect(container.querySelector('[data-slot="tool-group-trigger-label"]')?.classList.contains('truncate')).toBe(false);
     await act(async () => trigger.click()); expect(container.textContent).toContain('All 40 steps');
     await act(async () => trigger.click()); expect(container.textContent).not.toContain('All 40 steps');
@@ -387,6 +394,29 @@ describe("activity disclosures", () => {
     // And a second reveal starts from the reveal again, not from that fold.
     await act(async () => render(fixture(true)));
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("keeps a body folded when find matches the already-visible humanised label", async () => {
+    const fixture = (reveal: boolean) => (
+      <FindQueryContext value="Reading build config">
+        <SearchMessageContext value={reveal}>
+          <ToolFallbackRoot visibleSearchText="Reading build config">
+            <ToolFallbackTrigger verb="Read" label="Reading build config" summary="build.config.ts" />
+            <ToolFallbackContent>Unrelated hidden request and output</ToolFallbackContent>
+          </ToolFallbackRoot>
+        </SearchMessageContext>
+      </FindQueryContext>
+    );
+    await act(async () => render(fixture(false)));
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => render(fixture(true)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(container.textContent).not.toContain("Unrelated hidden request and output");
+    await act(async () => trigger.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => render(fixture(false)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
   // The row a person actually clicks in a find pass is a tool row, and it goes

@@ -47,7 +47,22 @@ export function answer(request) {
   }
   // Output past the transcript's per-body excerpt and under the shell tool's own cap.
   if (last?.role === 'user' && prompt === 'Run fixture large output') return { toolCall: { name: 'bash', args: { command: "seq 1 1100 | awk '{printf \"ok  test %05d passed in the fixture suite\\n\", $1}'" } } };
-  if (last?.role === 'user' && prompt === 'Run labelled fixture tool') return { toolCall: { name: 'bash', args: { command: "sleep 45; printf 'labelled fixture complete\\n'", activity_label: 'Checking layout balance' } } };
+  if (last?.role === 'user' && prompt.startsWith('Run labelled fixture tool')) {
+    const caseLabel = prompt.slice('Run labelled fixture tool'.length).trim();
+    const activityLabel = caseLabel ? `checking-${caseLabel}-row` : 'checking-layout-balance';
+    return { reasoning: 'Inspect the selectable activity row before running the command.', toolCall: { name: 'bash', args: { command: "sleep 12; printf 'labelled fixture complete\\n'", activity_label: activityLabel } } };
+  }
+  if (last?.role === 'user' && prompt === 'Run labelled fixture error') return { toolCall: { name: 'read', args: { path: 'missing-fixture-config.txt', activity_label: 'reading-missing-config' } } };
+  if (last?.role === 'user' && prompt === 'Run generic fixture tool' && names.includes('inspect_fleet')) return { toolCall: { name: 'inspect_fleet', args: {} } };
+  if (prompt === 'Run fixture activity sequence') {
+    const turn = request.messages.slice(request.messages.findLastIndex(message => message.role === 'user') + 1);
+    const step = turn.filter(message => message.role === 'tool').length;
+    const calls = [
+      { name: 'bash', args: { command: "printf 'first activity complete\\n'", activity_label: 'checking-first-activity' } },
+      { name: 'read', args: { path: 'missing-sequence-config.txt', activity_label: 'reading-second-activity' } },
+    ];
+    return calls[step] ? { toolCall: calls[step] } : { text: 'Activity sequence complete.' };
+  }
   if (last?.role === 'user' && prompt === 'Run fixture tools') return { toolCall: { name: 'bash', args: { command: "printf 'fixture tool output\\n'" } } };
   const goal = /<goal_id>\s*([^\s<>]+)\s*<\/goal_id>/.exec(prompt)?.[1];
   if (last?.role === 'user' && goal && names.includes('goal_complete')) return { toolCall: { name: 'goal_complete', args: { goal_id: goal, summary: 'Verified the fixture implementation and its focused checks.' } } };

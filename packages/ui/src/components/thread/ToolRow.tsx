@@ -1,6 +1,6 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { useAuiState } from "@assistant-ui/react";
-import { toolCallLabel, withoutToolLabel, type UiDialogRequest } from "@lasercode/protocol";
+import { toolDisplayLabel, withoutToolLabel, type UiDialogRequest } from "@lasercode/protocol";
 import { Bot, FolderOpen, GitBranch, MessageSquare } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useMemo, type ReactNode } from "react";
 
@@ -90,7 +90,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   const activityLevel = useActivityDetailLevel(path);
   // The agent's label is the row's durable primary title. The computed tool
   // summary stays visible beneath it, in every lifecycle state (D-282).
-  const agentLabel = toolCallLabel(toolName, args, toolLabelParams);
+  const agentLabel = toolDisplayLabel({ name: toolName, args }, toolLabelParams);
   // Which MCP servers this session started with, so `playwright_browser_*` is
   // read as Playwright's own tool and not as a tool nobody recognises
   // (docs/mcp.md "In the transcript").
