@@ -433,6 +433,9 @@ before creating or moving a release tag.
 An alternate `GIT_INDEX_FILE` may isolate release staging from unrelated work,
 but never export it into `pnpm verify` or tests: Git fixture repositories inherit
 it and read/write the wrong index. Scope it to individual staging/commit commands.
+Verification and release scripts also scrub the installed app's inherited launch
+environment and name what they removed. Do not reintroduce those variables in a
+wrapper; a test that needs one must set it explicitly inside its own process.
 
 ### A running service is not the installed version
 
