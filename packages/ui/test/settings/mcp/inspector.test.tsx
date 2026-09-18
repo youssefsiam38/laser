@@ -19,7 +19,7 @@ vi.mock("../../../src/runtime/index.js", () => {
 
 import { McpServersTab } from "../../../src/components/settings/mcp/McpServersTab.js";
 import { TooltipProvider } from "../../../src/components/ui/tooltip.js";
-import { click, clickElement, field, findButton, inspection, render, serverState, text, tool } from "./harness.js";
+import { click, clickElement, expectFocus, field, findButton, inspection, renderInWorkbench as render, serverState, text, tool } from "./harness.js";
 
 let root: Root;
 let servers: McpServerState[];
@@ -102,10 +102,10 @@ function Runtime({ children }: { children: ReactNode }) {
   return <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>;
 }
 
-async function open() {
+async function open(view: "global" | "project" = "global") {
   ({ root } = await render(
     <TooltipProvider>
-      <Runtime><McpServersTab cwd="/project" /></Runtime>
+      <Runtime><McpServersTab routeCwd="/project" view={view} /></Runtime>
     </TooltipProvider>,
   ));
   const row = document.querySelector<HTMLButtonElement>('[data-slot="mcp-server-row"] button')!;
@@ -119,6 +119,15 @@ function toolRow(name: string): HTMLElement {
 function toolSwitch(label: string, name: string): HTMLElement {
   return document.querySelector<HTMLElement>(`[aria-label="${label} · ${name}"]`)!;
 }
+
+it("keeps Effective details readable without mutation or tool-run actions", async () => {
+  await open("effective");
+  expect(findButton("Tools")).toBeDefined();
+  expect(findButton("Run")).toBeUndefined();
+  expect(findButton("Edit")).toBeUndefined();
+  expect(findButton("Remove")).toBeUndefined();
+  expect(findButton("Turn off")).toBeUndefined();
+});
 
 it("connects on open and shows what the server is", async () => {
   await open();
@@ -269,6 +278,23 @@ it("shows only the explicitly selected conversation's actual tools and discoveri
   expect(saved).toHaveLength(0);
 });
 
+it("returns focus to the inspector action that opened Edit or Override", async () => {
+  await open();
+  const edit = findButton("Edit")!;
+  findButton("Ping")!.focus();
+  await click("Edit");
+  await click("Cancel");
+  await expectFocus(edit);
+
+  await act(async () => root.unmount());
+  await open("project");
+  const override = findButton("Override for this project")!;
+  findButton("Ping")!.focus();
+  await click("Override for this project");
+  await click("Cancel");
+  await expectFocus(override);
+});
+
 it("preloads only through the Advanced override while preserving exclusions and approvals", async () => {
   servers[0]!.config.tools = { alwaysLoad: false, exclude: ["screenshot"], approve: ["click"] };
   await open(); await click("Edit"); await click("Advanced");
@@ -396,22 +422,33 @@ it("keeps a stored secret untouched when an edit saves without retyping it", asy
   await open();
   await click("Edit");
   expect(text()).toContain("Saved. It is never shown again.");
+  await act(async () => {
+    const label = field("Name it") as HTMLInputElement;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(label, "Docs updated");
+    label.dispatchEvent(new Event("input", { bubbles: true }));
+  });
   await click("Save changes");
   expect(saved.at(-1)!.server.auth).toEqual({ kind: "bearer", token: { secret: true } });
   expect(saved.at(-1)!.server.transport).toMatchObject({ headers: { "X-Key": { secret: true } } });
 });
 
-it("turns a server off, and switches a shared one off here without copying its definition", async () => {
-  await open();
+it("turns a Global server off, while Project opens a copied override draft", async () => {
+  await open("global");
   await click("Turn off");
   expect(saved.at(-1)!.server.disabled).toBe(true);
-  await click("Remove");
-  expect(findButton("Switch it off for this project instead")).toBeDefined();
-  await click("Switch it off for this project instead");
-  // The every-project definition stays the one definition (the protocol allows
-  // `{ name, disabled: true }` for exactly this).
-  expect(saved.at(-1)).toEqual({ cwd: "/project", scope: "project", server: { name: "playwright", disabled: true } });
-  expect(calls).toContain("mcp/disconnect");
+  await click("Close");
+  await act(async () => root.unmount());
+  servers = servers.map((entry) => ({ ...entry, config: { ...entry.config, disabled: false } }));
+
+  await open("project");
+  await click("Override for this project");
+  expect(text()).toContain("Override Playwright for Project settings");
+  await click("Save Project override");
+  expect(saved.at(-1)).toMatchObject({
+    cwd: "/project",
+    scope: "project",
+    server: { name: "playwright", transport: { kind: "stdio", command: "npx" } },
+  });
 });
 
 it("stops the command server it started when the entry is removed", async () => {
@@ -439,14 +476,14 @@ it("reads an entry that only switches an every-project server off, and turns it 
   ];
   ({ root } = await render(
     <TooltipProvider>
-      <McpServersTab cwd="/project" />
+      <McpServersTab routeCwd="/project" view="project" />
     </TooltipProvider>,
   ));
   await clickElement(document.querySelector<HTMLButtonElement>('[data-slot="mcp-server-row"][data-server="project:playwright"] button')!);
   // Nothing to connect to and nothing to edit here: it carries no definition.
   expect(calls).not.toContain("mcp/inspect");
   expect(findButton("Tools")).toBeUndefined();
-  expect(findButton("Edit the every-project entry")).toBeDefined();
+  expect(findButton("Edit the every-project entry")).toBeUndefined();
   await click("Turn on for this project");
   expect(mocks.request).toHaveBeenCalledWith("mcp/remove", { cwd: "/project", scope: "project", name: "playwright" });
 });

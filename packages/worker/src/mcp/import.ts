@@ -111,11 +111,20 @@ function stripJsonComments(text: string): string {
   return out;
 }
 
-/** Every source found on this machine, with its servers already translated. */
-export async function detectImportSources(cwd: string): Promise<McpImportSource[]> {
-  const candidates: Array<{ id: McpImportSourceId; path: string }> = [
-    { id: "project-mcp-json", path: join(resolve(cwd), ".mcp.json") },
-  ];
+/** Whether an upstream import candidate belongs to the selected project. */
+function isProjectRelativeSource(id: McpImportSourceId, path: string): boolean {
+  if (id === "project-mcp-json" || id === "vscode") return true;
+  // pi-mcp-adapter@2.33.0 declares exactly one machine-global OpenCode
+  // candidate. Its `./opencode.json` candidate may resolve to an ancestor git
+  // root, so comparing only with cwd would leak project configuration globally.
+  return id === "opencode" && resolve(path) !== resolve(homedir(), ".config", "opencode", "opencode.json");
+}
+
+/** Every source found for the explicit import target, with its servers already translated. */
+export async function detectImportSources(cwd: string, scope: McpScope): Promise<McpImportSource[]> {
+  const candidates: Array<{ id: McpImportSourceId; path: string }> = scope === "project"
+    ? [{ id: "project-mcp-json", path: join(resolve(cwd), ".mcp.json") }]
+    : [];
   // The shared file has two conventional homes; the first that exists wins,
   // in the engine's own precedence order.
   for (const path of [join(homedir(), ".config", "mcp", "mcp.json"), join(homedir(), ".agents", "mcp.json")]) {
@@ -131,7 +140,11 @@ export async function detectImportSources(cwd: string): Promise<McpImportSource[
   }
   for (const entry of discovered) {
     const id = entry.kind as McpImportSourceId;
-    if (id in LABELS && !candidates.some((candidate) => candidate.id === id)) candidates.push({ id, path: entry.path });
+    if (
+      id in LABELS
+      && (scope === "project" || !isProjectRelativeSource(id, entry.path))
+      && !candidates.some((candidate) => candidate.id === id)
+    ) candidates.push({ id, path: entry.path });
   }
 
   const sources: McpImportSource[] = [];

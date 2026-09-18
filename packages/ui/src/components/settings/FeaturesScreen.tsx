@@ -14,6 +14,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Toggle } from "@/components/ui/toggle";
 import { WorkerRecoveryNotice } from "@/components/worker-recovery-notice";
 import { useLaserStable, useLaserState } from "@/runtime";
+import { featureSource, selectedFeatureValue } from "./feature-scope.js";
 
 export interface FeaturesScreenProps {
   view: SettingsScopeView;
@@ -90,7 +91,7 @@ export function FeaturesScreen({ view, projectCwd, neutralRouteCwd, onManageServ
         result.restartPending
           ? `${feature.manifest.name} will change when the current session finishes and its project restarts.`
           : enabled === null
-            ? `${feature.manifest.name} now follows your every-project choice.`
+            ? `${feature.manifest.name} now follows your Global choice.`
             : `${feature.manifest.name} is ${enabled ? "enabled" : "disabled"}.`,
       );
       if (generation.current === mutationGeneration) await load();
@@ -137,11 +138,7 @@ export function FeaturesScreen({ view, projectCwd, neutralRouteCwd, onManageServ
                       ? Plug
                       : Bot;
               const changing = busy === feature.manifest.id;
-              const selected = view === "global"
-                ? feature.globalEnabled
-                : view === "project"
-                  ? feature.projectEnabled ?? feature.globalEnabled
-                  : feature.enabled;
+              const selected = selectedFeatureValue(feature, view);
               const routeUnavailable = !neutralRouteCwd && needsNeutralRoute(feature, view, !selected);
               return (
                 <article key={feature.manifest.id} className="group flex min-h-56 flex-col rounded-xl border border-line bg-surface p-4 transition-colors duration-(--motion-fast) hover:border-line-strong">
@@ -182,7 +179,7 @@ export function FeaturesScreen({ view, projectCwd, neutralRouteCwd, onManageServ
                   ) : null}
                   {writable && view === "project" && feature.projectEnabled !== undefined ? (
                     <Button type="button" variant="link" size="sm" className="mt-2 h-auto self-start p-0 text-xs" disabled={changing} onClick={() => void change(feature, null)}>
-                      Use every-project choice
+                      Use Global choice
                     </Button>
                   ) : null}
                 </article>
@@ -199,16 +196,4 @@ function needsNeutralRoute(feature: FeatureState, view: SettingsScopeView, enabl
   return view === "global"
     && feature.manifest.id === "web-search"
     && (enabled === true || (enabled === null && feature.globalEnabled));
-}
-
-function featureSource(feature: FeatureState, view: SettingsScopeView): string {
-  if (view === "global") {
-    return feature.globalSource === "default" ? `${PRODUCT_DISPLAY_NAME} default` : "Your every-project choice";
-  }
-  if (view === "project") {
-    return feature.projectEnabled !== undefined ? "Overridden for this project" : "Follows every-project choice";
-  }
-  if (feature.source === "project") return "Effective choice · Project override";
-  if (feature.source === "global") return "Effective choice · Every-project choice";
-  return `Effective choice · ${PRODUCT_DISPLAY_NAME} default`;
 }

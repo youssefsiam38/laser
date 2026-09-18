@@ -42,12 +42,17 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 import type { CapabilityDecision } from "@/runtime/environment-capabilities";
+import type { SettingsScopeView } from "@/runtime/settings-scope";
+import type { ScopeDraft } from "../ScopeDraftGuard.js";
+import { useCommittedTargetLifetime } from "../useCommittedTargetLifetime.js";
 
 export interface FallbackChainsTabProps {
   cwd: string;
   snapshot: SettingsSnapshot | undefined;
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
+  scopeView: SettingsScopeView;
   decision?: CapabilityDecision | undefined;
+  onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
 }
 
 /** A draft chain is local until it has a model to fall back to; a chain of one cannot be saved. */
@@ -59,23 +64,45 @@ const nameOf = (model: FallbackModelRef, catalogue: readonly ModelCatalogEntry[]
 const sameChains = (a: readonly FallbackChain[], b: readonly FallbackChain[]): boolean =>
   JSON.stringify(a) === JSON.stringify(b);
 
-export function FallbackChainsTab({ cwd, snapshot, onApply, decision }: FallbackChainsTabProps) {
-  const writable = decision?.state === "available" || decision === undefined;
-  const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
+export function FallbackChainsTab({ cwd, snapshot, onApply, scopeView, decision, onDraftChange }: FallbackChainsTabProps) {
+  const writable = scopeView === "global" && (decision?.state === "available" || decision === undefined);
+  const readOnlyExplanation = scopeView !== "global"
+    ? "Fallback chains are global. Choose Global above to edit them."
+    : decision?.state === "explained" ? decision.explanation : undefined;
   const saved = useMemo(
     () => readFallbackChainsValue(snapshot?.global.values[FALLBACK_CHAINS_SETTING]),
     [snapshot],
   );
-  const { models: catalogue, loading, error, none } = useConnectedModels(cwd);
+  const { models: catalogue, loading, error, none } = useConnectedModels(cwd, "global");
   const [chains, setChains] = useState<FallbackChain[]>(saved);
   const [draft, setDraft] = useState<Draft>(null);
   const [saving, setSaving] = useState(false);
   const [refused, setRefused] = useState<string>();
+  const targetKey = `${scopeView}:${cwd}:${snapshot?.global.path ?? ""}`;
+  const target = useCommittedTargetLifetime(targetKey);
+
+  useEffect(() => {
+    if (!draft) {
+      onDraftChange?.(undefined);
+      return;
+    }
+    onDraftChange?.({
+      id: "fallback-chain",
+      label: "New fallback chain",
+      discard: () => setDraft(null),
+    });
+    return () => onDraftChange?.(undefined);
+  }, [draft, onDraftChange]);
 
   // The file is the truth: adopt what a save (or another screen) wrote.
   useEffect(() => {
     setChains((current) => (sameChains(current, saved) ? current : saved));
   }, [saved]);
+
+  useEffect(() => {
+    setSaving(false);
+    setRefused(undefined);
+  }, [target]);
 
   const issues = useMemo(() => validateFallbackChains(chains), [chains]);
   const issuesFor = useCallback(
@@ -85,6 +112,8 @@ export function FallbackChainsTab({ cwd, snapshot, onApply, decision }: Fallback
 
   const commit = useCallback(
     async (next: FallbackChain[]) => {
+      const lease = target.capture();
+      if (!lease) return false;
       const problems = validateFallbackChains(next);
       if (problems.length > 0) {
         setRefused(problems[0]!.message);
@@ -95,13 +124,14 @@ export function FallbackChainsTab({ cwd, snapshot, onApply, decision }: Fallback
       setSaving(true);
       try {
         const ok = await onApply("global", [{ path: FALLBACK_CHAINS_SETTING, op: "set", value: next }]);
+        if (!target.isCurrent(lease)) return false;
         if (!ok) setChains(saved);
         return ok;
       } finally {
-        setSaving(false);
+        if (target.isCurrent(lease)) setSaving(false);
       }
     },
-    [onApply, saved],
+    [onApply, saved, target],
   );
 
   /** Models this chain can still take: connected, and not already in it. */

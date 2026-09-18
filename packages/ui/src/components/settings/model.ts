@@ -290,13 +290,3 @@ export function withModelsSwitchedOn(list: readonly string[], models: readonly P
   const refs = models.map(patternForModel);
   return list.filter((entry) => !refs.some((ref) => sameRef(entry, ref)));
 }
-
-/** Where a list setting currently lives: the project file when it sets one, else global. */
-export function settingsListScope(snapshot: SettingsSnapshot | undefined, path: "enabledModels" | "disabledModels"): SettingsScope {
-  return snapshot && getAtPath(snapshot.project.values, path) !== undefined ? "project" : "global";
-}
-
-/** Where `enabledModels` currently lives. */
-export function enabledModelsScope(snapshot: SettingsSnapshot | undefined): SettingsScope {
-  return settingsListScope(snapshot, "enabledModels");
-}

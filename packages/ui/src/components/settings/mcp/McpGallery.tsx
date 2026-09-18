@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-export function McpGallery({ onChoose, className }: { onChoose: (entry: McpCatalogEntry) => void; className?: string }) {
+export function McpGallery({ onChoose, className }: { onChoose: (entry: McpCatalogEntry, trigger: HTMLButtonElement) => void; className?: string }) {
   return (
     <section aria-label="Servers you can add" className={cn("flex flex-col gap-3", className)}>
       <div className="grid gap-3 md:grid-cols-2">
@@ -37,7 +37,7 @@ export function McpGallery({ onChoose, className }: { onChoose: (entry: McpCatal
             <p className="mt-1 text-sm leading-6 text-ink-2">{entry.description}</p>
             {entry.requires && <p className="mt-2 text-xs leading-5 text-ink-3">Needs: {entry.requires}</p>}
             <div className="mt-auto flex flex-wrap items-center gap-2 pt-4">
-              <Button type="button" size="sm" onClick={() => onChoose(entry)}>
+              <Button type="button" size="sm" onClick={(event) => onChoose(entry, event.currentTarget)}>
                 Add {entry.name}
               </Button>
               <Button asChild variant="ghost" size="sm">

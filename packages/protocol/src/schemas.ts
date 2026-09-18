@@ -861,7 +861,7 @@ export const clientParamsSchemas = {
     .strict(),
 
   // --- M14 MCP servers (docs/mcp.md) ---
-  "mcp/list": z.object({ cwd }).strict(),
+  "mcp/list": z.object({ cwd, view: z.enum(["global", "project", "effective"]) }).strict(),
   "mcp/save": z.object({ cwd, scope: featureScopeSchema, server: mcpServerConfigInputSchema, originalName: mcpServerName.optional() }).strict(),
   "mcp/remove": z.object({ cwd, scope: featureScopeSchema, name: mcpServerName }).strict(),
   "mcp/inspect": z
@@ -879,7 +879,7 @@ export const clientParamsSchemas = {
     .strict()
     .refine((value) => value.redirectUrl !== undefined || value.code !== undefined, "Paste the callback URL or the code."),
   "mcp/auth/logout": z.object({ cwd, scope: featureScopeSchema, name: mcpServerName }).strict(),
-  "mcp/import/detect": z.object({ cwd }).strict(),
+  "mcp/import/detect": z.object({ cwd, scope: featureScopeSchema }).strict(),
   "mcp/import/apply": z
     .object({ cwd, source: z.enum(MCP_IMPORT_SOURCES), names: z.array(mcpServerName).min(1).max(200), scope: featureScopeSchema, replace: z.boolean().optional() })
     .strict(),
@@ -912,7 +912,7 @@ export const clientParamsSchemas = {
   "pi/packages/records": z.object({ cwd: cwd.optional() }).strict(),
 
   "pi/providers/list": z.object({ cwd }).strict(),
-  "pi/models/catalog": z.object({ cwd, refresh: z.boolean().optional() }).strict(),
+  "pi/models/catalog": z.object({ cwd, settingsView: z.enum(["global", "effective"]), refresh: z.boolean().optional() }).strict(),
   "pi/providers/login/start": z.object({ cwd, provider: providerId, method: providerLoginMethodSchema }).strict(),
   "pi/providers/login/answer": z
     .object({ cwd, id: loginId, promptId: z.string().min(1).max(100), value: z.string().max(16 * 1024) })

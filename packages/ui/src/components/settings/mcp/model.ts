@@ -65,13 +65,13 @@ export function statusWords(status: McpServerStatus): StatusWords {
 }
 
 export function scopeLabel(scope: McpScope): string {
-  return scope === "global" ? "Every project" : "This project";
+  return scope === "global" ? "Global" : "Project";
 }
 
 /** What `shadowed` and `overridesGlobal` mean, in a sentence or nothing. */
 export function scopeNote(state: McpServerState): string | undefined {
-  if (state.overridesGlobal) return "This project switches the every-project server of this name off. Its definition is unchanged.";
-  if (state.shadowed) return "This project has its own entry for this name, so this is not what it uses here.";
+  if (state.overridesGlobal) return "Project switches the Global server of this name off. Its definition is unchanged.";
+  if (state.shadowed) return "Project has its own entry for this name, so this Global definition is not effective here.";
   return undefined;
 }
 

@@ -16,16 +16,12 @@ import { CapabilityNotice } from "@/components/capability-gate";
 
 import { Empty } from "./SettingsScreen.js";
 
-export function ProjectsTab({ activeCwd }: { activeCwd: string | undefined }) {
+export function ProjectsTab() {
   const { client, projectInfo } = useLaserStable();
   const execution = useCapability("pi/project/env/set", { presentation: "explained" });
   const projects = useMemo(
-    () => Object.values(projectInfo).sort((a, b) => {
-      if (a.cwd === activeCwd) return -1;
-      if (b.cwd === activeCwd) return 1;
-      return a.name.localeCompare(b.name) || a.cwd.localeCompare(b.cwd);
-    }),
-    [activeCwd, projectInfo],
+    () => Object.values(projectInfo).sort((a, b) => a.name.localeCompare(b.name) || a.cwd.localeCompare(b.cwd)),
+    [projectInfo],
   );
   const projectKey = projects.map(project => project.cwd).join("\0");
   const [statuses, setStatuses] = useState<Record<string, ProjectEnvStatus>>({});
@@ -96,7 +92,6 @@ export function ProjectsTab({ activeCwd }: { activeCwd: string | undefined }) {
               project={project}
               status={statuses[project.cwd]}
               loadError={failures[project.cwd]}
-              defaultOpen={project.cwd === activeCwd}
               writable={execution.state === "available"}
               onSave={save}
             />
@@ -111,18 +106,16 @@ function ProjectSection({
   project,
   status,
   loadError,
-  defaultOpen,
   writable,
   onSave,
 }: {
   project: ProjectInfo;
   status: ProjectEnvStatus | undefined;
   loadError: string | undefined;
-  defaultOpen: boolean;
   writable: boolean;
   onSave: (cwd: string, command: string) => Promise<ProjectEnvStatus>;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useState(false);
   const [command, setCommand] = useState("");
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);

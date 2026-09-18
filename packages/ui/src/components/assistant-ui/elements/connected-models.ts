@@ -29,7 +29,11 @@ export interface ConnectedModels {
 
 const EMPTY: ConnectedModels = { models: [], loading: false, none: false };
 
-export function useConnectedModels(cwd: string | undefined, enabled = true): ConnectedModels {
+export function useConnectedModels(
+  cwd: string | undefined,
+  settingsView: "global" | "effective",
+  enabled = true,
+): ConnectedModels {
   const { client } = useLaserStable();
   const [state, setState] = useState<ConnectedModels>(EMPTY);
 
@@ -41,7 +45,7 @@ export function useConnectedModels(cwd: string | undefined, enabled = true): Con
     let live = true;
     setState({ models: [], loading: true, none: false });
     void Promise.all([
-      client.request("pi/models/catalog", { cwd }),
+      client.request("pi/models/catalog", { cwd, settingsView }),
       // A failed providers call must not empty the picker: it is the narrowing
       // that is unavailable, not the models.
       client.request("pi/providers/list", { cwd }).then(
@@ -59,7 +63,7 @@ export function useConnectedModels(cwd: string | undefined, enabled = true): Con
     return () => {
       live = false;
     };
-  }, [client, cwd, enabled]);
+  }, [client, cwd, enabled, settingsView]);
 
   return state;
 }

@@ -53,11 +53,11 @@ describe("the words a row says", () => {
     expect(toolCountLabel({ toolCount: 1, directToolCount: 0 })).toBe("1 tool · 0 direct");
     expect(toolCountLabel({})).toBeUndefined();
     expect(scopeNote({ scope: "global", config: { name: "a", transport: { kind: "socket", path: "/a" } }, status: "off", shadowed: true })).toContain(
-      "not what it uses here",
+      "Global definition is not effective here",
     );
     expect(
       scopeNote({ scope: "project", config: { name: "a", transport: { kind: "socket", path: "/a" } }, status: "off", overridesGlobal: true }),
-    ).toContain("switches the every-project server");
+    ).toContain("switches the Global server");
   });
 });
 

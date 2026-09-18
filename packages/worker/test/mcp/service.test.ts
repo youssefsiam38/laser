@@ -157,4 +157,52 @@ describe("inspection status in the saved list", () => {
     expect(inspectionDefinition(first)).toBe(inspectionDefinition(second));
     expect(inspectionDefinition({ ...first, transport: { ...first.transport, url: "https://other.test/mcp" } })).not.toBe(inspectionDefinition(first));
   });
+
+  it("projects Global, Project and Effective from the same scoped store", async () => {
+    await service.save({ cwd, scope: "global", server: { ...fixture, name: "shared" } });
+    await service.save({ cwd, scope: "project", server: { ...fixture, name: "local" } });
+    expect((await service.list("global")).servers.map((entry) => [entry.scope, entry.config.name])).toEqual([
+      ["global", "shared"],
+    ]);
+    expect((await service.list("project")).servers.map((entry) => [entry.scope, entry.config.name])).toEqual([
+      ["project", "local"],
+      ["global", "shared"],
+    ]);
+    expect((await service.list("effective")).servers.map((entry) => [entry.scope, entry.config.name])).toEqual([
+      ["project", "local"],
+      ["global", "shared"],
+    ]);
+  });
+
+  it("notifies when a shadowed Global row changes while public projections stay exact", async () => {
+    await service.save({ cwd, scope: "global", server: { ...fixture, name: "shared" } });
+    await service.save({ cwd, scope: "project", server: { ...fixture, name: "shared", transport: { ...fixture.transport, args: [FIXTURE, "--project"] } } });
+    expect((await service.list("project")).servers.map((entry) => [entry.scope, entry.config.name])).toEqual([["project", "shared"]]);
+    expect((await service.list("global")).servers.map((entry) => [entry.scope, entry.config.name])).toEqual([["global", "shared"]]);
+
+    changed.mockClear();
+    await service.inspect({ cwd, scope: "global", name: "shared" });
+    expect(changed).toHaveBeenCalledOnce();
+    expect((await service.list("global")).servers[0]).toMatchObject({ scope: "global", status: "connected" });
+    expect((await service.list("project")).servers).toHaveLength(1);
+    expect((await service.list("project")).servers[0]).toMatchObject({ scope: "project", config: { name: "shared" } });
+  }, 60_000);
+
+  it("refuses cross-scope saved lookup but keeps a project disable-only row exact", async () => {
+    await service.save({ cwd, scope: "global", server: { ...fixture, name: "shared" } });
+    await expect(service.inspect({ cwd, scope: "project", name: "shared" })).rejects.toThrow(/Project settings/);
+    await service.save({ cwd, scope: "project", server: { name: "shared", disabled: true } });
+    expect((await service.list("project")).servers.find((entry) => entry.scope === "project" && entry.config.name === "shared")).toMatchObject({
+      overridesGlobal: true,
+      config: { disabled: true, transport: fixture.transport },
+    });
+    await expect(service.inspect({ cwd, scope: "project", name: "shared" })).resolves.toMatchObject({
+      name: "shared",
+      scope: "project",
+      status: "off",
+    });
+
+    await service.save({ cwd, scope: "project", server: { ...fixture, name: "local" } });
+    await expect(service.inspect({ cwd, scope: "global", name: "local" })).rejects.toThrow(/Global settings/);
+  }, 60_000);
 });

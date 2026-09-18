@@ -515,8 +515,8 @@ export interface McpRuntimeSnapshot {
 
 declare module "./messages.js" {
   interface ClientRequests {
-    /** Both scopes for this project. Changes apply to sessions started afterwards (D-221). */
-    "mcp/list": { params: { cwd: string }; result: { servers: McpServerState[]; conversations?: Array<{ sessionPath: string; context: McpConversationContext }> } };
+    /** The explicit Settings projection. Changes apply to sessions started afterwards (D-221). */
+    "mcp/list": { params: { cwd: string; view: "global" | "project" | "effective" }; result: { servers: McpServerState[]; conversations?: Array<{ sessionPath: string; context: McpConversationContext }> } };
     "mcp/save": {
       params: { cwd: string; scope: McpScope; server: McpServerConfigInput; /** Rename: the entry this replaces. */ originalName?: string };
       result: { servers: McpServerState[] };
@@ -539,7 +539,7 @@ declare module "./messages.js" {
       result: { status: McpServerStatus; detail?: string };
     };
     "mcp/auth/logout": { params: { cwd: string; scope: McpScope; name: string }; result: { status: McpServerStatus } };
-    "mcp/import/detect": { params: { cwd: string }; result: { sources: McpImportSource[] } };
+    "mcp/import/detect": { params: { cwd: string; scope: McpScope }; result: { sources: McpImportSource[] } };
     "mcp/import/apply": {
       params: { cwd: string; source: McpImportSourceId; names: string[]; scope: McpScope; /** Replace entries whose names conflict. */ replace?: boolean };
       result: { servers: McpServerState[]; imported: string[] };

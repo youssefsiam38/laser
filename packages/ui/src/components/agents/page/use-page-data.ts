@@ -77,7 +77,7 @@ export function useModelCatalog(cwd: string | undefined, enabled = true): Loaded
       // Only providers the person has connected (D-145): an agent set to a
       // model nobody can call is a refusal waiting to happen.
       pending = Promise.all([
-        client.request("pi/models/catalog", { cwd: key }),
+        client.request("pi/models/catalog", { cwd: key, settingsView: "effective" }),
         client.request("pi/providers/list", { cwd: key }).then(({ providers }) => providers, () => undefined),
       ]).then(([catalog, providers]) => narrowToConnected(catalog.models, providers).models);
       pending.catch(() => catalogCache.delete(key));

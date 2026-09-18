@@ -144,13 +144,11 @@ describe("changesFromJson", () => {
 
 import {
   connectedProviderIds,
-  enabledModelsScope,
   hiddenByListCount,
   modelOfferState,
   matchesModelView,
   offerStateCounts,
   patternForModel,
-  settingsListScope,
   withModelOffered,
   withModelsSwitchedOff,
   withModelsSwitchedOn,
@@ -251,18 +249,4 @@ describe("the switches (M13-T49 addendum)", () => {
     expect(list.some((entry) => entry.toLowerCase() === "openai/gpt-7-nova")).toBe(false);
   });
 
-  it("writes each list where it lives", () => {
-    expect(settingsListScope(snapshot({}, { disabledModels: ["a"] }), "disabledModels")).toBe("project");
-    expect(settingsListScope(snapshot({ disabledModels: ["a"] }), "disabledModels")).toBe("global");
-    expect(settingsListScope(snapshot({}, { enabledModels: ["a"] }), "disabledModels")).toBe("global");
-  });
-});
-
-describe("enabledModelsScope", () => {
-  it("writes where the list lives", () => {
-    expect(enabledModelsScope(undefined)).toBe("global");
-    expect(enabledModelsScope(snapshot({ enabledModels: ["a"] }))).toBe("global");
-    expect(enabledModelsScope(snapshot({ enabledModels: ["a"] }, { enabledModels: ["b"] }))).toBe("project");
-    expect(enabledModelsScope(snapshot({}, { enabledModels: [] }))).toBe("project");
-  });
 });

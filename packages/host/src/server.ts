@@ -1183,7 +1183,7 @@ export class HostServer {
       try {
         const [providers, catalog] = await Promise.all([
           worker.request<ClientRequests["pi/providers/list"]["result"]>("pi/providers/list", { cwd }),
-          worker.request<ClientRequests["pi/models/catalog"]["result"]>("pi/models/catalog", { cwd }),
+          worker.request<ClientRequests["pi/models/catalog"]["result"]>("pi/models/catalog", { cwd, settingsView: "effective" }),
         ]);
         const configured = new Set(providers.providers.filter((provider) => provider.configured).map((provider) => provider.id));
         const suggested = suggestBeamModel(catalog.models, { configuredProviders: configured });
