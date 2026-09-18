@@ -118,7 +118,7 @@ describe("the goal tool gate", () => {
 
     const errors = sent.filter((message) => message.type === "lasercode/module/log" && message.level === "error");
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatchObject({ module: "goal", message: expect.stringMatching(/reload this conversation.*Features/i) });
+    expect(errors[0]).toMatchObject({ module: "goal", message: expect.stringMatching(/ordinary messages still work.*\/goal pause/i) });
     expect(sent).toContainEqual(expect.objectContaining({ type: "lasercode/goal/state", goal: expect.objectContaining({ status: "active" }) }));
   });
 

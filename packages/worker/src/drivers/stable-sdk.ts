@@ -43,7 +43,7 @@ import {
   type InlineExtension,
   type ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import { goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
+import { ensureGoalToolsActive, goalExtensionPath, goalStateFromEntries } from "@lasercode/pi-goal";
 import { createCommandBus, createLaserExtension, createPromptProvenanceObserver, toSessionGoal, type LaserExtensionOptions } from "@lasercode/pi-extension";
 import { createHash } from "node:crypto";
 import {
@@ -110,7 +110,6 @@ import {
   type SessionDriver,
 } from "../driver.js";
 import { createUiBridge, type UiBridge } from "../ui-bridge.js";
-import { GOAL_TOOL_NAMES } from "@lasercode/pi-goal";
 import { isGoalCommand } from "@lasercode/pi-extension";
 import { ENGINE_BUILTIN_TOOLS, ensureWorkspaceSessionCwd, filterSkills, removedWorktreeCwd } from "../agents/session-config.js";
 import { defaultAgentInstructions } from "../agents/engine-instructions.js";
@@ -1817,14 +1816,11 @@ function agentResourceOptions(agent: DriverAgentOptions, cwd: string): {
  * enough is here, where the text about to become a command is still in hand.
  */
 function activateGoalTools(session: AgentSession): void {
-  try {
-    const known = new Set(session.getAllTools().map((tool) => tool.name));
-    const active = session.getActiveToolNames();
-    const missing = GOAL_TOOL_NAMES.filter((name) => known.has(name) && !active.includes(name));
-    if (missing.length > 0) session.setActiveToolsByName([...active, ...missing]);
-  } catch {
-    // No goal engine in this session: nothing to switch on.
-  }
+  ensureGoalToolsActive({
+    getRegisteredToolNames: () => session.getAllTools().map((tool) => tool.name),
+    getActiveToolNames: () => session.getActiveToolNames(),
+    setActiveToolNames: (names) => session.setActiveToolsByName(names),
+  });
 }
 
 const TOOL_LABEL_STATE = Symbol("lasercode.tool-label-state");

@@ -17,30 +17,8 @@ interface GoalData {
 interface CustomEntry {
   type: "custom";
   customType: string;
-  data: { goal?: GoalData | null } | Record<string, unknown>;
-}
-
-class SharedEvents {
-  private readonly listeners = new Map<string, Set<(payload: unknown) => void>>();
-  suppressRelease = false;
-
-  on(channel: string, listener: (payload: unknown) => void): void {
-    let listeners = this.listeners.get(channel);
-    if (!listeners) {
-      listeners = new Set();
-      this.listeners.set(channel, listeners);
-    }
-    listeners.add(listener);
-  }
-
-  emit(channel: string, payload: unknown): void {
-    if (this.suppressRelease && isRelease(payload)) return;
-    for (const listener of [...(this.listeners.get(channel) ?? [])]) listener(payload);
-  }
-}
-
-function isRelease(payload: unknown): boolean {
-  return typeof payload === "object" && payload !== null && "released" in payload;
+  data: unknown;
+  [key: string]: unknown;
 }
 
 function activeGoal(id = "goal-1", waiting?: GoalData["waiting"]): GoalData {
@@ -56,29 +34,42 @@ function goalEntry(goal: GoalData | null): CustomEntry {
   return { type: "custom", customType: "goal-state", data: { goal } };
 }
 
+function activeContractEntry(goalId = "goal-1"): CustomEntry {
+  const message = {
+    role: "custom",
+    customType: "goal-contract",
+    content: "This Goal contract supersedes every earlier goal-contract message.\n\nOnly the objective and goal_id in this latest Goal contract are current.",
+    display: false,
+    details: { version: 2, state: "active", goalId },
+    timestamp: 0,
+  };
+  return { type: "custom", customType: "goal-contract", data: message, ...message };
+}
+
 function latestGoal(entries: readonly CustomEntry[]): GoalData | null | undefined {
-  return [...entries].reverse().find((entry) => entry.customType === "goal-state")?.data.goal as GoalData | null | undefined;
+  const data = [...entries].reverse().find((entry) => entry.customType === "goal-state")?.data as { goal?: GoalData | null } | undefined;
+  return data?.goal;
 }
 
 function createHarness(options: {
-  events?: SharedEvents;
   entries?: CustomEntry[];
   active?: string[];
   hideRegistration?: string;
   refuseActivation?: boolean;
-  sessionManager?: { getBranch(): CustomEntry[]; getEntries(): CustomEntry[] };
 } = {}) {
-  const events = options.events ?? new SharedEvents();
   const entries = options.entries ?? [goalEntry(activeGoal())];
   const handlers = new Map<string, Array<(event: unknown, ctx: typeof ctx) => unknown>>();
   const commands = new Map<string, { handler(args: string, ctx: typeof ctx): unknown }>();
   const tools = new Map<string, { name: string }>();
   let active = [...(options.active ?? [])];
+  let hiddenRegistration = options.hideRegistration;
+  let refuseActivation = options.refuseActivation ?? false;
   const notifications: Array<{ message: string; level: string }> = [];
   const sent: string[] = [];
+  const sentMessages: Array<Record<string, unknown>> = [];
   const statuses: Array<string | undefined> = [];
   const abort = vi.fn();
-  const sessionManager = options.sessionManager ?? {
+  const sessionManager = {
     getBranch: () => entries,
     getEntries: () => entries,
   };
@@ -96,7 +87,7 @@ function createHarness(options: {
     },
   };
   const pi = {
-    events,
+    events: { on: () => undefined, emit: () => undefined },
     on: (name: string, handler: (event: unknown, context: typeof ctx) => unknown) => {
       const registered = handlers.get(name) ?? [];
       registered.push(handler);
@@ -104,24 +95,29 @@ function createHarness(options: {
     },
     registerTool: (tool: { name: string }) => tools.set(tool.name, tool),
     registerCommand: (name: string, command: { handler(args: string, context: typeof ctx): unknown }) => commands.set(name, command),
-    getAllTools: () => [...tools.values()].filter((tool) => tool.name !== options.hideRegistration),
+    getAllTools: () => [...tools.values()].filter((tool) => tool.name !== hiddenRegistration),
     getActiveTools: () => [...active],
     setActiveTools: (names: string[]) => {
-      if (options.refuseActivation) throw new Error("allowlist is locked");
+      if (refuseActivation) throw new Error("allowlist is locked");
       active = [...names];
     },
-    appendEntry: (customType: string, data: CustomEntry["data"]) => {
+    appendEntry: (customType: string, data: unknown) => {
       entries.push({ type: "custom", customType, data });
       return `entry-${entries.length}`;
     },
     sendUserMessage: (text: string) => {
       sent.push(text);
     },
-    sendMessage: () => undefined,
+    sendMessage: (message: Record<string, unknown>) => {
+      sentMessages.push(message);
+      entries.push({ type: "custom", customType: String(message.customType), data: message, ...message });
+    },
   };
   extension(pi);
   const fire = async (name: string, event: unknown = {}) => {
-    for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
+    const results: unknown[] = [];
+    for (const handler of handlers.get(name) ?? []) results.push(await handler(event, ctx));
+    return results;
   };
   return {
     active: () => active,
@@ -129,15 +125,23 @@ function createHarness(options: {
     commands,
     ctx,
     entries,
-    events,
     fire,
     notifications,
     sent,
+    sentMessages,
+    setHiddenRegistration: (name?: string) => { hiddenRegistration = name; },
+    setRefuseActivation: (value: boolean) => { refuseActivation = value; },
     statuses,
   };
 }
 
 const goalTools = ["goal_complete", "goal_blocked", "goal_wait"];
+
+function inactiveBoundary(results: readonly unknown[]): Record<string, unknown> | undefined {
+  return results
+    .map((result) => (result as { message?: Record<string, unknown> } | undefined)?.message)
+    .find((message) => (message?.details as { state?: string } | undefined)?.state === "inactive");
+}
 
 describe("active goal tool recovery", () => {
   it("reactivates every registered goal tool before restoring an active goal", async () => {
@@ -147,24 +151,24 @@ describe("active goal tool recovery", () => {
 
     expect(h.active()).toEqual(["read", ...goalTools]);
     expect(latestGoal(h.entries)?.status).toBe("active");
-    expect(h.entries.some((entry) => entry.customType === "goal-state" && entry.data.goal?.status === "paused")).toBe(false);
+    expect(h.entries.some((entry) => entry.customType === "goal-state" && (entry.data as { goal?: GoalData }).goal?.status === "paused")).toBe(false);
     expect(h.notifications).toEqual([]);
   });
 
   it.each([
     { name: "missing registration", options: { hideRegistration: "goal_complete" } },
     { name: "activation refusal", options: { refuseActivation: true } },
-  ])("keeps canonical state active and shows an actionable error for $name", async ({ options }) => {
+  ])("keeps canonical waiting state active and shows an actionable error for $name", async ({ options }) => {
     const entries = [goalEntry(activeGoal("goal-1", { reason: "External result" }))];
     const h = createHarness({ entries, active: ["read"], ...options });
 
     await h.fire("session_start");
 
     expect(latestGoal(h.entries)).toMatchObject({ status: "active", waiting: { reason: "External result" } });
-    expect(h.entries.some((entry) => entry.customType === "goal-state" && entry.data.goal?.status === "paused")).toBe(false);
+    expect(h.entries.some((entry) => entry.customType === "goal-state" && (entry.data as { goal?: GoalData }).goal?.status === "paused")).toBe(false);
     expect(h.notifications).toContainEqual({
       level: "error",
-      message: expect.stringMatching(/goal tools.*(reload|feature|available)/i),
+      message: expect.stringMatching(/goal tools.*\/goal pause/i),
     });
     expect(h.sent).toEqual([]);
   });
@@ -179,133 +183,82 @@ describe("active goal tool recovery", () => {
     await h.commands.get("goal")!.handler("clear", h.ctx);
     expect(latestGoal(h.entries)).toBeNull();
   });
-});
 
-describe("contended active-goal restore", () => {
-  it("uses the real shared mutex interface and resumes exactly once when its owner releases", async () => {
-    const events = new SharedEvents();
-    const entries = [goalEntry(activeGoal())];
-    const sessionManager = { getBranch: () => entries, getEntries: () => entries };
-    const owner = createHarness({ events, entries, sessionManager, active: [...goalTools] });
-    const recovering = createHarness({ events, entries, sessionManager, active: [...goalTools] });
+  it("keeps ordinary prompts usable, inactive, and free of goal continuations when registration is missing", async () => {
+    const entries = [goalEntry(activeGoal()), activeContractEntry()];
+    const h = createHarness({ entries, active: ["read"], hideRegistration: "goal_complete" });
+    await h.fire("session_start");
+    expect(h.notifications).toHaveLength(1);
 
-    await owner.fire("session_start");
-    await recovering.fire("session_start");
-    expect(latestGoal(entries)?.status).toBe("active");
-    expect(recovering.sent).toEqual([]);
+    for (const prompt of ["ordinary question one", "ordinary question two"]) {
+      const boundary = await h.fire("before_agent_start", { prompt });
+      expect(inactiveBoundary(boundary)).toBeDefined();
+      await h.fire("agent_start");
+      await h.fire("agent_end", { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "ordinary answer" }] }] });
+      await h.fire("agent_settled");
+    }
 
-    await owner.fire("session_shutdown");
-    await recovering.fire("agent_settled");
-    await recovering.fire("agent_settled");
-
-    expect(recovering.sent).toHaveLength(1);
-    expect(recovering.sent[0]).toMatch(/<goal_id>\s*goal-1\s*<\/goal_id>/u);
-    expect(entries.some((entry) => entry.customType === "goal-state" && entry.data.goal?.status === "paused")).toBe(false);
+    expect(h.abort).not.toHaveBeenCalled();
+    expect(h.sent).toEqual([]);
+    expect(latestGoal(h.entries)?.status).toBe("active");
+    expect(h.notifications).toHaveLength(1);
   });
 
-  it("falls back to a safe settlement retry when an existing owner emits no release signal", async () => {
-    const events = new SharedEvents();
-    const entries = [goalEntry(activeGoal())];
-    const sessionManager = { getBranch: () => entries, getEntries: () => entries };
-    const owner = createHarness({ events, entries, sessionManager, active: [...goalTools] });
-    const recovering = createHarness({ events, entries, sessionManager, active: [...goalTools] });
+  it("aborts only a goal-owned prompt when registration disappears", async () => {
+    const h = createHarness({ entries: [goalEntry(null)], active: ["read", ...goalTools] });
+    await h.fire("session_start");
+    await h.commands.get("goal")!.handler("Finish the owned request", h.ctx);
+    const ownedPrompt = h.sent.at(-1);
+    expect(ownedPrompt).toBeTypeOf("string");
 
-    await owner.fire("session_start");
-    await recovering.fire("session_start");
-    events.suppressRelease = true;
-    await owner.fire("session_shutdown");
-    events.suppressRelease = false;
+    h.setHiddenRegistration("goal_complete");
+    const boundary = await h.fire("before_agent_start", { prompt: ownedPrompt });
 
-    await recovering.fire("agent_settled");
-    await recovering.fire("agent_settled");
-
-    expect(recovering.sent).toHaveLength(1);
+    expect(h.abort).toHaveBeenCalledOnce();
+    expect(inactiveBoundary(boundary)).toBeDefined();
+    expect(latestGoal(h.entries)?.status).toBe("active");
+    expect(h.notifications.at(-1)?.message).toMatch(/\/goal pause/i);
   });
 
-  it("preserves waiting semantics after contention", async () => {
-    const events = new SharedEvents();
+  it("deduplicates each failure class and notifies again after real recovery", async () => {
+    const h = createHarness({ active: ["read"], hideRegistration: "goal_complete" });
+    await h.fire("session_start");
+    await h.fire("before_agent_start", { prompt: "first ordinary prompt" });
+    await h.fire("before_agent_start", { prompt: "second ordinary prompt" });
+    expect(h.notifications.filter((notice) => notice.level === "error")).toHaveLength(1);
+
+    h.setHiddenRegistration(undefined);
+    await h.fire("before_agent_start", { prompt: "repair the allowlist" });
+    h.setRefuseActivation(true);
+    h.setHiddenRegistration(undefined);
+    h.active().splice(0, h.active().length, "read");
+    await h.fire("before_agent_start", { prompt: "activation now refused" });
+    await h.fire("before_agent_start", { prompt: "activation still refused" });
+
+    expect(h.notifications.filter((notice) => notice.level === "error")).toHaveLength(2);
+    expect(h.notifications.at(-1)?.message).toMatch(/\/goal pause/i);
+  });
+
+  it("restores a registered waiting goal quietly without continuing it", async () => {
     const entries = [goalEntry(activeGoal("goal-wait", { reason: "Waiting for the child" }))];
-    const sessionManager = { getBranch: () => entries, getEntries: () => entries };
-    const owner = createHarness({ events, entries, sessionManager, active: [...goalTools] });
-    const recovering = createHarness({ events, entries, sessionManager, active: [...goalTools] });
+    const h = createHarness({ entries, active: ["read", ...goalTools] });
 
-    await owner.fire("session_start");
-    await recovering.fire("session_start");
-    await owner.fire("session_shutdown");
-    await recovering.fire("agent_settled");
+    await h.fire("session_start");
+    await h.fire("agent_settled");
 
     expect(latestGoal(entries)).toMatchObject({ id: "goal-wait", status: "active", waiting: { reason: "Waiting for the child" } });
-    expect(recovering.sent).toEqual([]);
+    expect(h.sent).toEqual([]);
+    expect(h.notifications).toEqual([]);
   });
 
-  it("re-reads canonical state and cannot revive a replaced goal", async () => {
-    const events = new SharedEvents();
-    const entries = [goalEntry(activeGoal("goal-old"))];
-    const sessionManager = { getBranch: () => entries, getEntries: () => entries };
-    const owner = createHarness({ events, entries, sessionManager, active: [...goalTools] });
-    const recovering = createHarness({ events, entries, sessionManager, active: [...goalTools] });
+  it("keeps a no-goal restore quiet", async () => {
+    const h = createHarness({ entries: [goalEntry(null)], active: ["read"] });
 
-    await owner.fire("session_start");
-    await recovering.fire("session_start");
-    events.suppressRelease = true;
-    await owner.fire("session_shutdown");
-    events.suppressRelease = false;
-    entries.push(goalEntry(activeGoal("goal-new")));
-    await recovering.fire("agent_settled");
+    await h.fire("session_start");
+    await h.fire("agent_settled");
 
-    expect(latestGoal(entries)?.id).toBe("goal-new");
-    expect(recovering.sent).toEqual([]);
-  });
-
-  it("generic abort cancels pending recovery without retrying or pausing", async () => {
-    const events = new SharedEvents();
-    const entries = [goalEntry(activeGoal())];
-    const sessionManager = { getBranch: () => entries, getEntries: () => entries };
-    const owner = createHarness({ events, entries, sessionManager, active: [...goalTools] });
-    const recovering = createHarness({ events, entries, sessionManager, active: [...goalTools] });
-
-    await owner.fire("session_start");
-    await recovering.fire("session_start");
-    await recovering.fire("agent_end", { messages: [{ role: "assistant", stopReason: "aborted", errorMessage: "Request aborted" }] });
-    await owner.fire("session_shutdown");
-    await recovering.fire("agent_settled");
-
-    expect(latestGoal(entries)?.status).toBe("active");
-    expect(recovering.sent).toEqual([]);
-  });
-
-  it.each([
-    { action: "pause", expected: "paused" },
-    { action: "clear", expected: null },
-  ])("explicit $action invalidates pending recovery and remains usable", async ({ action, expected }) => {
-    const events = new SharedEvents();
-    const entries = [goalEntry(activeGoal())];
-    const sessionManager = { getBranch: () => entries, getEntries: () => entries };
-    const owner = createHarness({ events, entries, sessionManager, active: [...goalTools] });
-    const recovering = createHarness({ events, entries, sessionManager, active: [...goalTools] });
-
-    await owner.fire("session_start");
-    await recovering.fire("session_start");
-    await owner.commands.get("goal")!.handler(action, owner.ctx);
-    await recovering.fire("agent_settled");
-
-    expect(latestGoal(entries)?.status ?? null).toBe(expected);
-    expect(recovering.sent).toEqual([]);
-  });
-
-  it("invalidates pending recovery on shutdown and ignores later release/settlement", async () => {
-    const events = new SharedEvents();
-    const entries = [goalEntry(activeGoal())];
-    const sessionManager = { getBranch: () => entries, getEntries: () => entries };
-    const owner = createHarness({ events, entries, sessionManager, active: [...goalTools] });
-    const recovering = createHarness({ events, entries, sessionManager, active: [...goalTools] });
-
-    await owner.fire("session_start");
-    await recovering.fire("session_start");
-    await recovering.fire("session_shutdown");
-    await owner.fire("session_shutdown");
-    await recovering.fire("agent_settled");
-
-    expect(recovering.sent).toEqual([]);
+    expect(h.abort).not.toHaveBeenCalled();
+    expect(h.sent).toEqual([]);
+    expect(h.notifications).toEqual([]);
   });
 });

@@ -1,4 +1,10 @@
-import { GOAL_TOOL_NAMES, goalStateFromEntries, type GoalSnapshot } from "@lasercode/pi-goal";
+import {
+  ensureGoalToolsActive,
+  GOAL_TOOL_NAMES,
+  goalStateFromEntries,
+  type GoalSnapshot,
+  type GoalToolActivationResult,
+} from "@lasercode/pi-goal";
 import type { SessionGoal } from "@lasercode/protocol";
 import type { LaserModule, ModuleContext } from "./index.js";
 
@@ -105,57 +111,32 @@ export function isGoalCommand(text: string): boolean {
  * Never throws: a session where the goal engine did not load has no such tools
  * to move, and a refused `setActiveTools` must not take the turn down with it.
  */
-export type GoalToolSyncResult =
-  | { ok: true }
-  | { ok: false; reason: "missing_registration" | "activation_refused"; message: string };
+export type GoalToolSyncResult = GoalToolActivationResult;
 
 export function syncGoalTools(ctx: ModuleContext, goalActive: boolean): GoalToolSyncResult {
   const pi = ctx.pi;
-  let known: Set<string>;
-  let active: Set<string>;
-  try {
-    known = new Set(pi.getAllTools().map((tool) => tool.name));
-    active = new Set(pi.getActiveTools());
-  } catch {
-    return activationRefused();
+  if (goalActive) {
+    return ensureGoalToolsActive({
+      getRegisteredToolNames: () => pi.getAllTools().map((tool) => tool.name),
+      getActiveToolNames: () => pi.getActiveTools(),
+      setActiveToolNames: (names) => pi.setActiveTools(names),
+    });
   }
-  const registered = GOAL_TOOL_NAMES.filter((name) => known.has(name));
-  if (!goalActive) {
-    const next = [...active].filter((name) => !registered.includes(name));
-    if (next.length === active.size) return { ok: true };
+  try {
+    const registered = new Set(pi.getAllTools().map((tool) => tool.name));
+    const active = pi.getActiveTools();
+    const next = active.filter((name) => !GOAL_TOOL_NAMES.includes(name) || !registered.has(name));
+    if (next.length === active.length) return { ok: true };
     try {
       pi.setActiveTools(next);
     } catch {
       // A session with no active goal stays quiet; there is no goal recovery
       // to diagnose, and the engine owns the eventual allowlist reset.
     }
-    return { ok: true };
-  }
-  if (registered.length !== GOAL_TOOL_NAMES.length) {
-    return {
-      ok: false,
-      reason: "missing_registration",
-      message: "Goal tools did not load. Reload this conversation; if the problem continues, turn Goals off and on in Features.",
-    };
-  }
-  const missing = GOAL_TOOL_NAMES.filter((name) => !active.has(name));
-  if (missing.length === 0) return { ok: true };
-  try {
-    pi.setActiveTools([...active, ...missing]);
-    const repaired = new Set(pi.getActiveTools());
-    if (GOAL_TOOL_NAMES.every((name) => repaired.has(name))) return { ok: true };
   } catch {
-    // Classified below without leaking the engine's private error.
+    // No active goal means there is no recovery failure to surface.
   }
-  return activationRefused();
-}
-
-function activationRefused(): GoalToolSyncResult {
-  return {
-    ok: false,
-    reason: "activation_refused",
-    message: "Goal tools could not be activated. Reload this conversation; if the problem continues, turn Goals off and on in Features.",
-  };
+  return { ok: true };
 }
 
 function readGoal(ctx: ModuleContext): SessionGoal | null {
