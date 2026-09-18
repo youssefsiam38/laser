@@ -11,7 +11,13 @@ vi.mock("electron", () => ({
   shell: {},
 }));
 
-import { nativeTextMenuTemplate, spellCheckerLanguages, type NativeTextMenuActions } from "../src/windows.js";
+import {
+  nativeTextMenuTemplate,
+  spellCheckerLanguages,
+  spellcheckStateForEvent,
+  type NativeTextMenuActions,
+  type SpellcheckMenuState,
+} from "../src/windows.js";
 
 const editFlags = {
   canUndo: true,
@@ -66,15 +72,34 @@ describe("the native text context menu", () => {
       spellcheckEnabled: false,
     }, actions);
 
-    expect(menu.slice(0, 3).map(item => item.label)).toEqual(["environment", "environs", "Add to dictionary"]);
+    expect(menu.slice(0, 5).map(item => item.label ?? item.type)).toEqual([
+      "environment", "environs", "separator", "Add to dictionary", "separator",
+    ]);
     expect(menu.map(item => item.role).filter(Boolean)).toEqual(["undo", "redo", "cut", "copy", "paste", "delete", "selectAll"]);
     menu[0]!.click?.({} as never, undefined, {} as never);
-    menu[2]!.click?.({} as never, undefined, {} as never);
+    menu[3]!.click?.({} as never, undefined, {} as never);
     expect(actions.replaceMisspelling).toHaveBeenCalledWith("environment");
     expect(actions.addToDictionary).toHaveBeenCalledWith("enviroment");
   });
 
-  it("explains a dictionary that cannot provide suggestions", () => {
+  it("caps spelling suggestions at five and separates dictionary actions", () => {
+    const menu = nativeTextMenuTemplate({
+      ...nativeParams,
+      dictionarySuggestions: ["winds", "windows", "wind's", "Windows", "windrows", "windlass"],
+      editFlags,
+      isEditable: true,
+      misspelledWord: "windos",
+      selectionText: "windos",
+      spellcheckEnabled: false,
+    }, actions);
+
+    expect(menu.slice(0, 8).map(item => item.label ?? item.type)).toEqual([
+      "winds", "windows", "wind's", "Windows", "windrows",
+      "separator", "Add to dictionary", "separator",
+    ]);
+  });
+
+  it("explains dictionary loading and failures truthfully", () => {
     const params = {
       ...nativeParams,
       dictionarySuggestions: [],
@@ -88,11 +113,39 @@ describe("the native text context menu", () => {
     const downloading = nativeTextMenuTemplate(params, actions, "linux", { status: "downloading" });
     expect(downloading[0]).toMatchObject({ label: "Spelling dictionary is downloading", enabled: false });
 
-    const offline = nativeTextMenuTemplate(params, actions, "linux", { status: "unavailable", reason: "offline" });
-    expect(offline[0]).toMatchObject({
-      label: "Spelling dictionary unavailable — connect to download",
+    const downloadFailure = nativeTextMenuTemplate(params, actions, "linux", { status: "unavailable", reason: "download" });
+    expect(downloadFailure[0]).toMatchObject({
+      label: "Spelling dictionary unavailable — restart the app to retry",
       enabled: false,
     });
+
+    const noLanguage = nativeTextMenuTemplate(params, actions, "linux", { status: "unavailable", reason: "no-language" });
+    expect(noLanguage[0]).toMatchObject({
+      label: "No spelling dictionary is available for this language",
+      enabled: false,
+    });
+
+    const configuration = nativeTextMenuTemplate(params, actions, "linux", { status: "unavailable", reason: "configuration" });
+    expect(configuration[0]).toMatchObject({
+      label: "Spelling dictionary could not be configured",
+      enabled: false,
+    });
+  });
+
+  it("keeps dictionary results authoritative when no suggestions exist", () => {
+    const menu = nativeTextMenuTemplate({
+      ...nativeParams,
+      dictionarySuggestions: [],
+      editFlags,
+      isEditable: true,
+      misspelledWord: "qzxqzx",
+      selectionText: "qzxqzx",
+      spellcheckEnabled: false,
+    }, actions, "linux", { status: "unavailable", reason: "download" });
+
+    expect(menu.slice(0, 4).map(item => item.label ?? item.type)).toEqual([
+      "No spelling suggestions", "separator", "Add to dictionary", "separator",
+    ]);
   });
 
   it("keeps Copy, Select All and platform lookup for selected transcript text", () => {
@@ -162,8 +215,8 @@ describe("the native text context menu", () => {
     expect(file.map(item => item.label).filter(Boolean)).toEqual(["Copy Link Address"]);
   });
 
-  it("escapes native menu mnemonics outside macOS", () => {
-    const menu = nativeTextMenuTemplate({
+  it("escapes native menu mnemonics without changing replacement text", () => {
+    const lookupMenu = nativeTextMenuTemplate({
       ...nativeParams,
       dictionarySuggestions: [],
       editFlags,
@@ -172,7 +225,38 @@ describe("the native text context menu", () => {
       selectionText: "R&D",
       spellcheckEnabled: false,
     }, actions, "win32");
-    expect(menu[0]?.label).toBe("Look Up “R&&D”");
+    expect(lookupMenu[0]?.label).toBe("Look Up “R&&D”");
+
+    const suggestionMenu = nativeTextMenuTemplate({
+      ...nativeParams,
+      dictionarySuggestions: ["R&D"],
+      editFlags,
+      isEditable: true,
+      misspelledWord: "RnD",
+      selectionText: "RnD",
+      spellcheckEnabled: false,
+    }, actions, "linux");
+    expect(suggestionMenu[0]?.label).toBe("R&&D");
+    suggestionMenu[0]!.click?.({} as never, undefined, {} as never);
+    expect(actions.replaceMisspelling).toHaveBeenCalledWith("R&D");
+  });
+});
+
+describe("spellcheck dictionary lifecycle", () => {
+  it("waits for initialization before marking a downloaded dictionary ready", () => {
+    let state: SpellcheckMenuState = { status: "ready" };
+    state = spellcheckStateForEvent("download-begin", state);
+    expect(state).toEqual({ status: "downloading" });
+
+    state = spellcheckStateForEvent("download-success", state);
+    expect(state).toEqual({ status: "downloading" });
+
+    state = spellcheckStateForEvent("initialized", state);
+    expect(state).toEqual({ status: "ready" });
+    expect(spellcheckStateForEvent("initialized")).toEqual({ status: "ready" });
+
+    state = spellcheckStateForEvent("download-failure", state);
+    expect(state).toEqual({ status: "unavailable", reason: "download" });
   });
 });
 

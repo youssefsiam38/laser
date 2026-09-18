@@ -233,9 +233,32 @@ type NativeTextMenuParams = Pick<
 export type SpellcheckMenuState =
   | { status: "ready" }
   | { status: "downloading" }
-  | { status: "unavailable"; reason: "offline" | "no-language" };
+  | { status: "unavailable"; reason: "download" | "no-language" | "configuration" };
+
+export type SpellcheckSessionEvent =
+  | "download-begin"
+  | "download-success"
+  | "initialized"
+  | "download-failure";
 
 const READY_SPELLCHECK: SpellcheckMenuState = { status: "ready" };
+
+/** Keep Electron's dictionary lifecycle and the native menu state in one tested mapping. */
+export function spellcheckStateForEvent(
+  event: SpellcheckSessionEvent,
+  current: SpellcheckMenuState = READY_SPELLCHECK,
+): SpellcheckMenuState {
+  switch (event) {
+    case "download-begin": return { status: "downloading" };
+    case "download-success": return current;
+    case "initialized": return READY_SPELLCHECK;
+    case "download-failure": return { status: "unavailable", reason: "download" };
+  }
+}
+
+function nativeMenuLabel(value: string, platform: NodeJS.Platform): string {
+  return platform === "darwin" ? value : value.replace(/&/g, "&&");
+}
 
 /**
  * Electron deliberately ships no page context menu. Build only the native text
@@ -280,20 +303,26 @@ export function nativeTextMenuTemplate(
     // result; gating them on that contradictory flag silently discards them.
     if (params.dictionarySuggestions.length > 0) {
       for (const suggestion of params.dictionarySuggestions.slice(0, 5)) {
-        template.push({ label: suggestion, click: () => actions.replaceMisspelling(suggestion) });
+        template.push({
+          label: nativeMenuLabel(suggestion, platform),
+          click: () => actions.replaceMisspelling(suggestion),
+        });
       }
     } else {
       template.push({ label: "No spelling suggestions", enabled: false });
     }
+    separator();
     template.push({ label: "Add to dictionary", click: () => actions.addToDictionary(params.misspelledWord) });
     separator();
   } else if (params.isEditable && spellcheck.status !== "ready") {
     template.push({
       label: spellcheck.status === "downloading"
         ? "Spelling dictionary is downloading"
-        : spellcheck.reason === "offline"
-          ? "Spelling dictionary unavailable — connect to download"
-          : "No spelling dictionary is available for this language",
+        : spellcheck.reason === "download"
+          ? "Spelling dictionary unavailable — restart the app to retry"
+          : spellcheck.reason === "no-language"
+            ? "No spelling dictionary is available for this language"
+            : "Spelling dictionary could not be configured",
       enabled: false,
     });
     separator();
@@ -302,8 +331,7 @@ export function nativeTextMenuTemplate(
   if (params.selectionText && actions.lookupSelection) {
     const oneLine = params.selectionText.replace(/\s+/g, " ").trim();
     const label = oneLine.length > 36 ? `${oneLine.slice(0, 35)}…` : oneLine;
-    const nativeLabel = platform === "darwin" ? label : label.replace(/&/g, "&&");
-    template.push({ label: `Look Up “${nativeLabel}”`, click: actions.lookupSelection });
+    template.push({ label: `Look Up “${nativeMenuLabel(label, platform)}”`, click: actions.lookupSelection });
     separator();
   }
 
@@ -563,21 +591,25 @@ export class WindowManager {
       return;
     }
     session.on("spellcheck-dictionary-download-begin", (_event, language) => {
-      this.spellcheckMenuState = { status: "downloading" };
+      this.spellcheckMenuState = spellcheckStateForEvent("download-begin", this.spellcheckMenuState);
       this.options.log.line(`spellcheck dictionary ${language} is downloading`);
     });
     session.on("spellcheck-dictionary-download-success", (_event, language) => {
-      this.spellcheckMenuState = READY_SPELLCHECK;
+      this.spellcheckMenuState = spellcheckStateForEvent("download-success", this.spellcheckMenuState);
       this.options.log.line(`spellcheck dictionary ${language} downloaded`);
     });
+    session.on("spellcheck-dictionary-initialized", (_event, language) => {
+      this.spellcheckMenuState = spellcheckStateForEvent("initialized", this.spellcheckMenuState);
+      this.options.log.line(`spellcheck dictionary ${language} initialized`);
+    });
     session.on("spellcheck-dictionary-download-failure", (_event, language) => {
-      this.spellcheckMenuState = { status: "unavailable", reason: "offline" };
-      this.options.log.line(`spellcheck dictionary ${language} is unavailable offline; native typing remains enabled`);
+      this.spellcheckMenuState = spellcheckStateForEvent("download-failure", this.spellcheckMenuState);
+      this.options.log.line(`spellcheck dictionary ${language} could not be downloaded; restart the app to retry`);
     });
     try {
       session.setSpellCheckerLanguages(languages);
     } catch (error) {
-      this.spellcheckMenuState = { status: "unavailable", reason: "no-language" };
+      this.spellcheckMenuState = { status: "unavailable", reason: "configuration" };
       this.options.log.line(`could not configure spellcheck dictionary ${languages.join(", ")}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
