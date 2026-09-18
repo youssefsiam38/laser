@@ -1,6 +1,3 @@
-import { HISTORY_PAGE_ENTRY_LIMIT } from "@lasercode/protocol";
-
-const TOOL_HEAVY_PAGE_FACTOR = 4;
 const MINIMUM_RESERVE = 1;
 
 export interface HistoryReserveEstimate {
@@ -15,9 +12,9 @@ export interface HistoryReserveEstimate {
 /**
  * Estimates only the history that is still unloaded. `userOffset` is normally
  * the strongest signal. A tool-heavy turn can contain many pages behind one
- * prompt, so a remaining cursor with zero/one earlier prompts uses one bounded
- * protocol page (or a few measured pages once one has arrived) rather than
- * pretending the cursor is already at the root.
+ * prompt, so a remaining cursor with zero/one earlier prompts uses the loaded
+ * projected page as its conservative range rather than multiplying protocol
+ * entries that may all fold into one rendered turn.
  */
 export function estimateHistoryReserve(input: HistoryReserveEstimate): number {
   if (!input.hasBefore) return 0;
@@ -26,11 +23,7 @@ export function estimateHistoryReserve(input: HistoryReserveEstimate): number {
     ? input.loadedHeight / input.loadedUserTurns
     : row;
   if (input.userOffset > 1) return Math.max(row, averageTurn * input.userOffset);
-  return Math.max(
-    row,
-    row * HISTORY_PAGE_ENTRY_LIMIT,
-    input.lastPageHeight > 0 ? input.lastPageHeight * TOOL_HEAVY_PAGE_FACTOR : 0,
-  );
+  return Math.max(row, input.loadedHeight, input.lastPageHeight);
 }
 
 /** Unloaded-history geometry. Only arrived-page height may reduce it. */
@@ -39,7 +32,6 @@ export class HistoryReserveModel {
   ready = false;
   private reading = false;
   private hasBefore = false;
-  private rowEstimate = 0;
   private lastPageHeight = 0;
 
   reset() {
@@ -47,13 +39,11 @@ export class HistoryReserveModel {
     this.ready = false;
     this.reading = false;
     this.hasBefore = false;
-    this.rowEstimate = 0;
     this.lastPageHeight = 0;
   }
 
   configure(input: Omit<HistoryReserveEstimate, "lastPageHeight"> & { rows: number }) {
     this.hasBefore = input.hasBefore;
-    this.rowEstimate = Math.max(MINIMUM_RESERVE, input.rowEstimate);
     if (!input.hasBefore) {
       this.height = 0;
       this.ready = false;
@@ -86,7 +76,10 @@ export class HistoryReserveModel {
     this.height = Math.max(this.floor(), this.height - delta);
   }
 
-  private floor() { return this.hasBefore ? Math.max(MINIMUM_RESERVE, this.rowEstimate) : 0; }
+  // Once reading starts, one geometric unit is enough to say "not the root".
+  // A row-sized floor can exceed the final page and collapse the range when the
+  // producer removes the cursor; arrived rows now grow the range monotonically.
+  private floor() { return this.hasBefore ? MINIMUM_RESERVE : 0; }
 }
 
 export interface EarlierPageTransaction {

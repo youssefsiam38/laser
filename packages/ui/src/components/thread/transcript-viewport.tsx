@@ -201,6 +201,7 @@ export class TranscriptViewport {
     // A page can prepend cleanly or merge into the oldest projected group. Find
     // the preserved suffix and exchange only the positive height inserted above
     // it; a replacement with no preserved suffix is not attributed to history.
+    let pageAttributed = false;
     if (this.earlierPage && previous.length && ids.length) {
       let previousStart = -1, nextStart = -1;
       for (let old = 0; old < previous.length && nextStart < 0; old++) {
@@ -211,13 +212,17 @@ export class TranscriptViewport {
         }
       }
       if (nextStart > 0) {
+        pageAttributed = true;
         const removedHeight = previousHeights.offset(previousStart);
         const insertedHeight = Math.max(0, this.heights.offset(nextStart) - removedHeight);
+        const reserveBefore = this.reserve.height;
         this.reserve.arrived(insertedHeight);
+        const globalShift = insertedHeight + this.reserve.height - reserveBefore;
+        if (Math.abs(globalShift) >= 0.5) this.structuralShift = (this.structuralShift ?? 0) + globalShift;
         this.arrivedPage = { ids: ids.slice(0, nextStart), removedHeight, exchangedHeight: insertedHeight, refine: true };
       }
     }
-    if (anchor && anchorBefore !== undefined) {
+    if (!pageAttributed && anchor && anchorBefore !== undefined) {
       const index = this.positions.get(anchor.messageId);
       const shift = index === undefined ? 0 : this.globalOffset(index) - anchorBefore;
       if (Math.abs(shift) >= 0.5) this.structuralShift = (this.structuralShift ?? 0) + shift;
@@ -381,13 +386,18 @@ export class TranscriptViewport {
     }
     // Refine only the prefix this page inserted, and only on its first measured
     // frame. Streaming, disclosure, image and font growth elsewhere cannot
-    // become fictitious unloaded history.
+    // become fictitious unloaded history. The same prefix delta is also the
+    // geometric compensation when a merged page replaced the named anchor.
+    let pageRefinementShift: number | undefined;
     if (this.arrivedPage?.refine) {
       const pageHeight = Math.max(0, this.arrivedPage.ids.reduce((sum, id) => {
         const index = this.positions.get(id);
         return sum + (index === undefined ? 0 : this.heights.height(index));
       }, 0) - this.arrivedPage.removedHeight);
-      this.reserve.refineArrived(pageHeight - this.arrivedPage.exchangedHeight);
+      const pageDelta = pageHeight - this.arrivedPage.exchangedHeight;
+      const reserveBefore = this.reserve.height;
+      this.reserve.refineArrived(pageDelta);
+      pageRefinementShift = pageDelta + this.reserve.height - reserveBefore;
       this.arrivedPage.exchangedHeight = pageHeight;
       this.arrivedPage.refine = false;
     }
@@ -397,7 +407,9 @@ export class TranscriptViewport {
     if (changed || this.windowDirty) {
       this.windowDirty = false;
       const mounted = this.reading && anchorIndex !== undefined && anchorBefore !== undefined && this.viewport && !this.target && this.nodes.has(this.place.anchor!.messageId);
-      if (mounted) {
+      if (pageRefinementShift !== undefined && !this.place.following && this.viewport && !this.target) {
+        if (Math.abs(pageRefinementShift) >= 0.5) this.scroll(this.viewport.scrollTop + pageRefinementShift);
+      } else if (mounted) {
         const shift = this.globalOffset(anchorIndex) - anchorBefore;
         if (Math.abs(shift) >= 0.5) this.scroll(this.viewport!.scrollTop + shift);
       } else this.restore();

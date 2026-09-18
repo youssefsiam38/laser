@@ -762,7 +762,7 @@ describe("scoped transcript destinations", () => {
       controller.beginEarlierPage();
       ids = [...Array.from({ length: 40 }, (_, index) => `new-${index}`), ...ids];
       controller.setIds(ids); controller.committed();
-      expect(viewport.scrollTop).toBe(0);
+      expect(viewport.scrollTop).toBeLessThanOrEqual(1);
       expect(controller.capture().following).toBe(false);
     } finally { detach(); viewport.remove(); }
   });
@@ -887,6 +887,45 @@ describe("scoped transcript destinations", () => {
     }
   });
 
+  it("pushes a top reader by the exact unabsorbed height of a merged page", async () => {
+    const frames = new Map<number, FrameRequestCallback>(); let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
+    const step = async () => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); await Promise.resolve(); };
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    let ids = ["old-head", "tail"];
+    controller.configure("/merged-page-push"); controller.setIds(ids); controller.setHistoryWindow(1, 1, "cursor-a");
+    Object.defineProperties(viewport, { clientHeight: { value: 300 }, scrollHeight: { get: () => controller.reserveHeight + controller.heights.total } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 300);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, viewport.scrollHeight);
+    content.style.fontSize = "14px"; content.style.lineHeight = "21px"; content.style.paddingTop = "20px";
+    viewport.append(content); document.body.append(viewport); controller.content = content;
+    const detach = controller.attach(viewport);
+    try {
+      await step();
+      viewport.scrollTop = 1; viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
+      viewport.scrollTop = 0; viewport.dispatchEvent(new Event("scroll"));
+      controller.beginEarlierPage();
+      ids = ["page-a", "page-b", "page-c", ...ids]; controller.setIds(ids);
+      controller.setHistoryWindow(1, 1, "cursor-b"); controller.finishEarlierPage(); controller.committed(); await step();
+      expect(controller.reserveHeight).toBe(1);
+
+      viewport.scrollTop = 0; viewport.dispatchEvent(new Event("scroll")); controller.capture();
+      const before = { top: viewport.scrollTop, height: viewport.scrollHeight };
+      controller.beginEarlierPage();
+      ids = ["merged-head", "tail"]; controller.setIds(ids);
+      const merged = document.createElement("div");
+      merged.getBoundingClientRect = () => new DOMRect(0, controller.reserveHeight - viewport.scrollTop, 600, 900);
+      content.append(merged); controller.register("merged-head", merged);
+      controller.setHistoryWindow(0, 1, undefined); controller.finishEarlierPage(); controller.committed();
+      await step();
+      const after = { top: viewport.scrollTop, height: viewport.scrollHeight };
+      expect(after.height).toBeGreaterThanOrEqual(before.height - 1);
+      expect(Math.abs((after.top - before.top) - (after.height - before.height))).toBeLessThanOrEqual(1);
+      expect(controller.earlierPageFallbackCount).toBe(0);
+    } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); }
+  });
+
   it("releases after page commits that merge, replace, retain a cursor, or change metadata", () => {
     for (const shape of ["merged", "replacement", "same-cursor", "metadata"] as const) {
       const controller = new TranscriptViewport();
@@ -941,15 +980,19 @@ describe("scoped transcript destinations", () => {
 
   it("keeps a nonzero page-based reserve while a cursor remains with one prompt", () => {
     const estimate = estimateHistoryReserve({ hasBefore: true, userOffset: 1, loadedUserTurns: 1, loadedHeight: 400, rowEstimate: 100, lastPageHeight: 0 });
-    expect(estimate).toBeGreaterThan(400);
+    expect(estimate).toBe(400);
     const reserve = new HistoryReserveModel();
     reserve.configure({ hasBefore: true, userOffset: 1, loadedUserTurns: 1, loadedHeight: 400, rowEstimate: 100, rows: 4 });
     reserve.startReading();
     const initial = reserve.height;
-    reserve.arrived(initial * 2);
-    expect(reserve.height).toBeGreaterThan(0);
-    reserve.configure({ hasBefore: false, userOffset: 0, loadedUserTurns: 2, loadedHeight: 800, rowEstimate: 100, rows: 8 });
+    const initialRange = initial + 400;
+    const arrivedHeight = initial * 2;
+    reserve.arrived(arrivedHeight);
+    expect(reserve.height).toBe(1);
+    expect(reserve.height + 400 + arrivedHeight).toBeGreaterThanOrEqual(initialRange);
+    reserve.configure({ hasBefore: false, userOffset: 0, loadedUserTurns: 2, loadedHeight: 400 + arrivedHeight, rowEstimate: 100, rows: 8 });
     expect(reserve.height).toBe(0);
+    expect(400 + arrivedHeight).toBeGreaterThanOrEqual(initialRange - 1);
   });
 
   it("does not exchange reserve for streaming or disclosure growth outside an arrived page", async () => {

@@ -119,17 +119,31 @@ export default async function scrollUpRepeat(check) {
     return undefined;
   });
   const trail = [];
+  const arrivals = [];
+  let priorRange = initialGeometry.height;
   // Paced like a person reading: a wheel notch, then a pause long enough for
   // the page to arrive and the viewport's reading window to close (SLOW=1),
   // or the trackpad bursts the blank-window check uses.
   const slow = process.env.SLOW === '1';
   for (let round = 0; round < (slow || real ? 400 : 120) && !pageErrors.length; round++) {
-    if (slow) {
-      const before = await viewport.evaluate(el => [el.scrollTop, el.scrollHeight]);
+    if (slow || real) {
+      const before = await viewport.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight }));
       await upward(500);
-      const samples = [];
-      for (const wait of [60, 150, 250, 200]) { await page.waitForTimeout(wait); samples.push(await viewport.evaluate(el => `${Math.round(el.scrollTop)}/${el.scrollHeight}`)); }
-      if (process.env.TRACE) console.log(`wheel ${round}: before ${before.join('/')} → ${samples.join(' → ')} · top row ${await visible()}`);
+      const samples = [await viewport.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight }))];
+      for (const wait of [60, 150, 250, 200]) { await page.waitForTimeout(wait); samples.push(await viewport.evaluate(el => ({ top: el.scrollTop, height: el.scrollHeight })); }
+      for (let index = 0; index < samples.length; index += 1) {
+        const sample = samples[index];
+        if (real) assert.ok(sample.height + 1 >= priorRange, `scroll range collapsed ${Math.round(priorRange)}→${Math.round(sample.height)} during upward reading`);
+        const previous = index > 0 ? samples[index - 1] : undefined;
+        if (previous && sample.height > previous.height + 0.5) {
+          const rangeDelta = sample.height - previous.height;
+          const topDelta = sample.top - previous.top;
+          arrivals.push({ rangeDelta, topDelta });
+          if (real) assert.ok(Math.abs(topDelta - rangeDelta) <= 1, `arrived page moved the reading anchor by ${Math.round(topDelta - rangeDelta)}px (${Math.round(previous.top)}/${Math.round(previous.height)}→${Math.round(sample.top)}/${Math.round(sample.height)})`);
+        }
+        priorRange = sample.height;
+      }
+      if (process.env.TRACE) console.log(`wheel ${round}: before ${Math.round(before.top)}/${Math.round(before.height)} → ${samples.map(sample => `${Math.round(sample.top)}/${Math.round(sample.height)}`).join(' → ')} · top row ${await visible()}`);
     }
     else { for (let step = 0; step < 12; step++) { await upward(900); await page.waitForTimeout(30); } await page.waitForTimeout(250); }
     const mounted = await rows();
@@ -171,6 +185,7 @@ export default async function scrollUpRepeat(check) {
     assert.equal(earlierRemaining, 0, 'the real conversation still has an earlier page to load');
     assert.equal(finalGeometry.reserve, 0, 'the real conversation claimed unloaded range at its root');
     assert.equal(finalGeometry.statusSeen, true, 'the real conversation never exposed an earlier-page busy status');
+    assert.ok(arrivals.length > 0, 'the real conversation observed no earlier-page arrival to verify');
     assert.ok(initialGeometry.height > finalGeometry.height * 0.2, `real initial range ${initialGeometry.height}px understated loaded history ${finalGeometry.height}px beyond the documented bound`);
     assert.ok(initialGeometry.height < finalGeometry.height * 8, `real initial range ${initialGeometry.height}px overstated loaded history ${finalGeometry.height}px beyond the documented bound`);
   }
@@ -185,6 +200,6 @@ export default async function scrollUpRepeat(check) {
   assert.ok(loadingShot, 'the earlier-history loading state was not captured');
   await loadingShot;
   if (slow && !real) assert.ok(trail.length > 100 && Number(trail.at(-1)) < 500, `paced reading covered ${trail.length} notches down to checkpoint ${trail.at(-1)}`);
-  console.log('scroll-up evidence:', JSON.stringify({ rounds: trail.length, first: trail[0], last: trail.at(-1), statusSignals: finalGeometry.statusSignals, input, real: Boolean(real) }));
+  console.log('scroll-up evidence:', JSON.stringify({ rounds: trail.length, first: trail[0], last: trail.at(-1), arrivals: arrivals.length, statusSignals: finalGeometry.statusSignals, input, real: Boolean(real) }));
   return { ok: true };
 }

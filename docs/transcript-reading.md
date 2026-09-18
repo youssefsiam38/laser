@@ -36,14 +36,15 @@ thumb and the reader's anchor stable while rows are measured.
 
 `userOffset` counts user prompts, not transcript entries. One prompt can contain
 hundreds of assistant and tool rows, so `userOffset` values of zero or one do
-not measure the remaining height well. While a cursor remains, that case uses a
-bounded page estimate: one protocol page of estimated rows, refined by a
-bounded multiple of the last arrived page.
+not measure the remaining height well. While a cursor remains, that case uses
+the measured loaded projection as one conservative page estimate. It does not
+multiply the protocol entry limit because many entries may fold into one turn.
 
 The thumb is therefore an honest estimate, not a random-access map. It can be
 larger or smaller than the final measured conversation in a tool-heavy turn.
-It never claims the root while a cursor remains, and dragging into the reserve
-loads pages sequentially until the producer removes the cursor. Real-session
+It retains one geometric unit while a cursor remains, so it never claims the
+root. Once that conservative range is exchanged, arrived pages grow the range
+and push the viewport by exactly their unabsorbed height. Real-session
 acceptance permits a wider initial/final range ratio for this reason and still
 requires a nonzero reserve, visible loading state, continuous anchors and zero
 reserve at the true root.
