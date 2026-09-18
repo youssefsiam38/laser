@@ -15,6 +15,13 @@
  * owns only the field, the state of the last search and the words said about
  * it. Copy and Download never change: they stream the whole body from its
  * authority as the raw text it is, formatted or not.
+ *
+ * It is mounted once per viewer opening, above both readers, and the reader
+ * that is showing hands up its {@link ReaderControls} (M16-T84). Choosing
+ * Plain text therefore changes the reading area and nothing else: the phrase
+ * the person typed, the match they are on and the focused control all stay
+ * where they were, and the query the viewer was opened with is run once, on
+ * opening, never again.
  */
 import { ArrowDownToLine, ArrowUpToLine, Check, ChevronDown, ChevronUp, Copy, Download, Search, Type, WrapText } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -30,6 +37,9 @@ export type BodyFindOutcome =
   | { found: true; position?: { index: number; total: number } | undefined }
   | { found: false; notice: string };
 
+/** Where the current search stands: "3 of 12". */
+export type BodyFindPosition = { index: number; total: number };
+
 /** How one reader looks through the body it is showing. */
 export interface BodyFind {
   /** Move to the next (or previous) match and reveal it. */
@@ -38,28 +48,41 @@ export interface BodyFind {
   stepsBack?: boolean | undefined;
   /** The query changed: forget where the last search stopped. */
   reset?(): void;
+  /**
+   * A reader whose document settles after it is drawn — highlighted code,
+   * rendered math — republishes where the search stands each time it repaints,
+   * so the count and the marks can never disagree.
+   */
+  subscribe?(listener: (position: BodyFindPosition | undefined) => void): () => void;
+}
+
+/** What the reader that is showing gives the footer to work with. */
+export interface ReaderControls {
+  find: BodyFind;
+  onStart(): void;
+  onEnd(): void;
+  /** What went wrong reading this body, in the person's words. */
+  error: string | undefined;
+  onRetry(): void;
+  /** Absent when the reading area has no lines to wrap (a formatted document). */
+  wrap?: { wrap: boolean; onWrap(): void } | undefined;
 }
 
 export interface ViewerFooterProps {
   label: string;
-  error: string | undefined;
-  onRetry(): void;
-  /** Absent when the reading area has no lines to wrap (a formatted document). */
-  wrap?: boolean | undefined;
-  onWrap?: (() => void) | undefined;
+  /** The reader that is showing, and everything the footer drives in it. */
+  controls: ReaderControls;
   /** The choice between the formatted document and its characters. Absent when there is no choice. */
   format?: { formatted: boolean; onChange(formatted: boolean): void } | undefined;
   /** One quiet sentence about how this body is being shown. */
   note?: string | undefined;
-  onStart(): void;
-  onEnd(): void;
-  find: BodyFind;
   initialQuery: string | undefined;
   fileBase: string;
   transfer: Parameters<typeof copyWhole>[0];
 }
 
-export function ViewerFooter({ label, error, onRetry, wrap, onWrap, format, note, onStart, onEnd, find: finder, initialQuery, fileBase, transfer }: ViewerFooterProps) {
+export function ViewerFooter({ label, controls, format, note, initialQuery, fileBase, transfer }: ViewerFooterProps) {
+  const { find: finder, onStart, onEnd, error, onRetry, wrap } = controls;
   const { copy, copied, markCopied } = useCopy();
   const [busy, setBusy] = useState<"copy" | "download" | "find" | undefined>();
   const [notice, setNotice] = useState<string>();
@@ -99,9 +122,28 @@ export function ViewerFooter({ label, error, onRetry, wrap, onWrap, format, note
   useEffect(() => {
     if (initialQuery) void find(initialQuery);
     return () => { if (findAbort.current) findAbort.current.aborted = true; };
-    // Only on open: later searches are the person's own.
+    // Only on open, and this footer is mounted once per opening: the query the
+    // viewer was opened with belongs to that moment, not to every later change
+    // of reader. Later searches are the person's own.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The reader changed underneath the same search (Plain text, and back). The
+  // person keeps their phrase, and the new reader is asked for the match they
+  // were on — never for the query the viewer happened to open with.
+  const lastFinder = useRef(finder);
+  const lastFound = useRef(found);
+  lastFound.current = found;
+  useEffect(() => {
+    if (lastFinder.current === finder) return;
+    lastFinder.current = finder;
+    setPosition(undefined);
+    if (lastFound.current) void find(lastFound.current);
+  }, [finder, find]);
+
+  // A document settles after it is drawn — code is highlighted, math is laid
+  // out — and the reader republishes where the search stands when it does.
+  useEffect(() => finder.subscribe?.(setPosition), [finder]);
 
   const copyAll = async () => {
     setBusy("copy");
@@ -154,6 +196,11 @@ export function ViewerFooter({ label, error, onRetry, wrap, onWrap, format, note
             value={query}
             maxLength={1024}
             onChange={event => { setQuery(event.target.value); setFound(undefined); setPosition(undefined); finder.reset?.(); }}
+            onKeyDown={event => {
+              if (event.nativeEvent.isComposing || event.key !== "Enter" || !finder.stepsBack || !event.shiftKey) return;
+              event.preventDefault();
+              void find(query, -1);
+            }}
             placeholder={`Find in ${label}`}
             className="h-8 w-full min-w-0 rounded-lg border border-line bg-surface ps-8 pe-2.5 text-sm text-ink outline-none transition-[border-color] duration-(--motion-instant) placeholder:text-ink-3 focus-visible:border-live focus-visible:ring-2 focus-visible:ring-live/25 pointer-coarse:h-11"
           />
@@ -164,13 +211,13 @@ export function ViewerFooter({ label, error, onRetry, wrap, onWrap, format, note
           </span>
         ) : null}
         {finder.stepsBack ? (
-          <Button type="button" variant="ghost" size="icon-sm" aria-label={`Previous match in ${label}`} className={cn(control, "pointer-coarse:size-11")}
+          <Button type="button" variant="ghost" size="icon-sm" aria-label={`Previous match in ${label}`} aria-keyshortcuts="Shift+Enter" className={cn(control, "pointer-coarse:size-11")}
             disabled={!searching || busy === "find"} onClick={() => void find(query, -1)}>
             <ChevronUp aria-hidden="true" />
           </Button>
         ) : null}
         {finder.stepsBack ? (
-          <Button type="submit" variant="ghost" size="icon-sm" aria-label={searching ? `Next match in ${label}` : `Find in ${label}`} className={cn(control, "pointer-coarse:size-11")}
+          <Button type="submit" variant="ghost" size="icon-sm" aria-label={searching ? `Next match in ${label}` : `Find in ${label}`} aria-keyshortcuts="Enter" className={cn(control, "pointer-coarse:size-11")}
             disabled={!query.trim() || busy === "find"}>
             <ChevronDown aria-hidden="true" />
           </Button>
@@ -188,8 +235,8 @@ export function ViewerFooter({ label, error, onRetry, wrap, onWrap, format, note
             <span>Plain text</span>
           </Button>
         ) : null}
-        {wrap !== undefined && onWrap ? (
-          <Button variant="ghost" size="sm" aria-pressed={wrap} aria-label="Wrap lines" className={cn(control, wrap && "bg-surface-2 text-ink")} onClick={onWrap}>
+        {wrap ? (
+          <Button variant="ghost" size="sm" aria-pressed={wrap.wrap} aria-label="Wrap lines" className={cn(control, wrap.wrap && "bg-surface-2 text-ink")} onClick={wrap.onWrap}>
             <WrapText aria-hidden="true" />
             <span>Wrap lines</span>
           </Button>

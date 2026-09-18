@@ -4,10 +4,13 @@
  *
  * The transcript draws prose with `markdown-text`; opening the whole of it used
  * to drop the person into a monospace pane where `**a heading**` was three
- * words and two pairs of asterisks. This reader is the same element, the same
- * component map, the same code headers and highlighting and the same math, put
- * in front of the body read back from its authority — so the full reply reads
- * exactly like the part of it that was already on screen.
+ * words and two pairs of asterisks. What draws the document is the shared
+ * element, {@link MarkdownDocument} — the same renderer, component map, code
+ * headers, highlighting, math and file links the transcript uses, with find on
+ * what is drawn and the repaint that keeps it honest while Shiki and KaTeX
+ * settle. This file is the adapter between that element and one body of one
+ * message: getting the bytes, deciding how many of them a document may hold,
+ * and the reading region they are read in.
  *
  * What it holds: one body, once, up to {@link MARKDOWN_BODY_MAX_BYTES} — four
  * of the paged reader's segments. A document is a single parsed tree; there is
@@ -17,24 +20,19 @@
  * the paged reader and Copy use ({@link streamBody}), behind the same revision
  * fence, and the read is abandoned the moment the reader goes away.
  *
- * Find works on what is drawn, not on what was read: DOM ranges over the
- * rendered text and the browser's own highlights, exactly as conversation find
- * does (`use-conversation-find`), never wrapping or replacing a text node
- * React owns. Copy and Download stay raw text: what is copied is what the
- * message is made of.
+ * Copy and Download stay raw text: what is copied is what the message is made
+ * of, formatted or not.
  */
-import { TextMessagePartProvider } from "@assistant-ui/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
-import { ExcerptedMessage, MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
+import { MarkdownDocument, type DocumentFind, type MarkdownDocumentFind } from "@/components/assistant-ui/elements/markdown-document";
 import { SkeletonText } from "@/components/ui/skeleton";
 import { formatBytes } from "@/format";
 import { cn } from "@/lib/utils";
 import { bodyReadMessage, streamBody } from "@/runtime/body-reader";
-import { textMatches } from "./search-text.js";
 import { OUTPUT_SEGMENT_BYTES } from "./output-pager.js";
 import type { copyWhole } from "./output-transfer.js";
-import { ViewerFooter, type BodyFind } from "./body-viewer-footer.js";
+import type { BodyFind, BodyFindPosition, ReaderControls } from "./body-viewer-footer.js";
 
 /**
  * The most of a body this reader formats as one document: four of the paged
@@ -51,37 +49,34 @@ type BodySource = Parameters<typeof copyWhole>[0];
 const SHORT = "Only part of this could be read just now. Try again in a moment.";
 const corrupt = (label: string): string => `What came back was not this ${label}. Open the conversation again.`;
 
-const HIGHLIGHT_CSS =
-  "::highlight(output-viewer-matches){background-color:color-mix(in oklab,var(--attention) 25%,transparent);color:var(--ink)}" +
-  "::highlight(output-viewer-current){background-color:var(--attention);color:var(--bg)}";
-
-const highlights = (): Map<string, unknown> | undefined =>
-  (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS?.highlights;
-
-const dropHighlights = (): void => {
-  const registry = highlights();
-  registry?.delete?.("output-viewer-matches");
-  registry?.delete?.("output-viewer-current");
-};
+/** This viewer's own pair, shared with no other find surface (§6b). */
+const HIGHLIGHT = { matches: "output-viewer-matches", current: "output-viewer-current" };
 
 export interface MarkdownBodyReaderProps {
   source: BodySource;
   /** The body's noun: "reply", "reasoning", "message". */
   label: string;
-  fileBase: string;
-  initialQuery: string | undefined;
-  /** Read this body as its characters instead. */
-  onPlainText(): void;
+  /** Hand the viewer's footer this reader's find, its reading keys and its state. */
+  publish(controls: ReaderControls): void;
 }
 
-export function MarkdownBodyReader({ source, label, fileBase, initialQuery, onPlainText }: MarkdownBodyReaderProps) {
+export function MarkdownBodyReader({ source, label, publish }: MarkdownBodyReaderProps) {
   const [attempt, setAttempt] = useState(0);
   const [body, setBody] = useState<{ text?: string; error?: string }>({});
   const scroller = useRef<HTMLDivElement>(null);
-  const lastQuery = useRef<string | undefined>(undefined);
-  const at = useRef(0);
+  /** The mounted document's find, once it is drawn. */
+  const document_ = useRef<DocumentFind | undefined>(undefined);
+  const detach = useRef<(() => void) | undefined>(undefined);
+  /** Where the count is published, so the document's own repaint corrects it. */
+  const watchers = useRef(new Set<(position: BodyFindPosition | undefined) => void>());
   /** Searches asked for before the body arrived (see `waitForDocument`). */
   const waiting = useRef<Array<() => void>>([]);
+
+  const release = useCallback(() => {
+    const waiters = waiting.current;
+    waiting.current = [];
+    for (const resolve of waiters) resolve();
+  }, []);
 
   // One read of the whole body, through the range contract every other reader
   // here uses. Leaving the formatted view abandons it; nothing is kept.
@@ -101,7 +96,12 @@ export function MarkdownBodyReader({ source, label, fileBase, initialQuery, onPl
         if (signal.aborted) return;
         if (outcome.bytes !== outcome.totalBytes) { setBody({ error: SHORT }); return; }
         if (!outcome.verified) { setBody({ error: corrupt(label) }); return; }
-        setBody({ text: parts.join("") });
+        // A quarter of a megabyte of Markdown is a large tree to build. As a
+        // transition it is built in slices the browser can interrupt, so the
+        // window stays alive — the skeleton keeps drawing, another session
+        // keeps streaming, the composer keeps taking keys — while it does.
+        const text = parts.join("");
+        startTransition(() => setBody({ text }));
       } catch (failure) {
         if (!signal.aborted) setBody({ error: bodyReadMessage(failure) });
       } finally {
@@ -110,15 +110,13 @@ export function MarkdownBodyReader({ source, label, fileBase, initialQuery, onPl
     })();
     // Leaving the formatted view abandons the read and releases anyone waiting
     // on a document that will never be drawn.
-    return () => {
-      signal.aborted = true;
-      const waiters = waiting.current;
-      waiting.current = [];
-      for (const resolve of waiters) resolve();
-    };
-  }, [source, attempt, label]);
+    return () => { signal.aborted = true; release(); };
+  }, [source, attempt, label, release]);
 
-  useEffect(() => () => dropHighlights(), []);
+  const empty = body.text !== undefined && body.text.trim() === "";
+  // A body that could not be read, or that has nothing in it, draws no
+  // document: a search waiting for one is answered now rather than never.
+  useEffect(() => { if (body.error !== undefined || empty) release(); }, [body.error, empty, release]);
 
   const place = useCallback((top: number) => {
     const element = scroller.current;
@@ -128,63 +126,79 @@ export function MarkdownBodyReader({ source, label, fileBase, initialQuery, onPl
   const toStart = useCallback(() => place(0), [place]);
   const toEnd = useCallback(() => { const element = scroller.current; if (element) place(element.scrollHeight); }, [place]);
 
+  const publishPosition = useCallback((position: BodyFindPosition | undefined) => {
+    for (const watcher of watchers.current) watcher(position);
+  }, []);
+
+  // What the element hands up, and what this reader wants back from it: its
+  // own highlight names, and its own idea of where a match should sit in the
+  // reading region.
+  const documentFind = useMemo<MarkdownDocumentFind>(() => ({
+    highlight: HIGHLIGHT,
+    publish(found) {
+      detach.current?.();
+      detach.current = undefined;
+      document_.current = found;
+      if (!found) return;
+      detach.current = found.subscribe(publishPosition);
+      release();
+    },
+    reveal(range) {
+      const element = scroller.current;
+      if (!element || typeof range.getBoundingClientRect !== "function") return;
+      const box = range.getBoundingClientRect();
+      const view = element.getBoundingClientRect();
+      // A match already in view is left where it is; the reader's eye does not
+      // move for a match it is looking at.
+      if (box.top < view.top || box.bottom > view.bottom) place(element.scrollTop + box.top - view.top - element.clientHeight / 3);
+    },
+  }), [place, publishPosition, release]);
+
   // The footer asks for the first search as soon as the viewer opens — which is
   // before the body has arrived. Waiting for the document is part of finding in
-  // it, and the wait ends on the paint that draws it, not on a clock. A search
+  // it, and the wait ends when the document is drawn, not on a clock. A search
   // that outlives the reader is dropped.
-  useEffect(() => {
-    if (body.text === undefined && body.error === undefined) return;
-    const waiters = waiting.current;
-    waiting.current = [];
-    for (const resolve of waiters) resolve();
-  }, [body]);
-  const documentRoot = useCallback(
-    () => scroller.current?.querySelector<HTMLElement>('[data-slot="body-viewer-document"]') ?? undefined,
-    [],
-  );
-  const waitForDocument = useCallback(async (signal: { aborted: boolean }): Promise<HTMLElement | undefined> => {
-    const drawn = documentRoot();
-    if (drawn) return drawn;
+  const waitForDocument = useCallback(async (signal: { aborted: boolean }): Promise<DocumentFind | undefined> => {
+    if (document_.current) return document_.current;
     await new Promise<void>(resolve => { waiting.current.push(resolve); });
-    if (signal.aborted) return undefined;
-    return documentRoot();
-  }, [documentRoot]);
+    return signal.aborted ? undefined : document_.current;
+  }, []);
 
-  const paint = useCallback((ranges: Range[], index: number) => {
-    const registry = highlights();
-    const element = scroller.current;
-    const current = ranges[index];
-    if (registry && typeof Highlight !== "undefined") {
-      registry.set("output-viewer-matches", new Highlight(...ranges));
-      registry.set("output-viewer-current", new Highlight(...(current ? [current] : [])));
-    }
-    if (!current || !element || typeof current.getBoundingClientRect !== "function") return;
-    const box = current.getBoundingClientRect();
-    const view = element.getBoundingClientRect();
-    // A match already in view is left where it is; the reader's eye does not
-    // move for a match it is looking at.
-    if (box.top < view.top || box.bottom > view.bottom) place(element.scrollTop + box.top - view.top - element.clientHeight / 3);
-  }, [place]);
+  // The two worlds are named, because they differ: the formatted reader looks
+  // through what is drawn, the plain one through the characters. `**bold**`,
+  // a fence's backticks and a link's URL are in one and not in the other.
+  const missing = useCallback(
+    (query: string) => `“${query}” is not in this ${label} as it is drawn. Plain text searches its characters.`,
+    [label],
+  );
+  // And nothing can be looked for in a body that could not be read: say that
+  // instead of saying the phrase is not in it.
+  const unread = useRef<string | undefined>(undefined);
+  unread.current = body.error;
 
   const find = useMemo<BodyFind>(() => ({
     stepsBack: true,
-    reset() { lastQuery.current = undefined; at.current = 0; dropHighlights(); },
-    async run(query, direction, signal) {
-      const root = await waitForDocument(signal);
-      if (signal.aborted || !root) return { found: false, notice: `“${query}” is not in this ${label}.` };
-      const ranges = documentRanges(root, query);
-      if (ranges.length === 0) {
-        lastQuery.current = undefined;
-        dropHighlights();
-        return { found: false, notice: `“${query}” is not in this ${label}.` };
-      }
-      const index = lastQuery.current === query ? (at.current + direction + ranges.length) % ranges.length : 0;
-      lastQuery.current = query;
-      at.current = index;
-      paint(ranges, index);
-      return { found: true, position: { index: index + 1, total: ranges.length } };
+    reset() { document_.current?.clear(); },
+    subscribe(listener) {
+      watchers.current.add(listener);
+      return () => { watchers.current.delete(listener); };
     },
-  }), [label, paint, waitForDocument]);
+    async run(query, direction, signal) {
+      const found = await waitForDocument(signal);
+      if (signal.aborted || !found) return { found: false, notice: unread.current ?? missing(query) };
+      const position = found.step(query, direction);
+      if (!position) return { found: false, notice: missing(query) };
+      return { found: true, position };
+    },
+  }), [missing, waitForDocument]);
+
+  // What the footer drives in this reader. A formatted document has no lines
+  // to wrap, so it offers no Wrap.
+  const controls = useMemo<ReaderControls>(
+    () => ({ find, onStart: toStart, onEnd: toEnd, error: body.error, onRetry: () => setAttempt(value => value + 1) }),
+    [find, toStart, toEnd, body.error],
+  );
+  useEffect(() => publish(controls), [publish, controls]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Home" && !event.shiftKey) { event.preventDefault(); toStart(); }
@@ -192,104 +206,35 @@ export function MarkdownBodyReader({ source, label, fileBase, initialQuery, onPl
   };
 
   const total = source.ref.totalBytes;
-  const empty = body.text !== undefined && body.text.trim() === "";
 
-  return <>
-    <div
-      ref={scroller}
-      data-slot="output-viewer-scroller"
-      data-format="markdown"
-      role="region"
-      tabIndex={0}
-      aria-label={`${label}, ${formatBytes(total)}`}
-      aria-busy={body.text === undefined && body.error === undefined ? true : undefined}
-      onKeyDown={onKeyDown}
-      className={cn(
-        "relative min-h-0 flex-1 overflow-auto overscroll-contain bg-surface px-4 py-3 text-ink outline-none [overflow-anchor:none]",
-        "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
-      )}
-    >
-      <style>{HIGHLIGHT_CSS}</style>
-      {body.text !== undefined ? (
-        empty
-          ? <p className="typed text-ink-3">This {label} is empty.</p>
-          // A reading column, centred: the measure is the transcript's, and a
-          // wide window puts the margin on both sides of it rather than all of
-          // it on the right.
-          : <div data-slot="body-viewer-document" className="mx-auto min-w-0 max-w-(--measure-prose)">
-              {/* The whole of it: nothing here is an excerpt, so code copied
-                  out of it is the code, unmarked. */}
-              <ExcerptedMessage.Provider value={false}>
-                <TextMessagePartProvider text={body.text} isRunning={false}>
-                  <MarkdownText nativeFiles />
-                </TextMessagePartProvider>
-              </ExcerptedMessage.Provider>
-            </div>
-      ) : body.error !== undefined ? null : (
-        <div data-slot="output-viewer-skeleton" aria-hidden="true" className="mx-auto flex max-w-(--measure-prose) flex-col gap-3">
-          {SKELETON.map((share, index) => <SkeletonText key={index} width={share} />)}
-        </div>
-      )}
-    </div>
-    <ViewerFooter
-      label={label}
-      error={body.error}
-      onRetry={() => setAttempt(value => value + 1)}
-      format={{ formatted: true, onChange: () => onPlainText() }}
-      onStart={toStart}
-      onEnd={toEnd}
-      find={find}
-      initialQuery={initialQuery}
-      fileBase={fileBase}
-      transfer={source}
-    />
-  </>;
+  return <div
+    ref={scroller}
+    data-slot="output-viewer-scroller"
+    data-format="markdown"
+    role="region"
+    tabIndex={0}
+    aria-label={`${label}, ${formatBytes(total)}`}
+    aria-busy={body.text === undefined && body.error === undefined ? true : undefined}
+    onKeyDown={onKeyDown}
+    className={cn(
+      "relative min-h-0 flex-1 overflow-auto overscroll-contain bg-surface px-4 py-3 text-ink outline-none [overflow-anchor:none]",
+      "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
+    )}
+  >
+    {body.text !== undefined ? (
+      empty
+        ? <p className="typed text-ink-3">This {label} is empty.</p>
+        : <div data-slot="body-viewer-document">
+            {/* The whole of it: nothing here is an excerpt, so code copied out
+                of it is the code, unmarked. */}
+            <MarkdownDocument text={body.text} measure="prose" excerpted={false} nativeFiles find={documentFind} />
+          </div>
+    ) : body.error !== undefined ? null : (
+      <div data-slot="output-viewer-skeleton" aria-hidden="true" className="mx-auto flex max-w-(--measure-prose) flex-col gap-3">
+        {SKELETON.map((share, index) => <SkeletonText key={index} width={share} />)}
+      </div>
+    )}
+  </div>;
 }
 
 const SKELETON = ["46%", "92%", "88%", "70%", "30%", "84%", "78%"];
-
-/**
- * Every match of `query` in what is drawn under `root`, as DOM ranges.
- *
- * The same approach as conversation find, and for the same reason: a range
- * spans markup boundaries and changes nothing about the tree React owns, so a
- * match inside `**bold**` or across a link is one highlight and no re-render.
- * Controls (a code block's copy button), hidden regions and anything marked as
- * not content — a fence's language label — are not text of the message.
- *
- * It is written here rather than imported from `use-conversation-find` because
- * that module reaches the transcript viewport, which reaches the message rows
- * this viewer is opened from.
- */
-export function documentRanges(root: HTMLElement, query: string): Range[] {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  const nodes: Array<{ node: Text; start: number; end: number }> = [];
-  let text = "";
-  for (let next = walker.nextNode(); next; next = walker.nextNode()) {
-    const parent = next.parentElement;
-    if (!parent || parent.closest("button, [hidden], [aria-hidden=true], [data-search-exclude], textarea, script, style")) continue;
-    const value = next.textContent ?? "";
-    if (!value) continue;
-    nodes.push({ node: next as Text, start: text.length, end: text.length + value.length });
-    text += value;
-  }
-  // Matches come out in order, so the node they start in is never behind the
-  // one before it: a document of ten thousand text nodes is walked once in
-  // total, not once per match.
-  const ranges: Range[] = [];
-  let cursor = 0;
-  for (const match of textMatches(text, query)) {
-    while (cursor < nodes.length && nodes[cursor]!.end <= match.start) cursor += 1;
-    const first = nodes[cursor];
-    if (!first) break;
-    let end = cursor;
-    while (end < nodes.length && nodes[end]!.end < match.end) end += 1;
-    const last = nodes[end];
-    if (!last) break;
-    const range = document.createRange();
-    range.setStart(first.node, match.start - first.start);
-    range.setEnd(last.node, match.end - last.start);
-    ranges.push(range);
-  }
-  return ranges;
-}

@@ -16,8 +16,11 @@ import { activator, dismissInstallPrompt, scrub, watchPage } from './support.mjs
  *     back from the host through `session/entry_range`, at both widths and in
  *     both themes, with nothing left as Markdown source and no page scroll.
  *  2. **Find works on what is drawn**: real DOM ranges, a count, next and
- *     previous, and the current match really inside the reading area.
- *  3. **Plain text is one control away** and shows the characters themselves.
+ *     previous, and the current match really inside the reading area — and it
+ *     survives Shiki replacing every fence's nodes after the document is drawn,
+ *     which is the one thing only a real browser can prove.
+ *  3. **Plain text is one control away**, shows the characters themselves, and
+ *     keeps the person's search and their focus while it does.
  *  4. **Home and End still read it from the keyboard**, and Escape gives focus
  *     back to the control that opened it.
  *  5. **A body too large to format says so in the person's words** and keeps
@@ -151,18 +154,46 @@ export default async function largeBodyMarkdown(check) {
   await check.shot(`markdown-viewer-find${check.state.touch ? '-touch' : ''}`);
   const matches = await page.evaluate(() => CSS.highlights.get('output-viewer-matches')?.size ?? 0);
   assert.equal(matches, expected, 'every match stays marked while one is current');
-  await field.fill('');
 
-  // 3 · Plain text shows the characters themselves, and formatted comes back.
-  await activate(dialog.getByRole('button', { name: 'Plain text', exact: true }));
+  // 2b · A match inside a fenced block, while the highlighter is still
+  // replacing fences: the marks are recomputed as the document settles, so the
+  // count keeps meaning the marks and no mark points at a replaced node.
+  const fenced = 'export const section1';
+  await field.fill(fenced);
+  await activate(dialog.getByRole('button', { name: 'Find in reply', exact: true }));
+  await page.waitForFunction(() => /^1 of \d+$/.test((document.querySelector('[data-slot="output-viewer-find-count"]')?.textContent ?? '').replace(/\s+/g, ' ').trim()), undefined, { timeout: 30_000 });
+  await page.waitForFunction(() => document.querySelector('[data-slot="body-viewer-document"] pre code span') !== null, undefined, { timeout: 60_000 });
+  await page.waitForTimeout(1_000);
+  const fencedTotal = Number(scrub(await count.textContent()).split(' of ')[1]);
+  assert.ok(fencedTotal > 1, `the fixture carries more than one fenced “${fenced}” (${fencedTotal})`);
+  const fencedMarks = await page.evaluate(() => ({
+    marked: CSS.highlights.get('output-viewer-matches')?.size ?? 0,
+    attached: [...(CSS.highlights.get('output-viewer-matches') ?? [])].every(range => range.startContainer.isConnected),
+    inCode: [...(CSS.highlights.get('output-viewer-matches') ?? [])].some(range => range.startContainer.parentElement?.closest('pre code') !== null),
+  }));
+  assert.deepEqual(fencedMarks, { marked: fencedTotal, attached: true, inCode: true }, 'every match inside highlighted code is still marked, on nodes that are still there');
+  assert.deepEqual(await inView(), { ranges: 1, visible: true }, 'the current match inside a fence is where the count says it is');
+
+  // 3 · Plain text shows the characters themselves, keeps the search and the
+  // focused control, and formatted comes back.
+  const toggle = dialog.getByRole('button', { name: 'Plain text', exact: true });
+  await activate(toggle);
   await page.waitForFunction(() => document.querySelector('[data-slot="body-viewer-document"]') === null, undefined, { timeout: 30_000 });
   await region.locator('[data-run]').first().waitFor({ timeout: 30_000 });
   const plain = await region.textContent();
   assert.ok(plain.includes('**Designing FeatureScopeProps lifecycle and draft management (1)**'), 'plain text is the characters the model wrote');
   assert.equal(await dialog.getByRole('button', { name: 'Wrap lines', exact: true }).count(), 1, 'the plain reader keeps Wrap lines');
+  assert.equal(await field.inputValue(), fenced, 'the phrase the person typed survives the toggle');
+  if (!check.state.touch) {
+    const keptFocus = await toggle.evaluate(node => node === document.activeElement);
+    assert.equal(keptFocus, true, 'the control the person pressed still has the focus');
+  }
   await check.shot(`markdown-viewer-plain${check.state.touch ? '-touch' : ''}`);
-  await activate(dialog.getByRole('button', { name: 'Plain text', exact: true }));
+  await activate(toggle);
   await document_.waitFor({ timeout: 60_000 });
+  assert.equal(await field.inputValue(), fenced, 'and it is still there on the way back');
+  await page.waitForFunction(() => /^\d+ of \d+$/.test((document.querySelector('[data-slot="output-viewer-find-count"]')?.textContent ?? '').replace(/\s+/g, ' ').trim()), undefined, { timeout: 30_000 });
+  await field.fill('');
 
   // 4 · Reading it from the keyboard, and closing it.
   await region.focus();

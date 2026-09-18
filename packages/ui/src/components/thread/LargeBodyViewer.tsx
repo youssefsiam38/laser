@@ -35,7 +35,7 @@ import { useLaserStable, useLaserState } from "@/runtime";
 import { type RangeRequest } from "@/runtime/body-reader";
 import { isReadable, type BodyRef } from "@/runtime/body-excerpt";
 import { registerEphemeralCache } from "@/runtime/pressure";
-import { ViewerFooter, type BodyFind } from "./body-viewer-footer.js";
+import { ViewerFooter, type BodyFind, type ReaderControls } from "./body-viewer-footer.js";
 import { fitsMarkdownReader, MarkdownBodyReader } from "./MarkdownBodyReader.js";
 import { charIndexAtByte, OUTPUT_SEGMENT_BYTES, OutputPager, type OutputSegment } from "./output-pager.js";
 import type { copyWhole } from "./output-transfer.js";
@@ -114,9 +114,17 @@ function ViewerContents({ ref_, path, label, tool, tone, initialQuery }: {
   // A body written as prose is read formatted, unless it is larger than one
   // document may hold or the person asked for its characters. Both choices
   // last as long as the viewer is open, exactly like Wrap lines.
-  const formattable = tone === "document" && readable && fitsMarkdownReader(ref_.totalBytes);
+  //
+  // What decides is the body itself, never the ground it was folded on: a
+  // tool's arguments and a tool's output are machine payloads whatever surface
+  // they sit on, and reading `-` as a bullet or `_a_` as emphasis would be a
+  // lie about what the model sent (PLAN.md M16-T84).
+  const prose = PROSE.has(ref_.component.kind);
+  const formattable = prose && readable && fitsMarkdownReader(ref_.totalBytes);
   const [formatted, setFormatted] = useState(true);
   const [wrap, setWrap] = useState(true);
+  const toggleWrap = useCallback(() => setWrap(value => !value), []);
+  const [controls, setControls] = useState<ReaderControls>();
   // Closing drops everything it read; memory pressure takes the neighbours.
   useEffect(() => {
     if (!pager) return;
@@ -156,31 +164,48 @@ function ViewerContents({ ref_, path, label, tool, tone, initialQuery }: {
       ) : null}
     </DialogHeader>
     {pager && transfer
-      ? formattable && formatted
-        ? <MarkdownBodyReader source={transfer} label={label} fileBase={fileBase} initialQuery={initialQuery} onPlainText={() => setFormatted(false)} />
-        : <OutputReader pager={pager} tone={tone} label={label} fileBase={fileBase} initialQuery={initialQuery} transfer={transfer}
-            wrap={wrap} onWrap={() => setWrap(value => !value)}
-            {...(formattable ? { format: { formatted: false, onChange: () => setFormatted(true) } } : {})}
-            {...(tone === "document" && !formattable ? { note: `This ${label} is too long to format; showing plain text.` } : {})} />
+      ? <>
+          {formattable && formatted
+            ? <MarkdownBodyReader source={transfer} label={label} publish={setControls} />
+            : <OutputReader pager={pager} tone={tone} label={label} publish={setControls}
+                wrap={wrap} onWrap={toggleWrap} />}
+          {/* One footer for the opening, above whichever reader is showing: the
+              phrase being looked for, the match it is on and the focused
+              control belong to the person, not to the reading area. */}
+          {controls ? <ViewerFooter
+            label={label}
+            controls={controls}
+            {...(formattable ? { format: { formatted, onChange: (value: boolean) => setFormatted(value) } } : {})}
+            {...(prose && !formattable ? { note: `This ${label} is too long to format; showing plain text.` } : {})}
+            initialQuery={initialQuery}
+            fileBase={fileBase}
+            transfer={transfer}
+          /> : null}
+        </>
       : <div className="flex min-h-0 flex-1 items-center justify-center p-6">
           <p className="typed text-ink-2">Full {label} available once it is saved.</p>
         </div>}
   </>;
 }
 
+/**
+ * The bodies that are written for a person to read, from `body-range.ts`'s own
+ * vocabulary: what an assistant said, what it thought, what a person wrote.
+ * Everything else — a tool's arguments, its result, its output, a custom
+ * record's details — is a machine payload and keeps the plain reader.
+ */
+const PROSE: ReadonlySet<BodyRef["component"]["kind"]> = new Set(["assistant_text", "reasoning", "user_text"]);
+
 interface Anchor { segment: number; within: number }
 
-function OutputReader({ pager, tone, label, fileBase, initialQuery, transfer, wrap, onWrap, format, note }: {
+function OutputReader({ pager, tone, label, publish, wrap, onWrap }: {
   pager: OutputPager;
   tone: "terminal" | "document";
   label: string;
-  fileBase: string;
-  initialQuery: string | undefined;
-  transfer: Parameters<typeof copyWhole>[0];
+  /** Hand the viewer's footer this reader's find, its reading keys and its state. */
+  publish(controls: ReaderControls): void;
   wrap: boolean;
   onWrap(): void;
-  format?: { formatted: boolean; onChange(formatted: boolean): void } | undefined;
-  note?: string | undefined;
 }) {
   const state = useSyncExternalStore(pager.subscribe, pager.getSnapshot, pager.getSnapshot);
   const scroller = useRef<HTMLDivElement>(null);
@@ -421,6 +446,12 @@ function OutputReader({ pager, tone, label, fileBase, initialQuery, transfer, wr
     else if (event.key === "End" && !event.shiftKey) { event.preventDefault(); toEnd(); }
   };
 
+  const controls = useMemo<ReaderControls>(
+    () => ({ find, onStart: toStart, onEnd: toEnd, error: state.error, onRetry: () => pager.retry(), wrap: { wrap, onWrap } }),
+    [find, toStart, toEnd, state.error, pager, wrap, onWrap],
+  );
+  useEffect(() => publish(controls), [publish, controls]);
+
   const empty = state.totalBytes === 0;
 
   return <>
@@ -465,21 +496,6 @@ function OutputReader({ pager, tone, label, fileBase, initialQuery, transfer, wr
         </div>
       )}
     </div>
-    <ViewerFooter
-      label={label}
-      error={state.error}
-      onRetry={() => pager.retry()}
-      wrap={wrap}
-      onWrap={onWrap}
-      {...(format ? { format } : {})}
-      {...(note ? { note } : {})}
-      onStart={toStart}
-      onEnd={toEnd}
-      find={find}
-      initialQuery={initialQuery}
-      fileBase={fileBase}
-      transfer={transfer}
-    />
   </>;
 }
 

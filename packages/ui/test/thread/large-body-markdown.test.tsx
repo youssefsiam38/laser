@@ -20,6 +20,7 @@ import { LargeBodyViewer } from "../../src/components/thread/LargeBodyViewer.js"
 import { MARKDOWN_BODY_MAX_BYTES } from "../../src/components/thread/MarkdownBodyReader.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { FileOpenerProvider } from "../../src/components/thread/FileOpener.js";
+import { FileLinkDirectory } from "../../src/components/ui/source-file-link.js";
 import { LaserStoreProvider, createStateStore, type StateStore } from "../../src/runtime/LaserProvider.js";
 import { initialState, reduce } from "../../src/store.js";
 import type { BodyRef } from "../../src/runtime/body-excerpt.js";
@@ -88,6 +89,16 @@ const REASONING = [
 
 const TERMINAL = Array.from({ length: 400 }, (_, i) => `**not markdown** line ${i}`).join("\n");
 
+/** A tool's arguments: a machine payload that happens to contain Markdown punctuation. */
+const REQUEST = JSON.stringify({ command: "grep -rn '**bold**' src", description: "- not a list\n# not a heading" }, null, 2);
+
+/** A reply naming a project file twice: once as a link, once as prose. */
+const FILES = [
+  "Read [docs/guide.md](docs/guide.md) before changing it.",
+  "",
+  "The rest of docs/guide.md is unchanged.",
+].join("\n");
+
 const client = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("@/runtime", async (importActual) => ({
   ...(await importActual<typeof import("../../src/runtime/index.js")>()),
@@ -113,6 +124,10 @@ describe("reading the whole of a document body", () => {
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+    // The browser's own highlight registry: what the reader marks, and what a
+    // repaint has to agree with.
+    vi.stubGlobal("CSS", { ...CSS, highlights: new Map<string, Set<Range>>() });
+    vi.stubGlobal("Highlight", class extends Set<Range> { constructor(...ranges: Range[]) { super(ranges); } });
     serve(REPLY);
     let state = reduce(initialState, { type: "opened", state: sessionState({ path: PATH }) });
     state = reduce(state, { type: "destination", destination: { phase: "ready-code", intent: 0, code: { kind: "project-session", project: "/p", path: PATH } } });
@@ -124,6 +139,7 @@ describe("reading the whole of a document body", () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
+    vi.unstubAllGlobals();
   });
 
   function Fixture({ children }: { children: ReactNode }) {
@@ -133,7 +149,7 @@ describe("reading the whole of a document body", () => {
       isRunning: false,
       onNew: async () => {},
     });
-    return <AssistantRuntimeProvider runtime={runtime}><FileOpenerProvider>{children}</FileOpenerProvider></AssistantRuntimeProvider>;
+    return <AssistantRuntimeProvider runtime={runtime}><FileOpenerProvider><FileLinkDirectory value="/p">{children}</FileLinkDirectory></FileOpenerProvider></AssistantRuntimeProvider>;
   }
 
   const open = (props: { body: string; label: string; tone: "document" | "terminal"; component?: BodyRef["component"]; initialQuery?: string }) =>
@@ -167,6 +183,11 @@ describe("reading the whole of a document body", () => {
     await act(async () => { setter.call(field, value); field.dispatchEvent(new Event("input", { bubbles: true })); });
   };
   const count = () => viewer().querySelector('[data-slot="output-viewer-find-count"]')?.textContent?.replace(/\s+/g, " ").trim();
+  const footerText = () => viewer().querySelector('[data-slot="output-viewer-footer"]')?.textContent ?? "";
+  const field = () => viewer().querySelector<HTMLInputElement>('input[type="search"]')!;
+  const marked = () => [...((CSS.highlights as unknown as Map<string, Set<Range>>).get("output-viewer-matches") ?? [])];
+  /** Let a coalesced repaint run: the observer's microtask and its frame. */
+  const settle = async () => { for (let i = 0; i < 3; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 24)); }); };
 
   it("draws the reply the way the transcript draws it, with nothing left as source", async () => {
     await open({ body: REPLY, label: "reply", tone: "document" });
@@ -293,6 +314,124 @@ describe("reading the whole of a document body", () => {
     expect(control("Plain text")).toBeUndefined();
     expect(control("Wrap lines")).toBeDefined();
     expect(control(/Previous match/)).toBeUndefined();
+  });
+
+  it("keeps a tool's request on the plain reader, whatever ground it was folded on", async () => {
+    serve(REQUEST);
+    await open({ body: REQUEST, label: "request", tone: "document", component: { kind: "tool_args", index: 0 } });
+    await flush();
+
+    // A machine payload is never parsed as prose: `- ` is not a bullet, `#` is
+    // not a heading and `**bold**` is two pairs of asterisks the model sent.
+    expect(document_()).toBeNull();
+    expect(control("Plain text")).toBeUndefined();
+    const region = viewer().querySelector<HTMLElement>('[data-slot="output-viewer-scroller"]')!;
+    expect(region.querySelector("pre")).not.toBeNull();
+    expect(region.textContent).toContain("- not a list");
+    expect(region.textContent).toContain("**bold**");
+    // And it is not told it was "too long to format": it was never prose.
+    expect(viewer().querySelector('[data-slot="output-viewer-note"]')).toBeNull();
+  });
+
+  it("keeps a tool's output on the plain reader on a document ground, at any size", async () => {
+    const output = `${"# not a heading\n- not a bullet\n".repeat(4)}`;
+    serve(output);
+    await open({ body: output, label: "output", tone: "document", component: { kind: "tool_output" } });
+    await flush();
+    expect(document_()).toBeNull();
+    expect(control("Plain text")).toBeUndefined();
+    expect(viewer().querySelector('[data-slot="output-viewer-note"]')).toBeNull();
+
+    const huge = "x".repeat(MARKDOWN_BODY_MAX_BYTES + 1);
+    serve(huge);
+    await open({ body: huge, label: "request", tone: "document", component: { kind: "tool_args", index: 0 } });
+    await flush();
+    expect(document_()).toBeNull();
+    expect(viewer().querySelector('[data-slot="output-viewer-note"]')).toBeNull();
+  });
+
+  it("keeps the person's search across Plain text, and never runs the opening query again", async () => {
+    await open({ body: REPLY, label: "reply", tone: "document", initialQuery: "nowhere in this body" });
+    await flush();
+    // The query the viewer was opened with is answered once, on opening.
+    expect(footerText()).toContain("is not in this reply");
+
+    await type("consideration");
+    await press(control(/^Find in reply$/));
+    expect(count()).toBe("1 of 2");
+    expect(footerText()).not.toContain("is not in this reply");
+
+    const toggle = control("Plain text")!;
+    await act(async () => toggle.focus());
+    await press(toggle);
+
+    // The reading area changed; the controls did not move, so the control the
+    // person pressed is still there and still has the focus.
+    expect(document_()).toBeNull();
+    expect(toggle.isConnected).toBe(true);
+    expect(document.activeElement).toBe(toggle);
+    expect(control("Plain text")).toBe(toggle);
+    // The phrase they typed survives, and the stale opening query is not re-run.
+    expect(field().value).toBe("consideration");
+    expect(footerText()).not.toContain("is not in this reply");
+    // The match they were on is found again in the characters themselves.
+    expect((CSS.highlights as unknown as Map<string, Set<Range>>).has("output-viewer-find")).toBe(true);
+    // Home/End belong to whichever reader is showing.
+    expect(control("Go to start")).toBeDefined();
+    await press(control("Go to end"));
+    expect(control("Wrap lines")).toBeDefined();
+
+    await press(toggle);
+    await flush();
+    expect(document_()).not.toBeNull();
+    expect(field().value).toBe("consideration");
+    expect(footerText()).not.toContain("is not in this reply");
+  });
+
+  it("marks a match inside a fenced block again after the highlighter replaces it", async () => {
+    await open({ body: REPLY, label: "reply", tone: "document" });
+    await flush();
+
+    await type("answer");
+    await press(control(/^Find in reply$/));
+    expect(count()).toBe("1 of 1");
+    expect(marked().map(range => range.toString())).toEqual(["answer"]);
+
+    // What Shiki does when its tokenizer lands, hundreds of milliseconds after
+    // the document was drawn: the fence's text nodes are replaced wholesale.
+    const code = document_()!.querySelector("pre code")!;
+    const source = code.textContent!;
+    await act(async () => {
+      code.replaceChildren(...source.split(/(?=\s)/).map(token => {
+        const span = document.createElement("span");
+        span.textContent = token;
+        return span;
+      }));
+    });
+    await settle();
+
+    // The count still means something, and it means the marks on screen.
+    expect(count()).toBe("1 of 1");
+    const after = marked();
+    expect(after.map(range => range.toString())).toEqual(["answer"]);
+    expect(after[0]!.startContainer.isConnected).toBe(true);
+    expect(code.contains(after[0]!.startContainer)).toBe(true);
+  });
+
+  it("finds a file the reply links to by its label, as the conversation does", async () => {
+    serve(FILES);
+    await open({ body: FILES, label: "reply", tone: "document" });
+    await flush();
+
+    const chip = document_()!.querySelector<HTMLElement>('[data-slot="file-chip"]');
+    expect(chip?.textContent).toBe("docs/guide.md");
+
+    await type("docs/guide.md");
+    await press(control(/^Find in reply$/));
+    // Both of them: the link's label is the person's text, not a control's.
+    expect(count()).toBe("1 of 2");
+    expect(marked().map(range => range.toString())).toEqual(["docs/guide.md", "docs/guide.md"]);
+    expect(marked().some(range => chip!.contains(range.startContainer))).toBe(true);
   });
 
   it("copies and saves the whole body as the characters it is made of", async () => {
