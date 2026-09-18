@@ -5,8 +5,6 @@
 // printed whole when it ends, so parallel logs never interleave.
 import { spawn } from "node:child_process";
 import { availableParallelism } from "node:os";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { appLaunchEnvironmentScrubMessage, scrubAppLaunchEnvironment } from "./launch-environment.mjs";
 
 const serial = [
@@ -46,24 +44,20 @@ function run([name, command, env = {}], baseEnv) {
   });
 }
 
-async function main() {
-  const scrubbed = scrubAppLaunchEnvironment(process.env);
-  process.stdout.write(appLaunchEnvironmentScrubMessage("verify", scrubbed.removed));
+const scrubbed = scrubAppLaunchEnvironment(process.env);
+process.stderr.write(appLaunchEnvironmentScrubMessage("verify", scrubbed.removed));
 
-  const started = performance.now();
-  const results = [];
-  for (const task of serial) {
-    const result = await run(task, scrubbed.env);
-    results.push(result);
-    if (!result.ok) break;
-  }
-  if (results.every((result) => result.ok)) {
-    results.push(...await Promise.all(parallel.map((task) => run(task, scrubbed.env))));
-  }
-
-  const failed = results.filter((result) => !result.ok);
-  process.stdout.write(`\nverify ${failed.length ? `FAILED: ${failed.map((result) => result.name).join(", ")}` : "passed"} in ${((performance.now() - started) / 1000).toFixed(1)}s\n`);
-  process.exitCode = failed.length ? 1 : 0;
+const started = performance.now();
+const results = [];
+for (const task of serial) {
+  const result = await run(task, scrubbed.env);
+  results.push(result);
+  if (!result.ok) break;
+}
+if (results.every((result) => result.ok)) {
+  results.push(...await Promise.all(parallel.map((task) => run(task, scrubbed.env))));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main();
+const failed = results.filter((result) => !result.ok);
+process.stdout.write(`\nverify ${failed.length ? `FAILED: ${failed.map((result) => result.name).join(", ")}` : "passed"} in ${((performance.now() - started) / 1000).toFixed(1)}s\n`);
+process.exit(failed.length ? 1 : 0);

@@ -13,6 +13,8 @@ import { identity } from "./identity/identity.mjs";
  * as MCP_LIVE, NODE, PORT and UI_URL are legitimate inputs to focused tests.
  * A test that needs one of these launch values sets it inside its own process,
  * after the gate has removed the caller's installed-app environment.
+ * Removing data-directory pins is not sandboxing: each test must still supply
+ * isolated data roots. SESSION_DIR is a caller/test override, not app-injected.
  */
 export const APP_LAUNCH_ENVIRONMENT_NAMES = Object.freeze([
   identity.env.runtimeGenerationId,
