@@ -42,7 +42,7 @@ export function ModelStep({ cwd, onChosen }: ModelStepProps) {
     setError(undefined);
     try {
       const [catalog, providerResult] = await Promise.all([
-        client.request("pi/models/catalog", { cwd }),
+        client.request("pi/models/catalog", { cwd, settingsView: "global" }),
         client.request("pi/providers/list", { cwd }),
       ]);
       setModels(catalog.models);

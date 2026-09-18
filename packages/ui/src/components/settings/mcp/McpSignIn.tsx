@@ -5,7 +5,7 @@
  * cannot reach the app — a phone, a remote machine — the same dialog takes
  * the callback address or the code by hand, so the flow never dead-ends.
  */
-import type { McpAuthStart, McpScope } from "@lasercode/protocol";
+import type { ClientRequests, McpAuthStart, McpScope } from "@lasercode/protocol";
 import { Check, Copy, ExternalLink, LogOut } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { useCopy } from "@/hooks/use-copy";
 import { useLaserStable } from "@/runtime";
+import type { ScopeDraft } from "../ScopeDraftGuard.js";
 
 /** Long enough to read “Signed in.”, short enough not to be in the way. */
 const SIGNED_IN_LINGER_MS = 1200;
@@ -24,12 +25,16 @@ export function McpSignInDialog({
   target,
   onOpenChange,
   onDone,
+  view,
+  onDraftChange,
 }: {
   cwd: string;
   /** The server being signed in to; `undefined` closes the dialog. */
   target: { scope: McpScope; name: string; title: string } | undefined;
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
+  view: ClientRequests["mcp/list"]["params"]["view"];
+  onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
 }) {
   const { client } = useLaserStable();
   const [start, setStart] = useState<McpAuthStart>();
@@ -85,7 +90,7 @@ export function McpSignInDialog({
     return client.subscribe((method, params) => {
       if (method !== "mcp/changed" || (params as { cwd: string }).cwd !== cwd) return;
       void client
-        .request("mcp/list", { cwd })
+        .request("mcp/list", { cwd, view })
         .then(({ servers }) => {
           const server = servers.find((entry) => entry.scope === target.scope && entry.config.name === target.name);
           if (server && server.status !== "needs-auth") finish();
@@ -95,10 +100,10 @@ export function McpSignInDialog({
           // the person's problem.
         });
     });
-  }, [client, cwd, target, done, finish]);
+  }, [client, cwd, target, done, finish, view]);
 
-  const complete = async () => {
-    if (!target || !pasted.trim()) return;
+  const complete = async (): Promise<boolean> => {
+    if (!target || !pasted.trim()) return false;
     setCompleting(true);
     setError(undefined);
     const value = pasted.trim();
@@ -111,15 +116,31 @@ export function McpSignInDialog({
       });
       if (result.status === "needs-auth") {
         setError(result.detail ?? "That did not complete the sign-in. Try the link again.");
-        return;
+        return false;
       }
       finish();
+      return true;
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
+      return false;
     } finally {
       setCompleting(false);
     }
   };
+
+  useEffect(() => {
+    if (!target || done) {
+      onDraftChange?.(undefined);
+      return;
+    }
+    onDraftChange?.({
+      id: "mcp-sign-in",
+      label: `${target.title} sign-in`,
+      ...(pasted.trim() ? { save: complete } : {}),
+      discard: () => onOpenChange(false),
+    });
+    return () => onDraftChange?.(undefined);
+  }, [done, onDraftChange, pasted, target]);
 
   return (
     <Dialog open={Boolean(target)} onOpenChange={onOpenChange}>

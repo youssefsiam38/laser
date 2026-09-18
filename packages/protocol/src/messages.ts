@@ -1534,7 +1534,7 @@ export interface ClientRequests {
   "pi/providers/list": { params: { cwd: string }; result: { providers: ProviderAuthInfo[]; error?: string } };
   /** The full model catalogue with per-model thinking levels. `refresh` re-fetches dynamic catalogues. */
   "pi/models/catalog": {
-    params: { cwd: string; refresh?: boolean };
+    params: { cwd: string; settingsView: "global" | "effective"; refresh?: boolean };
     result: {
       models: ModelCatalogEntry[];
       /** `enabledModels` patterns, or null when unset (every model is enabled). */

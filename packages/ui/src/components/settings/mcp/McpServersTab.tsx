@@ -18,8 +18,7 @@ import { CapabilityNotice } from "@/components/capability-gate";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn } from "@/lib/utils";
-import { useLaserStable } from "@/runtime";
+import { useLaserStable, type SettingsScopeView } from "@/runtime";
 
 import { McpAddDialog } from "./McpAddDialog.js";
 import { McpGallery } from "./McpGallery.js";
@@ -28,31 +27,53 @@ import { McpInspector } from "./McpInspector.js";
 import { McpServerList } from "./McpServerList.js";
 import { McpSignInDialog, McpSignOutDialog } from "./McpSignIn.js";
 import { rowKey, serverTitle } from "./model.js";
+import { ScopeDraftGuard, type ScopeDraft } from "../ScopeDraftGuard.js";
 
-type ScopeFilter = McpScope | "all";
-
-export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: string; projectOpen?: boolean; decision?: import("@/runtime/environment-capabilities").CapabilityDecision | undefined }) {
-  const writable = decision?.state === "available" || decision === undefined;
-  const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
+export function McpServersTab({ routeCwd, view, decision }: {
+  routeCwd: string;
+  view: SettingsScopeView;
+  decision?: import("@/runtime/environment-capabilities").CapabilityDecision | undefined;
+}) {
+  const writable = view !== "effective" && (decision?.state === "available" || decision === undefined);
+  const readOnlyExplanation = view === "effective"
+    ? "Effective settings are a read-only preview. Choose Global or Project to change MCP servers."
+    : decision?.state === "explained" ? decision.explanation : undefined;
+  const mutationScope: McpScope = view === "project" ? "project" : "global";
   const { client, actions } = useLaserStable();
   const [servers, setServers] = useState<McpServerState[]>();
   const [conversations, setConversations] = useState<NonNullable<ClientRequests["mcp/list"]["result"]["conversations"]>>([]);
   const [sources, setSources] = useState<McpImportSource[]>([]);
   const [detectFailed, setDetectFailed] = useState(false);
   const [error, setError] = useState<string>();
-  const [scopeFilter, setScopeFilter] = useState<ScopeFilter>("all");
   const [selectedId, setSelectedId] = useState<string>();
   const [adding, setAdding] = useState<{ entry?: McpCatalogEntry; edit?: { scope: McpScope; config: McpServerConfig } }>();
   const [importing, setImporting] = useState(false);
   const [signIn, setSignIn] = useState<{ scope: McpScope; name: string; title: string }>();
   const [signOut, setSignOut] = useState<{ scope: McpScope; name: string; title: string }>();
+  const [drafts, setDrafts] = useState<Record<string, ScopeDraft>>({});
   const generation = useRef(0);
+  const reportDraft = useCallback((slot: string, draft: ScopeDraft | undefined) => {
+    setDrafts((current) => {
+      if (!draft && !(slot in current)) return current;
+      const next = { ...current };
+      if (draft) next[slot] = draft;
+      else delete next[slot];
+      return next;
+    });
+  }, []);
+  const reportAddDraft = useCallback((draft: ScopeDraft | undefined) => reportDraft("add", draft), [reportDraft]);
+  const reportImportDraft = useCallback((draft: ScopeDraft | undefined) => reportDraft("import", draft), [reportDraft]);
+  const reportSignInDraft = useCallback((draft: ScopeDraft | undefined) => reportDraft("sign-in", draft), [reportDraft]);
+  const activeDrafts = useMemo(() => Object.values(drafts), [drafts]);
+  const targetKey = `${view}:${routeCwd}`;
+  const targetRef = useRef(targetKey);
+  targetRef.current = targetKey;
 
   const load = useCallback(async () => {
     const request = ++generation.current;
     setError(undefined);
     try {
-      const list = await client.request("mcp/list", { cwd });
+      const list = await client.request("mcp/list", { cwd: routeCwd, view });
       if (request !== generation.current) return;
       setServers(list.servers);
       setConversations(list.conversations ?? []);
@@ -61,7 +82,10 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
         setError(failure instanceof Error ? failure.message : String(failure));
       }
     }
-  }, [client, cwd]);
+  }, [client, routeCwd, view]);
+  const reloadProjected = useCallback(() => {
+    if (targetRef.current === targetKey) void load();
+  }, [load, targetKey]);
 
   /**
    * Looking for other tools' configurations reads nine places on disk, so it
@@ -69,9 +93,14 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
    * every configuration write.
    */
   const detect = useCallback(async () => {
+    if (view === "effective") {
+      setSources([]);
+      setDetectFailed(false);
+      return;
+    }
     const request = generation.current;
     try {
-      const detected = await client.request("mcp/import/detect", { cwd });
+      const detected = await client.request("mcp/import/detect", { cwd: routeCwd, scope: mutationScope });
       if (request !== generation.current) return;
       setSources(detected.sources);
       setDetectFailed(false);
@@ -80,11 +109,12 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
       // person is told that the search did not run.
       if (request === generation.current) setDetectFailed(true);
     }
-  }, [client, cwd]);
+  }, [client, mutationScope, routeCwd, view]);
 
   useEffect(() => {
     setServers(undefined);
     setConversations([]);
+    setSelectedId(undefined);
     void load();
     void detect();
     return () => {
@@ -98,34 +128,21 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
   useEffect(() => {
     return client.subscribe((method, params) => {
       if (method !== "mcp/changed") return;
-      if ((params as { cwd: string }).cwd !== cwd) return;
+      if ((params as { cwd: string }).cwd !== routeCwd) return;
       void load();
     });
-  }, [client, cwd, load]);
+  }, [client, routeCwd, load]);
 
   const selected = useMemo(
     () => (selectedId ? servers?.find((entry) => rowKey(entry) === selectedId) : undefined),
     [servers, selectedId],
   );
 
-  // The every-project entry a switch-off row refers to, so the inspector can
-  // offer to edit the definition that actually runs.
-  const globalEntry = useMemo(
-    () =>
-      selected?.overridesGlobal
-        ? servers?.find((entry) => entry.scope === "global" && entry.config.name === selected.config.name)
-        : undefined,
-    [servers, selected],
-  );
-
-  const shown = useMemo(
-    () => (servers ?? []).filter((entry) => scopeFilter === "all" || entry.scope === scopeFilter),
-    [servers, scopeFilter],
-  );
+  const shown = servers ?? [];
 
   const openSignIn = (id: string) => {
     const state = servers?.find((entry) => rowKey(entry) === id);
-    if (state) setSignIn({ scope: state.scope, name: state.config.name, title: serverTitle(state.config) });
+    if (state?.scope === mutationScope) setSignIn({ scope: state.scope, name: state.config.name, title: serverTitle(state.config) });
   };
 
   if (!servers) {
@@ -140,10 +157,12 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
     );
   }
 
-  const defaultScope: McpScope = projectOpen && scopeFilter === "project" ? "project" : "global";
+  const defaultScope: McpScope = mutationScope;
+  const selectedWritable = writable && selected?.scope === mutationScope;
 
   return (
     <ScrollArea className="h-full">
+      <ScopeDraftGuard drafts={activeDrafts} />
       <div className="mx-auto flex max-w-200 flex-col gap-5 px-4 py-5 md:px-6">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div className="max-w-140">
@@ -183,38 +202,6 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
 
         {writable ? <McpImportBanner sources={sources} onOpen={() => setImporting(true)} /> : null}
 
-        {!projectOpen && (
-          <p className="text-sm leading-6 text-ink-2">
-            No project is open, so this is the every-project list. Open a project to add a server just for it.
-          </p>
-        )}
-
-        {servers.length > 0 && (
-          // Buttons that press in, not tabs: they filter a list that is always
-          // on screen, and nothing here switches panels.
-          <div role="group" aria-label="Which servers to show" className="flex w-fit items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
-            {(
-              [
-                { id: "all" as const, label: "All" },
-                { id: "global" as const, label: "Every project" },
-                ...(projectOpen ? [{ id: "project" as const, label: "This project" }] : []),
-              ]
-            ).map((option) => (
-              <Button
-                key={option.id}
-                type="button"
-                aria-pressed={scopeFilter === option.id}
-                variant="ghost"
-                size="sm"
-                onClick={() => setScopeFilter(option.id)}
-                className={cn(scopeFilter === option.id && "bg-surface text-ink")}
-              >
-                {option.label}
-              </Button>
-            ))}
-          </div>
-        )}
-
         {servers.length === 0 && writable ? (
           <section className="flex flex-col gap-4">
             <div>
@@ -227,10 +214,10 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
           </section>
         ) : shown.length === 0 ? (
           <p className="text-sm leading-6 text-ink-2">
-            No server is saved for {scopeFilter === "project" ? "this project" : "every project"}. Add one, or look at All.
+            No server is saved for these {view === "global" ? "Global" : view === "project" ? "Project" : "Effective"} settings.
           </p>
         ) : (
-          <McpServerList servers={shown} selectedId={selectedId} {...(writable ? { onSelect: setSelectedId, onSignIn: openSignIn } : {})} />
+          <McpServerList servers={shown} selectedId={selectedId} onSelect={setSelectedId} {...(writable ? { onSignIn: openSignIn } : {})} />
         )}
 
         {writable && servers.length > 0 && (
@@ -246,15 +233,17 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
       </div>
 
       {writable ? <McpAddDialog
-        cwd={cwd}
+        cwd={routeCwd}
         open={Boolean(adding)}
         onOpenChange={(open) => !open && setAdding(undefined)}
         {...(adding?.entry ? { entry: adding.entry } : {})}
         {...(adding?.edit ? { edit: adding.edit } : {})}
         defaultScope={defaultScope}
-        allowProject={projectOpen}
+        allowProject={view === "project"}
+        lockScope
+        onDraftChange={reportAddDraft}
         onSaved={(next, saved) => {
-          setServers(next);
+          reloadProjected();
           setAdding(undefined);
           actions.toast("info", `${saved.name} is saved. Conversations you start from now on can use it.`);
           if (saved.needsAuth) {
@@ -267,28 +256,29 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
       /> : null}
 
       {writable ? <McpImportDialog
-        cwd={cwd}
+        cwd={routeCwd}
         open={importing}
         onOpenChange={setImporting}
         sources={sources}
         defaultScope={defaultScope}
-        allowProject={projectOpen}
-        onImported={(next, imported) => {
-          setServers(next);
+        allowProject={view === "project"}
+        lockScope
+        onDraftChange={reportImportDraft}
+        onImported={(_next, imported) => {
           setImporting(false);
           actions.toast("info", imported.length ? `Imported ${imported.join(", ")}.` : "Nothing was imported.");
-          void load();
+          reloadProjected();
         }}
       /> : null}
 
-      {writable ? <McpInspector
+      <McpInspector
         conversations={conversations}
-        cwd={cwd}
+        cwd={routeCwd}
+        writable={Boolean(selectedWritable)}
+        allowProjectOverride={Boolean(writable && view === "project" && selected?.scope === "global")}
         state={selected}
-        globalEntry={globalEntry}
-        scopeFilter={scopeFilter}
         onOpenChange={(open) => !open && setSelectedId(undefined)}
-        onServers={setServers}
+        onServers={reloadProjected}
         onError={(message) => actions.toast("error", message)}
         onNotice={(message) => actions.toast("info", message)}
         onEdit={(target) => setAdding({ edit: target })}
@@ -298,21 +288,23 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
         onSignOut={() => {
           if (selected) setSignOut({ scope: selected.scope, name: selected.config.name, title: serverTitle(selected.config) });
         }}
-      /> : null}
+      />
 
       {writable ? <McpSignInDialog
-        cwd={cwd}
+        cwd={routeCwd}
         target={signIn}
         onOpenChange={(open) => !open && setSignIn(undefined)}
-        onDone={() => void load()}
+        onDone={reloadProjected}
+        view={view}
+        onDraftChange={reportSignInDraft}
       /> : null}
       {writable ? <McpSignOutDialog
-        cwd={cwd}
+        cwd={routeCwd}
         target={signOut}
         onOpenChange={(open) => !open && setSignOut(undefined)}
         onDone={() => {
           actions.toast("info", "Signed out. The server stays configured.");
-          void load();
+          reloadProjected();
         }}
       /> : null}
     </ScrollArea>

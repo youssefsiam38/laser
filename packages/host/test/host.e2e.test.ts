@@ -345,7 +345,7 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
     try {
       const { cwd } = await client.request<{ cwd: string }>("pi/setup/state", {});
       expect(cwd).toBe(join(base, "state", "global"));
-      await expect(client.request("pi/models/catalog", { cwd })).resolves.toBeDefined();
+      await expect(client.request("pi/models/catalog", { cwd, settingsView: "global" })).resolves.toBeDefined();
       await expect(client.request("session/new", { cwd })).rejects.toThrow(/internal app storage/);
       await expect(client.request("pi/project/add", { cwd })).rejects.toThrow(/internal app storage/);
       expect(await client.request("pi/project/list", {})).toEqual({ projects: [] });

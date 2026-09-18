@@ -14,7 +14,7 @@ beforeEach(async () => {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   mocks.request.mockReset().mockResolvedValue({ id: "login" });
   mocks.subscribe.mockImplementation((fn) => { listener = fn; return () => {}; });
-  await act(async () => root.render(<ProviderSignIn cwd="/project" provider={provider} method="api_key" onDone={() => {}} onCancel={() => {}} />));
+  await act(async () => root.render(<ProviderSignIn routeCwd="/project" provider={provider} method="api_key" onDone={() => {}} onCancel={() => {}} />));
   await act(async () => emit({ type: "prompt", prompt: { id: "key", kind: "secret", message: "API key" } }));
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });

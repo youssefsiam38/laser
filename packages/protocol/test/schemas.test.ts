@@ -174,7 +174,7 @@ const samples: Record<ClientMethod, unknown> = {
   "feature/list": { cwd: "/p" },
   "feature/set": { id: "subagents", enabled: true, scope: "project", cwd: "/p" },
   // --- M14 MCP servers (docs/mcp.md) ---
-  "mcp/list": { cwd: "/p" },
+  "mcp/list": { cwd: "/p", view: "project" },
   "mcp/save": {
     cwd: "/p",
     scope: "project",
@@ -194,7 +194,7 @@ const samples: Record<ClientMethod, unknown> = {
   "mcp/auth/start": { cwd: "/p", scope: "global", name: "github" },
   "mcp/auth/complete": { cwd: "/p", scope: "global", name: "github", redirectUrl: "http://127.0.0.1:19876/callback?code=x&state=y" },
   "mcp/auth/logout": { cwd: "/p", scope: "global", name: "github" },
-  "mcp/import/detect": { cwd: "/p" },
+  "mcp/import/detect": { cwd: "/p", scope: "project" },
   "mcp/import/apply": { cwd: "/p", source: "claude-code", names: ["github"], scope: "global", replace: false },
 
   "web-search/status": { cwd: "/p" },
@@ -214,7 +214,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/packages/update": { cwd: "/p", source: "pi-web-access" },
   "pi/packages/check_updates": { cwd: "/p" },
   "pi/providers/list": { cwd: "/p" },
-  "pi/models/catalog": { cwd: "/p", refresh: true },
+  "pi/models/catalog": { cwd: "/p", settingsView: "effective", refresh: true },
   "pi/logs/query": { sections: ["provider"], search: "claude", limit: 100, beforeId: 900 },
   "pi/logs/content": { ref: "a".repeat(64), maxBytes: 4096 },
   "pi/logs/stats": {},
@@ -361,6 +361,19 @@ describe("client request schemas", () => {
     const complete = clientParamsSchemas["mcp/auth/complete"];
     expect(complete.safeParse({ cwd: "/p", scope: "global", name: "d", code: "abc" }).success).toBe(true);
     expect(complete.safeParse({ cwd: "/p", scope: "global", name: "d" }).success).toBe(false);
+    // Settings projections are explicit and strict without changing cwd/scope targeting.
+    const list = clientParamsSchemas["mcp/list"];
+    expect(list.safeParse({ cwd: "/p", view: "effective" }).success).toBe(true);
+    expect(list.safeParse({ cwd: "/p" }).success).toBe(false);
+    expect(list.safeParse({ cwd: "/p", view: "all" }).success).toBe(false);
+    const detect = clientParamsSchemas["mcp/import/detect"];
+    expect(detect.safeParse({ cwd: "/p", scope: "global" }).success).toBe(true);
+    expect(detect.safeParse({ cwd: "/p", scope: "effective" }).success).toBe(false);
+    const applyImport = clientParamsSchemas["mcp/import/apply"];
+    expect(applyImport.safeParse({ cwd: "/p", scope: "global", source: "claude-code", names: ["docs"], path: "/tmp/injected.json" }).success).toBe(false);
+    const models = clientParamsSchemas["pi/models/catalog"];
+    expect(models.safeParse({ cwd: "/p", settingsView: "global" }).success).toBe(true);
+    expect(models.safeParse({ cwd: "/p", settingsView: "project" }).success).toBe(false);
   });
 
   it("round-trips the search connection probe without a provider override", () => {

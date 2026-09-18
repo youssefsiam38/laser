@@ -35,6 +35,7 @@ export default async function settingsScope(check) {
     window.__settingsScopeDelay = null;
     window.__settingsScopeFailSetup = localStorage.getItem('__settings-scope-fail-setup') === '1';
     window.__settingsScopeFailedSetupRequests = 0;
+    window.__settingsScopeRequests = [];
     localStorage.removeItem('__settings-scope-fail-setup');
     const NativeWebSocket = window.WebSocket;
     window.WebSocket = class SettingsScopeWebSocket extends NativeWebSocket {
@@ -46,6 +47,7 @@ export default async function settingsScope(check) {
       send(data) {
         try {
           const request = JSON.parse(String(data));
+          if (request?.method) window.__settingsScopeRequests.push({ method: request.method, params: request.params });
           const delay = window.__settingsScopeDelay;
           if (delay && request.method === delay.method && request.params?.cwd === delay.cwd) {
             this.__settingsScopeDelayedIds.add(request.id);
@@ -137,7 +139,7 @@ export default async function settingsScope(check) {
   await page.getByText('Choose a project for Project settings', { exact: true }).waitFor();
 
   const choose = async (cwd) => {
-    await activate(page.getByRole('button', { name: /Project settings target:/ }));
+    await activate(page.getByRole('button', { name: /(?:Project settings target|Effective settings project):/ }));
     const item = page.getByRole('menuitemradio').filter({ hasText: basename(cwd) });
     await item.waitFor();
     await activate(item);
@@ -212,6 +214,52 @@ export default async function settingsScope(check) {
   await activate(page.getByRole('button', { name: 'Features', exact: true }));
   assert.equal(await page.getByRole('radio', { name: /^Effective\./ }).getAttribute('aria-checked'), 'true', 'scope persisted after closing Settings');
   await page.getByRole('button', { name: new RegExp(`Effective settings project:.*${basename(second)}`) }).waitFor();
+
+  const waitForRequest = async (method, expected) => {
+    await page.waitForFunction(({ method, expected }) => window.__settingsScopeRequests.some(request =>
+      request.method === method && Object.entries(expected).every(([key, value]) => request.params?.[key] === value)),
+    { method, expected });
+  };
+  const neutral = (await check.rpc('pi/setup/state', {})).cwd;
+
+  // Remaining Settings services expose their target in the real RPC shape.
+  await activate(page.getByRole('button', { name: 'MCP servers', exact: true }));
+  await waitForRequest('mcp/list', { cwd: second, view: 'effective' });
+  assert.equal(await page.getByRole('button', { name: 'Add a server', exact: true }).count(), 0,
+    'Effective MCP is read-only');
+  await activate(page.getByRole('radio', { name: /^Global\./ }));
+  await waitForRequest('mcp/list', { cwd: neutral, view: 'global' });
+  await waitForRequest('mcp/import/detect', { cwd: neutral, scope: 'global' });
+  await activate(page.getByRole('radio', { name: /^Project\./ }));
+  await choose(second);
+  await waitForRequest('mcp/list', { cwd: second, view: 'project' });
+  await waitForRequest('mcp/import/detect', { cwd: second, scope: 'project' });
+
+  await activate(page.getByRole('button', { name: 'Providers and models', exact: true }));
+  await waitForRequest('pi/models/catalog', { cwd: second, settingsView: 'effective' });
+  await waitForRequest('pi/providers/list', { cwd: neutral });
+  await activate(page.getByRole('radio', { name: /^Global\./ }));
+  await waitForRequest('pi/models/catalog', { cwd: neutral, settingsView: 'global' });
+  const searchTab = page.getByRole('tab', { name: 'Web search', exact: true });
+  if (await searchTab.count()) {
+    await activate(searchTab);
+    await waitForRequest('web-search/status', { cwd: neutral });
+  }
+
+  await activate(page.getByRole('button', { name: 'Help and shortcuts', exact: true }));
+  await waitForRequest('pi/keybindings/get', { cwd: neutral });
+  await page.getByText('Agent keybindings are global and stay in force for every project.', { exact: true }).waitFor();
+
+  await activate(page.getByRole('button', { name: 'Projects', exact: true }));
+  const firstProject = page.getByRole('button', { name: new RegExp(`project settings$`, 'i') }).filter({ hasText: basename(first) });
+  const secondProject = page.getByRole('button', { name: new RegExp(`project settings$`, 'i') }).filter({ hasText: basename(second) });
+  const [firstBox, secondBox] = await Promise.all([firstProject.boundingBox(), secondProject.boundingBox()]);
+  assert.ok(firstBox && secondBox && firstBox.y < secondBox.y,
+    'Projects stay name-sorted instead of promoting the selected Settings project');
+
+  await activate(page.getByRole('button', { name: 'Features', exact: true }));
+  await activate(page.getByRole('radio', { name: /^Effective\./ }));
+  await choose(second);
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(overflow <= 1, `Settings scope overflowed horizontally by ${overflow}px`);
