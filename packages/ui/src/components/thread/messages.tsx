@@ -364,13 +364,19 @@ export function UserMessage() {
           >
             {parentPath ? <ParentTask parentPath={parentPath} /> : null}
             {goalSetter && <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-ink-2"><Target className="size-3.5 text-live" aria-hidden="true" />Goal set</span>}
-            <MessageImages images={images} sourceFor={imageSource} onOpen={opener ? (index, trigger) => {
+            <MessageImages images={images} sourceFor={imageSource.sourceFor} observe={imageSource.observe} onOpen={opener ? (index, trigger) => {
               const image = images[index]!;
               // A picture this window rebuilt is opened from the pool's own
-              // blob; only a genuinely inline image has bytes to hand over.
-              const picture = imageSource.pictureFor?.(index, `Image ${index + 1}`);
-              opener.openFile(picture ?? { file: attachmentFile(image, `Image ${index + 1}`) }, trigger);
+              // blob; one it has not decoded right now is read back from the
+              // conversation's authority for the viewer, so opening never
+              // depends on what the decode pool happens to hold (M16-T82).
+              // Only a genuinely inline image has bytes to hand over here.
+              void imageSource.openFor(index, `Image ${index + 1}`).then(picture => {
+                if (picture) { opener.openFile(picture, trigger); return; }
+                if (image.data) opener.openFile({ file: attachmentFile(image, `Image ${index + 1}`) }, trigger);
+              });
             } : undefined} />
+            {imageSource.problem ? <p role="alert" data-slot="image-problem" className="mt-1 self-end text-xs text-ink-2">{imageSource.problem}</p> : null}
             {quote ? <QuoteReply text={quote} /> : null}
             {rest ? (
               <p className="wrap-break-word whitespace-pre-wrap">

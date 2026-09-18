@@ -18,21 +18,25 @@ export function FileOpenerProvider({ children, scope }: { children: ReactNode; s
    * hold. There is exactly one place that gives a hold back — here — so every
    * way a viewer can go away releases once and only once: closing it, opening
    * something else over it, the thread changing underneath it, and this
-   * provider going away. A release that has already run does nothing.
+   * provider going away.
+   *
+   * The release is an effect, never part of the state update: React may run an
+   * updater more than once, and a hold given back twice takes another row's.
    */
   const show = useCallback((next: { source: FileViewerSource; trigger: HTMLElement; scope: string | undefined } | undefined) => {
-    setOpened(current => {
-      if (current === next) return current;
-      current?.source.release?.();
-      return next;
-    });
+    setOpened(current => (current === next ? current : next));
   }, []);
   const held = useRef<typeof opened>(undefined);
-  held.current = opened;
+  useEffect(() => {
+    const previous = held.current;
+    held.current = opened;
+    if (previous && previous !== opened) previous.source.release?.();
+  }, [opened]);
   useEffect(() => () => {
     // Unmount, or the thread changed: whatever is open is let go.
-    held.current?.source.release?.();
+    const last = held.current;
     held.current = undefined;
+    last?.source.release?.();
   }, [scope]);
   const opener = useMemo<FileOpener>(() => ({ readFile: cache.read, openFile: (source, trigger) => show({ source, trigger, scope }) }), [cache, scope, show]);
   const close = () => show(undefined);

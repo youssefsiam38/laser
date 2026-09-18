@@ -7,18 +7,23 @@
  * this window is either state a person would notice losing or memory another
  * slice already owns:
  *
- * - decoded images (`runtime/image-blobs.ts`) hold only what a row is showing
- *   or a read in flight — the pool revokes an image the moment its last holder
- *   goes, so there is nothing idle to release;
+ * - decoded images (`runtime/image-blobs.ts`) keep a bounded residue for rows
+ *   that have scrolled off screen, and that residue is exactly this: nothing
+ *   renders from it, losing it costs one re-read when the row comes back, and
+ *   `releaseIdle()` says how many pictures and how much decoded surface it
+ *   gave up. The pool of the environment this window is in registers itself
+ *   when it is built (M16-T82); what a row is showing and what a viewer is
+ *   holding are never part of what it gives back;
  * - the transcripts themselves are step 2's, through T5's `ViewCache`;
  * - measurement, projection and entry memos are `WeakMap`s: they go with the
  *   objects they describe;
  * - find ranges, viewport heights, drafts, attachments, the device tail cache
  *   and the canonical store are not caches at all.
  *
- * So today exactly one kind of cache registers here: the bounded project-file
- * read cache each thread keeps. A window with no file viewer open therefore has
- * nothing to give, and says `nothing_to_give` rather than inventing a number.
+ * So two kinds of cache register here: the bounded project-file read cache each
+ * thread keeps, and the decoded-image residue of the transcript that is open. A
+ * window holding neither has nothing to give, and says `nothing_to_give` rather
+ * than inventing a number.
  *
  * Ordinary React state is never registered here. If it renders, it is not a
  * cache.
