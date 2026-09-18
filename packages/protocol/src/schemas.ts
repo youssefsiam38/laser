@@ -745,6 +745,7 @@ export const clientParamsSchemas = {
     window: z.union([
       z.object({ tail: z.number().int().min(1).max(200) }).strict(),
       z.object({ before: z.string().min(1).max(8192), limit: z.number().int().min(1).max(200).optional() }).strict(),
+      z.object({ beforeEntry: z.string().min(1).max(1024), limit: z.number().int().min(1).max(200).optional() }).strict(),
       z.object({ from: z.string().min(1).max(1024) }).strict(),
       z.object({ all: z.literal(true) }).strict(),
     ]).optional(),

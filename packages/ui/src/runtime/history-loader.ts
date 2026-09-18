@@ -20,6 +20,8 @@ export type HistoryAction =
    */
   | { type: "historyDelta"; path: string; token: string; baseRevision: string; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow }
   | { type: "historyPrepend"; path: string; before: string; entries: unknown[]; window: HistoryWindow; revision?: string | undefined }
+  /** Bounded recovery before a retained anchor; it extends and never replaces. */
+  | { type: "historyRecover"; path: string; anchor: string; expectedBefore?: string | undefined; trimAt?: string | undefined; entries: unknown[]; window: HistoryWindow; revision?: string | undefined }
   | { type: "historyMetadata"; path: string; from?: string | null | undefined; entries: unknown[]; leafId?: string | null | undefined; window: HistoryWindow; revision?: string | undefined };
 
 /**
@@ -272,9 +274,38 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const entries = incoming.entries;
       const stubs = mergeStubs([...incoming.stubs, ...(action.window.elided ?? []).map(stubOfElided)], v.stubs ?? []);
       const { live: _live, ...history } = action.window;
-      // The page plus the existing suffix covers the branch exactly when no
-      // earlier cursor remains. Alternative versions are a separate scope.
-      return adopt({ ...v, history: { ...history, complete: history.before === undefined }, entries: [...entries, ...v.entries], stubs,
+      // An ordinary contiguous page plus its loaded suffix is complete at the
+      // root. A recovered trimmed view may still contain a deliberate gap, so
+      // root exhaustion is recorded without claiming whole-history coverage.
+      const trimmed = v.trimmed && history.before === undefined
+        ? { ...v.trimmed, earlierExhausted: true as const }
+        : v.trimmed;
+      return adopt({ ...v, ...(trimmed ? { trimmed } : {}), history: { ...history, complete: v.trimmed ? false : history.before === undefined }, entries: [...entries, ...v.entries], stubs,
+        blocks: [...blocksFromEntries(entries, undefined, modelNamesOf(v.state), { stubs: incoming.stubs, revision: action.window.revision }), ...v.blocks] }, v, action.window);
+    }
+    case "historyRecover": {
+      const held = v.history;
+      if (!held || v.historyRevision !== action.revision || action.window.revision !== action.revision || held.anchor !== action.anchor
+        || held.before !== action.expectedBefore || held.epoch !== action.window.epoch
+        || (action.trimAt !== undefined && v.trimmed?.at !== action.trimAt)) return v;
+      const ids = new Set([...v.entries.map(e => (e as { id?: string }).id), ...(v.stubs ?? []).map(stub => stub.id)]);
+      const incoming = retainEntries(action.entries.filter(e => !ids.has((e as { id?: string }).id)));
+      const entries = incoming.entries;
+      const stubs = mergeStubs([...incoming.stubs, ...(action.window.elided ?? []).map(stubOfElided)], v.stubs ?? []);
+      const { live: _live, ...answered } = action.window;
+      const history: HistoryWindow = {
+        ...answered,
+        // A trimmed retained suffix may be disjoint, so reaching the root does
+        // not upgrade it to whole-history coverage. An untrimmed stale-cursor
+        // recovery is contiguous and can honestly become complete.
+        complete: v.trimmed ? false : answered.before === undefined,
+        branchesUnloaded: held.branchesUnloaded || answered.branchesUnloaded,
+        hasHistory: held.hasHistory || answered.hasHistory,
+      };
+      const trimmed = v.trimmed && history.before === undefined
+        ? { ...v.trimmed, earlierExhausted: true as const }
+        : v.trimmed;
+      return adopt({ ...v, ...(trimmed ? { trimmed } : {}), history, entries: [...entries, ...v.entries], stubs,
         blocks: [...blocksFromEntries(entries, undefined, modelNamesOf(v.state), { stubs: incoming.stubs, revision: action.window.revision }), ...v.blocks] }, v, action.window);
     }
   }
@@ -351,13 +382,15 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
       // that carry them — which is also what lets a page of a conversation with
       // one enormous turn still carry the turns around it.
       const result = await deps.request({ path, window, bodyLimit: BODY_EXCERPT_MAX_BYTES, ...(base ? { baseRevision: base } : {}) }).catch(error => {
-        // `from` and `all` cannot be split into pages. A retained anchor that
-        // no longer exists, or a range too large to send at once, reads the
-        // latest page instead: the conversation opens, earlier pages load on
-        // scroll.
+        // `from` and `all` are indivisible. An unopened/released view can still
+        // fall back to its bounded opening tail. A hydrated conversation on
+        // screen keeps its logical window instead: refresh failure is honest,
+        // while a tail replacement would erase what the person is reading.
         const code = (error as { code?: number }).code;
         const indivisible = "from" in window || "all" in window;
         if (!(("from" in window && code === ErrorCodes.InvalidParams) || (indivisible && code === ErrorCodes.RevisionUnavailable))) throw error;
+        const held = deps.get(path);
+        if (deps.isCurrent(path) && held?.hydrated && (held.entries.length > 0 || held.blocks.length > 0)) throw error;
         return deps.request({ path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
       });
       const current = deps.get(path);
@@ -406,32 +439,62 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     await read(path, true, active);
     return active() && hasCompleteTree(deps.get(path));
   };
+  /**
+   * Ask the producer for one bounded page ending before the retained entry.
+   * This is the only recovery for a lost or stale cursor: it extends the view
+   * in place and never exchanges the person's old window for a recent tail.
+   */
+  const recoverEarlier = async (path: string, accepting: () => boolean): Promise<boolean> => {
+    const view = deps.get(path);
+    const history = view?.history;
+    const anchor = history?.anchor;
+    if (!view || !history || !anchor || view.trimmed?.earlierExhausted) return false;
+    const expectedBefore = history.before;
+    const trimAt = view.trimmed?.at;
+    const revision = view.historyRevision;
+    const epoch = history.epoch;
+    const active = fence(path, accepting);
+    if (!active()) return false;
+    const result = await deps.request({ path, window: { beforeEntry: anchor, limit: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES }).catch(error => {
+      if (!active()) return undefined;
+      const code = (error as { code?: number }).code;
+      if (code === ErrorCodes.InvalidParams || code === ErrorCodes.RevisionUnavailable) return undefined;
+      throw error;
+    });
+    if (!result?.window || !active() || result.window.revision !== revision) return false;
+    const current = deps.get(path);
+    if (!current || current.historyRevision !== revision || current.history?.anchor !== anchor
+      || current.history.before !== expectedBefore || current.history.epoch !== epoch
+      || (trimAt !== undefined && current.trimmed?.at !== trimAt)) return false;
+    deps.dispatch({ type: "historyRecover", path, anchor, revision, entries: result.entries, window: result.window,
+      ...(expectedBefore !== undefined ? { expectedBefore } : {}), ...(trimAt !== undefined ? { trimAt } : {}) });
+    return deps.get(path) !== current;
+  };
   const earlier = async (path: string, accepting: () => boolean): Promise<boolean> => {
     if (!accepting()) return false;
-    let view = deps.get(path);
-    // A trim releases the producer-owned cursor along with the older rows. The
-    // person's one request first asks from the retained anchor, so rows kept
-    // for focus/actions survive cursor minting. Only an invalid/retired anchor
-    // falls back to the bounded tail in `read`.
-    if (!view?.history?.before && view?.trimmed) {
-      await read(path, false, accepting);
-      if (!accepting()) return false;
-      view = deps.get(path);
-    }
+    const view = deps.get(path);
+    // A trim releases the producer-owned cursor with the older rows. Recover
+    // directly before the retained anchor; asking for its suffix can exceed a
+    // page and a tail replacement would delete the window being read.
+    if (!view?.history?.before && view?.trimmed) return recoverEarlier(path, accepting);
     const active = fence(path, accepting);
     const before = view?.history?.before;
     const revision = view?.historyRevision;
     if (!before || !active()) return false;
-    const result = await deps.request({ path, window: { before, limit: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES }).catch(async error => {
-      if (!active()) return undefined;
-      if ((error as { code?: number }).code !== ErrorCodes.InvalidParams) throw error;
-      await read(path, false, active); return undefined;
-    });
-    if (!result || !active() || !result.window) return false;
+    let result: ClientRequests["pi/session/entries"]["result"] | undefined;
+    try {
+      result = await deps.request({ path, window: { before, limit: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
+    } catch (error) {
+      if (!active()) return false;
+      const code = (error as { code?: number }).code;
+      if (code !== ErrorCodes.InvalidParams && code !== ErrorCodes.RevisionUnavailable) throw error;
+      return recoverEarlier(path, active);
+    }
+    if (!result.window || !active()) return false;
     const current = deps.get(path);
     if (current?.history?.before !== before || current.historyRevision !== revision) return false;
     deps.dispatch({ type: "historyPrepend", path, before, revision, entries: result.entries, window: result.window });
-    return deps.get(path) !== current && deps.get(path)?.history?.before !== before;
+    return deps.get(path) !== current;
   };
   const metadata = async (path: string, accepting: () => boolean): Promise<void> => {
     const active = fence(path, accepting);

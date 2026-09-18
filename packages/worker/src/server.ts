@@ -712,7 +712,7 @@ export class WorkerServer {
           for (;;) {
             const seq = live.seq;
             const baseline = live.preAcceptance;
-            const snapshot = baseline ?? await live.driver.entries({ live: !("before" in req.params.window) });
+            const snapshot = baseline ?? await live.driver.entries({ live: !("before" in req.params.window) && !("beforeEntry" in req.params.window) });
             if (this.runtimes.get(live.path) !== live) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation was closed. Open it again.");
             if (seq !== live.seq || baseline !== live.preAcceptance) continue;
             const active = "live" in snapshot ? snapshot.live : undefined;
@@ -724,7 +724,7 @@ export class WorkerServer {
             const common = {
               sessionId: this.sessionIdOf(live), epoch: live.historyEpoch, seq, revision, environmentKey,
               authority: "live" as const,
-              ...("before" in req.params.window ? {} : { live: active ?? { running: baseline?.state.isStreaming ?? live.driver.state().isStreaming, tools: [] } }),
+              ...("before" in req.params.window || "beforeEntry" in req.params.window ? {} : { live: active ?? { running: baseline?.state.isStreaming ?? live.driver.state().isStreaming, tools: [] } }),
             };
             const resolved = req.params.baseRevision === undefined
               ? undefined

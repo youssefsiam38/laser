@@ -27,6 +27,8 @@ import type { BodyComponent, BodyRegion, ElidedEntry, EntryRegionsResult, Persis
 export type HistoryWindowRequest =
   | { tail: number }
   | { before: string; limit?: number }
+  /** A bounded page ending immediately before this active-ancestry entry. */
+  | { beforeEntry: string; limit?: number }
   | { from: string }
   | { all: true };
 
