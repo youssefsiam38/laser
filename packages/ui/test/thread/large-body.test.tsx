@@ -525,10 +525,14 @@ describe("a prompt whose image the window points at", () => {
         { type: "image", mimeType: "image/png", data },
       ] } },
     ], "e0");
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
-
-    const image = container.querySelector('[data-slot="message-image"]') as HTMLImageElement | null;
+    // The read is two async hops (revision, then ranges) plus a digest; wait
+    // for the picture rather than for a fixed number of macrotasks, which a
+    // loaded CI runner has exceeded.
+    let image: HTMLImageElement | null = null;
+    for (let attempt = 0; attempt < 50 && !image; attempt += 1) {
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+      image = container.querySelector('[data-slot="message-image"]') as HTMLImageElement | null;
+    }
     expect(image, container.innerHTML.slice(0, 300)).not.toBeNull();
     expect(image!.getAttribute("src")).toMatch(/^blob:image-/);
     // The bytes were read through the range contract, never held in the store.
