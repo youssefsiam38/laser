@@ -174,6 +174,20 @@ describe("inspection status in the saved list", () => {
     ]);
   });
 
+  it("notifies when a shadowed Global row changes while public projections stay exact", async () => {
+    await service.save({ cwd, scope: "global", server: { ...fixture, name: "shared" } });
+    await service.save({ cwd, scope: "project", server: { ...fixture, name: "shared", transport: { ...fixture.transport, args: [FIXTURE, "--project"] } } });
+    expect((await service.list("project")).servers.map((entry) => [entry.scope, entry.config.name])).toEqual([["project", "shared"]]);
+    expect((await service.list("global")).servers.map((entry) => [entry.scope, entry.config.name])).toEqual([["global", "shared"]]);
+
+    changed.mockClear();
+    await service.inspect({ cwd, scope: "global", name: "shared" });
+    expect(changed).toHaveBeenCalledOnce();
+    expect((await service.list("global")).servers[0]).toMatchObject({ scope: "global", status: "connected" });
+    expect((await service.list("project")).servers).toHaveLength(1);
+    expect((await service.list("project")).servers[0]).toMatchObject({ scope: "project", config: { name: "shared" } });
+  }, 60_000);
+
   it("refuses cross-scope saved lookup but keeps a project disable-only row exact", async () => {
     await service.save({ cwd, scope: "global", server: { ...fixture, name: "shared" } });
     await expect(service.inspect({ cwd, scope: "project", name: "shared" })).rejects.toThrow(/Project settings/);

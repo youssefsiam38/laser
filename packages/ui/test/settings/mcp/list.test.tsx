@@ -25,7 +25,8 @@ vi.mock("../../../src/runtime/index.js", () => {
 
 import { McpServersTab } from "../../../src/components/settings/mcp/McpServersTab.js";
 import { TooltipProvider } from "../../../src/components/ui/tooltip.js";
-import { click, findButton, render, serverState, text } from "./harness.js";
+import { WorkbenchProvider } from "../../../src/components/workbench/workbench-context.js";
+import { click, findButton, renderInWorkbench as render, serverState, text } from "./harness.js";
 
 let root: Root;
 let servers: McpServerState[];
@@ -114,9 +115,9 @@ it("shows both scopes, the project's first, with every status in a person's word
   expect(playwright.textContent).toContain("npx @playwright/mcp");
   expect(playwright.textContent).toContain("Command");
   expect(playwright.textContent).toContain("24 tools · 24 direct");
-  expect(playwright.textContent).toContain("Every project");
+  expect(playwright.textContent).toContain("Global");
   const override = rows.find((row) => row.dataset["server"] === "project:playwright")!;
-  expect(override.textContent).toContain("switches the every-project server");
+  expect(override.textContent).toContain("switches the Global server");
   expect(rows.find((row) => row.dataset["server"] === "global:broken")!.textContent).toContain("It quit straight away.");
   expect(rows.find((row) => row.dataset["server"] === "project:memory")!.textContent).toContain("…/memory.sock");
   expect(text()).toContain("stops further calls from existing conversations");
@@ -179,6 +180,19 @@ it("reloads when the worker says the configuration changed", async () => {
   expect(github.dataset["status"]).toBe("Connected");
 });
 
+it("offers sign-in only for a needs-auth row owned by the writable scope", async () => {
+  servers.push(serverState({
+    scope: "project",
+    status: "needs-auth",
+    config: { name: "project-auth", transport: { kind: "http", url: "https://project.test/mcp" }, auth: { kind: "oauth" } },
+  }));
+  await mount("project");
+  const inherited = document.querySelector<HTMLElement>('[data-slot="mcp-server-row"][data-server="global:github"]')!;
+  const owned = document.querySelector<HTMLElement>('[data-slot="mcp-server-row"][data-server="project:project-auth"]')!;
+  expect([...inherited.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Sign in")).toBe(false);
+  expect([...owned.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Sign in")).toBe(true);
+});
+
 it("looks for other tools' configurations when it opens and when asked, never on every write", async () => {
   await mount();
   const detects = () => mocks.request.mock.calls.filter(([method]) => method === "mcp/import/detect").length;
@@ -196,6 +210,7 @@ it("renders Effective as a read-only resolved list", async () => {
   await mount("effective");
   expect(findButton("Add a server")).toBeUndefined();
   expect(findButton("Import")).toBeUndefined();
+  expect(findButton("Look again")).toBeUndefined();
   expect(mocks.request.mock.calls.some(([method]) => method === "mcp/import/detect")).toBe(false);
   expect(mocks.request).toHaveBeenCalledWith("mcp/list", { cwd: "/project", view: "effective" });
   expect(text()).toContain("Effective settings are a read-only preview");
@@ -209,26 +224,29 @@ it("shows the global projection without requiring a project", async () => {
   expect(mocks.request).toHaveBeenCalledWith("mcp/import/detect", { cwd: "/project", scope: "global" });
 });
 
-it("ignores a delayed list from the previous Settings view", async () => {
-  let resolveGlobal!: (value: { servers: McpServerState[] }) => void;
-  const globalRows = servers.filter((entry) => entry.scope === "global");
+it("ignores a delayed list after a committed Global → Project → Global cycle", async () => {
+  let resolveOldGlobal!: (value: { servers: McpServerState[] }) => void;
+  let globalLoads = 0;
+  const oldRows = [serverState({ config: { name: "old-global", transport: { kind: "stdio", command: "old" } } })];
+  const returnedRows = [serverState({ config: { name: "returned-global", transport: { kind: "stdio", command: "new" } } })];
   const projectRows = [servers.find((entry) => entry.scope === "project")!];
   mocks.request.mockImplementation(async (method: string, params: { view?: string }) => {
-    if (method === "mcp/list" && params.view === "global") return await new Promise(resolve => { resolveGlobal = resolve; });
-    if (method === "mcp/list") return { servers: projectRows };
+    if (method === "mcp/list" && params.view === "global" && ++globalLoads === 1) return await new Promise(resolve => { resolveOldGlobal = resolve; });
+    if (method === "mcp/list") return { servers: params.view === "global" ? returnedRows : projectRows };
     if (method === "mcp/import/detect") return { sources: [] };
     throw new Error(`unexpected ${method}`);
   });
   ({ root } = await render(
     <TooltipProvider><McpServersTab routeCwd="/project" view="global" /></TooltipProvider>,
   ));
-  await act(async () => root.render(
-    <TooltipProvider><McpServersTab routeCwd="/project" view="project" /></TooltipProvider>,
-  ));
+  const tree = (view: "global" | "project") => <WorkbenchProvider><TooltipProvider><McpServersTab routeCwd="/project" view={view} /></TooltipProvider></WorkbenchProvider>;
+  await act(async () => root.render(tree("project")));
   expect(text()).toContain("memory");
-  await act(async () => resolveGlobal({ servers: globalRows }));
-  expect(text()).toContain("memory");
-  expect(text()).not.toContain("github");
+  await act(async () => root.render(tree("global")));
+  expect(text()).toContain("returned-global");
+  await act(async () => resolveOldGlobal({ servers: oldRows }));
+  expect(text()).toContain("returned-global");
+  expect(text()).not.toContain("old-global");
 });
 
 it("ignores a change in another project", async () => {
@@ -244,7 +262,7 @@ it("has a retryable initial failure rather than a blank page", async () => {
     throw new Error("The worker is not running.");
   });
   await mount();
-  expect(text()).toContain("Could not read this project’s servers");
+  expect(text()).toContain("Could not read Project servers");
   expect(text()).toContain("The worker is not running.");
   await click("Retry");
   expect(document.querySelectorAll('[data-slot="mcp-server-row"]').length).toBe(7);

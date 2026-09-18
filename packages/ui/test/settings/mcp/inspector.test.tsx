@@ -19,7 +19,7 @@ vi.mock("../../../src/runtime/index.js", () => {
 
 import { McpServersTab } from "../../../src/components/settings/mcp/McpServersTab.js";
 import { TooltipProvider } from "../../../src/components/ui/tooltip.js";
-import { click, clickElement, field, findButton, inspection, render, serverState, text, tool } from "./harness.js";
+import { click, clickElement, field, findButton, inspection, renderInWorkbench as render, serverState, text, tool } from "./harness.js";
 
 let root: Root;
 let servers: McpServerState[];
@@ -405,6 +405,11 @@ it("keeps a stored secret untouched when an edit saves without retyping it", asy
   await open();
   await click("Edit");
   expect(text()).toContain("Saved. It is never shown again.");
+  await act(async () => {
+    const label = field("Name it") as HTMLInputElement;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(label, "Docs updated");
+    label.dispatchEvent(new Event("input", { bubbles: true }));
+  });
   await click("Save changes");
   expect(saved.at(-1)!.server.auth).toEqual({ kind: "bearer", token: { secret: true } });
   expect(saved.at(-1)!.server.transport).toMatchObject({ headers: { "X-Key": { secret: true } } });
@@ -420,8 +425,8 @@ it("turns a Global server off, while Project opens a copied override draft", asy
 
   await open("project");
   await click("Override for this project");
-  expect(text()).toContain("Edit Playwright");
-  await click("Save changes");
+  expect(text()).toContain("Override Playwright for Project settings");
+  await click("Save Project override");
   expect(saved.at(-1)).toMatchObject({
     cwd: "/project",
     scope: "project",

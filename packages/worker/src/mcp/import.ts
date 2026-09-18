@@ -112,9 +112,12 @@ function stripJsonComments(text: string): string {
 }
 
 /** Whether an upstream import candidate belongs to the selected project. */
-function isProjectRelativeSource(id: McpImportSourceId, path: string, cwd: string): boolean {
+function isProjectRelativeSource(id: McpImportSourceId, path: string): boolean {
   if (id === "project-mcp-json" || id === "vscode") return true;
-  return id === "opencode" && resolve(path) === join(resolve(cwd), "opencode.json");
+  // pi-mcp-adapter@2.33.0 declares exactly one machine-global OpenCode
+  // candidate. Its `./opencode.json` candidate may resolve to an ancestor git
+  // root, so comparing only with cwd would leak project configuration globally.
+  return id === "opencode" && resolve(path) !== resolve(homedir(), ".config", "opencode", "opencode.json");
 }
 
 /** Every source found for the explicit import target, with its servers already translated. */
@@ -139,7 +142,7 @@ export async function detectImportSources(cwd: string, scope: McpScope): Promise
     const id = entry.kind as McpImportSourceId;
     if (
       id in LABELS
-      && (scope === "project" || !isProjectRelativeSource(id, entry.path, cwd))
+      && (scope === "project" || !isProjectRelativeSource(id, entry.path))
       && !candidates.some((candidate) => candidate.id === id)
     ) candidates.push({ id, path: entry.path });
   }

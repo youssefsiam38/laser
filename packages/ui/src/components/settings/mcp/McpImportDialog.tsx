@@ -16,8 +16,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { SettingsSwitch } from "@/components/assistant-ui/elements/settings-panel";
 import { useLaserStable } from "@/runtime";
 import type { ScopeDraft } from "../ScopeDraftGuard.js";
+import { useCommittedTargetLifetime } from "../useCommittedTargetLifetime.js";
 
-import { ScopeChoice } from "./McpServerForm.js";
 import { scopeLabel, transportSummary } from "./model.js";
 
 /** Translate the import wire's field paths without exposing its vocabulary. */
@@ -63,9 +63,7 @@ export function McpImportDialog({
   open,
   onOpenChange,
   sources,
-  defaultScope = "global",
-  allowProject = true,
-  lockScope = false,
+  scope,
   onDraftChange,
   onImported,
 }: {
@@ -73,9 +71,7 @@ export function McpImportDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sources: readonly McpImportSource[];
-  defaultScope?: McpScope;
-  allowProject?: boolean;
-  lockScope?: boolean;
+  scope: McpScope;
   onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
   onImported: (servers: McpServerState[], imported: string[]) => void;
 }) {
@@ -83,7 +79,6 @@ export function McpImportDialog({
   const available = useMemo(() => sources.filter((source) => source.servers.length > 0), [sources]);
   const [sourceId, setSourceId] = useState<string>();
   const [chosen, setChosen] = useState<Set<string>>(() => new Set());
-  const [scope, setScope] = useState<McpScope>(defaultScope);
   const [replace, setReplace] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -92,12 +87,12 @@ export function McpImportDialog({
     if (!open) return;
     setSourceId(available[0]?.id);
     setChosen(new Set());
-    setScope(defaultScope);
     setReplace(false);
     setError(undefined);
-  }, [open, available, defaultScope]);
+  }, [open, available]);
 
   const source = available.find((entry) => entry.id === sourceId) ?? available[0];
+  const lifetime = useCommittedTargetLifetime(`${cwd}:${scope}:${source?.id ?? "none"}:${open ? "open" : "closed"}`);
   const importable = (source?.servers ?? []).filter((server) => !server.unsupported);
   const conflicting = importable.some((server) => chosen.has(server.name) && server.conflicts.includes(scope));
 
@@ -110,6 +105,8 @@ export function McpImportDialog({
 
   const apply = async (): Promise<boolean> => {
     if (!source || !chosen.size) return false;
+    const lease = lifetime.capture();
+    if (!lease) return false;
     setBusy(true);
     setError(undefined);
     try {
@@ -120,19 +117,20 @@ export function McpImportDialog({
         scope,
         ...(replace ? { replace: true } : {}),
       });
+      if (!lifetime.isCurrent(lease)) return false;
       onImported(result.servers, result.imported);
       onOpenChange(false);
       return true;
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      if (lifetime.isCurrent(lease)) setError(failure instanceof Error ? failure.message : String(failure));
       return false;
     } finally {
-      setBusy(false);
+      if (lifetime.isCurrent(lease)) setBusy(false);
     }
   };
 
   useEffect(() => {
-    if (!open) {
+    if (!open || !source || chosen.size === 0) {
       onDraftChange?.(undefined);
       return;
     }
@@ -143,7 +141,7 @@ export function McpImportDialog({
       discard: () => onOpenChange(false),
     });
     return () => onDraftChange?.(undefined);
-  }, [chosen, onDraftChange, open, replace, scope, sourceId]);
+  }, [chosen, onDraftChange, open, replace, scope, source, sourceId]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -235,11 +233,7 @@ export function McpImportDialog({
               </>
             )}
 
-            {lockScope ? (
-              <p className="text-sm text-ink-2">Import into <span className="font-medium text-ink">{scope === "global" ? "Global settings" : "Project settings"}</span>.</p>
-            ) : (
-              <ScopeChoice scope={scope} onChange={setScope} allowProject={allowProject} label="Import into" />
-            )}
+            <p className="text-sm text-ink-2">Import into <span className="font-medium text-ink">{scope === "global" ? "Global settings" : "Project settings"}</span>.</p>
 
             {conflicting && (
               <div className="flex items-start gap-3">

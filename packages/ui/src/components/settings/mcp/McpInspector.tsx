@@ -55,7 +55,7 @@ export interface McpInspectorProps {
   state: McpServerState | undefined;
   onOpenChange: (open: boolean) => void;
   onServers: (servers: McpServerState[]) => void;
-  onEdit: (target: { scope: McpScope; config: McpServerConfig }) => void;
+  onEdit: (target: { mode: "edit" | "override"; scope: McpScope; config: McpServerConfig }) => void;
   onSignIn: () => void;
   onSignOut: () => void;
   onError: (message: string) => void;
@@ -351,8 +351,8 @@ export function McpInspector({
                       onSignOut={onSignOut}
                       onToggleDisabled={() => void save({ disabled: !state.config.disabled })}
                       onTurnOnHere={() => void turnOnHere()}
-                      onEdit={() => onEdit({ scope: state.scope, config: state.config })}
-                      onOverride={() => onEdit({ scope: "project", config: state.config })}
+                      onEdit={() => onEdit({ mode: "edit", scope: state.scope, config: state.config })}
+                      onOverride={() => onEdit({ mode: "override", scope: "project", config: state.config })}
                       onRemove={() => setConfirmRemove(true)}
                     />
                   )}
@@ -589,7 +589,7 @@ function Overview({
                 {transport.kind} · <span className="typed">{transport.full}</span>
               </>
             ) : (
-              "Nothing of its own — it only switches the every-project server off here."
+              "Nothing of its own — it only switches the Global server off here."
             )}
           </dd>
           <dt className="text-ink-3">Sign-in</dt>

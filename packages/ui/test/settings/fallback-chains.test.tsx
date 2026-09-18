@@ -22,8 +22,10 @@ vi.mock("@/runtime", () => {
   return { useLaserStable: () => value };
 });
 
-import { FallbackChainsTab } from "../../src/components/settings/fallback/FallbackChainsTab.js";
+import { FallbackChainsTab, type FallbackChainsTabProps } from "../../src/components/settings/fallback/FallbackChainsTab.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
+import { deviceStore } from "../../src/runtime/device-storage.js";
+import { testDescriptor } from "../runtime/environment-fixture.js";
 
 let root: Root, container: HTMLDivElement;
 let applied: Array<{ scope: SettingsScope; changes: SettingChange[] }>;
@@ -68,6 +70,7 @@ const snapshot = (): SettingsSnapshot => ({
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  if (!deviceStore.status().active) deviceStore.activate(testDescriptor());
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -255,6 +258,29 @@ it("shows the global fallback list read-only outside Global", async () => {
   await settle();
   expect(container.textContent).toContain("Fallback chains are global. Choose Global above to edit them.");
   expect(container.querySelector<HTMLButtonElement>('[data-slot="add-chain"]')?.disabled).toBe(true);
+});
+
+it("does not let a late refused save repaint a committed A → B → A target", async () => {
+  let resolveOld!: (ok: boolean) => void;
+  const oldSave = new Promise<boolean>((resolve) => { resolveOld = resolve; });
+  chains = [chain(["anthropic", "claude-sonnet-4-5"], ["deepseek", "deepseek-chat"], ["google", "gemini-2.5-pro"])];
+  const firstA = snapshot();
+  const tree = (scopeView: "global" | "project", cwd: string, value: SettingsSnapshot, onApply: FallbackChainsTabProps["onApply"]) => (
+    <TooltipProvider><FallbackChainsTab cwd={cwd} scopeView={scopeView} snapshot={value} onApply={onApply} /></TooltipProvider>
+  );
+  await act(async () => root.render(tree("global", "/a", firstA, () => oldSave)));
+  await settle();
+  await act(async () => button(card(0), "Remove DeepSeek V3 from this chain").click());
+
+  chains = [chain(["google", "gemini-2.5-pro"], ["deepseek", "deepseek-chat"])];
+  await act(async () => root.render(tree("project", "/b", snapshot(), async () => true)));
+  chains = [chain(["anthropic", "claude-sonnet-4-5"], ["google", "gemini-2.5-pro"])];
+  await act(async () => root.render(tree("global", "/a", snapshot(), async () => true)));
+  expect(modelsIn(0)).toEqual(["anthropic/claude-sonnet-4-5", "google/gemini-2.5-pro"]);
+
+  await act(async () => resolveOld(false));
+  expect(modelsIn(0)).toEqual(["anthropic/claude-sonnet-4-5", "google/gemini-2.5-pro"]);
+  expect(container.textContent).not.toContain("Saving");
 });
 
 it("puts the file back when the write is refused", async () => {

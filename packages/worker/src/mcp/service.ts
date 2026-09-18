@@ -103,7 +103,7 @@ export class McpService {
 
   // -------------------------------------------------------------- methods
 
-  async list(view: ClientRequests["mcp/list"]["params"]["view"] = "project"): Promise<ClientRequests["mcp/list"]["result"]> {
+  async list(view: ClientRequests["mcp/list"]["params"]["view"]): Promise<ClientRequests["mcp/list"]["result"]> {
     return {
       servers: await this.states(view),
       conversations: view === "global"
@@ -307,10 +307,21 @@ export class McpService {
     };
   }
 
-  /** Latency alone is not a status change; repeated inspection must not flicker. */
+  /**
+   * Latency alone is not a status change; repeated inspection must not flicker.
+   * Compare both public projections. A Project override can shadow the Global
+   * row, but Global Settings still has to hear its own status transition.
+   */
   private async reported(): Promise<string> {
-    return JSON.stringify((await this.states("project")).map(({ scope, config, status, detail, toolCount, directToolCount, resourceCount, promptCount, inspecting }) =>
-      ({ scope, name: config.name, status, detail, toolCount, directToolCount, resourceCount, promptCount, inspecting })));
+    const [global, project] = await Promise.all([this.states("global"), this.states("project")]);
+    const canonical = new Map<string, object>();
+    // Global first preserves its own visible status for a shadowed definition;
+    // Project contributes Project identities and malformed rows from either file.
+    for (const { scope, config, status, detail, toolCount, directToolCount, resourceCount, promptCount, inspecting } of [...global, ...project]) {
+      const key = `${scope}\0${config.name}`;
+      if (!canonical.has(key)) canonical.set(key, { scope, name: config.name, status, detail, toolCount, directToolCount, resourceCount, promptCount, inspecting });
+    }
+    return JSON.stringify([...canonical].sort(([left], [right]) => left.localeCompare(right)).map(([, row]) => row));
   }
 
   private async reportChanges<T>(operation: () => Promise<T>): Promise<T> {

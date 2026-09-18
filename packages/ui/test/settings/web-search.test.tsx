@@ -8,15 +8,20 @@ const mocks = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("../../src/runtime/index.js", () => { const stable = { client: { request: mocks.request } }; return { useLaserStable: () => stable }; });
 import { WebSearchTab } from "../../src/components/settings/WebSearchTab.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
+import { deviceStore } from "../../src/runtime/device-storage.js";
+import { testDescriptor } from "../runtime/environment-fixture.js";
 let root: Root, container: HTMLDivElement, status: WebSearchStatus;
+let featureState: Record<string, unknown>;
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  if (!deviceStore.status().active) deviceStore.activate(testDescriptor());
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   status = { selectedProvider: "duckduckgo", providers: WEB_SEARCH_PROVIDERS.map((p) => ({ id: p.id, source: "none", hasKey: false, configured: p.key !== "required" && !p.endpoint })) };
+  featureState = { manifest: { id: "web-search" }, globalEnabled: false, enabled: false };
   mocks.request.mockReset().mockImplementation(async (method: string, params: { change?: WebSearchChange }) => {
     if (method === "web-search/status") return status;
     if (method === "pi/providers/list") return { providers: [{ id: "openai", name: "OpenAI", configured: true }] };
-    if (method === "feature/list") return { features: [{ manifest: { id: "web-search" }, globalEnabled: false, enabled: false }] };
+    if (method === "feature/list") return { features: [featureState] };
     if (method === "feature/set") return { restartPending: false };
     if (method === "web-search/configure") {
       const change = params.change!;
@@ -105,7 +110,7 @@ it("reports and discards a typed connection draft", async () => {
   expect(address.value).toBe("");
 });
 
-it("keeps two independently expanded provider drafts registered", async () => {
+it("keeps provider drafts registered and their secret values alive across collapse and filtering", async () => {
   const active = new Map<string, ScopeDraft>();
   await render("global", (providerId, draft) => {
     if (draft) active.set(providerId, draft);
@@ -133,8 +138,45 @@ it("keeps two independently expanded provider drafts registered", async () => {
     "SearXNG search connection",
     "Bright Data search connection",
   ]);
-  expect(container.querySelector('input[placeholder="https://search.example.com"]')).not.toBeNull();
-  expect(container.querySelector('input[placeholder="Your SERP zone name"]')).not.toBeNull();
+
+  await open("SearXNG");
+  expect(active.has("searxng")).toBe(true);
+  await open("SearXNG");
+  expect(container.querySelector<HTMLInputElement>('input[placeholder="https://search.example.com"]')?.value).toBe("https://search.local");
+
+  const filter = container.querySelector<HTMLInputElement>('input[aria-label="Find a search provider"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(filter, "Bright");
+    filter.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(active.has("searxng")).toBe(true);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(filter, "");
+    filter.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(container.querySelector<HTMLInputElement>('input[placeholder="https://search.example.com"]')?.value).toBe("https://search.local");
+  expect(container.querySelector<HTMLInputElement>('input[placeholder="Your SERP zone name"]')?.value).toBe("search-zone");
+});
+
+it("shows Project feature provenance and clears only the Project override", async () => {
+  featureState = {
+    manifest: { id: "web-search" },
+    globalEnabled: true,
+    projectEnabled: false,
+    enabled: false,
+    source: "project",
+  };
+  await render("project");
+  expect(container.textContent).toContain("Overridden for this project");
+  const toggle = [...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.getAttribute("aria-label") === "Enable web search");
+  expect(toggle?.getAttribute("aria-pressed")).toBe("false");
+  await click("Use Global choice");
+  expect(mocks.request).toHaveBeenCalledWith("feature/set", {
+    id: "web-search",
+    scope: "project",
+    enabled: null,
+    cwd: "/selected-project",
+  });
 });
 
 it("has a retryable initial failure instead of an empty screen", async () => {

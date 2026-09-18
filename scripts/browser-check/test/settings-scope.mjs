@@ -227,6 +227,9 @@ export default async function settingsScope(check) {
   await waitForRequest('mcp/list', { cwd: second, view: 'effective' });
   assert.equal(await page.getByRole('button', { name: 'Add a server', exact: true }).count(), 0,
     'Effective MCP is read-only');
+  assert.equal(await page.getByRole('button', { name: 'Look again', exact: true }).count(), 0,
+    'Effective MCP has no inert discovery action');
+  await check.shot('settings-scope-mcp');
   await activate(page.getByRole('radio', { name: /^Global\./ }));
   await waitForRequest('mcp/list', { cwd: neutral, view: 'global' });
   await waitForRequest('mcp/import/detect', { cwd: neutral, scope: 'global' });
@@ -238,17 +241,47 @@ export default async function settingsScope(check) {
   await activate(page.getByRole('button', { name: 'Providers and models', exact: true }));
   await waitForRequest('pi/models/catalog', { cwd: second, settingsView: 'effective' });
   await waitForRequest('pi/providers/list', { cwd: neutral });
+  await check.shot('settings-scope-models');
   await activate(page.getByRole('radio', { name: /^Global\./ }));
   await waitForRequest('pi/models/catalog', { cwd: neutral, settingsView: 'global' });
   const searchTab = page.getByRole('tab', { name: 'Web search', exact: true });
   if (await searchTab.count()) {
     await activate(searchTab);
     await waitForRequest('web-search/status', { cwd: neutral });
+    const searxng = page.getByRole('button').filter({ hasText: 'SearXNG' }).first();
+    await activate(searxng);
+    const address = page.getByPlaceholder('https://search.example.com');
+    await address.fill('https://browser-check.invalid/search');
+    await activate(searxng);
+    await activate(page.getByRole('radio', { name: /^Project\./ }));
+    await page.getByRole('dialog', { name: 'Keep these unsaved changes?' }).waitFor();
+    await activate(page.getByRole('button', { name: 'Keep editing', exact: true }));
+    assert.equal(await globalScope.getAttribute('aria-checked'), 'true', 'a dirty Web Search draft refused the scope change');
+    await activate(searxng);
+    assert.equal(await address.inputValue(), 'https://browser-check.invalid/search', 'collapse preserved the Web Search draft');
+    const providerFilter = page.getByRole('textbox', { name: 'Find a search provider' });
+    await providerFilter.fill('Bright Data');
+    assert.equal(await searxng.count(), 0, 'filtering removed only the provider presentation');
+    await providerFilter.fill('');
+    await page.getByRole('button').filter({ hasText: 'SearXNG' }).first().waitFor();
+    assert.equal(await page.getByPlaceholder('https://search.example.com').inputValue(), 'https://browser-check.invalid/search',
+      'filtering preserved the Web Search draft');
+    await check.shot('settings-scope-web-search-draft');
+    await activate(page.getByRole('radio', { name: /^Project\./ }));
+    await activate(page.getByRole('button', { name: 'Discard and switch', exact: true }));
+    await choose(second);
   }
 
+  await activate(page.getByRole('radio', { name: /^Effective\./ }));
   await activate(page.getByRole('button', { name: 'Help and shortcuts', exact: true }));
   await waitForRequest('pi/keybindings/get', { cwd: neutral });
   await page.getByText('Agent keybindings are global and stay in force for every project.', { exact: true }).waitFor();
+  const interruptEdit = page.getByRole('button', { name: 'Change the key for Cancel or abort', exact: true });
+  await interruptEdit.waitFor();
+  assert.equal(await interruptEdit.isDisabled(), false, 'remembered Effective does not disable global keybinding edits');
+  assert.equal(await page.getByText(/Effective settings are a read-only preview/).count(), 0,
+    'global Keyboard does not show scoped read-only copy');
+  await check.shot('settings-scope-keyboard');
 
   await activate(page.getByRole('button', { name: 'Projects', exact: true }));
   const firstProject = page.getByRole('button', { name: new RegExp(`project settings$`, 'i') }).filter({ hasText: basename(first) });

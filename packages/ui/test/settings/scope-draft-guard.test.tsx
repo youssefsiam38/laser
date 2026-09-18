@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, Component, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -16,6 +16,12 @@ let workbench: WorkbenchState | undefined;
 function Probe() {
   workbench = useWorkbench();
   return null;
+}
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { message?: string }> {
+  state: { message?: string } = {};
+  static getDerivedStateFromError(error: Error) { return { message: error.message }; }
+  render() { return this.state.message ? <p data-slot="guard-error">{this.state.message}</p> : this.props.children; }
 }
 
 async function flush() {
@@ -63,6 +69,13 @@ afterEach(async () => {
   deviceStore.deactivate();
   workbench = undefined;
   vi.restoreAllMocks();
+});
+
+it("fails fast when mounted outside the Workbench provider", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  await act(async () => root.render(<ErrorBoundary><ScopeDraftGuard drafts={[]} /></ErrorBoundary>));
+  expect(container.querySelector('[data-slot="guard-error"]')?.textContent)
+    .toBe("useWorkbench must be used inside <WorkbenchProvider>.");
 });
 
 it("aggregates simultaneous drafts and Keep editing cancels the scope change", async () => {

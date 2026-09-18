@@ -25,7 +25,8 @@ vi.mock("../../../src/runtime/index.js", () => {
 
 import { McpServersTab } from "../../../src/components/settings/mcp/McpServersTab.js";
 import { TooltipProvider } from "../../../src/components/ui/tooltip.js";
-import { click, clickElement, field, findButton, render, serverState, text } from "./harness.js";
+import { WorkbenchProvider } from "../../../src/components/workbench/workbench-context.js";
+import { click, clickElement, field, findButton, renderInWorkbench as render, serverState, text } from "./harness.js";
 
 let root: Root;
 let servers: McpServerState[];
@@ -116,7 +117,7 @@ it("imports the servers a person chose into the visible Project scope", async ()
   expect(text()).toContain("the API_KEY environment variable");
   expect(text()).not.toContain("transport.headers.");
   expect(text()).not.toContain("transport.env.");
-  expect(text()).toContain("already in This project");
+  expect(text()).toContain("already in Project");
   expect(text()).toContain("kept in the app’s secret store");
   const unsupported = document.querySelector<HTMLElement>('[data-slot="mcp-import-row"][data-server="weird"]')!;
   expect(unsupported.textContent).toContain("it asks for a transport this app does not speak");
@@ -133,6 +134,28 @@ it("imports the servers a person chose into the visible Project scope", async ()
 
   expect(applied).toEqual([{ cwd: "/project", source: "claude-code", names: ["memory", "linear"], scope: "project", replace: true }]);
   expect(mocks.toast).toHaveBeenCalledWith("info", "Imported memory, linear.");
+});
+
+it("ignores a late import result after the committed target changes", async () => {
+  let resolveImport!: (value: { servers: McpServerState[]; imported: string[] }) => void;
+  mocks.request.mockImplementation(async (method: string) => {
+    if (method === "mcp/list") return { servers };
+    if (method === "mcp/import/detect") return { sources };
+    if (method === "mcp/import/apply") return await new Promise(resolve => { resolveImport = resolve; });
+    throw new Error(`unexpected ${method}`);
+  });
+  await mount("project");
+  await click("Import");
+  await clickElement(document.querySelector<HTMLInputElement>('[aria-label="Import memory"]')!);
+  await click("Import 1 server");
+
+  servers = [serverState({ scope: "global", status: "unknown", config: { name: "global-current", transport: { kind: "stdio", command: "current" } } })];
+  await act(async () => root.render(
+    <WorkbenchProvider><TooltipProvider><McpServersTab routeCwd="/project" view="global" /></TooltipProvider></WorkbenchProvider>,
+  ));
+  await act(async () => resolveImport({ servers: [], imported: ["memory"] }));
+  expect(text()).toContain("global-current");
+  expect(mocks.toast).not.toHaveBeenCalledWith("info", expect.stringContaining("Imported"));
 });
 
 it("signs in from the row, waits for the browser, and still takes a pasted address", async () => {
@@ -166,6 +189,32 @@ it("signs in from the row, waits for the browser, and still takes a pasted addre
     redirectUrl: "https://127.0.0.1:7777/callback?code=abc",
   });
   expect(text()).toContain("Signed in.");
+});
+
+it("ignores a late auth start after a committed Project → Global target change", async () => {
+  let resolveOld!: (value: McpAuthStart) => void;
+  let starts = 0;
+  servers = [serverState({ scope: "project", status: "needs-auth", config: { name: "project-auth", transport: { kind: "http", url: "https://project.test/mcp" }, auth: { kind: "oauth" } } })];
+  mocks.request.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+    if (method === "mcp/list") return { servers };
+    if (method === "mcp/import/detect") return { sources: [] };
+    if (method === "mcp/auth/start" && ++starts === 1) return await new Promise(resolve => { resolveOld = resolve; });
+    if (method === "mcp/auth/start") return { authorizationUrl: "https://new.test/authorize", callbackListening: true };
+    throw new Error(`unexpected ${method}:${String(params["name"] ?? "")}`);
+  });
+  await mount("project");
+  await click("Sign in");
+
+  servers = [serverState({ scope: "global", status: "needs-auth", config: { name: "global-auth", transport: { kind: "http", url: "https://global.test/mcp" }, auth: { kind: "oauth" } } })];
+  await act(async () => root.render(
+    <WorkbenchProvider><TooltipProvider><McpServersTab routeCwd="/project" view="global" /></TooltipProvider></WorkbenchProvider>,
+  ));
+  await click("Sign in");
+  expect(text()).toContain("https://new.test/authorize");
+
+  await act(async () => resolveOld({ authorizationUrl: "https://old.test/authorize", callbackListening: true }));
+  expect(text()).toContain("https://new.test/authorize");
+  expect(text()).not.toContain("https://old.test/authorize");
 });
 
 it("takes a bare code when no callback is listening, and says where to paste it", async () => {

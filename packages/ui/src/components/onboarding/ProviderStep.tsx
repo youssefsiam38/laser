@@ -24,6 +24,7 @@ import type { ProviderAuthInfo, ProviderLoginMethod } from "@lasercode/protocol"
 import { ProviderSignIn } from "./ProviderSignIn.js";
 import { sortProviders } from "./setup-model.js";
 import type { ScopeDraft } from "@/components/settings/ScopeDraftGuard";
+import { useCommittedTargetLifetime } from "@/components/settings/useCommittedTargetLifetime.js";
 
 export interface ProviderStepProps {
   routeCwd: string;
@@ -65,22 +66,28 @@ export function ProviderStep({ routeCwd, writable = true, onConfigured, onBusyCh
   const [filter, setFilter] = useState("");
   const [signingOut, setSigningOut] = useState<string>();
   const generation = useRef(0);
+  const target = useCommittedTargetLifetime(routeCwd);
 
   const load = useCallback(async () => {
+    const lease = target.capture();
+    if (!lease) return;
     const request = ++generation.current;
     setError(undefined);
     try {
       const { providers: list } = await client.request("pi/providers/list", { cwd: routeCwd });
-      if (request !== generation.current) return;
+      if (request !== generation.current || !target.isCurrent(lease)) return;
       setProviders(list);
       onConfigured(list.filter((p) => p.configured).length);
     } catch (loadError) {
-      if (request === generation.current) setError(loadError instanceof Error ? loadError.message : String(loadError));
+      if (request === generation.current && target.isCurrent(lease)) setError(loadError instanceof Error ? loadError.message : String(loadError));
     }
-  }, [client, onConfigured, routeCwd]);
+  }, [client, onConfigured, routeCwd, target]);
 
   useEffect(() => {
     setProviders(undefined);
+    setSelected(undefined);
+    setMethod(undefined);
+    setSigningOut(undefined);
     void load();
     return () => { generation.current += 1; };
   }, [load]);
@@ -91,7 +98,7 @@ export function ProviderStep({ routeCwd, writable = true, onConfigured, onBusyCh
     onBusyChange?.(signingIn);
   }, [onBusyChange, signingIn]);
   useEffect(() => {
-    if (!current) {
+    if (!current || !method) {
       onDraftChange?.(undefined);
       return;
     }
@@ -104,7 +111,7 @@ export function ProviderStep({ routeCwd, writable = true, onConfigured, onBusyCh
       },
     });
     return () => onDraftChange?.(undefined);
-  }, [current, onDraftChange]);
+  }, [current, method, onDraftChange]);
 
   const sorted = useMemo(() => sortProviders(providers ?? []), [providers]);
   const shown = useMemo(() => {
@@ -113,17 +120,19 @@ export function ProviderStep({ routeCwd, writable = true, onConfigured, onBusyCh
   }, [sorted, filter]);
 
   const signOut = async (provider: ProviderAuthInfo) => {
+    const lease = target.capture();
+    if (!lease) return;
     const request = generation.current;
     setSigningOut(provider.id);
     try {
       const { providers: list } = await client.request("pi/providers/logout", { cwd: routeCwd, provider: provider.id });
-      if (request !== generation.current) return;
+      if (request !== generation.current || !target.isCurrent(lease)) return;
       setProviders(list);
       onConfigured(list.filter((p) => p.configured).length);
     } catch (logoutError) {
-      if (request === generation.current) setError(logoutError instanceof Error ? logoutError.message : String(logoutError));
+      if (request === generation.current && target.isCurrent(lease)) setError(logoutError instanceof Error ? logoutError.message : String(logoutError));
     } finally {
-      if (request === generation.current) setSigningOut(undefined);
+      if (request === generation.current && target.isCurrent(lease)) setSigningOut(undefined);
     }
   };
 

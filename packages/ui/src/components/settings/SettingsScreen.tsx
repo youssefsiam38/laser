@@ -406,7 +406,7 @@ export function SettingsScreen({ initialTab }: SettingsScreenProps) {
                 />
               ) : null}
               {shownTab === "usage" ? <UsageTab /> : null}
-              {shownTab === "keyboard" && neutralRouteCwd ? <KeyboardTab neutralRouteCwd={neutralRouteCwd} view={settingsScope.view} decision={keybindingsWrite} /> : null}
+              {shownTab === "keyboard" && neutralRouteCwd ? <KeyboardTab neutralRouteCwd={neutralRouteCwd} decision={keybindingsWrite} /> : null}
               {shownTab === "projects" ? <ProjectsTab /> : null}
               {shownTab === "trust" ? <TrustTab decision={trustWrite} /> : null}
               {shownTab === "device" ? <DeviceTab /> : null}

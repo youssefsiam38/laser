@@ -139,7 +139,7 @@ async function render(snap: SettingsSnapshot | undefined = snapshot({ enabledMod
   };
   await act(async () => root.render(
     <TooltipProvider>
-      <ModelsTab settingsRouteCwd="/p" neutralRouteCwd="/neutral" view={view} snapshot={snap} onApply={onApply} />
+      <WorkbenchProvider><ModelsTab settingsRouteCwd="/p" neutralRouteCwd="/neutral" view={view} snapshot={snap} onApply={onApply} /></WorkbenchProvider>
     </TooltipProvider>,
   ));
 }
@@ -358,7 +358,7 @@ it("holds the switch busy while the write is in flight", async () => {
   root = createRoot(container);
   await act(async () => root.render(
     <TooltipProvider>
-      <ModelsTab settingsRouteCwd="/p" neutralRouteCwd="/neutral" view="global" snapshot={snapshot({ enabledModels: patterns })} onApply={() => pending} />
+      <WorkbenchProvider><ModelsTab settingsRouteCwd="/p" neutralRouteCwd="/neutral" view="global" snapshot={snapshot({ enabledModels: patterns })} onApply={() => pending} /></WorkbenchProvider>
     </TooltipProvider>,
   ));
   await act(async () => switchOf("gpt-5").click());
@@ -457,29 +457,30 @@ it("keeps the pattern editor folded under Advanced and writes to the visible Pro
   expect(applied).toEqual([{ scope: "project", changes: [{ path: "enabledModels", op: "unset" }] }]);
 });
 
-it("ignores a delayed catalogue from the previous Settings target", async () => {
+it("ignores a delayed catalogue after a committed A → B → A target cycle", async () => {
   let resolveOld!: (value: { models: ModelCatalogEntry[]; enabledPatterns: null; disabledModels: string[]; errors: string[] }) => void;
+  let sameLoads = 0;
   const old = model("openai", "old-model", false);
   const next = model("openai", "new-model", false);
+  const returned = model("openai", "returned-model", false);
   mocks.request.mockImplementation(async (method: string, params: { cwd?: string }) => {
     if (method === "pi/providers/list") return { providers };
-    if (method === "pi/models/catalog" && params.cwd === "/old") {
+    if (method === "pi/models/catalog" && params.cwd === "/same" && ++sameLoads === 1) {
       return await new Promise(resolve => { resolveOld = resolve; });
     }
-    if (method === "pi/models/catalog") return { models: [next], enabledPatterns: null, disabledModels: [], errors: [] };
+    if (method === "pi/models/catalog") return { models: [params.cwd === "/same" ? returned : next], enabledPatterns: null, disabledModels: [], errors: [] };
     if (method === "pi/transcribe/status") return { available: true };
     throw new Error(`unexpected ${method}`);
   });
   const props = { neutralRouteCwd: "/neutral", view: "global" as const, snapshot: snapshot({}), onApply: async () => true };
-  await act(async () => root.render(
-    <TooltipProvider><ModelsTab {...props} settingsRouteCwd="/old" /></TooltipProvider>,
-  ));
-  await act(async () => root.render(
-    <TooltipProvider><ModelsTab {...props} settingsRouteCwd="/new" /></TooltipProvider>,
-  ));
+  const tree = (cwd: string) => <TooltipProvider><WorkbenchProvider><ModelsTab {...props} settingsRouteCwd={cwd} /></WorkbenchProvider></TooltipProvider>;
+  await act(async () => root.render(tree("/same")));
+  await act(async () => root.render(tree("/new")));
   expect(rowIds()).toContain("openai/new-model");
+  await act(async () => root.render(tree("/same")));
+  expect(rowIds()).toContain("openai/returned-model");
   await act(async () => resolveOld({ models: [old], enabledPatterns: null, disabledModels: [], errors: [] }));
-  expect(rowIds()).toContain("openai/new-model");
+  expect(rowIds()).toContain("openai/returned-model");
   expect(rowIds()).not.toContain("openai/old-model");
 });
 

@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
+import { useCommittedTargetLifetime } from "@/components/settings/useCommittedTargetLifetime.js";
 import type { ProviderAuthInfo, ProviderLoginEvent, ProviderLoginMethod, ProviderLoginPrompt } from "@lasercode/protocol";
 
 export interface ProviderSignInProps {
@@ -70,9 +71,11 @@ export function ProviderSignIn({ routeCwd, provider, method, onDone, onCancel, c
   const early = useRef<Array<{ id: string; event: ProviderLoginEvent }>>([]);
   const doneRef = useRef(false);
   const attemptRef = useRef(0);
+  const target = useCommittedTargetLifetime(`${routeCwd}:${provider.id}:${method}`);
   const copy = useCopy();
 
   const apply = useCallback((event: ProviderLoginEvent) => {
+    if (!target.capture()) return;
     setFlow((current) => {
       switch (event.type) {
         case "auth_url":
@@ -98,7 +101,7 @@ export function ProviderSignIn({ routeCwd, provider, method, onDone, onCancel, c
           return { ...current, status: "cancelled", prompt: undefined, progress: undefined };
       }
     });
-  }, []);
+  }, [target]);
 
   // Subscribe before starting so a prompt the worker emits before it answers
   // `start` is not lost; it is parked until the id is known.
@@ -119,6 +122,8 @@ export function ProviderSignIn({ routeCwd, provider, method, onDone, onCancel, c
   );
 
   const start = useCallback(async (attempt: number) => {
+    const lease = target.capture();
+    if (!lease) return;
     setFlow(fresh());
     setAnswer("");
     setSubmitted(false);
@@ -126,7 +131,7 @@ export function ProviderSignIn({ routeCwd, provider, method, onDone, onCancel, c
     doneRef.current = false;
     try {
       const { id } = await client.request("pi/providers/login/start", { cwd: routeCwd, provider: provider.id, method });
-      if (attemptRef.current !== attempt) {
+      if (attemptRef.current !== attempt || !target.isCurrent(lease)) {
         await client.request("pi/providers/login/cancel", { cwd: routeCwd, id }).catch(() => undefined);
         return;
       }
@@ -134,11 +139,11 @@ export function ProviderSignIn({ routeCwd, provider, method, onDone, onCancel, c
       for (const parked of early.current) if (parked.id === id) apply(parked.event);
       early.current = [];
     } catch (startError) {
-      if (attemptRef.current === attempt) {
+      if (attemptRef.current === attempt && target.isCurrent(lease)) {
         setFlow((current) => ({ ...current, status: "error", error: startError instanceof Error ? startError.message : String(startError) }));
       }
     }
-  }, [apply, client, method, provider.id, routeCwd]);
+  }, [apply, client, method, provider.id, routeCwd, target]);
 
   useEffect(() => {
     const attempt = ++attemptRef.current;
@@ -155,21 +160,28 @@ export function ProviderSignIn({ routeCwd, provider, method, onDone, onCancel, c
 
   useEffect(() => {
     if (flow.status === "done" && !doneRef.current) {
+      const lease = target.capture();
+      if (!lease) return undefined;
       doneRef.current = true;
-      const handle = setTimeout(onDone, 900);
+      const handle = setTimeout(() => {
+        if (target.isCurrent(lease)) onDone();
+      }, 900);
       return () => clearTimeout(handle);
     }
     return undefined;
-  }, [flow.status, onDone]);
+  }, [flow.status, onDone, target]);
 
   const cancel = useCallback(() => {
+    if (!target.capture()) return;
     const id = flowRef.current.id;
     if (id && flowRef.current.status === "waiting") void client.request("pi/providers/login/cancel", { cwd: routeCwd, id }).catch(() => undefined);
     onCancel();
-  }, [client, onCancel, routeCwd]);
+  }, [client, onCancel, routeCwd, target]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    const lease = target.capture();
+    if (!lease) return;
     const prompt = flow.prompt;
     if (!prompt || !flow.id || sending) return;
     const value = answer.trim();
@@ -178,27 +190,30 @@ export function ProviderSignIn({ routeCwd, provider, method, onDone, onCancel, c
     setSubmitted(true);
     try {
       await client.request("pi/providers/login/answer", { cwd: routeCwd, id: flow.id, promptId: prompt.id, value });
+      if (!target.isCurrent(lease)) return;
       setAnswer("");
       setFlow((current) => (current.status === "waiting" && current.prompt?.id === prompt.id ? { ...current, prompt: undefined } : current));
     } catch (answerError) {
-      setFlow((current) => ({ ...current, status: "error", error: answerError instanceof Error ? answerError.message : String(answerError) }));
+      if (target.isCurrent(lease)) setFlow((current) => ({ ...current, status: "error", error: answerError instanceof Error ? answerError.message : String(answerError) }));
     } finally {
-      setSending(false);
+      if (target.isCurrent(lease)) setSending(false);
     }
   };
 
   const choose = async (optionId: string) => {
+    const lease = target.capture();
+    if (!lease) return;
     const prompt = flow.prompt;
     if (!prompt || !flow.id || sending) return;
     setSending(true);
     setSubmitted(true);
     try {
       await client.request("pi/providers/login/answer", { cwd: routeCwd, id: flow.id, promptId: prompt.id, value: optionId });
-      setFlow((current) => (current.status === "waiting" && current.prompt?.id === prompt.id ? { ...current, prompt: undefined } : current));
+      if (target.isCurrent(lease)) setFlow((current) => (current.status === "waiting" && current.prompt?.id === prompt.id ? { ...current, prompt: undefined } : current));
     } catch (answerError) {
-      setFlow((current) => ({ ...current, status: "error", error: answerError instanceof Error ? answerError.message : String(answerError) }));
+      if (target.isCurrent(lease)) setFlow((current) => ({ ...current, status: "error", error: answerError instanceof Error ? answerError.message : String(answerError) }));
     } finally {
-      setSending(false);
+      if (target.isCurrent(lease)) setSending(false);
     }
   };
 

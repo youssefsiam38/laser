@@ -6,11 +6,14 @@ import type { ProviderAuthInfo, ProviderLoginEvent } from "@lasercode/protocol";
 const mocks = vi.hoisted(() => ({ request: vi.fn(), subscribe: vi.fn() }));
 vi.mock("../../src/runtime/index.js", () => { const stable = { client: mocks }; return { useLaserStable: () => stable }; });
 import { ProviderSignIn } from "../../src/components/onboarding/ProviderSignIn.js";
+import { deviceStore } from "../../src/runtime/device-storage.js";
+import { testDescriptor } from "../runtime/environment-fixture.js";
 let root: Root, container: HTMLDivElement, listener: (method: string, params: unknown) => void;
 const provider: ProviderAuthInfo = { id: "openai", name: "OpenAI", configured: false, oauth: false, subscription: false, modelCount: 1 };
 const emit = (event: ProviderLoginEvent) => listener("pi/providers/login/event", { cwd: "/project", provider: "openai", id: "login", event });
 beforeEach(async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  if (!deviceStore.status().active) deviceStore.activate(testDescriptor());
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   mocks.request.mockReset().mockResolvedValue({ id: "login" });
   mocks.subscribe.mockImplementation((fn) => { listener = fn; return () => {}; });

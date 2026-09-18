@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { basename } from 'node:path';
 
 export default async function acceptance(check) {
   const { page } = check;
@@ -38,6 +39,11 @@ export default async function acceptance(check) {
   const settings = page.getByRole('button', { name: 'Settings', exact: true });
   if (!(await settings.isVisible())) await activate(page.getByRole('button', { name: 'Sessions', exact: true }));
   await activate(settings);
+  // Conversation snapshots belong to the explicit Project view; Global has no
+  // project conversation context by design.
+  await activate(page.getByRole('radio', { name: /^Project\./ }));
+  await activate(page.getByRole('button', { name: /Project settings target:/ }));
+  await activate(page.getByRole('menuitemradio').filter({ hasText: basename(cwd) }));
   // The narrow tab strip restores its scroll while Settings mounts. Use its
   // supported keyboard activation; changed feature controls still use tap.
   const serverTab = page.getByRole('button', { name: 'MCP servers', exact: true });
@@ -60,7 +66,12 @@ export default async function acceptance(check) {
   assert.equal(await section.getByRole('list', { name: 'Included tools' }).count(), 0);
   await check.shot('mcp-discovery');
 
-  await activate(inspector.getByRole('tab', { name: 'Overview', exact: true }));
+  // Project can inspect inherited conversation context but cannot mutate the
+  // Global owner. Reopen the owner explicitly before reconnecting or editing.
+  await activate(inspector.getByRole('button', { name: 'Close', exact: true }));
+  await inspector.waitFor({ state: 'hidden' });
+  await activate(page.getByRole('radio', { name: /^Global\./ }));
+  await activate(page.locator('[data-server="global:fixture"] button').first());
   const reconnect = inspector.getByRole('button', { name: 'Reconnect', exact: true });
   await reconnect.focus(); await reconnect.press('Enter');
   // Edit waits for the supported reconnect to settle; no forced action or sleep.
@@ -83,6 +94,12 @@ export default async function acceptance(check) {
   const snapshots = (await check.rpc('mcp/list', { cwd, view: 'project' })).conversations;
   assert.deepEqual(snapshots.find(item => item.sessionPath === progressive).context.preloaded, []);
   assert.ok(snapshots.find(item => item.sessionPath === next).context.preloaded.includes('fixture_echo'));
+  await activate(inspector.getByRole('button', { name: 'Close', exact: true }));
+  await inspector.waitFor({ state: 'hidden' });
+  await activate(page.getByRole('radio', { name: /^Project\./ }));
+  await activate(page.getByRole('button', { name: /Project settings target:/ }));
+  await activate(page.getByRole('menuitemradio').filter({ hasText: basename(cwd) }));
+  await activate(page.locator('[data-server="global:fixture"] button').first());
   await activate(inspector.getByRole('tab', { name: 'Tools', exact: true }));
   await section.getByRole('combobox', { name: 'Conversation', exact: true }).selectOption(next);
   await section.getByRole('list', { name: 'Included tools' }).getByText('fixture_echo', { exact: true }).waitFor();

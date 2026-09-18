@@ -33,7 +33,7 @@ import { Button } from "@/components/ui/button";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { modKey } from "@/format";
-import { useLaserStable, type SettingsScopeView } from "@/runtime";
+import { useLaserStable } from "@/runtime";
 import { cn } from "@/lib/utils";
 
 interface Binding {
@@ -92,11 +92,9 @@ function groups(mod: string): BindingGroup[] {
   ];
 }
 
-export function KeyboardTab({ neutralRouteCwd, view, decision }: { neutralRouteCwd: string; view: SettingsScopeView; decision?: CapabilityDecision | undefined }) {
-  const writable = view !== "effective" && (decision?.state === "available" || decision === undefined);
-  const readOnlyExplanation = view === "effective"
-    ? "Effective settings are a read-only preview. Choose Global or Project on a scoped Settings tab to change global keybindings."
-    : decision?.state === "explained" ? decision.explanation : undefined;
+export function KeyboardTab({ neutralRouteCwd, decision }: { neutralRouteCwd: string; decision?: CapabilityDecision | undefined }) {
+  const writable = decision?.state === "available" || decision === undefined;
+  const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
   const mod = modKey();
   const list = useMemo(() => groups(mod), [mod]);
 

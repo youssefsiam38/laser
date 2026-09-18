@@ -54,6 +54,22 @@ it("omits project-relative sources from Global but includes them for Project", a
   expect((await projectPending).map(source => source.id)).toEqual(["project-mcp-json", "shared-global", "vscode", "opencode"]);
 });
 
+it("treats an ancestor git-root OpenCode file as Project-only", async () => {
+  state.discovered = [{ kind: "opencode", path: "/synthetic-project/opencode.json" }];
+  const globalPending = detectImportSources("/synthetic-project/nested", "global");
+  expect([...state.reads.keys()]).toEqual(["/synthetic-home/.config/mcp/mcp.json"]);
+  state.reads.get("/synthetic-home/.config/mcp/mcp.json")!(body("global"));
+  expect((await globalPending).some((source) => source.id === "opencode")).toBe(false);
+
+  state.reads.clear();
+  const projectPending = detectImportSources("/synthetic-project/nested", "project");
+  expect([...state.reads.keys()]).toContain("/synthetic-project/opencode.json");
+  for (const [path, resolve] of state.reads) {
+    resolve(path.endsWith("opencode.json") ? openCodeBody("ancestor-open-code") : body("other"));
+  }
+  expect((await projectPending).find((source) => source.id === "opencode")?.path).toBe("/synthetic-project/opencode.json");
+});
+
 it("preserves upstream machine-global OpenCode precedence in both scopes", async () => {
   state.discovered = [{ kind: "opencode", path: "/synthetic-home/.config/opencode/opencode.json" }];
   for (const scope of ["global", "project"] as const) {

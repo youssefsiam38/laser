@@ -9,7 +9,7 @@
  * fetched back, so a field says "Saved" or "Needs a value" and only what the
  * person types now travels to `mcp/save`.
  */
-import { MCP_STARTUP_MODES, MCP_PROTOCOL_VERSIONS, type McpAuthKind, type McpScope, type McpStartup, type McpTransportKind } from "@lasercode/protocol";
+import { MCP_STARTUP_MODES, MCP_PROTOCOL_VERSIONS, type McpAuthKind, type McpStartup, type McpTransportKind } from "@lasercode/protocol";
 import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import { useId, type ReactNode } from "react";
 
@@ -190,43 +190,6 @@ export function ValueRows({
   );
 }
 
-/** Where the server is saved. The same two words the Features screen uses. */
-export function ScopeChoice({
-  scope,
-  onChange,
-  disabled,
-  allowProject = true,
-  label = "Save it for",
-}: {
-  scope: McpScope;
-  onChange: (scope: McpScope) => void;
-  disabled?: boolean;
-  /** False with no project open: there is no project to save anything for. */
-  allowProject?: boolean;
-  label?: string;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-sm text-ink-2">{label}</span>
-      <div role="group" aria-label={label} className="flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
-        {(["global", "project"] as const).map((option) => (
-          <Button
-            key={option}
-            type="button"
-            aria-pressed={scope === option}
-            disabled={disabled || (option === "project" && !allowProject)}
-            variant="ghost"
-            size="sm"
-            onClick={() => onChange(option)}
-            className={cn(scope === option && "bg-surface text-ink")}
-          >
-            {option === "global" ? "Every project" : "This project"}
-          </Button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 const TRANSPORTS: Array<{ kind: McpTransportKind; label: string; hint: string }> = [
   { kind: "stdio", label: "Command", hint: "A program on this machine that the app starts." },

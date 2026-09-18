@@ -14,7 +14,7 @@
  * is the sentence that would have refused the write.
  */
 import { ArrowDown, ArrowUp, Loader2, Plus, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   FALLBACK_CHAINS_SETTING,
@@ -44,6 +44,7 @@ import { cn } from "@/lib/utils";
 import type { CapabilityDecision } from "@/runtime/environment-capabilities";
 import type { SettingsScopeView } from "@/runtime/settings-scope";
 import type { ScopeDraft } from "../ScopeDraftGuard.js";
+import { useCommittedTargetLifetime } from "../useCommittedTargetLifetime.js";
 
 export interface FallbackChainsTabProps {
   cwd: string;
@@ -78,8 +79,7 @@ export function FallbackChainsTab({ cwd, snapshot, onApply, scopeView, decision,
   const [saving, setSaving] = useState(false);
   const [refused, setRefused] = useState<string>();
   const targetKey = `${scopeView}:${cwd}:${snapshot?.global.path ?? ""}`;
-  const targetRef = useRef(targetKey);
-  targetRef.current = targetKey;
+  const target = useCommittedTargetLifetime(targetKey);
 
   useEffect(() => {
     if (!draft) {
@@ -99,6 +99,11 @@ export function FallbackChainsTab({ cwd, snapshot, onApply, scopeView, decision,
     setChains((current) => (sameChains(current, saved) ? current : saved));
   }, [saved]);
 
+  useEffect(() => {
+    setSaving(false);
+    setRefused(undefined);
+  }, [target]);
+
   const issues = useMemo(() => validateFallbackChains(chains), [chains]);
   const issuesFor = useCallback(
     (index: number): FallbackChainIssue[] => issues.filter((issue) => issue.chain === index),
@@ -107,7 +112,8 @@ export function FallbackChainsTab({ cwd, snapshot, onApply, scopeView, decision,
 
   const commit = useCallback(
     async (next: FallbackChain[]) => {
-      const target = targetKey;
+      const lease = target.capture();
+      if (!lease) return false;
       const problems = validateFallbackChains(next);
       if (problems.length > 0) {
         setRefused(problems[0]!.message);
@@ -118,14 +124,14 @@ export function FallbackChainsTab({ cwd, snapshot, onApply, scopeView, decision,
       setSaving(true);
       try {
         const ok = await onApply("global", [{ path: FALLBACK_CHAINS_SETTING, op: "set", value: next }]);
-        if (targetRef.current !== target) return false;
+        if (!target.isCurrent(lease)) return false;
         if (!ok) setChains(saved);
         return ok;
       } finally {
-        setSaving(false);
+        if (target.isCurrent(lease)) setSaving(false);
       }
     },
-    [onApply, saved, targetKey],
+    [onApply, saved, target],
   );
 
   /** Models this chain can still take: connected, and not already in it. */

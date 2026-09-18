@@ -13,6 +13,7 @@ import { Tabs } from "radix-ui";
 import { WebSearchTab } from "./WebSearchTab.js";
 import { FallbackChainsTab } from "./fallback/FallbackChainsTab.js";
 import { ScopeDraftGuard, type ScopeDraft } from "./ScopeDraftGuard.js";
+import { useCommittedTargetLifetime } from "./useCommittedTargetLifetime.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronRight, ChevronsUpDown, Eye, Loader2, Mic2, RefreshCw, Sparkles } from "lucide-react";
 
@@ -108,6 +109,8 @@ export function ModelsTab(props: ModelsTabProps) {
         <Tabs.Trigger value="fallback" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Fallback chains</Button></Tabs.Trigger>
         {webSearch.state === "available" ? <Tabs.Trigger value="search" asChild><Button variant="ghost" size="sm" className="data-[state=active]:bg-surface-2">Web search</Button></Tabs.Trigger> : null}
       </Tabs.List>
+      {/* D-293: keep every known pane mounted so each owns its draft,
+          secret-input, focus and scroll lifetime across inner-tab changes. */}
       <Tabs.Content forceMount value="models" className="min-h-0 flex-1 data-[state=inactive]:hidden"><ModelConnectionsTab {...props} decision={settingsWrite} onDraftChange={reportProviderDraft} /></Tabs.Content>
       <Tabs.Content forceMount value="fallback" className="min-h-0 flex-1 data-[state=inactive]:hidden">
         <FallbackChainsTab
@@ -121,13 +124,22 @@ export function ModelsTab(props: ModelsTabProps) {
       </Tabs.Content>
       {webSearch.state === "available" ? (
         <Tabs.Content forceMount value="search" className="min-h-0 flex-1 data-[state=inactive]:hidden">
-          <WebSearchTab
-            neutralRouteCwd={props.neutralRouteCwd}
-            view={props.view}
-            {...(props.view !== "global" ? { projectCwd: props.settingsRouteCwd } : {})}
-            decision={searchWrite}
-            onDraftChange={reportSearchDraft}
-          />
+          {props.view === "global" ? (
+            <WebSearchTab
+              neutralRouteCwd={props.neutralRouteCwd}
+              view="global"
+              decision={searchWrite}
+              onDraftChange={reportSearchDraft}
+            />
+          ) : (
+            <WebSearchTab
+              neutralRouteCwd={props.neutralRouteCwd}
+              view={props.view}
+              projectCwd={props.settingsRouteCwd}
+              decision={searchWrite}
+              onDraftChange={reportSearchDraft}
+            />
+          )}
         </Tabs.Content>
       ) : null}
     </Tabs.Root>
@@ -162,16 +174,18 @@ function ModelConnectionsTab({ settingsRouteCwd, neutralRouteCwd, view: scopeVie
   const [note, setNote] = useState<string>();
   const generation = useRef(0);
   const targetKey = `${scopeView}:${settingsRouteCwd}:${neutralRouteCwd}`;
-  const targetRef = useRef(targetKey);
-  targetRef.current = targetKey;
+  const target = useCommittedTargetLifetime(targetKey);
   const applyHere = useCallback(async (scope: SettingsScope, changes: SettingChange[]) => {
-    const target = targetKey;
+    const lease = target.capture();
+    if (!lease) return false;
     const ok = await onApply(scope, changes);
-    return ok && targetRef.current === target;
-  }, [onApply, targetKey]);
+    return ok && target.isCurrent(lease);
+  }, [onApply, target]);
 
   const load = useCallback(
-    async (refresh: boolean) => {
+    async (refresh: boolean): Promise<boolean> => {
+      const lease = target.capture();
+      if (!lease) return false;
       const request = ++generation.current;
       if (refresh) setRefreshing(true);
       else setLoading(true);
@@ -185,7 +199,7 @@ function ModelConnectionsTab({ settingsRouteCwd, neutralRouteCwd, view: scopeVie
           }),
           client.request("pi/transcribe/status", { cwd: neutralRouteCwd }),
         ]);
-        if (request !== generation.current) return;
+        if (request !== generation.current || !target.isCurrent(lease)) return false;
         setProviders(providerResult.providers);
         setModels(catalogResult.models);
         setPatterns(catalogResult.enabledPatterns);
@@ -193,16 +207,18 @@ function ModelConnectionsTab({ settingsRouteCwd, neutralRouteCwd, view: scopeVie
         setDictation(dictationResult);
         setErrors([...(providerResult.error ? [providerResult.error] : []), ...catalogResult.errors]);
         setFatal(undefined);
+        return true;
       } catch (loadError) {
-        if (request === generation.current) setFatal(loadError instanceof Error ? loadError.message : String(loadError));
+        if (request === generation.current && target.isCurrent(lease)) setFatal(loadError instanceof Error ? loadError.message : String(loadError));
+        return false;
       } finally {
-        if (request === generation.current) {
+        if (request === generation.current && target.isCurrent(lease)) {
           setLoading(false);
           setRefreshing(false);
         }
       }
     },
-    [client, neutralRouteCwd, scopeView, settingsRouteCwd],
+    [client, neutralRouteCwd, scopeView, settingsRouteCwd, target],
   );
 
   const handleProviderConfigured = useCallback(() => {
@@ -279,15 +295,19 @@ function ModelConnectionsTab({ settingsRouteCwd, neutralRouteCwd, view: scopeVie
   /** Mark rows busy for the life of `work`; the row's switch waits meanwhile. */
   const whileBusy = async (keys: string[], work: () => Promise<boolean>): Promise<boolean> => {
     if (keys.some((key) => busy.has(key))) return false;
+    const lease = target.capture();
+    if (!lease) return false;
     setBusy((current) => new Set([...current, ...keys]));
     try {
       return await work();
     } finally {
-      setBusy((current) => {
-        const next = new Set(current);
-        for (const key of keys) next.delete(key);
-        return next;
-      });
+      if (target.isCurrent(lease)) {
+        setBusy((current) => {
+          const next = new Set(current);
+          for (const key of keys) next.delete(key);
+          return next;
+        });
+      }
     }
   };
 

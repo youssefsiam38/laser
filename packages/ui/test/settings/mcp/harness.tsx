@@ -3,6 +3,9 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { expect } from "vitest";
 import type { McpInspection, McpServerState, McpToolInfo } from "@lasercode/protocol";
+import { WorkbenchProvider } from "../../../src/components/workbench/workbench-context.js";
+import { deviceStore } from "../../../src/runtime/device-storage.js";
+import { testDescriptor } from "../../runtime/environment-fixture.js";
 
 export function serverState(partial: Partial<McpServerState> & Pick<McpServerState, "config">): McpServerState {
   return { scope: "global", status: "unknown", ...partial };
@@ -105,4 +108,9 @@ export async function render(node: React.ReactNode): Promise<{ root: Root; conta
   const root = createRoot(container);
   await act(async () => root.render(node));
   return { root, container };
+}
+
+export async function renderInWorkbench(node: React.ReactNode): Promise<{ root: Root; container: HTMLDivElement }> {
+  if (!deviceStore.status().active) deviceStore.activate(testDescriptor());
+  return render(<WorkbenchProvider>{node}</WorkbenchProvider>);
 }

@@ -33,6 +33,7 @@ import { deviceStore } from "../../src/runtime/device-storage.js";
 import { createStateStore, LaserStoreProvider, type StateStore } from "../../src/runtime/LaserProvider.js";
 import { initialState } from "../../src/store.js";
 import { testDescriptor } from "../runtime/environment-fixture.js";
+import { settingsScopeStore } from "../../src/runtime/settings-scope.js";
 
 const catalog = { sections: [], fields: [] };
 const snapshot = (cwd: string, reason = cwd) => ({
@@ -240,6 +241,15 @@ describe("shared explicit Settings scope", () => {
     expect(container.textContent).toContain("Agent keybindings are global and stay in force for every project.");
     expect(container.textContent).toContain("Interrupt");
     expect(container.textContent).not.toContain("need a project open");
+  });
+
+  it("keeps global keybindings editable under a remembered Effective scope", async () => {
+    expect(settingsScopeStore.set({ view: "effective", projectCwd: "/settings-two" })).toBe(true);
+    await mount("keyboard");
+    expect(calls("pi/keybindings/get")).toEqual([{ cwd: "/neutral-settings-route" }]);
+    const change = container.querySelector<HTMLButtonElement>('button[aria-label="Change the key for Interrupt"]');
+    expect(change?.disabled).toBe(false);
+    expect(container.textContent).not.toContain("Effective settings are a read-only preview");
   });
 
   it("routes a Global Feature write through the neutral service route", async () => {
