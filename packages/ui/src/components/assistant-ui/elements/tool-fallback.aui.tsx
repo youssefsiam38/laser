@@ -1,5 +1,5 @@
 "use client";
-import { useFindQuery, useSearchRevealDisclosure } from "@/components/thread/search-state";
+import { useFindQuery, useSearchReveal } from "@/components/thread/search-state";
 /**
  * `tool-fallback` (assistant-ui registry), restyled to DESIGN.md.
  *
@@ -46,7 +46,7 @@ import { BodyOverflow } from "@/components/thread/BodyOverflow";
 import { JsonViewer, parseJsonText } from "./json-viewer.js";
 import type { BlockBodies } from "@/store";
 import { omittedBytes } from "@/runtime/body-excerpt";
-import { toolDisplayLabel, toolOutputText, withoutToolLabel } from "@lasercode/protocol";
+import { toolDisplayLabel, toolOutputText, toolSearchContent, withoutToolLabel } from "@lasercode/protocol";
 
 import { activityDisclosure, activityRow, activityTrigger, collapsePanel, mono, pressable } from "./surfaces.js";
 
@@ -64,6 +64,8 @@ export type ToolFallbackRootProps = Omit<React.ComponentProps<typeof Collapsible
   tone?: "danger" | "attention" | undefined;
   /** Visible trigger text that find can highlight without opening the body. */
   visibleSearchText?: string | undefined;
+  /** Lazily reads the body's shared search projection, excluding the visible trigger label. */
+  bodySearchText?: (() => readonly string[]) | undefined;
 };
 
 function ToolFallbackRoot({
@@ -73,6 +75,7 @@ function ToolFallbackRoot({
   defaultOpen = false,
   tone,
   visibleSearchText,
+  bodySearchText,
   children,
   ...props
 }: ToolFallbackRootProps) {
@@ -84,33 +87,36 @@ function ToolFallbackRoot({
   const isControlled = controlledOpen !== undefined;
   const baseOpen = isControlled ? controlledOpen : uncontrolledOpen;
   const query = useFindQuery().trim();
-  const { revealing, open: revealOpen, fold } = useSearchRevealDisclosure();
-  // A label match is already paintable in the closed header. Opening its body
-  // would reveal unrelated request/output and break search-index/DOM equality.
-  const visibleMatch = revealing && query !== "" && visibleSearchText !== undefined
-    && visibleSearchText.toLocaleLowerCase().includes(query.toLocaleLowerCase());
-  const [visibleRevealOpen, setVisibleRevealOpen] = useState<boolean | null>(null);
-  useEffect(() => setVisibleRevealOpen(null), [revealing, query, visibleMatch]);
-  const isOpen = revealing
-    ? visibleMatch ? (visibleRevealOpen ?? baseOpen) : revealOpen
-    : baseOpen;
+  const revealing = useSearchReveal();
+  const queryMatches = useCallback(
+    (text: string) => query !== "" && text.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
+    [query],
+  );
+  const visibleMatch = visibleSearchText !== undefined && queryMatches(visibleSearchText);
+  const bodyMatch = revealing && query !== "" ? bodySearchText?.().some(queryMatches) ?? false : false;
+  // Only a header-only match stays folded. If the shared body projection also
+  // matches, the body must mount so every indexed occurrence has a DOM range.
+  const headerOnlyMatch = revealing && visibleMatch && bodySearchText !== undefined && !bodyMatch;
+  const [transientOverride, setTransientOverride] = useState<{ query: string; open: boolean } | null>(null);
+  useEffect(() => { if (!revealing) setTransientOverride(null); }, [revealing]);
+  // Keying the override by query prevents a manual toggle for the previous
+  // query leaking through the render before effects run.
+  const revealedOpen = transientOverride?.query === query ? transientOverride.open : undefined;
+  const isOpen = revealing ? (revealedOpen ?? (headerOnlyMatch ? baseOpen : true)) : baseOpen;
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
       lockScroll();
-      // Folding a row that find is holding open belongs to that reveal, not to
-      // the person's remembered choice (AGENTS.md "Search disclosure is
-      // transient"; the same rule as `tool-group.aui.tsx`). A visible label
-      // starts where the person left it but can still be opened for this reveal.
+      // A choice while find is revealing this row belongs to that query alone;
+      // it never writes the person's remembered disclosure preference.
       if (revealing) {
-        if (visibleMatch) setVisibleRevealOpen(next);
-        else fold(next);
+        setTransientOverride({ query, open: next });
         return;
       }
       if (!isControlled) setUncontrolledOpen(next);
       controlledOnOpenChange?.(next);
     },
-    [lockScroll, revealing, visibleMatch, fold, isControlled, controlledOnOpenChange],
+    [lockScroll, revealing, query, isControlled, controlledOnOpenChange],
   );
 
   return (
@@ -819,6 +825,12 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
       onOpenChange={rememberOpen}
       tone={tone}
       visibleSearchText={agentLabel}
+      bodySearchText={() => toolSearchContent({
+        name: toolName,
+        args,
+        result: finalResult ?? (artifact as { partialOutput?: unknown } | undefined)?.partialOutput,
+        isError: isError === true,
+      }, toolLabelParams)}
       data-tool={toolName}
       data-status={status?.type}
     >

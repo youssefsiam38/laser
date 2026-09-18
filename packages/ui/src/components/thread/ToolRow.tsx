@@ -1,13 +1,13 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { useAuiState } from "@assistant-ui/react";
-import { toolDisplayLabel, withoutToolLabel, type UiDialogRequest } from "@lasercode/protocol";
+import { toolDisplayLabel, toolSearchContent, withoutToolLabel, type UiDialogRequest } from "@lasercode/protocol";
 import { Bot, FolderOpen, GitBranch, MessageSquare } from "lucide-react";
 import { lazy, memo, Suspense, useCallback, useMemo, type ReactNode } from "react";
 
 import { useSessionMcpServers } from "@/agents/hooks";
 import { CodeDiff, DiffStat, diffStatDescription } from "@/components/assistant-ui/elements/code-diff";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
-import { ToolCall } from "@/components/assistant-ui/elements/tool-call";
+import { ToolCall, ToolSearchBodyContext } from "@/components/assistant-ui/elements/tool-call";
 import { ToolError } from "@/components/assistant-ui/elements/tool-error";
 import {
   ToolFallback,
@@ -91,6 +91,12 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   // The agent's label is the row's durable primary title. The computed tool
   // summary stays visible beneath it, in every lifecycle state (D-282).
   const agentLabel = toolDisplayLabel({ name: toolName, args }, toolLabelParams);
+  const bodySearchText = useCallback(() => toolSearchContent({
+    name: toolName,
+    args,
+    result: props.result ?? (props.artifact as { partialOutput?: unknown } | undefined)?.partialOutput,
+    isError: props.isError === true,
+  }, toolLabelParams), [toolName, args, props.result, props.artifact, props.isError, toolLabelParams]);
   // Which MCP servers this session started with, so `playwright_browser_*` is
   // read as Playwright's own tool and not as a tool nobody recognises
   // (docs/mcp.md "In the transcript").
@@ -170,21 +176,23 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   // composed from the same parts, with the server's content as its body.
   if (mcp) {
     return (
-      <McpToolRow
-        info={mcp}
-        toolName={toolName}
-        args={visibleArgs}
-        argsText={visibleArgsText}
-        result={result}
-        text={text}
-        details={details}
-        state={state}
-        elapsedMs={elapsed}
-        open={open}
-        onOpenChange={rememberOpen}
-        footer={<>{footerFolds}{footer}</>}
-        label={agentLabel}
-      />
+      <ToolSearchBodyContext value={bodySearchText}>
+        <McpToolRow
+          info={mcp}
+          toolName={toolName}
+          args={visibleArgs}
+          argsText={visibleArgsText}
+          result={result}
+          text={text}
+          details={details}
+          state={state}
+          elapsedMs={elapsed}
+          open={open}
+          onOpenChange={rememberOpen}
+          footer={<>{footerFolds}{footer}</>}
+          label={agentLabel}
+        />
+      </ToolSearchBodyContext>
     );
   }
 
@@ -231,6 +239,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         open={open}
         onOpenChange={rememberOpen}
         toolName={toolName}
+        bodySearchText={bodySearchText}
         peek={failed && text ? <ToolError message={text} compact /> : undefined}
         footer={footer}
       >
@@ -255,6 +264,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       open={open}
       onOpenChange={rememberOpen}
       toolName={toolName}
+      bodySearchText={bodySearchText}
       trailing={appliedDiffStats ? <DiffStat added={appliedDiffStats.added} removed={appliedDiffStats.removed} /> : undefined}
       accessibleDescription={diffDescription}
       peek={failed && text ? <ToolError message={text} compact /> : undefined}

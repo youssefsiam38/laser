@@ -397,10 +397,10 @@ describe("activity disclosures", () => {
   });
 
   it("keeps a body folded when find matches the already-visible humanised label", async () => {
-    const fixture = (reveal: boolean) => (
-      <FindQueryContext value="Reading build config">
+    const fixture = (reveal: boolean, query = "Reading build config") => (
+      <FindQueryContext value={query}>
         <SearchMessageContext value={reveal}>
-          <ToolFallbackRoot visibleSearchText="Reading build config">
+          <ToolFallbackRoot visibleSearchText="Reading build config" bodySearchText={() => ["Unrelated hidden request and output"]}>
             <ToolFallbackTrigger verb="Read" label="Reading build config" summary="build.config.ts" />
             <ToolFallbackContent>Unrelated hidden request and output</ToolFallbackContent>
           </ToolFallbackRoot>
@@ -415,8 +415,29 @@ describe("activity disclosures", () => {
     expect(container.textContent).not.toContain("Unrelated hidden request and output");
     await act(async () => trigger.click());
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
-    await act(async () => render(fixture(false)));
+    await act(async () => render(fixture(true, "Reading")));
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => render(fixture(false, "Reading")));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("reveals a folded body when the query matches both its humanised label and output", async () => {
+    const fixture = (reveal: boolean) => (
+      <FindQueryContext value="build config">
+        <SearchMessageContext value={reveal}>
+          <ToolFallback toolCallId="mixed-find" toolName="read"
+            args={{ path: "build.config.ts", activity_label: "reading-build-config" }}
+            argsText='{"path":"build.config.ts","activity_label":"reading-build-config"}'
+            status={{ type: "complete" }} result="build config output" />
+        </SearchMessageContext>
+      </FindQueryContext>
+    );
+    await act(async () => render(fixture(false)));
+    const trigger = container.querySelector<HTMLButtonElement>('[data-slot="tool-fallback-trigger"]')!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => render(fixture(true)));
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("build config output");
   });
 
   // The row a person actually clicks in a find pass is a tool row, and it goes

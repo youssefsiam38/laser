@@ -65,6 +65,50 @@ async function selectVisibleText(check, text, button, description) {
   return selected.text;
 }
 
+async function mixedLabelBodyFindEvidence(check, caseLabel) {
+  const query = `${caseLabel.replaceAll('-', ' ')} body`;
+  await check.rpc('session/prompt', {
+    path: check.fixture.path,
+    content: [{ type: 'text', text: `Run mixed labelled fixture ${caseLabel}` }],
+  });
+  const row = check.page.locator('[data-slot="tool-call"][data-tool="bash"]')
+    .filter({ hasText: `Reading ${query}` }).last();
+  const button = row.locator('button[data-slot="tool-fallback-trigger"]');
+  if (await button.getAttribute('aria-expanded') === 'true') await button.click();
+  assert.equal(await button.getAttribute('aria-expanded'), 'false', 'mixed-match row starts folded');
+  await row.evaluate(element => element.setAttribute('data-mixed-find-row', ''));
+
+  await check.page.keyboard.press('Control+f');
+  const input = check.page.getByRole('textbox', { name: 'Find in conversation' });
+  await input.fill(query);
+  await check.page.getByRole('status').filter({ hasText: '1 / 2' }).waitFor();
+  assert.equal(await button.getAttribute('aria-expanded'), 'true', 'a matching hidden body mounts even when the label also matches');
+  const ranges = await check.page.evaluate(() => {
+    const row = document.querySelector('[data-mixed-find-row]');
+    const content = row?.querySelector('[data-slot="tool-fallback-content"]');
+    const all = [...(CSS.highlights?.get('conversation-matches') ?? [])];
+    const current = [...(CSS.highlights?.get('conversation-current') ?? [])];
+    return {
+      all: all.map(range => range.toString()),
+      currentInBody: current.length === 1 && Boolean(content?.contains(current[0].startContainer)),
+    };
+  });
+  assert.deepEqual(ranges.all, [query, query], 'both indexed occurrences have paintable DOM ranges');
+  assert.equal(ranges.currentInBody, false, 'the first occurrence is the visible label');
+
+  await check.page.getByRole('button', { name: 'Next match' }).click();
+  await check.page.getByRole('status').filter({ hasText: '2 / 2' }).waitFor();
+  await check.page.waitForFunction(expected => {
+    const label = document.querySelector('[data-mixed-find-row] [data-slot="tool-fallback-trigger-label"]');
+    const current = [...(CSS.highlights?.get('conversation-current') ?? [])];
+    return current.length === 1 && current[0].toString() === expected
+      && !label?.contains(current[0].startContainer);
+  }, query);
+  assert.equal(await button.getAttribute('aria-expanded'), 'true', 'navigating to the body match keeps it revealed');
+  await input.press('Escape');
+  assert.equal(await button.getAttribute('aria-expanded'), 'false', 'closing find restores the folded preference');
+}
+
 async function humanisedFindEvidence(check, row, button, displayLabel, storedLabel) {
   assert.equal(await button.getAttribute('aria-expanded'), 'false', 'labelled row starts folded before find');
   await check.page.keyboard.press('Control+f');
@@ -196,6 +240,7 @@ export default async function activityLabels(check) {
 
   if (await button.getAttribute('aria-expanded') === 'true') await button.click();
   await humanisedFindEvidence(check, row, button, displayLabel, storedLabel);
+  await mixedLabelBodyFindEvidence(check, caseLabel);
 
   await check.reducedMotion(true);
   assert.equal(await check.page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches), true,

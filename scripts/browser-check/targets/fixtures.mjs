@@ -53,6 +53,12 @@ export function answer(request) {
     return { reasoning: 'Inspect the selectable activity row before running the command.', toolCall: { name: 'bash', args: { command: "sleep 12; printf 'labelled fixture complete\\n'", activity_label: activityLabel } } };
   }
   if (last?.role === 'user' && prompt === 'Run labelled fixture error') return { toolCall: { name: 'read', args: { path: 'missing-fixture-config.txt', activity_label: 'reading-missing-config' } } };
+  if (last?.role === 'user' && prompt.startsWith('Run mixed labelled fixture')) {
+    const caseLabel = prompt.slice('Run mixed labelled fixture'.length).trim() || 'build-config';
+    const output = `${caseLabel.replaceAll('-', ' ')} body`;
+    const encoded = [...`${output}\n`].map(character => `\\${character.charCodeAt(0).toString(8).padStart(3, '0')}`).join('');
+    return { toolCall: { name: 'bash', args: { command: `printf '${encoded}'`, activity_label: `reading-${caseLabel}-body` } } };
+  }
   if (last?.role === 'user' && prompt === 'Run generic fixture tool' && names.includes('inspect_fleet')) return { toolCall: { name: 'inspect_fleet', args: {} } };
   if (prompt === 'Run fixture activity sequence') {
     const turn = request.messages.slice(request.messages.findLastIndex(message => message.role === 'user') + 1);
