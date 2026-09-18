@@ -52,10 +52,10 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount() {
+async function mount(view: "global" | "project" = "global") {
   ({ root } = await render(
     <TooltipProvider>
-      <McpServersTab cwd="/project" />
+      <McpServersTab routeCwd="/project" view={view} />
     </TooltipProvider>,
   ));
 }
@@ -95,6 +95,16 @@ it("tests the gallery definition it composed, then saves progressive discovery f
   expect(saved).toHaveLength(1);
   expect(saved[0]!.server.tools).toEqual({ alwaysLoad: false });
   expect(mocks.toast).toHaveBeenCalledWith("info", expect.stringContaining("playwright is saved"));
+});
+
+it("locks a new server to the visible Project scope", async () => {
+  await mount("project");
+  await click("Add Playwright");
+  await click("Test");
+  expect(inspected[0]).toMatchObject({ cwd: "/project", scope: "project" });
+  expect(text()).toContain("Save it for Project settings.");
+  expect(findButton("This project")).toBeUndefined();
+  expect(findButton("Every project")).toBeUndefined();
 });
 
 it("chooses each own-Chrome mode, omits headless, and keeps unrelated form edits", async () => {

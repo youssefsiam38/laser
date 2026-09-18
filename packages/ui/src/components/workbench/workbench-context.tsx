@@ -115,9 +115,10 @@ export function useWorkbench(): Workbench {
 export function useSettingsScopeNavigationGuard(
   guard: SettingsScopeNavigationGuard | undefined,
 ): void {
-  const { registerSettingsScopeGuard } = useWorkbench();
+  const workbench = useContext(WorkbenchContext);
+  const registerSettingsScopeGuard = workbench?.registerSettingsScopeGuard;
   useEffect(() => {
-    if (!guard) return undefined;
+    if (!guard || !registerSettingsScopeGuard) return undefined;
     return registerSettingsScopeGuard(guard);
   }, [guard, registerSettingsScopeGuard]);
 }

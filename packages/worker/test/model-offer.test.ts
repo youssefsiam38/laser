@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ModelsAdapter } from "../src/packages.js";
 import { durableOverrides } from "../src/settings-overrides.js";
 import { SettingsAdapter, disabledModelRefs, engineSettingsOnly, laserEngineSettings, modelSwitchedOff, readEffectiveProductSettings } from "../src/settings.js";
 
@@ -112,5 +113,14 @@ describe("where the disable list lives", () => {
   it("refuses a list that is not strings", async () => {
     const settings = new SettingsAdapter({ cwd, agentDir, hostTrusted: true });
     await expect(settings.apply("global", [{ path: "disabledModels", op: "set", value: "openai/gpt-5" }])).rejects.toThrow(/list of strings/);
+  });
+
+  it("keeps Global catalogue settings free of the route project's overlay", async () => {
+    const settings = new SettingsAdapter({ cwd, agentDir, hostTrusted: true });
+    await settings.apply("global", [{ path: "disabledModels", op: "set", value: ["openai/global-model"] }]);
+    await settings.apply("project", [{ path: "disabledModels", op: "set", value: ["openai/project-model"] }]);
+    const catalogue = new ModelsAdapter({ cwd, agentDir, settings });
+    expect((await catalogue.catalog(false, "global")).disabledModels).toEqual(["openai/global-model"]);
+    expect((await catalogue.catalog(false, "effective")).disabledModels).toEqual(["openai/project-model"]);
   });
 });

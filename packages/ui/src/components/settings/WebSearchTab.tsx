@@ -1,5 +1,7 @@
 "use client";
 import type { CapabilityDecision } from "@/runtime/environment-capabilities";
+import type { SettingsScopeView } from "@/runtime/settings-scope";
+import type { ScopeDraft } from "./ScopeDraftGuard.js";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronRight, Globe, KeyRound, Link2, Loader2, RefreshCw } from "lucide-react";
@@ -18,9 +20,23 @@ import { cn } from "@/lib/utils";
 
 /** ProviderStep's connection/disclosure pattern, using the adopted settings
  * primitives. Keys are write-only: never restored from responses or drafts. */
-export function WebSearchTab({ cwd, decision }: { cwd: string; decision?: CapabilityDecision | undefined }) {
-  const writable = decision?.state === "available" || decision === undefined;
-  const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
+export function WebSearchTab({
+  neutralRouteCwd,
+  projectCwd,
+  view,
+  decision,
+  onDraftChange,
+}: {
+  neutralRouteCwd: string;
+  projectCwd?: string | undefined;
+  view: SettingsScopeView;
+  decision?: CapabilityDecision | undefined;
+  onDraftChange?: ((providerId: string, draft: ScopeDraft | undefined) => void) | undefined;
+}) {
+  const writable = view !== "effective" && (decision?.state === "available" || decision === undefined);
+  const readOnlyExplanation = view === "effective"
+    ? "Effective settings are a read-only preview. Choose Global or Project to change this global service."
+    : decision?.state === "explained" ? decision.explanation : undefined;
   const { client } = useLaserStable();
   const [status, setStatus] = useState<WebSearchStatus>();
   const [models, setModels] = useState<ProviderAuthInfo[]>([]);
@@ -30,21 +46,23 @@ export function WebSearchTab({ cwd, decision }: { cwd: string; decision?: Capabi
   const [pending, setPending] = useState<{ provider?: string; label: string; target: "provider" | "availability" }>();
   const busy = pending !== undefined;
   const [filter, setFilter] = useState("");
-  const [expanded, setExpanded] = useState<string>();
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const generation = useRef(0);
   const load = useCallback(async () => {
     const request = ++generation.current;
     setError(undefined);
     try {
       const [search, providers, features] = await Promise.all([
-        client.request("web-search/status", { cwd }), client.request("pi/providers/list", { cwd }).catch(() => ({ providers: [] })), client.request("feature/list", { cwd }),
+        client.request("web-search/status", { cwd: neutralRouteCwd }),
+        client.request("pi/providers/list", { cwd: neutralRouteCwd }).catch(() => ({ providers: [] })),
+        client.request("feature/list", view === "global" ? {} : { cwd: projectCwd! }),
       ]);
       if (request !== generation.current) return;
       setStatus(search); setModels(providers.providers); setFeature(features.features.find((entry) => entry.manifest.id === "web-search"));
     } catch (failure) {
       if (request === generation.current) setError(failure instanceof Error ? failure.message : "Could not load search connections. Try again.");
     }
-  }, [client, cwd]);
+  }, [client, neutralRouteCwd, projectCwd, view]);
   useEffect(() => { setStatus(undefined); setPending(undefined); void load(); return () => { generation.current++; }; }, [load]);
   const change = async (change: WebSearchChange) => {
     if (busy) return false;
@@ -55,7 +73,7 @@ export function WebSearchTab({ cwd, decision }: { cwd: string; decision?: Capabi
     setError(undefined); setNotice(undefined);
     const request = generation.current;
     try {
-      const result = await client.request("web-search/configure", { cwd, change });
+      const result = await client.request("web-search/configure", { cwd: neutralRouteCwd, change });
       if (request !== generation.current) return false;
       setStatus(result); setNotice(change.action === "select" || (change.action === "configure" && change.activate)
         ? `${WEB_SEARCH_PROVIDERS.find((p) => p.id === result.selectedProvider)?.name} passed the test and is the only selected search provider. Web search enablement is unchanged.`
@@ -67,21 +85,35 @@ export function WebSearchTab({ cwd, decision }: { cwd: string; decision?: Capabi
     } finally { if (request === generation.current) setPending(undefined); }
   };
   const toggle = async (enabled: boolean) => {
-    if (busy) return;
+    if (busy || view === "effective") return;
+    const featureRouteCwd = view === "project" ? projectCwd : neutralRouteCwd;
+    if (!featureRouteCwd) return;
     const name = WEB_SEARCH_PROVIDERS.find((provider) => provider.id === status?.selectedProvider)?.name ?? "search provider";
     setPending({ target: "availability", label: enabled ? `Testing ${name} before enabling search…` : "Turning off web search…" });
     setError(undefined); setNotice(undefined);
+    const request = generation.current;
     try {
-      const result = await client.request("feature/set", { id: "web-search", scope: "global", enabled, cwd });
-      // Reload with cwd so project overrides remain visible.
+      const result = await client.request("feature/set", {
+        id: "web-search",
+        scope: view === "project" ? "project" : "global",
+        enabled,
+        cwd: featureRouteCwd,
+      });
+      if (request !== generation.current) return;
+      // Connections remain global; feature state reloads from the visible Settings scope.
       await load();
+      if (request + 1 !== generation.current) return;
       setNotice(result.restartPending ? "Saved. Search availability will change when the affected project can restart." : `Web search ${enabled ? "enabled" : "disabled"}. Your connections are unchanged.`);
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not change web search. Try again."); }
-    finally { setPending(undefined); }
+    } catch (failure) {
+      if (request === generation.current) setError(failure instanceof Error ? failure.message : "Could not change web search. Try again.");
+    } finally {
+      if (request === generation.current || request + 1 === generation.current) setPending(undefined);
+    }
   };
   if (!status) return <div className="p-4">{error ? <ErrorState title="Could not load web search" detail={error} onRetry={() => void load()} /> : <GenerationLoader label="Loading search connections" />}</div>;
   const selected = WEB_SEARCH_PROVIDERS.find((entry) => entry.id === status.selectedProvider)!;
   const selectedStatus = status.providers.find((entry) => entry.id === selected.id)!;
+  const featureEnabled = view === "global" ? feature?.globalEnabled : feature?.enabled;
   const shown = WEB_SEARCH_PROVIDERS.filter((entry) => `${entry.name} ${entry.id}`.toLowerCase().includes(filter.trim().toLowerCase()));
   return (
     <ScrollArea className="h-full">
@@ -94,7 +126,7 @@ export function WebSearchTab({ cwd, decision }: { cwd: string; decision?: Capabi
         <section className="rounded-xl border border-line bg-surface p-4" aria-label="Search availability">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0"><div className="flex items-center gap-2"><Globe className="size-4 text-ink-2" /><h3 className="text-sm font-semibold">Enable web search</h3></div><p className="mt-1 text-sm leading-6 text-ink-2">Turning on tests the selected provider with a real search; charges may apply. Switching off keeps your connections saved.</p></div>
-            <Toggle variant="outline" pressed={feature?.globalEnabled ?? false} disabled={!writable || busy || !feature} aria-label="Enable web search" onPressedChange={(enabled) => void toggle(enabled)}>{feature?.globalEnabled ? "On" : "Off"}</Toggle>
+            <Toggle variant="outline" pressed={featureEnabled ?? false} disabled={!writable || busy || !feature} aria-label="Enable web search" onPressedChange={(enabled) => void toggle(enabled)}>{featureEnabled ? "On" : "Off"}</Toggle>
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-sm"><span className="text-ink-2">Searches go to</span><span className="font-medium">{selected.name}</span><Badge variant="outline">{selectedStatus.configured ? selectedStatus.source === "none" ? "No key needed" : "Connection saved" : "Setup needed"}</Badge></div>
           {!selectedStatus.configured && <p className="mt-2 text-sm text-attention">Configure {selected.name} below before searching.</p>}
@@ -108,14 +140,19 @@ export function WebSearchTab({ cwd, decision }: { cwd: string; decision?: Capabi
         <div className="divide-y divide-line rounded-xl border border-line bg-surface">
           {shown.map((provider) => {
             const connection = status.providers.find((entry) => entry.id === provider.id)!;
-            return <Collapsible key={provider.id} open={expanded === provider.id} onOpenChange={(open) => setExpanded(open ? provider.id : undefined)}>
+            return <Collapsible key={provider.id} open={expanded.has(provider.id)} onOpenChange={(open) => setExpanded((current) => {
+              const next = new Set(current);
+              if (open) next.add(provider.id);
+              else next.delete(provider.id);
+              return next;
+            })}>
               <CollapsibleTrigger className="flex w-full items-center gap-3 rounded-lg p-3 text-start transition-colors duration-(--motion-fast) hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-live">
-                <ChevronRight className={cn("rtl:-scale-x-100", "size-4 shrink-0 text-ink-3 transition-transform duration-(--motion-fast)", expanded === provider.id && "rotate-90 rtl:-rotate-90")} />
+                <ChevronRight className={cn("rtl:-scale-x-100", "size-4 shrink-0 text-ink-3 transition-transform duration-(--motion-fast)", expanded.has(provider.id) && "rotate-90 rtl:-rotate-90")} />
                 <span className="min-w-0 flex-1"><span className="block text-sm font-medium">{provider.name}</span><span className="block text-xs text-ink-2">{connection.source === "shared" ? `Shared · ${connection.sharedProvider}` : connection.hasKey ? "Search-only key saved" : provider.key === "none" ? provider.endpoint ? "Self-hosted instance" : "No key needed" : provider.key === "optional" ? "Key optional" : "API key or connection required"}</span></span>
                 {status.selectedProvider === provider.id && <Badge variant="outline"><Check className="size-3" /> Selected</Badge>}
                 {pending?.provider === provider.id && <Loader2 aria-label={pending.label} className="size-4 shrink-0 text-live motion-safe:animate-busy" />}
               </CollapsibleTrigger>
-              <CollapsibleContent><SearchConnection key={`${provider.id}:${connection.source}:${connection.sharedProvider ?? ""}`} provider={provider} connection={connection} models={models} busy={busy} progress={pending?.provider === provider.id ? pending.label : undefined} selected={status.selectedProvider === provider.id} writable={writable} onChange={change} /></CollapsibleContent>
+              <CollapsibleContent><SearchConnection key={`${provider.id}:${connection.source}:${connection.sharedProvider ?? ""}`} provider={provider} connection={connection} models={models} busy={busy} progress={pending?.provider === provider.id ? pending.label : undefined} selected={status.selectedProvider === provider.id} writable={writable} onChange={change} onDraftChange={onDraftChange} /></CollapsibleContent>
             </Collapsible>;
           })}
           {!shown.length && <p className="p-4 text-sm text-ink-2">No providers match “{filter}”. Try another name.</p>}
@@ -125,8 +162,16 @@ export function WebSearchTab({ cwd, decision }: { cwd: string; decision?: Capabi
   );
 }
 
-function SearchConnection({ provider, connection, models, busy, progress, selected, writable, onChange }: {
-  provider: WebSearchProvider; connection: WebSearchProviderStatus; models: ProviderAuthInfo[]; busy: boolean; progress?: string | undefined; selected: boolean; writable: boolean; onChange: (change: WebSearchChange) => Promise<boolean>;
+function SearchConnection({ provider, connection, models, busy, progress, selected, writable, onChange, onDraftChange }: {
+  provider: WebSearchProvider;
+  connection: WebSearchProviderStatus;
+  models: ProviderAuthInfo[];
+  busy: boolean;
+  progress?: string | undefined;
+  selected: boolean;
+  writable: boolean;
+  onChange: (change: WebSearchChange) => Promise<boolean>;
+  onDraftChange?: ((providerId: string, draft: ScopeDraft | undefined) => void) | undefined;
 }) {
   const [key, setKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(connection.baseUrl ?? "");
@@ -135,7 +180,33 @@ function SearchConnection({ provider, connection, models, busy, progress, select
     const activate = !forget && (source !== "none" || provider.key !== "required");
     const ok = await onChange({ action: "configure", provider: provider.id, connection: { source, ...(sharedProvider ? { sharedProvider } : {}), ...(provider.endpoint && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}), ...(provider.zone && zone.trim() ? { zone: zone.trim() } : {}) }, ...(forget ? { apiKey: null } : source === "dedicated" && key.trim() ? { apiKey: key.trim() } : {}), ...(activate ? { activate: true } : {}) });
     if (ok) setKey("");
+    return ok;
   };
+  const dirty = key.trim() !== ""
+    || baseUrl.trim() !== (connection.baseUrl ?? "")
+    || zone.trim() !== (connection.zone ?? "");
+  useEffect(() => {
+    if (!dirty) {
+      onDraftChange?.(provider.id, undefined);
+      return;
+    }
+    const source: WebSearchConnection["source"] = key.trim()
+      ? "dedicated"
+      : connection.source === "shared"
+        ? "shared"
+        : provider.key === "none" ? "none" : connection.source;
+    onDraftChange?.(provider.id, {
+      id: `web-search-${provider.id}`,
+      label: `${provider.name} search connection`,
+      save: () => save(source, connection.sharedProvider),
+      discard: () => {
+        setKey("");
+        setBaseUrl(connection.baseUrl ?? "");
+        setZone(connection.zone ?? "");
+      },
+    });
+    return () => onDraftChange?.(provider.id, undefined);
+  }, [baseUrl, connection.baseUrl, connection.sharedProvider, connection.source, dirty, key, onDraftChange, provider.id, provider.key, provider.name, zone, connection.zone]);
   const shared = models.filter((entry) => provider.sharedProviders.includes(entry.id));
   return <div className="flex flex-col gap-3 px-4 pb-4 pt-1" aria-busy={progress !== undefined}>
     {provider.note && <p className="text-sm leading-6 text-ink-2">{provider.note}</p>}
