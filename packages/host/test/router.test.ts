@@ -22,6 +22,8 @@ import { AgentStore } from "../src/agents/store.js";
 import { AttentionTracker } from "../src/attention.js";
 import { SessionCatalog } from "../src/catalog.js";
 import { ProjectRegistry } from "../src/projects.js";
+import { FeatureService } from "../src/features.js";
+import { PrefsStore } from "../src/prefs.js";
 import { Router, UPLOAD_IDLE_MS } from "../src/router.js";
 import { ViewCache } from "../src/views.js";
 import { createHostPressureController, type HostPressureSample, type PressureAdmission } from "../src/pressure/index.js";
@@ -92,7 +94,7 @@ const WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-worksp
 const WORKSPACES = { beam: join(WORKSPACE_ROOT, "beam"), chat: join(WORKSPACE_ROOT, "chat") };
 
 /** A Router with fakes for everything but the piece under test. */
-function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; reserved?: string[]; agents?: boolean; workspaces?: { beam: string; chat: string }; exclude?: string[]; now?: () => number; workerRequest?: (method: string, params: unknown) => Promise<unknown>; admission?: PressureAdmission; activation?: RuntimeActivationGate } = {}) {
+function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; reserved?: string[]; agents?: boolean; features?: boolean; workspaces?: { beam: string; chat: string }; exclude?: string[]; now?: () => number; workerRequest?: (method: string, params: unknown) => Promise<unknown>; admission?: PressureAdmission; activation?: RuntimeActivationGate } = {}) {
   const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-`));
   const catalogRows = options.catalogRows ?? [];
   const open = options.open ?? { [CWD_A]: [PATH_A] };
@@ -119,6 +121,8 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
     cwdOfSession: (path: string) => bound.get(path),
     bindSession: (path: string, cwd: string) => bound.set(path, cwd),
     recoverOpenedSession: async () => undefined,
+    discardPrepared: async () => true,
+    restart: async () => undefined,
     get: async (cwd: string) => ({
       request: async (method: string, params: unknown) => {
         workerRequests.push({ cwd, method, params });
@@ -141,7 +145,18 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   // Fixtures date from June; a fixed clock keeps retention from pruning them.
   const runs = options.agents ? new AgentRunRegistry({ now: () => new Date("2026-06-02T00:00:00.000Z") }) : undefined;
   const views = new ViewCache(2);
-  const router = new Router(pool, catalog, { attention, projects, views, agents, runs, access: testAccess(), admission: options.admission, activation: options.activation, ...(options.now ? { now: options.now } : {}) });
+  const router = new Router(pool, catalog, {
+    attention,
+    projects,
+    views,
+    agents,
+    runs,
+    access: testAccess(),
+    admission: options.admission,
+    activation: options.activation,
+    ...(options.features ? { features: new FeatureService(new PrefsStore()) } : {}),
+    ...(options.now ? { now: options.now } : {}),
+  });
 
   // The Router only records a stub from inside `dispatch`; reach the private
   // recorder the same way `session/new` does, without standing up a worker.
@@ -166,6 +181,35 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
     },
   };
 }
+
+describe("Router · feature execution routes", () => {
+  it("refuses a missing Web Search route instead of choosing the first worker", async () => {
+    const h = harness({ features: true, open: { [CWD_A]: [], [CWD_B]: [] } });
+    try {
+      await expect(h.router.dispatch({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "feature/set",
+        params: { id: "web-search", enabled: true, scope: "global" },
+      })).rejects.toThrow("No Settings target was supplied");
+      expect(h.workerRequests).toEqual([]);
+
+      await h.router.dispatch({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "feature/set",
+        params: { id: "web-search", enabled: true, scope: "global", cwd: CWD_B },
+      });
+      expect(h.workerRequests).toEqual([{
+        cwd: CWD_B,
+        method: "web-search/configure",
+        params: { cwd: CWD_B, change: { action: "test" } },
+      }]);
+    } finally {
+      h.cleanup();
+    }
+  });
+});
 
 describe("Router · runtime activation", () => {
   it("routes all three methods only for a native caller and preserves exact update ids", async () => {

@@ -65,8 +65,10 @@ export const DEVICE_KEYS = {
   destination: "destination",
   /** `{ "<cwd>": "<session path>" }` — the last session opened per project. */
   sessionsByProject: "sessions",
-  /** The last project cwd. */
+  /** The last project cwd used by the Code destination. */
   project: "project",
+  /** `{v:1, view, projectCwd?}` — the explicit Settings target. */
+  settingsScope: "settings-scope",
   beamSession: "beam-session",
   archived: "archived",
   sessionGroups: "session-groups",

@@ -28,6 +28,7 @@ function Host({ configured = false }: { configured?: boolean }) {
   return <AdvancedTab
     view={view}
     onViewChange={setView}
+    scopeView="global"
     {...(configured ? { cwd: "/p", catalog: {} as never, snapshot: {} as never } : {})}
     loading={false}
     onReload={() => {}}
@@ -43,7 +44,7 @@ it("keeps Resources usable without a selected project", async () => {
     expect(tab.className).toContain("pointer-coarse:min-h-11");
   }
   await click("Configuration");
-  expect(document.body.textContent).toContain("Configuration needs a project");
+  expect(document.body.textContent).toContain("Configuration target unavailable");
   await click("Resources");
   expect(document.body.textContent).toContain("Resource truth is available");
 });
