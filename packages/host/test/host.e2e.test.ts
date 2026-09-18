@@ -551,12 +551,25 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
       });
       expect(saved.agent.name).toBe("reviewer");
       await client.waitFor((m) => "method" in m && m.method === "agents/updated" && (m.params as { revision: number }).revision === saved.snapshot.revision);
-      await expect(client.request("agents/delete", { name: "default" })).rejects.toThrow("This agent starts new sessions. Choose another default first.");
+      await expect(client.request("agents/delete", { name: "default", location: { scope: "global" } })).rejects.toThrow("This agent starts new sessions. Choose another default first.");
 
       // The real worker is primed with the definitions before its first
       // answer; whether or not it knows the method yet, it still runs sessions.
+      await client.request("pi/project/add", { cwd: project });
       const { state } = await client.request<{ state: SessionState }>("session/new", { cwd: project });
       expect(state.cwd).toBe(project);
+      const projectSaved = await client.request<{ snapshot: { agents: Array<{ name: string; scope: string; projectCwd?: string }> } }>("agents/save", {
+        agent: { name: "reviewer", scope: "project", projectCwd: project, description: "Project reviews", instructions: "Review this project.", engineInstructions: false, excludeCoreInstructions: false, model: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] },
+        originalName: null,
+      });
+      expect(projectSaved.snapshot.agents.filter((agent) => agent.name === "reviewer")).toHaveLength(2);
+      const afterProjectDelete = await client.request<{ snapshot: { agents: Array<{ name: string; scope: string }> } }>("agents/delete", {
+        name: "reviewer",
+        location: { scope: "project", projectCwd: project },
+      });
+      expect(afterProjectDelete.snapshot.agents.filter((agent) => agent.name === "reviewer")).toEqual([
+        expect.objectContaining({ scope: "global" }),
+      ]);
       expect(await client.request("agents/runs/list", { path: state.path })).toEqual({ runs: [] });
       const projects = await client.request<{ projects: Array<{ cwd: string }> }>("pi/project/list", {});
       expect(projects.projects.map((p) => p.cwd)).toEqual([project]);

@@ -475,6 +475,10 @@ export const agentNameSchema = z.string().regex(AGENT_NAME_PATTERN, {
 });
 export const agentModelChoiceSchema = z.object({ provider: z.string().min(1).max(100), id: z.string().min(1).max(200) }).strict();
 export const agentMessageModeSchema = z.enum(AGENT_MESSAGE_MODES).default("interrupt");
+export const agentLocationSchema = z.discriminatedUnion("scope", [
+  z.object({ scope: z.literal("global") }).strict(),
+  z.object({ scope: z.literal("project"), projectCwd: cwd }).strict(),
+]);
 export const builtinAgentNameSchema = z.enum(BUILTIN_AGENT_NAMES);
 export const agentSkillRefSchema = z
   .object({ name: z.string().min(1).max(64), path: z.string().min(1).max(4096), scope: z.enum(["global", "project"]) })
@@ -976,7 +980,7 @@ export const clientParamsSchemas = {
   "agents/list": z.object({}).strict(),
   "agents/validate": z.object({ agent: agentDefinitionInputSchema, originalName: agentNameSchema.nullable() }).strict(),
   "agents/save": z.object({ agent: agentDefinitionInputSchema, originalName: agentNameSchema.nullable() }).strict(),
-  "agents/delete": z.object({ name: agentNameSchema }).strict(),
+  "agents/delete": z.object({ name: agentNameSchema, location: agentLocationSchema }).strict(),
   "agents/set-default": z.object({ name: agentNameSchema }).strict(),
   "agents/set-policy": z.object({ policy: agentPolicyPatchSchema }).strict(),
   "agents/skills": z.object({ cwd }).strict(),

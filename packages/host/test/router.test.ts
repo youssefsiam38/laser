@@ -696,7 +696,7 @@ describe("Router · agents (docs/agents-leap)", () => {
       expect(saved).toMatchObject({ result: { agent: { name: "reviewer", kind: "custom" }, snapshot: { revision: 1 } } });
       expect(await rpc(h.router, "agents/save", { agent: { ...input, name: "beam" }, originalName: null })).toMatchObject({ error: { data: { issues: [{ field: "name" }] } } });
       expect(await rpc(h.router, "agents/set-default", { name: "reviewer" })).toMatchObject({ result: { snapshot: { defaultAgent: "reviewer" } } });
-      expect(await rpc(h.router, "agents/delete", { name: "reviewer" })).toMatchObject({ error: { message: "This agent starts new sessions. Choose another default first." } });
+      expect(await rpc(h.router, "agents/delete", { name: "reviewer", location: { scope: "global" } })).toMatchObject({ error: { message: "This agent starts new sessions. Choose another default first." } });
       expect(await rpc(h.router, "agents/set-policy", { policy: { maxDepth: 2 } })).toMatchObject({ result: { snapshot: { policy: { maxDepth: 2 } } } });
       // One method, three built-ins: each carries its choice to the agent of that name.
       expect(await rpc(h.router, "agents/builtin/set-model", { name: "beam", model: { provider: "openai", id: "gpt-5-mini" } })).toMatchObject({

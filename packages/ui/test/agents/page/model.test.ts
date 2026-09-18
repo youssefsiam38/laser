@@ -13,6 +13,8 @@ import {
   orderAgents,
   parseModelChoice,
   sameDefinitionInput,
+  sameSelection,
+  selectionOfAgent,
   sectionOfField,
   shapeAgentName,
   startableAgents,
@@ -78,6 +80,16 @@ describe("agents page model", () => {
     expect(agentForWarning(snap, sameNameDifferentFile, "/p")).toBeUndefined();
     expect(agentForWarning(snap, legacyWithoutPath, "/p")).toBe(loaded);
     expect(agentForWarning(snap, broken, "/p")).toBeUndefined();
+  });
+
+  it("keys selection and default protection by exact source location", () => {
+    const snap = snapshot();
+    const global = agent({ name: "default", scope: "global" });
+    const project = agent({ name: "default", scope: "project", projectCwd: "/p" });
+    expect(sameSelection(selectionOfAgent(global), selectionOfAgent(project))).toBe(false);
+    expect(sameSelection(selectionOfAgent(project), { kind: "agent", name: "default", location: { scope: "project", projectCwd: "/p" } })).toBe(true);
+    expect(deletability(global, snap)).toEqual({ ok: false, reason: expect.stringContaining("default") });
+    expect(deletability(project, snap)).toEqual({ ok: true });
   });
 
   it("refuses to delete the default agent and built-ins, with the reason", () => {

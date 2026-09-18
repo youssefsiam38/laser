@@ -31,16 +31,16 @@ const mocks = vi.hoisted(() => {
         renamedAgents: originalName && originalName !== saved.name ? { ...snap.renamedAgents, [originalName]: saved.name } : snap.renamedAgents,
         agents: [
           ...snap.agents
-            .filter((a) => a.name !== (originalName ?? input.name))
+            .filter((agent) => !(agent.name === (originalName ?? input.name) && agent.scope === input.scope && (input.scope === "global" || agent.projectCwd === input.projectCwd)))
             .map((a) => (originalName && originalName !== saved.name ? { ...a, allowedAgents: a.allowedAgents.map((name) => (name === originalName ? saved.name : name)) } : a)),
           saved,
         ],
       });
       return saved;
     }),
-    remove: vi.fn(async (name: string) => {
+    remove: vi.fn(async (name: string, location: { scope: "global" } | { scope: "project"; projectCwd: string }) => {
       const snap = current();
-      publish({ ...snap, revision: snap.revision + 1, agents: snap.agents.filter((a) => a.name !== name) });
+      publish({ ...snap, revision: snap.revision + 1, agents: snap.agents.filter((agent) => !(agent.name === name && agent.scope === location.scope && (location.scope === "global" || agent.projectCwd === location.projectCwd))) });
     }),
     setDefault: vi.fn(async (name: string) => {
       const snap = current();
@@ -76,6 +76,7 @@ const mocks = vi.hoisted(() => {
     dismissBeamChoice: vi.fn(),
   };
   const request = vi.fn(async (method: string) => {
+    if (method === "pi/setup/state") return { cwd: "/state/beam" };
     if (method === "pi/models/catalog")
       return {
         models: [
@@ -91,7 +92,7 @@ const mocks = vi.hoisted(() => {
     if (method === "feature/list") return { features: [{ manifest: { id: "web-search" }, enabled: false }] };
     throw new Error(`unexpected ${method}`);
   });
-  const stable = { client: { request }, currentProject: "/p", actions: { agents, toast: vi.fn(), newSession: vi.fn(async () => "/p/new.jsonl") } };
+  const stable = { client: { request }, currentProject: "/p", projects: ["/p"], projectInfo: { "/p": { name: "p" } }, actions: { agents, toast: vi.fn(), newSession: vi.fn(async () => "/p/new.jsonl") } };
   return { state, agents, request, stable };
 });
 
@@ -105,7 +106,9 @@ import { AgentsButton } from "../../../src/components/agents/page/AgentsButton.j
 import { TooltipProvider } from "../../../src/components/ui/tooltip.js";
 import { WorkbenchProvider, useWorkbench, type AgentsTarget } from "../../../src/components/workbench/index.js";
 import { LaserStoreProvider, createStateStore, type StateStore } from "../../../src/runtime/LaserProvider.js";
-import { testDescriptor } from "../../runtime/environment-fixture.js";
+import { OTHER_ENVIRONMENT_KEY, testDescriptor } from "../../runtime/environment-fixture.js";
+import { deviceStore } from "../../../src/runtime/device-storage.js";
+import type { SettingsScopeState } from "../../../src/runtime/settings-scope.js";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -115,6 +118,9 @@ const seed = (snap: AgentsSnapshot): AppState => ({ ...reduce(initialState, { ty
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  deviceStore.deactivate();
+  localStorage.clear();
+  deviceStore.activate(testDescriptor());
   if (typeof globalThis.ResizeObserver === "undefined") {
     globalThis.ResizeObserver = class {
       observe() {}
@@ -128,6 +134,7 @@ beforeEach(() => {
   store = createStateStore(seed(snapshot()));
   mocks.state.store = store;
   mocks.state.issues = [];
+  mocks.stable.projects.splice(0, mocks.stable.projects.length, "/p");
   for (const fn of Object.values(mocks.agents)) fn.mockClear();
   mocks.request.mockClear();
   mocks.stable.actions.toast.mockClear();
@@ -136,6 +143,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  deviceStore.deactivate();
 });
 
 let workbench: ReturnType<typeof useWorkbench> | undefined;
@@ -144,19 +152,22 @@ function WorkbenchProbe() {
   return null;
 }
 
-async function mount(props: { cwd?: string | undefined; target?: AgentsTarget | undefined } = {}) {
-  await act(async () =>
-    root.render(
-      <LaserStoreProvider store={store}>
-        <TooltipProvider>
-          <WorkbenchProvider>
-            <WorkbenchProbe />
-            <AgentsScreen cwd={"cwd" in props ? props.cwd : "/p"} target={props.target} />
-          </WorkbenchProvider>
-        </TooltipProvider>
-      </LaserStoreProvider>,
-    ),
+async function mount(props: { scope?: SettingsScopeState | undefined; target?: AgentsTarget | undefined } = {}) {
+  const render = (target: AgentsTarget | undefined) => root.render(
+    <LaserStoreProvider store={store}>
+      <TooltipProvider>
+        <WorkbenchProvider>
+          <WorkbenchProbe />
+          <AgentsScreen target={target} />
+        </WorkbenchProvider>
+      </TooltipProvider>
+    </LaserStoreProvider>,
   );
+  await act(async () => render(props.scope ? undefined : props.target));
+  if (props.scope) {
+    await act(async () => { expect(await workbench!.requestSettingsScope(props.scope!)).toBe(true); });
+    if (props.target) await act(async () => render(props.target));
+  }
 }
 
 const q = <T extends Element = HTMLElement>(selector: string): T => {
@@ -196,6 +207,24 @@ describe("Agents page", () => {
     expect(container.textContent).toContain("Limits for every agent");
     expect(container.querySelector("input")).toBeNull();
     for (const method of ["save", "remove", "setDefault", "setPolicy", "setBuiltinModel", "setBuiltinInstructions"]) expect((mocks.agents as Record<string, { mock: { calls: unknown[] } }>)[method]?.mock.calls ?? []).toHaveLength(0);
+  });
+
+  it("keeps Global fully usable with zero registered projects", async () => {
+    mocks.stable.projects.splice(0);
+    await mount();
+    expect(container.textContent).toContain("Global");
+    await click(row("reviewer"));
+    await settle();
+    expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("reviewer");
+    expect(mocks.request).toHaveBeenCalledWith("pi/setup/state", {});
+  });
+
+  it("does not read or write when the selected Project is no longer present", async () => {
+    mocks.stable.projects.splice(0);
+    await mount({ scope: { view: "project", projectCwd: "/gone" } });
+    expect(container.textContent).toContain("This project is unavailable");
+    expect(container.querySelector('[data-slot="agent-list"]')).toBeNull();
+    expect(container.querySelector('[data-slot="agents-new"]')).toBeNull();
   });
 
   it("lists your agents first and the built-ins at the bottom, with the default and warning badges", async () => {
@@ -348,16 +377,12 @@ describe("Agents page", () => {
     expect(mocks.stable.actions.toast).toHaveBeenCalledWith("info", "code-reviewer saved.");
   });
 
-  it("chooses a new agent's fixed scope and sends the project with the save payload", async () => {
-    await mount();
+  it("captures the Project destination before a new draft and sends that exact location", async () => {
+    await mount({ scope: { view: "project", projectCwd: "/p" } });
     await click(q('[data-slot="agents-new"]'));
     const editor = q<HTMLFormElement>('[data-slot="agent-editor"]');
-    const global = editor.querySelector<HTMLInputElement>('input[name="scope"][value="global"]')!;
-    const project = editor.querySelector<HTMLInputElement>('input[name="scope"][value="project"]')!;
-    expect(global.checked).toBe(true);
-    expect(project.disabled).toBe(false);
-    expect(editor.querySelector('[data-slot="agent-scope-option"][data-scope="project"]')?.textContent).toContain("This project · p");
-    await click(project);
+    expect(editor.querySelector('input[name="scope"]')).toBeNull();
+    expect(editor.querySelector('[data-slot="agent-definition-destination"]')?.textContent).toContain("Project · p");
     await type(editor.querySelector<HTMLInputElement>('input[name="name"]')!, "project-reviewer");
     await type(editor.querySelector<HTMLTextAreaElement>('textarea[name="description"]')!, "Reviews this project");
     await type(editor.querySelector<HTMLTextAreaElement>('textarea[name="instructions"]')!, "Review the project.");
@@ -365,13 +390,8 @@ describe("Agents page", () => {
     await settle();
     expect(mocks.agents.save).toHaveBeenCalledWith(expect.objectContaining({ scope: "project", projectCwd: "/p", excludeCoreInstructions: false }), null);
     const saved = q('[data-slot="agent-editor"][data-agent="project-reviewer"]');
-    expect(saved.querySelector('[data-slot="agent-scope-control"]')).toBeNull();
     expect(saved.querySelector('[data-slot="agent-definition-location"]')?.textContent).toContain("This project · p");
-    const definitionPath = saved.querySelector('[data-slot="agent-definition-path"] code')!;
-    expect(definitionPath.getAttribute("aria-label")).toContain("/p/project-agents/project-reviewer.md");
-    expect(definitionPath.hasAttribute("title")).toBe(false);
-    expect(button("Copy definition path")).toBeTruthy();
-    expect(row("project-reviewer").querySelector('[data-slot="agent-project-badge"]')?.textContent).toBe("Project");
+    expect(row("project-reviewer").dataset.projectCwd).toBe("/p");
   });
 
   it("keeps the core-instructions opt-out in both instruction modes and saves it", async () => {
@@ -405,14 +425,19 @@ describe("Agents page", () => {
     const brokenWarning = { agentName: "broken", field: "file" as const, path: `/p/${PROJECT_AGENTS_DIR}/broken.md`, target: `/p/${PROJECT_AGENTS_DIR}/broken.md`, message: "The frontmatter could not be read. Fix the file and save it again.", since: "2026-09-08T00:00:01.000Z" };
     store = createStateStore(seed(snapshot({ agents: [base.agents[0]!, globalReviewer, projectReviewer, projectOnly, otherProject, ...base.agents.slice(1, 4)], warnings: [loadedWarning, brokenWarning] })));
     mocks.state.store = store;
-    await mount({ target: { agent: "reviewer", field: "file" } });
+    await mount({
+      scope: { view: "project", projectCwd: "/p" },
+      target: { agent: "reviewer", location: { scope: "project", projectCwd: "/p" }, field: "file" },
+    });
     await settle(50);
-    expect(qa('[data-slot="agent-row"]').map((item) => item.dataset.agent)).toEqual(["default", "project-only", "reviewer", "beam", "chat", "namer"]);
-    expect(qa('[data-slot="agent-row"][data-agent="reviewer"]')).toHaveLength(1);
-    const projectBadge = row("reviewer").querySelector('[data-slot="agent-project-badge"]');
+    expect(qa('[data-slot="agent-row"]').map((item) => `${item.dataset.scope}:${item.dataset.agent}`)).toEqual(["project:project-only", "project:reviewer", "global:default", "global:reviewer"]);
+    expect(qa('[data-slot="agent-row"][data-agent="reviewer"]')).toHaveLength(2);
+    const projectBadge = q('[data-slot="agent-row"][data-agent="reviewer"][data-scope="project"] [data-slot="agent-project-badge"]');
     expect(projectBadge?.textContent).toBe("Project");
     expect(projectBadge?.getAttribute("aria-label")).toContain("replaces the global agent");
     expect(container.textContent).not.toContain("other-project");
+    expect(container.textContent).not.toContain("Built in");
+    expect(container.textContent).not.toContain("Harness");
     const broken = q('[data-slot="agent-file-warning-row"]');
     expect(broken.tagName).toBe("DIV");
     expect(broken.getAttribute("role")).toBe("note");
@@ -425,20 +450,42 @@ describe("Agents page", () => {
     expect(fileNotice.textContent).toContain("This file changed while it was open.");
     expect(document.activeElement).toBe(fileNotice);
     expect(editor.querySelector('[data-slot="agent-definition-path"] code')?.getAttribute("aria-label")).toContain(projectReviewer.path);
+
+    await click(q('[data-slot="agent-row"][data-agent="reviewer"][data-scope="global"]'));
+    expect(q('[data-slot="agent-editor"]').textContent).toContain("Global reviewer");
+    expect([...document.body.querySelectorAll("button")].some((candidate) => candidate.textContent?.trim() === "Create Project override")).toBe(false);
   });
 
-  it("surfaces the host's default-must-be-global refusal from a rejected project save", async () => {
-    await mount();
-    await click(q('[data-slot="agents-new"]'));
+  it("renders Effective as the resolved read-only catalog with zero mutation affordances", async () => {
+    const base = snapshot();
+    const globalReviewer = agent({ name: "reviewer", scope: "global", description: "Global reviewer" });
+    const projectReviewer = agent({ name: "reviewer", scope: "project", projectCwd: "/p", description: "Project reviewer" });
+    store = createStateStore(seed(snapshot({ agents: [base.agents[0]!, globalReviewer, projectReviewer, ...base.agents.slice(1, 4)] })));
+    mocks.state.store = store;
+    await mount({ scope: { view: "effective", projectCwd: "/p" } });
+    expect(qa('[data-slot="agent-row"]').map((item) => `${item.dataset.scope}:${item.dataset.agent}`)).toEqual(["global:default", "project:reviewer"]);
+    expect(container.querySelector('[data-slot="agents-new"]')).toBeNull();
+    expect(container.textContent).not.toContain("Harness");
+    await click(q('[data-slot="agent-row"][data-agent="reviewer"]'));
+    expect(q('[data-slot="agent-editor"]').textContent).toContain("Project reviewer");
+    expect(document.body.querySelector("button[type=submit]")).toBeNull();
+    expect([...document.body.querySelectorAll("button")].some((candidate) => candidate.textContent?.trim() === "Delete")).toBe(false);
+  });
+
+  it("creates an explicit Project override as a new exact-location definition", async () => {
+    await mount({
+      scope: { view: "project", projectCwd: "/p" },
+      target: { agent: "reviewer", location: { scope: "global" } },
+    });
+    expect(q('[data-slot="agent-inherited-notice"]').textContent).toContain("read-only Global source");
+    await click(button("Create Project override"));
     const editor = q<HTMLFormElement>('[data-slot="agent-editor"]');
-    await click(editor.querySelector<HTMLInputElement>('input[name="scope"][value="project"]')!);
-    await type(editor.querySelector<HTMLInputElement>('input[name="name"]')!, "project-default");
-    await type(editor.querySelector<HTMLTextAreaElement>('textarea[name="description"]')!, "Project default");
-    await type(editor.querySelector<HTMLTextAreaElement>('textarea[name="instructions"]')!, "Work here.");
-    mocks.agents.save.mockRejectedValueOnce(new Error("The default agent must be global."));
+    expect(editor.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe("reviewer");
+    expect(editor.querySelector('[data-slot="agent-definition-destination"]')?.textContent).toContain("Project · p");
     await click(button("Create agent"));
     await settle();
-    expect(editor.querySelector('[data-slot="agent-editor-footer"] [role="alert"]')?.textContent).toContain("The default agent must be global.");
+    expect(mocks.agents.save).toHaveBeenCalledWith(expect.objectContaining({ name: "reviewer", scope: "project", projectCwd: "/p" }), null);
+    expect(qa('[data-slot="agent-row"][data-agent="reviewer"]')).toHaveLength(2);
   });
 
   it("blocks save on a validation issue and shows it at the field", async () => {
@@ -491,6 +538,25 @@ describe("Agents page", () => {
     expect(mocks.stable.actions.toast).not.toHaveBeenCalledWith("error", expect.anything());
   });
 
+  it("deletes only the selected Project source when the Global name matches", async () => {
+    const base = snapshot();
+    const global = agent({ name: "duplicate", scope: "global" });
+    const project = agent({ name: "duplicate", scope: "project", projectCwd: "/p" });
+    store = createStateStore(seed(snapshot({ agents: [base.agents[0]!, global, project, ...base.agents.slice(1, 4)] })));
+    mocks.state.store = store;
+    await mount({
+      scope: { view: "project", projectCwd: "/p" },
+      target: { agent: "duplicate", location: { scope: "project", projectCwd: "/p" } },
+    });
+    await click(button("Delete"));
+    const dialog = q('[data-slot="delete-agent-dialog"]');
+    await click([...dialog.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === "Delete")!);
+    await settle();
+    expect(mocks.agents.remove).toHaveBeenCalledWith("duplicate", { scope: "project", projectCwd: "/p" });
+    expect(qa('[data-slot="agent-row"][data-agent="duplicate"]')).toHaveLength(1);
+    expect(q('[data-slot="agent-row"][data-agent="duplicate"]').dataset.scope).toBe("global");
+  });
+
   it("keeps the default agent undeletable with the reason, until another agent is the default", async () => {
     await mount();
     await click(row("default"));
@@ -513,7 +579,7 @@ describe("Agents page", () => {
     expect(dialog.textContent).toContain("Sessions that used it keep their history.");
     await click([...dialog.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Delete")!);
     await settle();
-    expect(mocks.agents.remove).toHaveBeenCalledWith("default");
+    expect(mocks.agents.remove).toHaveBeenCalledWith("default", { scope: "global" });
     expect(qa('[data-slot="agent-row"]').map((r) => r.dataset.agent)).toEqual(["reviewer", "beam", "chat", "namer"]);
     expect(q('[data-slot="agents-overview"]')).toBeTruthy();
   });
@@ -562,14 +628,59 @@ describe("Agents page", () => {
     await click(row("reviewer"));
     await type(q<HTMLTextAreaElement>('textarea[name="description"]'), "Edited");
     await click(row("default"));
-    const dialog = q('[data-slot="discard-changes-dialog"]');
-    expect(dialog.textContent).toContain("Discard changes?");
+    const dialog = q('[role="dialog"]');
+    expect(dialog.textContent).toContain("Keep these unsaved changes?");
     await click([...dialog.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Keep editing")!);
     expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("reviewer");
     expect(q<HTMLTextAreaElement>('textarea[name="description"]').value).toBe("Edited");
     await click(row("default"));
-    await click([...q('[data-slot="discard-changes-dialog"]').querySelectorAll("button")].find((b) => b.textContent?.trim() === "Discard")!);
+    await click([...q('[role="dialog"]').querySelectorAll("button")].find((b) => b.textContent?.trim() === "Discard and switch")!);
     expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("default");
+  });
+
+  it("guards shared scope changes and workbench exits with the same owned draft", async () => {
+    await mount();
+    await act(async () => workbench!.open("agents"));
+    await click(row("reviewer"));
+    await type(q<HTMLTextAreaElement>('textarea[name="description"]'), "Guarded edit");
+
+    let scopeChange!: Promise<boolean>;
+    await act(async () => {
+      scopeChange = workbench!.requestSettingsScope({ view: "project", projectCwd: "/p" });
+      await Promise.resolve();
+    });
+    await click(button("Keep editing"));
+    await expect(scopeChange).resolves.toBe(false);
+    expect(workbench?.settingsScope).toEqual({ view: "global" });
+    expect(q<HTMLTextAreaElement>('textarea[name="description"]').value).toBe("Guarded edit");
+
+    let pageExit!: Promise<boolean>;
+    await act(async () => {
+      pageExit = workbench!.open("logs") as Promise<boolean>;
+      await Promise.resolve();
+    });
+    await click(button("Discard and switch"));
+    await expect(pageExit).resolves.toBe(true);
+    expect(workbench?.page).toBe("logs");
+  });
+
+  it("ignores a save completion after the environment and editor target are replaced", async () => {
+    let resolveSave!: (saved: AgentDefinition) => void;
+    mocks.agents.save.mockImplementationOnce(() => new Promise<AgentDefinition>((resolve) => { resolveSave = resolve; }));
+    await mount();
+    await click(row("reviewer"));
+    await type(q<HTMLTextAreaElement>('textarea[name="description"]'), "Pending save");
+    await click(button("Save"));
+    await settle();
+    expect(mocks.agents.save).toHaveBeenCalledTimes(1);
+
+    await act(async () => { deviceStore.activate(testDescriptor({ environmentKey: OTHER_ENVIRONMENT_KEY })); });
+    await settle();
+    await click(row("default"));
+    await act(async () => { resolveSave(agent({ name: "reviewer", description: "Pending save" })); await Promise.resolve(); });
+    await settle();
+    expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("default");
+    expect(mocks.stable.actions.toast).not.toHaveBeenCalledWith("info", "reviewer saved.");
   });
 
   it("edits the default agent from the product's instructions", async () => {
@@ -580,7 +691,7 @@ describe("Agents page", () => {
     expect(editor.querySelector('[data-slot="engine-instructions"]')?.textContent).toContain("You are the product's default agent.");
     expect(editor.querySelector('[data-slot="engine-instructions"] [data-slot="instruction-template-source"]')).not.toBeNull();
     expect(editor.querySelector('[data-slot="engine-instructions"] textarea')).toBeNull();
-    expect(mocks.agents.engineInstructions).toHaveBeenCalledWith("/p");
+    expect(mocks.agents.engineInstructions).toHaveBeenCalledWith("/state/beam");
     await click(button("Customize"));
     const instructions = editor.querySelector<HTMLTextAreaElement>('textarea[name="instructions"]')!;
     expect(instructions.value).toBe("You are the product's default agent.");
@@ -615,27 +726,28 @@ describe("Agents page", () => {
     expect(button("Save").disabled).toBe(true);
   });
 
-  it("starts a chat with an agent in the open project and closes the workbench", async () => {
-    await mount();
+  it("starts a chat only through the explicit Project target and closes the workbench", async () => {
+    await mount({ scope: { view: "project", projectCwd: "/p" } });
     await act(async () => workbench!.open("agents"));
-    await click(row("reviewer"));
+    await click(q('[data-slot="agent-row"][data-agent="reviewer"][data-scope="global"]'));
     await click(button("Start chat"));
     await settle();
     expect(mocks.stable.actions.newSession).toHaveBeenCalledWith("/p", { agentName: "reviewer" });
     expect(workbench?.page).toBeNull();
   });
 
-  it("disables Start chat with a reason when no project is open, and still reads the catalog through the Beam workspace", async () => {
-    await mount({ cwd: undefined });
-    await click(q('[data-slot="agents-new"]'));
-    const projectScope = q<HTMLInputElement>('input[name="scope"][value="project"]');
-    expect(projectScope.disabled).toBe(true);
-    expect(projectScope.closest("label")?.textContent).toContain("Open a project to create an agent there.");
+  it("shows a noneditable Project state with no selection and keeps Global reads projectless", async () => {
+    await mount({ scope: { view: "project" } });
+    expect(container.textContent).toContain("Choose a project for Project agents");
+    expect(container.querySelector('[data-slot="agents-new"]')).toBeNull();
+    expect(mocks.request).not.toHaveBeenCalledWith("pi/models/catalog", expect.anything());
+
+    await act(async () => { expect(await workbench!.requestSettingsScope({ view: "global" })).toBe(true); });
     await click(row("reviewer"));
-    expect(button("Start chat").disabled).toBe(true);
-    expect(button("Start chat").getAttribute("aria-describedby")).toBeTruthy();
     await settle();
-    expect(mocks.request).toHaveBeenCalledWith("pi/models/catalog", { cwd: "/state/beam", settingsView: "effective" });
+    expect(button("Start chat").disabled).toBe(true);
+    expect(mocks.request).toHaveBeenCalledWith("pi/setup/state", {});
+    expect(mocks.request).not.toHaveBeenCalledWith("pi/models/catalog", { cwd: "/p", settingsView: expect.any(String) });
   });
 
   it("shows Namer's qualification states and runs the check", async () => {
@@ -679,7 +791,7 @@ describe("Agents page", () => {
     expect(card().textContent).toContain("No provider is connected.");
     await click(button("Run qualification again"));
     await settle();
-    expect(mocks.agents.qualifyNamer).toHaveBeenCalledWith("/p");
+    expect(mocks.agents.qualifyNamer).toHaveBeenCalledWith("/state/beam");
     expect(card().textContent).toContain("openai/mini");
   });
 

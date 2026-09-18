@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initialState, reduce } from "../../../src/store.js";
 import { snapshot } from "../fixtures.js";
 import { testDescriptor } from "../../runtime/environment-fixture.js";
+import { deviceStore } from "../../../src/runtime/device-storage.js";
 
 /** The phone layout: the list first, the editor as a full-height view with a way back. */
 const mocks = vi.hoisted(() => {
@@ -26,11 +27,12 @@ const mocks = vi.hoisted(() => {
     dismissBeamChoice: vi.fn(),
   };
   const request = vi.fn(async (method: string) => {
+    if (method === "pi/setup/state") return { cwd: "/state/beam" };
     if (method === "pi/models/catalog") return { models: [], enabledPatterns: null, refreshedAt: "", errors: [] };
     if (method === "feature/list") return { features: [] };
     throw new Error(`unexpected ${method}`);
   });
-  return { stable: { client: { request }, currentProject: "/p", actions: { agents, toast: vi.fn(), newSession: vi.fn() } } };
+  return { stable: { client: { request }, currentProject: "/p", projects: ["/p"], actions: { agents, toast: vi.fn(), newSession: vi.fn() } } };
 });
 
 vi.mock("../../../src/runtime/LaserProvider.js", async (importOriginal) => ({
@@ -57,6 +59,9 @@ function Probe() {
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  deviceStore.deactivate();
+  localStorage.clear();
+  deviceStore.activate(testDescriptor());
   if (typeof globalThis.ResizeObserver === "undefined") {
     globalThis.ResizeObserver = class {
       observe() {}
@@ -71,6 +76,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  deviceStore.deactivate();
 });
 
 const q = (selector: string) => container.querySelector<HTMLElement>(selector);
@@ -85,7 +91,7 @@ describe("Agents page on a phone", () => {
           <TooltipProvider>
             <WorkbenchProvider>
               <Probe />
-              <AgentsScreen cwd="/p" />
+              <AgentsScreen />
             </WorkbenchProvider>
           </TooltipProvider>
         </LaserStoreProvider>,

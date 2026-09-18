@@ -1,70 +1,24 @@
 "use client";
-import type { AgentDefinition, AgentDefinitionInput } from "@lasercode/protocol";
+import type { AgentDefinition, AgentLocation } from "@lasercode/protocol";
 import { Check, Clipboard } from "lucide-react";
-import { useId } from "react";
-
 import { Badge } from "@/components/ui/badge";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useCopy } from "@/hooks/use-copy";
-import { cn } from "@/lib/utils";
-
 import { Hint } from "./fields.js";
 import { projectFolderName } from "./model.js";
 
-export function ScopeField({
-  scope,
-  projectCwd,
-  onChange,
-}: {
-  scope: AgentDefinitionInput["scope"];
-  projectCwd: string | undefined;
-  onChange(scope: AgentDefinitionInput["scope"]): void;
-}) {
-  const labelId = useId();
-  const option = (value: AgentDefinitionInput["scope"], label: string, detail: string, disabled = false) => {
-    const checked = scope === value;
-    return (
-      <label
-        key={value}
-        data-slot="agent-scope-option"
-        data-scope={value}
-        data-selected={checked || undefined}
-        className={cn(
-          "flex min-h-11 min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 outline-none",
-          "transition-[background-color,border-color] duration-(--motion-instant) has-focus-visible:outline-solid has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-live",
-          checked ? "border-live bg-[color-mix(in_oklab,var(--live)_10%,transparent)]" : "border-line hover:bg-surface-2",
-          disabled && "cursor-not-allowed opacity-60",
-        )}
-      >
-        <input
-          type="radio"
-          name="scope"
-          value={value}
-          checked={checked}
-          disabled={disabled}
-          className="mt-1 size-3.5 shrink-0 accent-live outline-none"
-          onChange={() => onChange(value)}
-        />
-        <span className="min-w-0">
-          <span className="block min-w-0 truncate text-sm font-medium text-ink">{label}</span>
-          <span className="block text-xs leading-5 text-ink-3">{detail}</span>
-        </span>
-      </label>
-    );
-  };
-
+export function DefinitionDestination({ location }: { location: AgentLocation }) {
   return (
-    <div>
-      <div id={labelId} className="sr-only">Where this agent lives</div>
-      <div role="radiogroup" aria-labelledby={labelId} data-slot="agent-scope-control" className="flex flex-col gap-2 sm:flex-row">
-        {option("global", "Global", "Available in every project.")}
-        {option(
-          "project",
-          projectCwd ? `This project · ${projectFolderName(projectCwd)}` : "This project",
-          projectCwd ? "Available only while this project is open." : "Open a project to create an agent there.",
-          projectCwd === undefined,
-        )}
-      </div>
+    <div data-slot="agent-definition-destination" className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-line bg-surface px-3 py-2">
+      <span className="min-w-0">
+        <span className="block min-w-0 truncate text-sm font-medium text-ink">
+          {location.scope === "project" ? `Project · ${projectFolderName(location.projectCwd)}` : "Global"}
+        </span>
+        <span className="block text-xs leading-5 text-ink-3">
+          {location.scope === "project" ? "This definition will belong to the selected project." : "This definition will be available in every project."}
+        </span>
+      </span>
+      <Badge variant="outline" className="shrink-0">Fixed</Badge>
     </div>
   );
 }

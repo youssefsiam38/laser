@@ -509,7 +509,7 @@ export class HostServer {
       onChange: (projects) => {
         this.notify("pi/project/updated", { projects });
         agentStore?.setTrustedProjects(
-          projects.filter((project) => project.trust === "trusted").map((project) => project.cwd),
+          projects.filter((project) => projectEnvTrustAllows(project.trust)).map((project) => project.cwd),
         );
       },
       onTrustRequest: (request) => {
@@ -566,7 +566,7 @@ export class HostServer {
     });
     agentStore = this.agents;
     agentStore.setTrustedProjects(
-      this.projects.list().filter((project) => project.trust === "trusted").map((project) => project.cwd),
+      this.projects.list().filter((project) => projectEnvTrustAllows(project.trust)).map((project) => project.cwd),
     );
     this.runs = new AgentRunRegistry({
       storePath: join(stateDir, "agent-runs.json"),

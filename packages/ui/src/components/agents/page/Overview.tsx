@@ -14,7 +14,7 @@ import { AgentCard } from "@/components/assistant-ui/elements/agent-card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-import { agentForWarning, isFirstRun, orderAgents, type AgentsSelection } from "./model.js";
+import { agentAtLocation, agentForWarning, isFirstRun, orderAgents, selectionOfAgent, type AgentsSelection } from "./model.js";
 
 export interface AgentsOverviewProps {
   snapshot: AgentsSnapshot;
@@ -30,7 +30,10 @@ export interface AgentsOverviewProps {
 export function AgentsOverview({ snapshot, projectCwd, warnings, onNew, onOpen, compact = false, className }: AgentsOverviewProps) {
   const firstRun = isFirstRun(snapshot, projectCwd);
   const { custom } = orderAgents(snapshot, projectCwd);
-  const linkedWarnings = warnings.filter((warning) => agentForWarning(snapshot, warning, projectCwd) !== undefined);
+  const linkedWarnings = warnings.flatMap((warning) => {
+    const agent = agentForWarning(snapshot, warning, projectCwd);
+    return agent ? [{ warning, agent }] : [];
+  });
   const own = custom.filter((agent) => agent.name !== "default");
   return (
     <div data-slot="agents-overview" data-first-run={firstRun || undefined} className={cn("flex w-full flex-col gap-4", compact ? "" : "mx-auto max-w-180 px-4 py-5 md:px-6", className)}>
@@ -70,16 +73,19 @@ export function AgentsOverview({ snapshot, projectCwd, warnings, onNew, onOpen, 
 
       {!compact ? (
         <div className="flex flex-col gap-1">
-          <Line onClick={() => onOpen({ kind: "agent", name: snapshot.defaultAgent })}>
+          <Line onClick={() => {
+            const agent = agentAtLocation(snapshot, snapshot.defaultAgent, { scope: "global" });
+            if (agent) onOpen(selectionOfAgent(agent));
+          }}>
             <span className="flex-1 text-ink-2">
               New sessions start with <span className="font-medium text-ink">{agentDisplayName(snapshot.defaultAgent)}</span>
             </span>
           </Line>
-          {linkedWarnings.map((warning) => (
+          {linkedWarnings.map(({ warning, agent }) => (
             <Line
               key={`${warning.agentName}:${warning.field}:${warning.target ?? ""}`}
               tone="attention"
-              onClick={() => onOpen({ kind: "agent", name: warning.agentName }, warning.field)}
+              onClick={() => onOpen(selectionOfAgent(agent), warning.field)}
               data-slot="overview-warning"
             >
               <TriangleAlert aria-hidden="true" className="size-4 shrink-0 text-attention" />
