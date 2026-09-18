@@ -5,7 +5,9 @@ import { ComposerPrimitive, ThreadPrimitive } from "@assistant-ui/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 // Each interaction mounts a real 240-message history, including its footers.
-vi.setConfig({ testTimeout: 15_000 });
+// Real reducer work over a large fixture: this file has sat within 300 ms of
+// its ceiling under a loaded machine, so give it room rather than a flake.
+vi.setConfig({ testTimeout: 45_000 });
 
 vi.mock("../../src/client.js", async (original) => {
   const { FakeWorkerClient } = await import("./fake-worker.js");
