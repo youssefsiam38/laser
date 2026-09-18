@@ -9,7 +9,9 @@
 
 import {
   modelKey,
+  sameModel,
   sessionFallbackEntrySchema,
+  validateFallbackChains,
   SESSION_FALLBACK_ENTRY_TYPE,
   type FallbackActivation,
   type FallbackEntryEvent,
@@ -38,6 +40,40 @@ export interface EntryOptions {
   from?: FallbackModelRef | undefined;
   to?: FallbackModelRef | undefined;
   failure?: { class: ProviderFailureClass; at: string } | undefined;
+}
+
+/**
+ * Whether one retained session entry proves only a person's pre-turn model setup.
+ *
+ * This is intentionally narrower than "a fallback entry": traversal, failure
+ * memory, a moved activation, malformed data, and contradictory identities all
+ * mean the conversation has history. The strict protocol schema owns the wire
+ * shape; the canonical model helpers own identity comparisons.
+ */
+export function isSetupOnlyFallbackEntry(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") return false;
+  const envelope = raw as { type?: unknown; customType?: unknown; data?: unknown };
+  if (envelope.type !== "custom" || envelope.customType !== SESSION_FALLBACK_ENTRY_TYPE) return false;
+  const parsed = sessionFallbackEntrySchema.safeParse(envelope.data);
+  if (!parsed.success) return false;
+  const entry = parsed.data as unknown as SessionFallbackEntry;
+  if (
+    !entry.to
+    || entry.from !== undefined
+    || entry.failure !== undefined
+    || entry.failover !== undefined
+    || Object.keys(entry.models).length > 0
+  ) return false;
+  if (entry.event === "cleared") return entry.activation === null;
+  if (entry.event !== "activated" || !entry.activation || entry.activation.position !== 0) return false;
+  if (validateFallbackChains([{ models: entry.activation.models }]).length > 0) return false;
+  const first = entry.activation.models[0];
+  return Boolean(
+    first
+    && sameModel(first, entry.to)
+    && entry.activation.chainKey === modelKey(first)
+    && entry.activation.chainKey === modelKey(entry.to),
+  );
 }
 
 /** The record for one transition: the whole state, plus what caused this write. */

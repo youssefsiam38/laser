@@ -9,7 +9,9 @@ import { type InlineExtension, type SessionManager } from "@earendil-works/pi-co
 import {
   PRODUCT_DISPLAY_NAME,
   PRODUCT_NAME,
+  modelKey,
   SESSION_AGENT_ENTRY_TYPE,
+  SESSION_FALLBACK_ENTRY_TYPE,
   SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE,
   TOOL_LABEL_DESCRIPTION,
   TOOL_LABEL_MAX,
@@ -508,6 +510,139 @@ describe("StableSdkDriver with an agent definition", () => {
     const lines = acceptedBytes.toString().trim().split("\n").map((line) => JSON.parse(line) as { type?: string; customType?: string; message?: { role?: string } });
     expect(lines.filter((line) => line.type === "message" && line.message?.role === "user")).toHaveLength(1);
     expect(lines.filter((line) => line.customType === SESSION_AGENT_ENTRY_TYPE)).toHaveLength(2);
+  }, 60_000);
+
+  it("keeps real activated and cleared fallback setup records pristine across reload and agent binding", async () => {
+    writeFileSync(join(base, "agent", "models.json"), JSON.stringify({
+      providers: {
+        stub: {
+          baseUrl: stub.url,
+          api: "openai-completions",
+          apiKey: "stub-key",
+          models: [
+            { id: "stub-1", name: "Stub One", contextWindow: 8000, maxTokens: 1000, reasoning: true },
+            { id: "stub-2", name: "Stub Two", contextWindow: 8000, maxTokens: 1000, reasoning: true },
+            { id: "stub-3", name: "Stub Three", contextWindow: 8000, maxTokens: 1000, reasoning: true },
+          ],
+        },
+      },
+    }));
+    writeFileSync(join(base, "agent", "settings.json"), JSON.stringify({
+      defaultProvider: "stub",
+      defaultModel: "stub-1",
+      defaultThinkingLevel: "medium",
+      fallbackChains: [
+        { models: [{ provider: "stub", id: "stub-1" }, { provider: "stub", id: "stub-2" }] },
+        { models: [{ provider: "stub", id: "stub-2" }, { provider: "stub", id: "stub-1" }] },
+      ],
+    }));
+    const reviewer: AgentDefinition = {
+      ...fallbackDefaultAgent(),
+      name: "reviewer",
+      engineInstructions: false,
+      instructions: "THE SELECTED REVIEWER",
+      model: { provider: "stub", id: "stub-1" },
+      thinkingLevel: "medium",
+    };
+    const messages: JsonRpcMessage[] = [];
+    const server = new WorkerServer({
+      cwd: join(base, "project"),
+      agentDir: join(base, "agent"),
+      sessionDir: join(base, "sessions"),
+      stateDir: join(base, "state"),
+      createDriver: () => {
+        const driver = new StableSdkDriver();
+        drivers.push(driver);
+        return driver;
+      },
+      send: (message) => messages.push(message),
+    });
+    let id = 0;
+    const call = async (method: string, params: unknown) => {
+      const requestId = ++id;
+      await server.handle({ jsonrpc: "2.0", id: requestId, method, params });
+      return messages.find((message) => "id" in message && message.id === requestId) as { result?: unknown; error?: { code?: number; message?: string } };
+    };
+    const snapshot = fallbackSnapshot();
+    await call("agents/sync", { snapshot: { ...snapshot, agents: [...snapshot.agents, reviewer] } });
+
+    const exercise = async (selectedId: "stub-2" | "stub-3", expectedEvent: "activated" | "cleared") => {
+      const created = await call("session/new", { cwd: join(base, "project") });
+      const initial = (created.result as { state: SessionState }).state;
+      expect((await call("pi/model/set", { path: initial.path, model: { provider: "stub", id: selectedId } })).error).toBeUndefined();
+      expect((await call("pi/thinking/set", { path: initial.path, level: "high" })).error).toBeUndefined();
+      expect((await call("pi/session/rename", { path: initial.path, name: `${expectedEvent} setup` })).error).toBeUndefined();
+
+      const beforeLines = readFileSync(initial.path, "utf8").trim().split("\n")
+        .map((line) => JSON.parse(line) as { type?: string; customType?: string; data?: Record<string, unknown>; message?: { role?: string } });
+      expect(beforeLines.filter((entry) => entry.type === "message")).toEqual([]);
+      const fallbackRecords = beforeLines.filter((entry) => entry.customType === SESSION_FALLBACK_ENTRY_TYPE);
+      expect(fallbackRecords).toHaveLength(1);
+      expect(fallbackRecords[0]?.data).toMatchObject({
+        version: 1,
+        event: expectedEvent,
+        to: { provider: "stub", id: selectedId },
+        activation: expectedEvent === "activated"
+          ? {
+              chainKey: modelKey({ provider: "stub", id: selectedId }),
+              models: [{ provider: "stub", id: "stub-2" }, { provider: "stub", id: "stub-1" }],
+              position: 0,
+            }
+          : null,
+        models: {},
+      });
+      expect(fallbackRecords[0]?.data).not.toHaveProperty("from");
+      expect(fallbackRecords[0]?.data).not.toHaveProperty("failure");
+      expect(fallbackRecords[0]?.data).not.toHaveProperty("failover");
+
+      expect((await call("pi/session/close", { path: initial.path })).error).toBeUndefined();
+      const reloaded = await call("session/load", { path: initial.path });
+      expect(reloaded.error).toBeUndefined();
+      expect((reloaded.result as { state: SessionState }).state).toMatchObject({
+        path: initial.path,
+        id: initial.id,
+        name: `${expectedEvent} setup`,
+        messageCount: 0,
+        model: { provider: "stub", id: selectedId },
+        thinkingLevel: "high",
+        ...(expectedEvent === "activated"
+          ? { fallback: { position: 0, chain: [{ id: "stub-2" }, { id: "stub-1" }] } }
+          : {}),
+      });
+      if (expectedEvent === "cleared") expect((reloaded.result as { state: SessionState }).state.fallback).toBeUndefined();
+
+      const prompted = await call("session/prompt", {
+        path: initial.path,
+        content: [{ type: "text", text: `run ${expectedEvent}` }],
+        // Absent model intent preserves the person's explicit selection even
+        // though this agent definition names stub-1.
+        firstTurn: { agentName: "reviewer" },
+      });
+      expect(prompted.error).toBeUndefined();
+      expect(prompted.result).toEqual({ accepted: true, queued: false });
+      const after = (await call("session/load", { path: initial.path }).then((reply) => reply.result as { state: SessionState })).state;
+      expect(after).toMatchObject({
+        path: initial.path,
+        id: initial.id,
+        name: `${expectedEvent} setup`,
+        messageCount: 2,
+        model: { provider: "stub", id: selectedId },
+        thinkingLevel: "high",
+        agent: { agentName: "reviewer", kind: "root" },
+      });
+      return initial.path;
+    };
+
+    const activatedPath = await exercise("stub-2", "activated");
+    const clearedPath = await exercise("stub-3", "cleared");
+    expect(stub.requests.map((request) => request.model)).toEqual(["stub-2", "stub-3"]);
+    expect(systemTextOf(stub.requests[0]!)).toContain("THE SELECTED REVIEWER");
+    expect(systemTextOf(stub.requests[1]!)).toContain("THE SELECTED REVIEWER");
+    for (const path of [activatedPath, clearedPath]) {
+      const lines = readFileSync(path, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
+      expect(lines.filter((entry) => entry.type === "message" && entry.message?.role === "user")).toHaveLength(1);
+    }
+    await server.dispose();
   }, 60_000);
 
   it("binds first-turn model intent through WorkerServer with exact precedence", async () => {
