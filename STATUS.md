@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-18T12:45:31+03:00 · orchestrator-2026-09-18 · HEAD: d44226f5
+**Last updated:** 2026-09-18T13:06:16+03:00 · orchestrator-2026-09-18 · HEAD: 18f0dd70
 **Current focus:** M16 — independent user acceptance and active-chat continuity first; finish agreed repairs before 0.9.2.
 
 | Milestone | State |
@@ -28,9 +28,9 @@
 | M19 Runtime recovery/update activation | done |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** terminal worker-session resumption is unreliable; explicit checkpoint transfers preserve progress. No external release blocker.
-**In flight:** T81 owner4e5b5b3c implements active retention/bounded paging. T82 parent UAT: one-image passes;25-image fails even after settlement/reload. Online hydration research recorded. T75 candidate5a009840 passed parent316 focused tests; independent user journeys db51b319 run before integration; Agents still pending.
-**Next up:** T81 causal repair/UAT; T82 recoverable image hydration and permitted disk-cache plan; T75 Agents after service integration. Then T76 final poisoned gate and T79 publication.
+**Blockers:** terminal worker-session resumption is unreliable; clean checkpoint transfers preserve progress. No external release blocker.
+**In flight:** T81 candidate8f003578 needs newer-revision/reachability and concurrent live-UAT corrections before independent review. T75 candidate5a009840 passed real scoped writes; focus-return flags and touch continuation remain. Both owners stopped clean; correction handoffs underway.
+**Next up:** correct/verify T81 and T75; then T82 recoverable image hydration and T75 Agents. T82 parent UAT confirms25-image failure; online hydration research committed18f0dd70. Then T76 final poisoned gate and T79 publication.
 **Recently done:** T78 pristine agent choice (`107e5ecc`, worker1089 + real route tests); T70 selectable activity (`e7ad7c34`, UI2472 + matrix); T74 image/text recovery (`b703f3bf`, UI2436 + matrix); T77 goal-tool recovery (`a0a698ee`, 54 focused + real engine); T73 packaged spelling (`d0bbc680`).
 
-**Published:** v0.9.1 (`8183fd04`), verified release checkpoint. 0.9.2 not released. Autonomous completion/commits/push/release authorized; no live restart. Active logical history outranks ordinary cache shares (D-295); safety, identity and privacy remain mandatory.
+**Published:** v0.9.1 (`8183fd04`), verified release checkpoint. 0.9.2 not released. Autonomous completion/commits/push/release authorized; no live restart. Active history outranks ordinary cache shares (D-295). MCP forms remain modal; acceptance follows reachable user paths (D-296).
