@@ -243,17 +243,25 @@ export default async function liveHistoryRetention(check) {
   let concurrentAnchor;
   let concurrentMarker;
   await activateEarlier(activation, async () => {
-    // Follow the same words, not "whichever row is last": the mounted window
-    // moves with the reader, so re-resolving `.last()` after the page compares
-    // two different checkpoints and reports a preserved anchor as a lost one.
-    const marker = page.getByText(/Checkpoint 10\d+ is complete\./).last();
-    await marker.waitFor();
-    concurrentAnchor = await marker.evaluate(node => ({ top: node.getBoundingClientRect().top, text: node.textContent }));
-    concurrentMarker = page.getByText(concurrentAnchor.text, { exact: true }).first();
+    // The row the reader is on: the topmost checkpoint on screen. The newest
+    // checkpoint is pages below a reader at the top and virtualises out as the
+    // page arrives, and "whichever row is last" compares two different rows.
+    concurrentAnchor = await viewport.evaluate(element => {
+      const top = element.getBoundingClientRect().top, bottom = element.getBoundingClientRect().bottom;
+      for (const node of element.querySelectorAll('[data-window-message]')) {
+        const box = node.getBoundingClientRect();
+        if (box.bottom <= top || box.top >= bottom) continue;
+        const marker = /Checkpoint 10\d+ is complete\./.exec(node.innerText)?.[0];
+        if (marker) return { top: box.top, text: marker };
+      }
+      return undefined;
+    });
+    assert(concurrentAnchor, 'a checkpoint row is on screen before the concurrent page');
+    concurrentMarker = page.locator('[data-window-message]').filter({ hasText: concurrentAnchor.text }).first();
   });
   pages += 1;
-  await concurrentMarker.waitFor();
-  const concurrentAfter = await concurrentMarker.evaluate(node => ({ top: node.getBoundingClientRect().top, text: node.textContent }));
+  await concurrentMarker.waitFor({ state: 'attached' });
+  const concurrentAfter = await concurrentMarker.evaluate(node => ({ top: node.getBoundingClientRect().top, text: /Checkpoint 10\d+ is complete\./.exec(node.innerText)?.[0] }));
   const concurrentAnchorDelta = concurrentAfter.top - concurrentAnchor.top;
   assert.equal(concurrentAfter.text, concurrentAnchor.text, 'concurrent prepend preserves the anchored visible content');
   assert(Math.abs(concurrentAnchorDelta) <= 48, `concurrent prepend moved the visible anchor more than one control row: ${concurrentAnchorDelta}px`);

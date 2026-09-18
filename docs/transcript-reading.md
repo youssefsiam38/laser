@@ -42,6 +42,13 @@ are what acceptance measures.
 - Compensation that the clamp at `scrollTop` 0 cannot spend stays owed, with
   its sign, until content above the reader exists again. Without that, a reader
   at the top of the window loses the movement and stays pinned there.
+- A measured frame takes the anchor's offset once, before anything in the
+  frame can move it — relayout, a held root estimate going, the reserve
+  refining, rows measuring — and shifts by the one difference at the end.
+  There is no second authority: an absolute "hold" that re-places a surviving
+  row for a run of frames was tried and removed, because it fought the
+  structural shift and the reserve exchange for the same pixels, clamped at 0,
+  and kept the reading place from being re-taken after a merged head.
 
 ## What the scrollbar means
 

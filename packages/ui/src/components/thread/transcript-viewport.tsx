@@ -325,7 +325,7 @@ export class TranscriptViewport {
   }
   /** Move by exactly what changed above the reader, surviving the clamp at 0. */
   private shiftBy(delta: number) {
-    if (!this.viewport) return;
+    if (!this.viewport || (Math.abs(delta) < 0.5 && this.clampDebt === 0)) return;
     const target = this.viewport.scrollTop + delta + this.clampDebt;
     // Above the content there is nowhere to go: the part of the movement the
     // clamp cannot spend stays owed, with its sign, until content above the
@@ -420,15 +420,18 @@ export class TranscriptViewport {
     if (this.frame) cancelAnimationFrame(this.frame);
     this.frame = 0;
     if (this.disposed) return;
+    // Where the anchor sits before this pass, taken before anything in it can
+    // move: type/spacing relayout, a held root estimate going, the reserve
+    // refining and measured rows all change the same coordinate. Whatever any
+    // of them change above the anchor, the person must not feel it: one shift
+    // by exactly that amount at the end of the pass, never a fresh absolute.
+    const anchorIndex = !this.place.following && this.place.anchor ? this.positions.get(this.place.anchor.messageId) : undefined;
+    const anchorBefore = anchorIndex !== undefined ? this.globalOffset(anchorIndex) : undefined;
+    const reserveBefore = this.reserve.height;
     let changed = this.layout();
     // A held root estimate is removed on the first measured frame after its
     // page settles, whether or not another commit follows.
     if (this.collapseDeferredRoot("now")) changed = true;
-    // Where the anchor sits before this pass. When measured rows replace
-    // estimates above it, the person must not feel it: shift by exactly what
-    // changed above the anchor, never re-place it from a fresh absolute.
-    const anchorIndex = !this.place.following && this.place.anchor ? this.positions.get(this.place.anchor.messageId) : undefined;
-    const anchorBefore = anchorIndex !== undefined ? this.globalOffset(anchorIndex) : undefined;
     for (const [id, node] of this.nodes) {
       const index = this.positions.get(id);
       if (index === undefined) continue;
@@ -442,33 +445,40 @@ export class TranscriptViewport {
     }
     // Refine only the prefix this page inserted, and only on its first measured
     // frame. Streaming, disclosure, image and font growth elsewhere cannot
-    // become fictitious unloaded history. The same prefix delta is also the
-    // geometric compensation when a merged page replaced the named anchor.
-    let pageRefinementShift: number | undefined;
+    // become fictitious unloaded history.
+    let pageDelta: number | undefined;
     if (this.arrivedPage?.refine) {
       const pageHeight = Math.max(0, this.arrivedPage.ids.reduce((sum, id) => {
         const index = this.positions.get(id);
         return sum + (index === undefined ? 0 : this.heights.height(index));
       }, 0) - this.arrivedPage.removedHeight);
-      const pageDelta = pageHeight - this.arrivedPage.exchangedHeight;
-      const reserveBefore = this.reserve.height;
+      pageDelta = pageHeight - this.arrivedPage.exchangedHeight;
       this.reserve.refineArrived(pageDelta);
-      pageRefinementShift = pageDelta + this.reserve.height - reserveBefore;
       this.arrivedPage.exchangedHeight = pageHeight;
       this.arrivedPage.refine = false;
     }
     this.configureReserve();
     // A global measurement budget, including layouts and previously visited sessions.
     while (this.measured.size > 20_000) this.measured.delete(this.measured.keys().next().value!);
+    // Change above the reader is a relative movement, never a placement. The
+    // anchor's own offset says exactly what changed above it; without a placed
+    // anchor (its id was folded into a merged group this frame) the reserve and
+    // the arrived prefix are everything above. An absolute restore against the
+    // mounted row is right only when the person is still and no page is settling.
+    const anchorRow = this.place.anchor ? this.nodes.get(this.place.anchor.messageId) : undefined;
+    const readerHeld = this.viewport && !this.target && !this.place.following;
+    let compensated = false;
+    if (readerHeld && anchorIndex !== undefined && anchorBefore !== undefined
+      && (Boolean(this.reading) || !anchorRow || pageDelta !== undefined || this.clampDebt !== 0)) {
+      compensated = true;
+      this.shiftBy(this.globalOffset(anchorIndex) - anchorBefore);
+    } else if (readerHeld && anchorIndex === undefined && (pageDelta !== undefined || Math.abs(this.reserve.height - reserveBefore) >= 0.5)) {
+      compensated = true;
+      this.shiftBy(this.reserve.height - reserveBefore + (pageDelta ?? 0));
+    }
     if (changed || this.windowDirty) {
       this.windowDirty = false;
-      const mounted = this.reading && anchorIndex !== undefined && anchorBefore !== undefined && this.viewport && !this.target && this.nodes.has(this.place.anchor!.messageId);
-      if (pageRefinementShift !== undefined && !this.place.following && this.viewport && !this.target) {
-        if (Math.abs(pageRefinementShift) >= 0.5 || this.clampDebt > 0) this.shiftBy(pageRefinementShift);
-      } else if (mounted) {
-        const shift = this.globalOffset(anchorIndex) - anchorBefore;
-        if (Math.abs(shift) >= 0.5 || this.clampDebt > 0) this.shiftBy(shift);
-      } else this.restore();
+      if (!compensated) this.restore();
       this.publish();
     }
     this.capture();
@@ -479,7 +489,7 @@ export class TranscriptViewport {
    * the reader's pixels do not move with it: compensate by how far the anchor
    * moved, or — when no anchor row is placed — by the change itself.
    */
-  private withReserveCompensation(change: () => void, apply: "commit" | "now" = "commit") {
+  private withReserveCompensation(change: () => void) {
     const anchorIndex = !this.place.following && this.place.anchor ? this.positions.get(this.place.anchor.messageId) : undefined;
     const anchorBefore = anchorIndex !== undefined ? this.globalOffset(anchorIndex) : undefined;
     const reserveBefore = this.reserve.height;
@@ -488,13 +498,13 @@ export class TranscriptViewport {
     const shift = anchorIndex !== undefined && anchorBefore !== undefined
       ? this.globalOffset(anchorIndex) - anchorBefore
       : this.reserve.height - reserveBefore;
-    if (Math.abs(shift) < 0.5) return;
-    // Inside a commit the shift joins the one this frame already owes; on a
-    // measured frame nothing else will consume it, so it is applied here.
-    if (apply === "commit" || !this.viewport || this.target) this.structuralShift = (this.structuralShift ?? 0) + shift;
-    else this.shiftBy(shift);
+    if (Math.abs(shift) >= 0.5) this.structuralShift = (this.structuralShift ?? 0) + shift;
   }
-  /** Remove a held root estimate once the page that reached it has committed. */
+  /**
+   * Remove a held root estimate once the page that reached it has committed.
+   * Inside a commit the change joins that frame's structural shift; on a
+   * measured frame `measure()`'s own bracket compensates it with everything else.
+   */
   private collapseDeferredRoot(apply: "commit" | "now"): boolean {
     const held = this.deferredRootCollapse;
     if (!held) return false;
@@ -502,7 +512,8 @@ export class TranscriptViewport {
     if (this.ids.length === held.rows && this.earlierPage) return false;
     this.deferredRootCollapse = undefined;
     const before = this.reserve.height;
-    this.withReserveCompensation(() => this.configureReserve(), apply);
+    if (apply === "commit") this.withReserveCompensation(() => this.configureReserve());
+    else this.configureReserve();
     return Math.abs(this.reserve.height - before) >= 0.5;
   }
   private configureReserve() {

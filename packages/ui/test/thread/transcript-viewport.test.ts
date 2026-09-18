@@ -930,6 +930,49 @@ describe("scoped transcript destinations", () => {
     } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); }
   });
 
+  it("keeps the reader's row still when a replacing page measures taller than its estimate", async () => {
+    const frames = new Map<number, FrameRequestCallback>(); let frameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
+    const step = async () => { const pending = [...frames.values()]; frames.clear(); for (const callback of pending) callback(0); await Promise.resolve(); };
+    const controller = new TranscriptViewport(), viewport = document.createElement("div"), content = document.createElement("div");
+    let ids = ["old-head", "kept-a", "kept-b"];
+    const heights: Record<string, number> = { "old-head": 200, "kept-a": 200, "kept-b": 200, "page-0": 200, "page-1": 200 };
+    Object.defineProperties(viewport, { clientHeight: { value: 300 }, scrollHeight: { get: () => controller.reserveHeight + controller.heights.total } });
+    viewport.getBoundingClientRect = () => new DOMRect(0, 0, 600, 300);
+    content.getBoundingClientRect = () => new DOMRect(0, -viewport.scrollTop, 600, viewport.scrollHeight);
+    content.style.fontSize = "14px"; content.style.lineHeight = "21px"; content.style.paddingTop = "20px";
+    viewport.append(content); document.body.append(viewport); controller.content = content;
+    controller.configure("/replacing-page"); controller.setIds(ids); controller.setHistoryWindow(1, 1, "cursor-a");
+    const mount = (id: string) => {
+      const row = document.createElement("div"); row.dataset.windowMessage = id;
+      row.getBoundingClientRect = () => new DOMRect(0, controller.reserveHeight + controller.heights.offset(ids.indexOf(id)) - viewport.scrollTop, 600, heights[id]!);
+      content.append(row); controller.register(id, row);
+    };
+    ids.forEach(mount);
+    const detach = controller.attach(viewport);
+    try {
+      await step();
+      const screen = () => controller.reserveHeight + controller.heights.offset(ids.indexOf("kept-a")) - viewport.scrollTop;
+      viewport.scrollTop = Math.max(1, controller.reserveHeight - 100);
+      viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 })); viewport.dispatchEvent(new Event("scroll"));
+      await step();
+      const held = screen();
+      controller.beginEarlierPage();
+      // The page replaces the old head rather than preserving it, and its rows
+      // measure much taller than the estimate that projected them: the
+      // surviving row the reader was above must not move for that.
+      heights["page-0"] = 900; heights["page-1"] = 700;
+      ids = ["page-0", "page-1", "kept-a", "kept-b"]; controller.setIds(ids);
+      mount("page-0"); mount("page-1");
+      controller.setHistoryWindow(0, 2, undefined); controller.finishEarlierPage(); controller.committed();
+      await step(); await step();
+      expect(Math.abs(screen() - held)).toBeLessThanOrEqual(1);
+      expect(viewport.scrollTop).toBeGreaterThan(0);
+      expect(controller.earlierPageFallbackCount).toBe(0);
+    } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); }
+  });
+
   it("releases after page commits that merge, replace, retain a cursor, or change metadata", () => {
     for (const shape of ["merged", "replacement", "same-cursor", "metadata"] as const) {
       const controller = new TranscriptViewport();
