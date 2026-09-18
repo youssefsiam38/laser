@@ -328,11 +328,11 @@ describe("Router · pressure admission", () => {
       );
       expect(windowed).toHaveProperty("result");
       const anchored = await h.router.handle(
-        { jsonrpc: "2.0", id: 3, method: "pi/session/entries", params: { path: PATH_A, window: { beforeEntry: "entry-40", limit: 40 } } },
+        { jsonrpc: "2.0", id: 3, method: "pi/session/entries", params: { path: PATH_A, window: { beforeEntry: "entry-40", limit: 40 }, baseRevision: "r1.test" } },
         LOCAL_ACCESS,
       );
       expect(anchored).toHaveProperty("result");
-      expect(h.workerRequests.at(-1)?.params).toEqual({ path: PATH_A, window: { beforeEntry: "entry-40", limit: 40 } });
+      expect(h.workerRequests.at(-1)?.params).toEqual({ path: PATH_A, window: { beforeEntry: "entry-40", limit: 40 }, baseRevision: "r1.test" });
       expect(admits).toHaveBeenCalledTimes(1);
     } finally { h.cleanup(); }
   });

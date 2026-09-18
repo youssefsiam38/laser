@@ -139,7 +139,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/session/navigate": { path: "/s.jsonl", entryId: "abc", summarize: true, label: "x", stopFirst: true },
   "pi/session/rename": { path: "/s.jsonl", name: "feature" },
   "pi/session/delete": { path: "/s.jsonl", worktree: "delete" },
-  "pi/session/entries": { path: "/s.jsonl", window: { beforeEntry: "entry-40", limit: 40 } },
+  "pi/session/entries": { path: "/s.jsonl", window: { beforeEntry: "entry-40", limit: 40 }, baseRevision: "r1.test" },
   "pi/session/detach": { path: "/s.jsonl" },
   "pi/session/move": { path: "/s.jsonl", cwd: "/p" },
   "pi/session/close": { path: "/s.jsonl" },

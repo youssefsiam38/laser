@@ -7,7 +7,7 @@ import { createHistoryLoader } from "../../src/runtime/history-loader.js";
 const state: SessionState = { path: "/session", id: "s", cwd: "/project", model: null, thinkingLevel: "off", isStreaming: false, isCompacting: false, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", autoCompactionEnabled: true, messageCount: 80, pendingMessageCount: 0 };
 const entries = Array.from({ length: 80 }, (_, i) => ({ type: "message", id: `e${i}`, parentId: i ? `e${i - 1}` : null, message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `Message ${i}` }] } }));
 const source = { entries, leafId: "e79" };
-const scope = { path: state.path, epoch: "one", seq: 0 };
+const scope = { sessionId: state.id, epoch: "one", seq: 0, revision: "r1.test.base", environmentKey: "e1.test" };
 type Params = ClientRequests["pi/session/entries"]["params"];
 type Result = ClientRequests["pi/session/entries"]["result"];
 function fixture(request: (params: Params) => Promise<Result>) {
@@ -27,7 +27,7 @@ describe("history request ownership", () => {
     await f.loader.read(state.path, true);
     expect(f.view().blocks).toHaveLength(80);
     await f.loader.read(state.path, false, () => true, undefined, "recent");
-    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
+    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision: scope.revision });
     const expected = historyWindow(source, { tail: 40 }, scope);
     expect(f.view().entries).toEqual(expected.entries);
     expect(f.view().history).toEqual(expected.window);
@@ -71,14 +71,33 @@ describe("history request ownership", () => {
 
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
 
-    expect(request.mock.calls[1]![0].window).toEqual({ beforeEntry: "e10", limit: 40 });
-    expect(f.view().trimmed?.earlierExhausted).toBe(true);
+    expect(request.mock.calls[1]![0]).toMatchObject({ window: { beforeEntry: "e10", limit: 40 }, baseRevision: scope.revision });
     expect(f.view().blocks.some(block => "entryId" in block && block.entryId === "e10")).toBe(true);
     expect(f.view().entries.some(row => (row as { id?: string }).id === "e10")).toBe(true);
-    expect(f.view().history?.complete).toBe(false);
-    const calls = request.mock.calls.length;
-    expect(await f.loader.earlier(state.path, () => true)).toBe(false);
-    expect(request).toHaveBeenCalledTimes(calls);
+    expect(f.view().history).toMatchObject({ anchor: "e79", complete: false });
+    // The root page and retained latest suffix are disjoint. The same bounded
+    // control walks the missing middle instead of declaring false exhaustion.
+    while (f.view().trimmed) expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.map(row => row.id));
+    expect(f.view().history).toMatchObject({ anchor: "e0", complete: true });
+  });
+
+  it("recovers a producer-split middle gap even when no device trim created it", async () => {
+    const request = vi.fn(async (params: Params) => historyWindow(source, params.window!, scope));
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    const held = f.view();
+    const root = historyWindow({ entries: entries.slice(0, 10), leafId: "e9" }, { all: true }, scope);
+    f.dispatch({ type: "historyPrepend", path: state.path, before: held.history!.before!, anchor: held.history!.anchor!,
+      baseRevision: scope.revision, ownerRevision: held.historyRevision, entries: root.entries,
+      window: { ...root.window, complete: false } });
+
+    expect(f.view().history).toMatchObject({ anchor: "e40", complete: false });
+    expect(f.view().history?.before).toBeUndefined();
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ window: { beforeEntry: "e40", limit: 40 }, baseRevision: scope.revision }));
+    expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.map(row => row.id));
+    expect(f.view().history?.complete).toBe(true);
   });
 
   it("keeps a body-heavy retained window when its old anchor-to-live suffix exceeds the page ceiling", async () => {
@@ -184,9 +203,12 @@ describe("history request ownership", () => {
     expect(f.view()).toBe(accepted);
   });
 
-  it("rejects retained-anchor recovery from another producer revision", async () => {
+  it("rejects retained-anchor recovery when the producer cannot prove the held revision", async () => {
     let recovering = false;
-    const request = vi.fn(async (params: Params) => historyWindow(source, params.window!, recovering ? { ...scope, revision: "other-revision" } : scope));
+    const request = vi.fn(async (params: Params) => {
+      if (recovering) throw { code: ErrorCodes.RevisionUnavailable };
+      return historyWindow(source, params.window!, scope);
+    });
     const f = fixture(request);
     await f.loader.read(state.path, true);
     f.dispatch({ type: "views/trim", paths: [state.path], keepBytes: 1, at: "2026-09-18T00:00:00.000Z",
@@ -196,6 +218,31 @@ describe("history request ownership", () => {
 
     expect(await f.loader.earlier(state.path, () => true)).toBe(false);
     expect(f.view()).toBe(held);
+  });
+
+  it("adopts a proved append revision while preserving the owner and retained rows", async () => {
+    const appended = [
+      { type: "message", id: "e80", parentId: "e79", message: { role: "user", content: "new prompt" } },
+      { type: "message", id: "e81", parentId: "e80", message: { role: "assistant", content: "new answer" } },
+    ];
+    const evolved = { ...scope, revision: "r1.test.appended" };
+    let page = false;
+    const request = vi.fn(async (params: Params) => historyWindow(
+      page ? { entries: [...entries, ...appended], leafId: "e81" } : source,
+      params.window!, page ? evolved : scope,
+    ));
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    const ownerRevision = f.view().historyRevision;
+    page = true;
+
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+
+    expect(request.mock.calls[1]![0]).toMatchObject({ baseRevision: scope.revision });
+    expect(f.view().entries).toEqual(entries);
+    expect(f.view().history).toMatchObject({ revision: evolved.revision, complete: true });
+    expect(f.view().validated?.revision).toBe(evolved.revision);
+    expect(f.view().historyRevision).toBe(ownerRevision);
   });
 
   it("drops an older page when a trim overtakes it, then the same control path still works", async () => {
@@ -315,6 +362,9 @@ describe("history request ownership", () => {
     const f = fixture(async params => params.window && "before" in params.window ? old.promise : historyWindow(source, params.window!, scope));
     await f.loader.read(state.path);
     const before = f.view().history!.before!;
+    const staleAnchor = f.view().history!.anchor!;
+    const staleBaseRevision = f.view().history!.revision;
+    const staleOwnerRevision = f.view().historyRevision;
     const earlier = f.loader.earlier(state.path, () => true);
     await f.replace(async params => historyWindow(source, params.window!, scope)).recent(state.path, () => true);
     const accepted = f.view();
@@ -322,7 +372,7 @@ describe("history request ownership", () => {
     old.resolve(stale);
     expect(await earlier).toBe(false);
     expect(f.view()).toBe(accepted);
-    f.dispatch({ type: "historyPrepend", path: state.path, before, entries: stale.entries, window: stale.window });
+    f.dispatch({ type: "historyPrepend", path: state.path, before, anchor: staleAnchor, baseRevision: staleBaseRevision, ownerRevision: staleOwnerRevision, entries: stale.entries, window: stale.window });
     expect(f.view()).toBe(accepted);
   });
 

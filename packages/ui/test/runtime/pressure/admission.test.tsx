@@ -29,7 +29,8 @@ vi.mock("../../../src/client.js", async (original) => {
       const p = params as import("@lasercode/protocol").ClientRequests["pi/session/entries"]["params"];
       if (!p.window) return result;
       return historyWindow(result as { entries: unknown[]; leafId: string | null }, p.window, {
-        path: p.path, epoch: "fixture", seq: FakeWorkerClient.world.live[p.path]!.seq,
+        sessionId: p.path, epoch: "fixture", seq: FakeWorkerClient.world.live[p.path]!.seq,
+        revision: "r1.test.fixture", environmentKey: "e1.test.fixture",
       });
     }
   } };

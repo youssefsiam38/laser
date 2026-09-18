@@ -66,10 +66,11 @@ describe("reconciling a re-entry with its authority", () => {
     await f.loader.recent(state.path, () => true);
     expect(f.request.mock.calls[1]![0]).toMatchObject({ window: { tail: 40 }, baseRevision: "r1.env.40" });
 
-    // Older pages, anchors and whole trees keep their exact request semantics.
+    // Older pages carry the held producer revision; whole-tree reads remain independent.
     await f.loader.earlier(state.path, () => true);
     await f.loader.all(state.path, () => true);
-    for (const [params] of f.request.mock.calls.slice(2)) expect(params.baseRevision).toBeUndefined();
+    expect(f.request.mock.calls[2]![0].baseRevision).toBe("r1.env.40");
+    expect(f.request).toHaveBeenCalledTimes(3);
   });
 
   it("appends a proved suffix, keeps the cached cursor and never claims the delta's own page", async () => {

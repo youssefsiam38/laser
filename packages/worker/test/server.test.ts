@@ -295,9 +295,9 @@ describe("WorkerServer", () => {
       const response = await loading;
       expect(reads).toBe(2);
       expect(response.result).toMatchObject({ entries: rows.slice(8), leafId: "e11", window: { seq: 1, userOffset: 4, live: { message: { value: { content: [{ text: "before after" }] } } } } });
-      const { before, epoch } = (response.result as { window: { before: string; epoch: string } }).window;
+      const { before, epoch, revision } = (response.result as { window: { before: string; epoch: string; revision: string } }).window;
       expect(h.notifications("session/update").at(-1)?.params).toMatchObject({ seq: 1, epoch });
-      const older = await h.call(3, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { before, limit: 4 } });
+      const older = await h.call(3, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { before, limit: 4 }, baseRevision: revision });
       expect(older.result).toMatchObject({ entries: rows.slice(4, 8), window: { seq: 1, userOffset: 2 } });
       expect(older.result).not.toHaveProperty("window.live");
     } finally { await h.server.dispose(); }

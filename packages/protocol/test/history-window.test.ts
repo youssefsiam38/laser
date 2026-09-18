@@ -197,8 +197,10 @@ describe("history windows", () => {
       { path: PATH, window: { tail: 0 } },
       { path: PATH, window: { tail: 1000 } },
       { path: PATH, window: { tail: 40, all: true } },
-      { path: PATH, window: { beforeEntry: "entry", before: "cursor" } },
-      { path: PATH, window: { beforeEntry: "" } },
+      { path: PATH, window: { before: "cursor" } },
+      { path: PATH, window: { beforeEntry: "entry" } },
+      { path: PATH, window: { beforeEntry: "entry", before: "cursor" }, baseRevision: scope.revision },
+      { path: PATH, window: { beforeEntry: "" }, baseRevision: scope.revision },
       { path: PATH, authority: "durable" },
       { path: PATH, baseRevision: "" },
     ]) {

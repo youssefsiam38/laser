@@ -119,11 +119,11 @@ describe("worker-free session projection", () => {
       expect(reads).toEqual(entries.slice(-40).map(entry => (entry as { id: string }).id));
       expect(JSON.stringify(tail.window?.before)).not.toContain(f.path);
       reads.length = 0;
-      const older = await project(projection, f.path, { before: tail.window!.before! });
+      const older = await project(projection, f.path, { before: tail.window!.before! }, tail.window!.revision);
       expect(older.entries).toEqual(entries.slice(-80, -40));
       expect(reads).toEqual(entries.slice(-80, -40).map(entry => (entry as { id: string }).id));
       reads.length = 0;
-      const recovered = await project(projection, f.path, { beforeEntry: "e200", limit: 40 });
+      const recovered = await project(projection, f.path, { beforeEntry: "e200", limit: 40 }, tail.window!.revision);
       expect(recovered.entries).toEqual(older.entries);
       expect(recovered.window?.before).toBe(older.window?.before);
       expect(reads).toEqual(entries.slice(-80, -40).map(entry => (entry as { id: string }).id));
@@ -139,13 +139,14 @@ describe("worker-free session projection", () => {
       const { projection } = services();
       const tail = await project(projection, f.path, { tail: 4 });
       appendFileSync(f.path, `${JSON.stringify(message("e12", "e11", 12))}\n`);
-      const older = await project(projection, f.path, { before: tail.window!.before!, limit: 4 });
+      const older = await project(projection, f.path, { before: tail.window!.before!, limit: 4 }, tail.window!.revision);
       expect(older.entries).toEqual(messages(12).slice(4, 8));
-      expect((await project(projection, f.path, { beforeEntry: "e8", limit: 4 })).entries).toEqual(older.entries);
+      expect(older.window!.revision).not.toBe(tail.window!.revision);
+      expect((await project(projection, f.path, { beforeEntry: "e8", limit: 4 }, tail.window!.revision)).entries).toEqual(older.entries);
 
       appendFileSync(f.path, `${JSON.stringify(message("fork", "e1", 14))}\n`);
-      await expect(projection.read(f.path, { before: tail.window!.before!, limit: 4 })).rejects.toThrow("history changed");
-      await expect(projection.read(f.path, { beforeEntry: "e8", limit: 4 })).rejects.toThrow("history changed");
+      await expect(projection.read(f.path, { before: tail.window!.before!, limit: 4 }, tail.window!.revision)).resolves.toMatchObject({ kind: "refuse", error: { code: ErrorCodes.RevisionUnavailable } });
+      await expect(projection.read(f.path, { beforeEntry: "e8", limit: 4 }, tail.window!.revision)).resolves.toMatchObject({ kind: "refuse", error: { code: ErrorCodes.RevisionUnavailable } });
     } finally {
       f.cleanup();
     }
@@ -267,7 +268,7 @@ describe("worker-free session projection", () => {
       expect(page.entries).toEqual(live!.entries);
       expect(stableWindow(page.window!)).toEqual(stableWindow(live!.window));
       expect(historyContentSerializedBytes(page.entries, page.window?.context ?? [])).toBeLessThanOrEqual(HISTORY_PAGE_BYTE_LIMIT);
-      const before = await project(service.projection, f.path, { before: page.window!.before!, limit: 40 });
+      const before = await project(service.projection, f.path, { before: page.window!.before!, limit: 40 }, page.window!.revision);
       expect(before.window).toMatchObject({ mode: "replace", before: expect.any(String) });
       expect(before.entries.length).toBeLessThan(40);
       expect(historyContentSerializedBytes(before.entries, before.window?.context ?? [])).toBeLessThanOrEqual(HISTORY_PAGE_BYTE_LIMIT);
@@ -328,7 +329,7 @@ describe("worker-free session projection", () => {
       expect(tail.result.entries.map(entry => (entry as { id: string }).id)).toEqual(["huge-a"]);
       expect(tail.result.window?.before).toBeTruthy();
       console.info(`RP-12 pathological 20k/tail:200: ${tailElapsedMs.toFixed(2)} ms`);
-      const older = await projection.read(f.path, { before: tail.result.window!.before! });
+      const older = await projection.read(f.path, { before: tail.result.window!.before! }, tail.result.window!.revision);
       if (older.kind !== "answer") throw new Error("expected the prompt page");
       expect(older.result.entries.map(entry => (entry as { id: string }).id).at(-1)).toBe("huge-u");
       reads.mockClear();

@@ -729,6 +729,17 @@ export class WorkerServer {
             const resolved = req.params.baseRevision === undefined
               ? undefined
               : live.revisions.resolve(req.params.baseRevision, this.revisionHeader(live), snapshot.entries, snapshot.leafId);
+            // Older pages merge into rows the client already holds. Require the
+            // existing revision service to prove those rows are still the
+            // current state or a byte-identical prefix; cursor/entry identity
+            // alone cannot detect a same-id rewrite or compaction barrier.
+            if (("before" in req.params.window || "beforeEntry" in req.params.window)
+              && (resolved?.base === "stale" || !resolved?.state)) {
+              throw new ProtocolError(
+                ErrorCodes.RevisionUnavailable,
+                "This conversation changed since that page was read. Reload it and try again.",
+              );
+            }
             // Only a live-edge tail can be spliced onto a cached revision.
             // Older-page, search-anchor and all-history requests retain their
             // exact tree semantics even when the base is current or a prefix.
