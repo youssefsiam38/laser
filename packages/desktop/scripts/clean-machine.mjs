@@ -547,7 +547,10 @@ record(
 // This asks the default backend and the pure engine the same three questions
 // and requires the same three answers from both, so a packaging change that
 // leaves the guard unable to answer — which would reject every regex search a
-// person makes — fails the gate here instead of on their machine.
+// person makes — fails the gate here instead of on their machine. The analysis
+// budget is generous on purpose: what is being checked is that the engine is
+// there and answers, not how fast it answers, and an emulated arm64 runner has
+// returned `unknown` at 253 ms against a 250 ms budget.
 const REDOS_CASES = [
   { source: "^(a|a)*$", expect: "vulnerable" },
   { source: "get_.*_tool", expect: "vulnerable" },
@@ -559,7 +562,7 @@ const redosScript =
   `const { checkSync } = req("recheck");` +
   `const cases = ${JSON.stringify(REDOS_CASES)};` +
   `const out = [];` +
-  `for (const c of cases) { const t = Date.now(); const r = checkSync(c.source, "i", { attackTimeout: 50, incubationTimeout: 50, timeout: 250 });` +
+  `for (const c of cases) { const t = Date.now(); const r = checkSync(c.source, "i", { attackTimeout: 1000, incubationTimeout: 1000, timeout: 10000 });` +
   ` out.push({ source: c.source, expect: c.expect, status: r.status, ms: Date.now() - t }); }` +
   `console.log(JSON.stringify({ backend: process.env.RECHECK_SYNC_BACKEND || "default", results: out }));`;
 const redosRuns = [
