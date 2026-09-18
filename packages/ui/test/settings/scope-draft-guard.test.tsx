@@ -22,6 +22,13 @@ async function flush() {
   await act(async () => { await Promise.resolve(); });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
 async function mount(drafts: ScopeDraft[]) {
   await act(async () => root.render(
     <TooltipProvider>
@@ -176,4 +183,108 @@ it("lets the newer scope request win while the first confirmation is open", asyn
   await act(async () => button("Discard and switch").click());
   expect(await second).toBe(true);
   expect(workbench?.settingsScope).toEqual({ view: "project", projectCwd: "/two" });
+});
+
+it("does not let delayed Save A settle or disable newer navigation B", async () => {
+  const firstSave = deferred<boolean>();
+  const secondDraftSave = vi.fn(async () => true);
+  await mount([
+    { id: "first", label: "First draft", save: vi.fn(() => firstSave.promise), discard: vi.fn() },
+    { id: "second", label: "Second draft", save: secondDraftSave, discard: vi.fn() },
+  ]);
+
+  let navigationA!: Promise<boolean>;
+  let navigationB!: Promise<boolean>;
+  await act(async () => {
+    navigationA = workbench!.requestSettingsScope({ view: "project", projectCwd: "/a" });
+    await Promise.resolve();
+  });
+  await act(async () => { button("Save and switch").click(); await Promise.resolve(); });
+  await act(async () => {
+    navigationB = workbench!.requestSettingsScope({ view: "project", projectCwd: "/b" });
+    await Promise.resolve();
+  });
+  expect(await navigationA).toBe(false);
+  expect(button("Save and switch").disabled).toBe(false);
+
+  await act(async () => { firstSave.resolve(true); await firstSave.promise; });
+  expect(secondDraftSave).not.toHaveBeenCalled();
+  expect(button("Save and switch").disabled).toBe(false);
+  await act(async () => button("Keep editing").click());
+  expect(await navigationB).toBe(false);
+  expect(workbench?.settingsScope).toEqual({ view: "global" });
+});
+
+it("does not let a rejected Save A close newer navigation B", async () => {
+  const oldSave = deferred<boolean>();
+  await mount([{ id: "provider", label: "Provider sign-in", save: () => oldSave.promise, discard: vi.fn() }]);
+
+  let navigationA!: Promise<boolean>;
+  let navigationB!: Promise<boolean>;
+  await act(async () => {
+    navigationA = workbench!.requestSettingsScope({ view: "project", projectCwd: "/a" });
+    await Promise.resolve();
+  });
+  await act(async () => { button("Save and switch").click(); await Promise.resolve(); });
+  await act(async () => {
+    navigationB = workbench!.requestSettingsScope({ view: "project", projectCwd: "/b" });
+    await Promise.resolve();
+  });
+  expect(await navigationA).toBe(false);
+  await act(async () => { oldSave.reject(new Error("Old target disconnected")); await oldSave.promise.catch(() => undefined); });
+  expect(button("Save and switch").disabled).toBe(false);
+  await act(async () => button("Keep editing").click());
+  expect(await navigationB).toBe(false);
+});
+
+it("does not let delayed Discard A settle newer navigation B", async () => {
+  const discardA = deferred<void>();
+  await mount([{ id: "provider", label: "Provider sign-in", discard: () => discardA.promise }]);
+
+  let navigationA!: Promise<boolean>;
+  let navigationB!: Promise<boolean>;
+  await act(async () => {
+    navigationA = workbench!.requestSettingsScope({ view: "project", projectCwd: "/a" });
+    await Promise.resolve();
+  });
+  await act(async () => { button("Discard and switch").click(); await Promise.resolve(); });
+  await act(async () => {
+    navigationB = workbench!.requestSettingsScope({ view: "project", projectCwd: "/b" });
+    await Promise.resolve();
+  });
+  expect(await navigationA).toBe(false);
+
+  await act(async () => { discardA.resolve(); await discardA.promise; });
+  expect(button("Discard and switch").disabled).toBe(false);
+  await act(async () => button("Keep editing").click());
+  expect(await navigationB).toBe(false);
+  expect(workbench?.settingsScope).toEqual({ view: "global" });
+});
+
+it.each(["environment replacement", "guard unmount"] as const)("stops sequential saves after %s", async (interruption) => {
+  const firstSave = deferred<boolean>();
+  const secondSave = vi.fn(async () => true);
+  const drafts: ScopeDraft[] = [
+    { id: "first", label: "First draft", save: () => firstSave.promise, discard: vi.fn() },
+    { id: "second", label: "Second draft", save: secondSave, discard: vi.fn() },
+  ];
+  await mount(drafts);
+
+  let navigation!: Promise<boolean>;
+  await act(async () => {
+    navigation = workbench!.requestSettingsScope({ view: "project", projectCwd: "/one" });
+    await Promise.resolve();
+  });
+  await act(async () => { button("Save and switch").click(); await Promise.resolve(); });
+  if (interruption === "environment replacement") {
+    await act(async () => { deviceStore.activate(testDescriptor({ environmentKey: OTHER_ENVIRONMENT_KEY })); });
+  } else {
+    await act(async () => root.render(
+      <TooltipProvider><WorkbenchProvider><Probe /></WorkbenchProvider></TooltipProvider>,
+    ));
+  }
+  expect(await navigation).toBe(false);
+
+  await act(async () => { firstSave.resolve(true); await firstSave.promise; });
+  expect(secondSave).not.toHaveBeenCalled();
 });

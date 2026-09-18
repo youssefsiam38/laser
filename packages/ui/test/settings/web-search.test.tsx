@@ -27,9 +27,16 @@ beforeEach(() => {
   });
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
-async function render(view: "global" | "project" | "effective" = "global", onDraftChange?: (draft: ScopeDraft | undefined) => void) {
+async function render(view: "global" | "project" | "effective" = "global", onDraftChange?: (providerId: string, draft: ScopeDraft | undefined) => void) {
   await act(async () => root.render(
-    <TooltipProvider><WebSearchTab neutralRouteCwd="/project" view={view} onDraftChange={onDraftChange} /></TooltipProvider>,
+    <TooltipProvider>
+      <WebSearchTab
+        neutralRouteCwd="/neutral"
+        view={view}
+        {...(view === "global" ? {} : { projectCwd: "/selected-project" })}
+        onDraftChange={onDraftChange}
+      />
+    </TooltipProvider>,
   ));
 }
 async function click(text: string) {
@@ -43,31 +50,49 @@ it("requires an explicit sharing action and can revoke without model logout", as
   expect(container.textContent).toContain("Reuse this model connection");
   expect(mocks.request.mock.calls.some(([method]) => method === "web-search/configure")).toBe(false);
   await click("Allow, test and use");
-  expect(mocks.request).toHaveBeenCalledWith("web-search/configure", { cwd: "/project", change: { action: "configure", provider: "openai", connection: { source: "shared", sharedProvider: "openai" }, activate: true } });
+  expect(mocks.request).toHaveBeenCalledWith("web-search/configure", { cwd: "/neutral", change: { action: "configure", provider: "openai", connection: { source: "shared", sharedProvider: "openai" }, activate: true } });
   expect(status.selectedProvider).toBe("openai");
   expect(container.textContent).toContain("OpenAI passed the test and is the only selected search provider");
   await click("Revoke search access");
   expect(status.providers.find((p) => p.id === "openai")?.source).toBe("none");
   expect(mocks.request.mock.calls.some(([method]) => method === "pi/providers/logout")).toBe(false);
 });
-it("changes availability without changing any saved connection", async () => {
-  await render(); await click("Enable web search");
-  expect(mocks.request).toHaveBeenCalledWith("feature/set", { id: "web-search", scope: "global", enabled: true, cwd: "/project" });
+it("changes Global availability through the neutral route without changing a connection", async () => {
+  await render();
+  expect(mocks.request).toHaveBeenCalledWith("feature/list", {});
+  expect(mocks.request).toHaveBeenCalledWith("web-search/status", { cwd: "/neutral" });
+  expect(mocks.request).toHaveBeenCalledWith("pi/providers/list", { cwd: "/neutral" });
+  await click("Enable web search");
+  expect(mocks.request).toHaveBeenCalledWith("feature/set", { id: "web-search", scope: "global", enabled: true, cwd: "/neutral" });
   expect(mocks.request.mock.calls.some(([method]) => method === "web-search/configure")).toBe(false);
 });
-it("keeps the global service on its neutral route in Project and makes Effective read-only", async () => {
+it("keeps connections neutral while Project feature state and writes use the selected project", async () => {
   await render("project");
-  expect(mocks.request).toHaveBeenCalledWith("web-search/status", { cwd: "/project" });
-  await act(async () => root.unmount());
-  root = createRoot(container);
+  expect(mocks.request).toHaveBeenCalledWith("web-search/status", { cwd: "/neutral" });
+  expect(mocks.request).toHaveBeenCalledWith("pi/providers/list", { cwd: "/neutral" });
+  expect(mocks.request).toHaveBeenCalledWith("feature/list", { cwd: "/selected-project" });
+  await click("Enable web search");
+  expect(mocks.request).toHaveBeenCalledWith("feature/set", {
+    id: "web-search",
+    scope: "project",
+    enabled: true,
+    cwd: "/selected-project",
+  });
+});
+it("reads Effective feature state from the selected project and exposes no write", async () => {
   await render("effective");
-  expect([...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.getAttribute("aria-label") === "Enable web search")?.disabled).toBe(true);
+  expect(mocks.request).toHaveBeenCalledWith("feature/list", { cwd: "/selected-project" });
+  expect(mocks.request).toHaveBeenCalledWith("web-search/status", { cwd: "/neutral" });
+  const toggle = [...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.getAttribute("aria-label") === "Enable web search");
+  expect(toggle?.disabled).toBe(true);
+  await act(async () => toggle?.click());
+  expect(mocks.request.mock.calls.some(([method]) => method === "feature/set")).toBe(false);
   expect(container.textContent).toContain("Effective settings are a read-only preview");
 });
 
 it("reports and discards a typed connection draft", async () => {
   let draft: ScopeDraft | undefined;
-  await render("global", (next) => { draft = next; });
+  await render("global", (_providerId, next) => { draft = next; });
   await act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.textContent?.startsWith("SearXNG"))!.click());
   const address = container.querySelector<HTMLInputElement>('input[placeholder="https://search.example.com"]')!;
   await act(async () => {
@@ -78,6 +103,38 @@ it("reports and discards a typed connection draft", async () => {
   expect(draft?.label).toContain("SearXNG");
   await act(async () => { await draft?.discard(); });
   expect(address.value).toBe("");
+});
+
+it("keeps two independently expanded provider drafts registered", async () => {
+  const active = new Map<string, ScopeDraft>();
+  await render("global", (providerId, draft) => {
+    if (draft) active.set(providerId, draft);
+    else active.delete(providerId);
+  });
+  const open = async (name: string) => {
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.textContent?.startsWith(name))!.click());
+  };
+  const type = async (selector: string, value: string) => {
+    const input = container.querySelector<HTMLInputElement>(selector)!;
+    expect(input, selector).not.toBeNull();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+
+  await open("SearXNG");
+  await type('input[placeholder="https://search.example.com"]', "https://search.local");
+  await open("Bright Data");
+  await type('input[placeholder="Your SERP zone name"]', "search-zone");
+
+  expect(active.size).toBe(2);
+  expect([...active.values()].map((draft) => draft.label)).toEqual([
+    "SearXNG search connection",
+    "Bright Data search connection",
+  ]);
+  expect(container.querySelector('input[placeholder="https://search.example.com"]')).not.toBeNull();
+  expect(container.querySelector('input[placeholder="Your SERP zone name"]')).not.toBeNull();
 });
 
 it("has a retryable initial failure instead of an empty screen", async () => {

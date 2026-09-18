@@ -98,7 +98,7 @@ export function ModelsTab(props: ModelsTabProps) {
   }, []);
   const reportProviderDraft = useCallback((draft: ScopeDraft | undefined) => reportDraft("provider", draft), [reportDraft]);
   const reportFallbackDraft = useCallback((draft: ScopeDraft | undefined) => reportDraft("fallback", draft), [reportDraft]);
-  const reportSearchDraft = useCallback((draft: ScopeDraft | undefined) => reportDraft("search", draft), [reportDraft]);
+  const reportSearchDraft = useCallback((providerId: string, draft: ScopeDraft | undefined) => reportDraft(`search:${providerId}`, draft), [reportDraft]);
   const activeDrafts = useMemo(() => Object.values(drafts), [drafts]);
   return (
     <Tabs.Root defaultValue="models" className="flex h-full min-h-0 flex-col">

@@ -69,7 +69,7 @@ export function ProviderSignIn({ routeCwd, provider, method, onDone, onCancel, c
   /** Events that arrived before `start` answered with the id. */
   const early = useRef<Array<{ id: string; event: ProviderLoginEvent }>>([]);
   const doneRef = useRef(false);
-  const mounted = useRef(true);
+  const attemptRef = useRef(0);
   const copy = useCopy();
 
   const apply = useCallback((event: ProviderLoginEvent) => {
@@ -118,7 +118,7 @@ export function ProviderSignIn({ routeCwd, provider, method, onDone, onCancel, c
     [apply, client, provider.id, routeCwd],
   );
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (attempt: number) => {
     setFlow(fresh());
     setAnswer("");
     setSubmitted(false);
@@ -126,7 +126,7 @@ export function ProviderSignIn({ routeCwd, provider, method, onDone, onCancel, c
     doneRef.current = false;
     try {
       const { id } = await client.request("pi/providers/login/start", { cwd: routeCwd, provider: provider.id, method });
-      if (!mounted.current) {
+      if (attemptRef.current !== attempt) {
         await client.request("pi/providers/login/cancel", { cwd: routeCwd, id }).catch(() => undefined);
         return;
       }
@@ -134,15 +134,17 @@ export function ProviderSignIn({ routeCwd, provider, method, onDone, onCancel, c
       for (const parked of early.current) if (parked.id === id) apply(parked.event);
       early.current = [];
     } catch (startError) {
-      setFlow((current) => ({ ...current, status: "error", error: startError instanceof Error ? startError.message : String(startError) }));
+      if (attemptRef.current === attempt) {
+        setFlow((current) => ({ ...current, status: "error", error: startError instanceof Error ? startError.message : String(startError) }));
+      }
     }
   }, [apply, client, method, provider.id, routeCwd]);
 
   useEffect(() => {
-    mounted.current = true;
-    void start();
+    const attempt = ++attemptRef.current;
+    void start(attempt);
     return () => {
-      mounted.current = false;
+      attemptRef.current += 1;
       const current = flowRef.current;
       if (current.id && (current.status === "starting" || current.status === "waiting")) {
         void client.request("pi/providers/login/cancel", { cwd: routeCwd, id: current.id }).catch(() => undefined);
@@ -326,7 +328,7 @@ export function ProviderSignIn({ routeCwd, provider, method, onDone, onCancel, c
         </p>
       )}
 
-      {flow.status === "error" && <ErrorState title={`Could not sign in to ${provider.name}`} detail={flow.error} onRetry={() => void start()} retryLabel="Try again" />}
+      {flow.status === "error" && <ErrorState title={`Could not sign in to ${provider.name}`} detail={flow.error} onRetry={() => void start(++attemptRef.current)} retryLabel="Try again" />}
 
       {flow.status === "cancelled" && <p className="text-sm text-ink-2">Sign-in was cancelled.</p>}
 

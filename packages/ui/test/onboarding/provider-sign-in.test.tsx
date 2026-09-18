@@ -57,3 +57,47 @@ it("stops loading when submitting the answer fails", async () => {
   expect(container.querySelector('[data-slot="generation-loader"]')).toBeNull();
   expect(container.textContent).toContain("Host connection lost");
 });
+
+it("cancels a delayed obsolete start instead of adopting it into a newer attempt", async () => {
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  let resolveOld!: (value: { id: string }) => void;
+  let starts = 0;
+  mocks.request.mockReset().mockImplementation((method: string) => {
+    if (method === "pi/providers/login/start") {
+      starts += 1;
+      if (starts === 1) return new Promise((resolve) => { resolveOld = resolve; });
+      return Promise.resolve({ id: "new-login" });
+    }
+    return Promise.resolve({});
+  });
+
+  const props = { routeCwd: "/project", provider, onDone: () => {}, onCancel: () => {} };
+  await act(async () => root.render(<ProviderSignIn {...props} method="api_key" />));
+  await act(async () => root.render(<ProviderSignIn {...props} method="oauth" />));
+  await act(async () => { resolveOld({ id: "old-login" }); await Promise.resolve(); });
+
+  expect(mocks.request).toHaveBeenCalledWith("pi/providers/login/cancel", { cwd: "/project", id: "old-login" });
+  await act(async () => listener("pi/providers/login/event", {
+    cwd: "/project",
+    provider: "openai",
+    id: "new-login",
+    event: { type: "prompt", prompt: { id: "new-key", kind: "secret", message: "New API key" } },
+  }));
+  expect(container.textContent).toContain("New API key");
+});
+
+it("cancels a start that resolves after unmount", async () => {
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  let resolveStart!: (value: { id: string }) => void;
+  mocks.request.mockReset().mockImplementation((method: string) => {
+    if (method === "pi/providers/login/start") return new Promise((resolve) => { resolveStart = resolve; });
+    return Promise.resolve({});
+  });
+  await act(async () => root.render(<ProviderSignIn routeCwd="/project" provider={provider} method="api_key" onDone={() => {}} onCancel={() => {}} />));
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await act(async () => { resolveStart({ id: "late-login" }); await Promise.resolve(); });
+  expect(mocks.request).toHaveBeenCalledWith("pi/providers/login/cancel", { cwd: "/project", id: "late-login" });
+});

@@ -20,12 +20,28 @@ vi.mock("../../src/runtime/index.js", () => {
   return { useCapability: () => ({ state: "available" }), useLaserStable: () => stable };
 });
 vi.mock("../../src/components/onboarding/index.js", () => ({ ProviderStep: () => null }));
-vi.mock("../../src/components/settings/WebSearchTab.js", () => ({ WebSearchTab: () => null }));
+vi.mock("../../src/components/settings/WebSearchTab.js", () => ({
+  WebSearchTab: ({ onDraftChange }: { onDraftChange?: (providerId: string, draft: { id: string; label: string; discard: () => void }) => void }) => (
+    <div>
+      <button type="button" onClick={() => onDraftChange?.("a", { id: "web-search-a", label: "Search A", discard: () => {} })}>Dirty Search A</button>
+      <button type="button" onClick={() => onDraftChange?.("b", { id: "web-search-b", label: "Search B", discard: () => {} })}>Dirty Search B</button>
+    </div>
+  ),
+}));
 
 import { ModelsTab } from "../../src/components/settings/ModelsTab.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
+import { WorkbenchProvider, useWorkbench, type WorkbenchState } from "../../src/components/workbench/index.js";
+import { deviceStore } from "../../src/runtime/device-storage.js";
+import { testDescriptor } from "../runtime/environment-fixture.js";
 
 let root: Root, container: HTMLDivElement;
+let workbench: WorkbenchState | undefined;
+
+function WorkbenchProbe() {
+  workbench = useWorkbench();
+  return null;
+}
 let providers: ProviderAuthInfo[];
 let models: ModelCatalogEntry[];
 let patterns: string[] | null;
@@ -71,6 +87,9 @@ function catalogue(): ModelCatalogEntry[] {
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  deviceStore.deactivate();
+  localStorage.clear();
+  deviceStore.activate(testDescriptor());
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -103,6 +122,8 @@ afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
   document.body.innerHTML = "";
+  deviceStore.deactivate();
+  workbench = undefined;
 });
 
 async function render(snap: SettingsSnapshot | undefined = snapshot({ enabledModels: patterns }), view: "global" | "project" | "effective" = "global") {
@@ -147,6 +168,39 @@ async function chooseView(label: "All" | "Enabled" | "Hidden") {
   await act(async () => item!.click());
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
+
+it("keeps each Web Search provider draft in the owning Models guard", async () => {
+  const props = {
+    settingsRouteCwd: "/p",
+    neutralRouteCwd: "/neutral",
+    view: "global" as const,
+    snapshot: snapshot({ enabledModels: patterns }),
+    onApply: async () => true,
+  };
+  await act(async () => root.render(
+    <TooltipProvider>
+      <WorkbenchProvider>
+        <WorkbenchProbe />
+        <ModelsTab {...props} />
+      </WorkbenchProvider>
+    </TooltipProvider>,
+  ));
+  await act(async () => {
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.textContent === "Dirty Search A")!.click();
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.textContent === "Dirty Search B")!.click();
+  });
+  let navigation!: Promise<boolean>;
+  await act(async () => {
+    navigation = workbench!.requestSettingsScope({ view: "project", projectCwd: "/next" });
+    await Promise.resolve();
+  });
+  expect(document.body.textContent).toContain("2 drafts belong to the current Settings target");
+  expect(document.body.textContent).toContain("Search A");
+  expect(document.body.textContent).toContain("Search B");
+  const keep = [...document.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.textContent === "Keep editing")!;
+  await act(async () => keep.click());
+  expect(await navigation).toBe(false);
+});
 
 // ---- row states ------------------------------------------------------------
 
