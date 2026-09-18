@@ -243,9 +243,13 @@ export default async function liveHistoryRetention(check) {
   let concurrentAnchor;
   let concurrentMarker;
   await activateEarlier(activation, async () => {
-    concurrentMarker = page.getByText(/Checkpoint 10\d+ is complete\./).last();
-    await concurrentMarker.waitFor();
-    concurrentAnchor = await concurrentMarker.evaluate(node => ({ top: node.getBoundingClientRect().top, text: node.textContent }));
+    // Follow the same words, not "whichever row is last": the mounted window
+    // moves with the reader, so re-resolving `.last()` after the page compares
+    // two different checkpoints and reports a preserved anchor as a lost one.
+    const marker = page.getByText(/Checkpoint 10\d+ is complete\./).last();
+    await marker.waitFor();
+    concurrentAnchor = await marker.evaluate(node => ({ top: node.getBoundingClientRect().top, text: node.textContent }));
+    concurrentMarker = page.getByText(concurrentAnchor.text, { exact: true }).first();
   });
   pages += 1;
   await concurrentMarker.waitFor();

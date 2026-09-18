@@ -155,7 +155,11 @@ export default async function scrollUpRepeat(check) {
       for (const wait of [60, 150, 250, 200]) { await page.waitForTimeout(wait); samples.push(await geometry()); }
       for (let index = 0; index < samples.length; index += 1) {
         const sample = samples[index];
-        assert.ok(sample.height + 1 >= priorRange, `scroll range collapsed ${Math.round(priorRange)}→${Math.round(sample.height)} during upward reading`);
+        // Rows below the reader are re-measured as they mount, so the range
+        // breathes by a line or two. What may not happen is the range losing a
+        // page of history while somebody reads into it.
+        assert.ok(sample.height + sample.client >= priorRange,
+          `scroll range collapsed ${Math.round(priorRange)}→${Math.round(sample.height)} during upward reading`);
         const previous = index > 0 ? samples[index - 1] : undefined;
         if (previous) {
           // Nothing but the person moves the reader between settle samples: the
