@@ -7,7 +7,7 @@
  * over to `ProviderSignIn`. A provider that says it supports neither is shown
  * without a verb, with the reason where the verb would be (R2).
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronRight, KeyRound, LogOut, UserRound } from "lucide-react";
 
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
@@ -23,9 +23,12 @@ import type { ProviderAuthInfo, ProviderLoginMethod } from "@lasercode/protocol"
 
 import { ProviderSignIn } from "./ProviderSignIn.js";
 import { sortProviders } from "./setup-model.js";
+import type { ScopeDraft } from "@/components/settings/ScopeDraftGuard";
+import { useCommittedTargetLifetime } from "@/components/settings/useCommittedTargetLifetime.js";
 
 export interface ProviderStepProps {
-  cwd: string;
+  routeCwd: string;
+  writable?: boolean;
   /** Called whenever the configured set changes, with how many are signed in. */
   onConfigured: (count: number) => void;
   /**
@@ -34,6 +37,7 @@ export interface ProviderStepProps {
    * second, near-identical Continue two centimetres away from it.
    */
   onBusyChange?: ((busy: boolean) => void) | undefined;
+  onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
 }
 
 /** Above this many, a filter box appears; below it, the list is short enough to read. */
@@ -52,7 +56,7 @@ const FILTER_THRESHOLD = 8;
 const credentialBadge = (provider: { oauth: boolean; source?: string | undefined }): string =>
   provider.oauth || provider.source === "environment" || provider.source === "fallback" ? "signed in" : "key saved";
 
-export function ProviderStep({ cwd, onConfigured, onBusyChange }: ProviderStepProps) {
+export function ProviderStep({ routeCwd, writable = true, onConfigured, onBusyChange, onDraftChange }: ProviderStepProps) {
   const { client } = useLaserStable();
   const manageProviders = useCapability("pi/providers/login/start", { presentation: "explained" });
   const [providers, setProviders] = useState<ProviderAuthInfo[]>();
@@ -61,20 +65,31 @@ export function ProviderStep({ cwd, onConfigured, onBusyChange }: ProviderStepPr
   const [method, setMethod] = useState<ProviderLoginMethod>();
   const [filter, setFilter] = useState("");
   const [signingOut, setSigningOut] = useState<string>();
+  const generation = useRef(0);
+  const target = useCommittedTargetLifetime(routeCwd);
 
   const load = useCallback(async () => {
+    const lease = target.capture();
+    if (!lease) return;
+    const request = ++generation.current;
     setError(undefined);
     try {
-      const { providers: list } = await client.request("pi/providers/list", { cwd });
+      const { providers: list } = await client.request("pi/providers/list", { cwd: routeCwd });
+      if (request !== generation.current || !target.isCurrent(lease)) return;
       setProviders(list);
       onConfigured(list.filter((p) => p.configured).length);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : String(loadError));
+      if (request === generation.current && target.isCurrent(lease)) setError(loadError instanceof Error ? loadError.message : String(loadError));
     }
-  }, [client, cwd, onConfigured]);
+  }, [client, onConfigured, routeCwd, target]);
 
   useEffect(() => {
+    setProviders(undefined);
+    setSelected(undefined);
+    setMethod(undefined);
+    setSigningOut(undefined);
     void load();
+    return () => { generation.current += 1; };
   }, [load]);
 
   const current = providers?.find((p) => p.id === selected);
@@ -82,6 +97,21 @@ export function ProviderStep({ cwd, onConfigured, onBusyChange }: ProviderStepPr
   useEffect(() => {
     onBusyChange?.(signingIn);
   }, [onBusyChange, signingIn]);
+  useEffect(() => {
+    if (!current || !method) {
+      onDraftChange?.(undefined);
+      return;
+    }
+    onDraftChange?.({
+      id: "provider-sign-in",
+      label: `${current.name} sign-in`,
+      discard: () => {
+        setSelected(undefined);
+        setMethod(undefined);
+      },
+    });
+    return () => onDraftChange?.(undefined);
+  }, [current, method, onDraftChange]);
 
   const sorted = useMemo(() => sortProviders(providers ?? []), [providers]);
   const shown = useMemo(() => {
@@ -90,15 +120,19 @@ export function ProviderStep({ cwd, onConfigured, onBusyChange }: ProviderStepPr
   }, [sorted, filter]);
 
   const signOut = async (provider: ProviderAuthInfo) => {
+    const lease = target.capture();
+    if (!lease) return;
+    const request = generation.current;
     setSigningOut(provider.id);
     try {
-      const { providers: list } = await client.request("pi/providers/logout", { cwd, provider: provider.id });
+      const { providers: list } = await client.request("pi/providers/logout", { cwd: routeCwd, provider: provider.id });
+      if (request !== generation.current || !target.isCurrent(lease)) return;
       setProviders(list);
       onConfigured(list.filter((p) => p.configured).length);
     } catch (logoutError) {
-      setError(logoutError instanceof Error ? logoutError.message : String(logoutError));
+      if (request === generation.current && target.isCurrent(lease)) setError(logoutError instanceof Error ? logoutError.message : String(logoutError));
     } finally {
-      setSigningOut(undefined);
+      if (request === generation.current && target.isCurrent(lease)) setSigningOut(undefined);
     }
   };
 
@@ -113,10 +147,10 @@ export function ProviderStep({ cwd, onConfigured, onBusyChange }: ProviderStepPr
     );
   }
 
-  if (manageProviders.state !== "available") {
+  if (!writable || manageProviders.state !== "available") {
     return (
       <div className="flex flex-col gap-2">
-        {manageProviders.state === "explained" ? (
+        {writable && manageProviders.state === "explained" ? (
           <CapabilityNotice title="Provider changes are unavailable here" explanation={manageProviders.explanation ?? "Use a connection with settings access to change providers."} />
         ) : null}
         <ul className="flex max-h-72 flex-col gap-1 overflow-y-auto pe-0.5" aria-label="Providers">
@@ -136,7 +170,7 @@ export function ProviderStep({ cwd, onConfigured, onBusyChange }: ProviderStepPr
   if (current && method) {
     return (
       <ProviderSignIn
-        cwd={cwd}
+        routeCwd={routeCwd}
         provider={current}
         method={method}
         onDone={() => {

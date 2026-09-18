@@ -17,13 +17,20 @@ vi.mock("../../../src/runtime/index.js", () => {
 
 import { McpServersTab } from "../../../src/components/settings/mcp/McpServersTab.js";
 import { TooltipProvider } from "../../../src/components/ui/tooltip.js";
-import { click, field, findButton, inspection, manyTools, render, text, tool, type as typeInto } from "./harness.js";
+import { useWorkbench, type Workbench } from "../../../src/components/workbench/workbench-context.js";
+import { click, field, findButton, inspection, manyTools, renderInWorkbench as render, text, tool, type as typeInto } from "./harness.js";
 
 let root: Root;
 let servers: McpServerState[];
 let inspectResult: McpInspection;
 let saved: Array<{ scope: string; server: McpServerConfigInput; originalName?: string }>;
 let inspected: Array<{ scope: string; server?: McpServerConfigInput; name?: string }>;
+let workbench: Workbench | undefined;
+
+function WorkbenchProbe() {
+  workbench = useWorkbench();
+  return null;
+}
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -45,6 +52,7 @@ beforeEach(() => {
     throw new Error(`unexpected ${method}`);
   });
   mocks.toast.mockReset();
+  workbench = undefined;
 });
 
 afterEach(async () => {
@@ -52,13 +60,51 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount() {
+async function mount(view: "global" | "project" = "global") {
   ({ root } = await render(
     <TooltipProvider>
-      <McpServersTab cwd="/project" />
+      <McpServersTab routeCwd="/project" view={view} />
     </TooltipProvider>,
   ));
 }
+
+it("lets a blank real dialog switch without a guard, then guards a meaningful draft", async () => {
+  ({ root } = await render(
+    <TooltipProvider><WorkbenchProbe /><McpServersTab routeCwd="/project" view="global" /></TooltipProvider>,
+  ));
+  await click("Add a server");
+  await expect(workbench!.requestSettingsScope({ view: "project", projectCwd: "/next" })).resolves.toBe(true);
+  expect(findButton("Keep editing")).toBeUndefined();
+
+  await typeInto("Name it", "Docs");
+  await typeInto("Command", "docs-server");
+  let navigation!: Promise<boolean>;
+  await act(async () => {
+    navigation = workbench!.requestSettingsScope({ view: "effective", projectCwd: "/next" });
+    await Promise.resolve();
+  });
+  expect(findButton("Keep editing")).toBeDefined();
+  await click("Keep editing");
+  await expect(navigation).resolves.toBe(false);
+  expect((field("Name it") as HTMLInputElement).value).toBe("Docs");
+});
+
+it("saves a real dialog to its original Global target before switching", async () => {
+  ({ root } = await render(
+    <TooltipProvider><WorkbenchProbe /><McpServersTab routeCwd="/project" view="global" /></TooltipProvider>,
+  ));
+  await click("Add a server");
+  await typeInto("Name it", "Docs");
+  await typeInto("Command", "docs-server");
+  let navigation!: Promise<boolean>;
+  await act(async () => {
+    navigation = workbench!.requestSettingsScope({ view: "effective", projectCwd: "/saved-next" });
+    await Promise.resolve();
+  });
+  await click("Save and switch");
+  await expect(navigation).resolves.toBe(true);
+  expect(saved.at(-1)).toMatchObject({ scope: "global", server: { name: "docs" } });
+});
 
 it("tests the gallery definition it composed, then saves progressive discovery for 24 tools", async () => {
   await mount();
@@ -95,6 +141,16 @@ it("tests the gallery definition it composed, then saves progressive discovery f
   expect(saved).toHaveLength(1);
   expect(saved[0]!.server.tools).toEqual({ alwaysLoad: false });
   expect(mocks.toast).toHaveBeenCalledWith("info", expect.stringContaining("playwright is saved"));
+});
+
+it("locks a new server to the visible Project scope", async () => {
+  await mount("project");
+  await click("Add Playwright");
+  await click("Test");
+  expect(inspected[0]).toMatchObject({ cwd: "/project", scope: "project" });
+  expect(text()).toContain("Save it for Project settings.");
+  expect(findButton("This project")).toBeUndefined();
+  expect(findButton("Every project")).toBeUndefined();
 });
 
 it("chooses each own-Chrome mode, omits headless, and keeps unrelated form edits", async () => {
@@ -226,7 +282,8 @@ it("refuses to save a token sign-in with nothing in it", async () => {
     signIn.value = "bearer";
     signIn.dispatchEvent(new Event("change", { bubbles: true }));
   });
-  await click("Add");
+  const add = findButton("Add")!;
+  expect(add.disabled).toBe(true);
   expect(saved).toHaveLength(0);
-  expect(text()).toContain("Enter the token, or choose None.");
+  expect(text()).toContain("Needs a value.");
 });

@@ -87,7 +87,7 @@ export function Workbench() {
       <div className="min-h-0 flex-1">
         <Suspense fallback={<ScreenSkeleton />}>
           {shownPage === "settings" ? (
-            <SettingsScreen ambientCwd={cwd} initialTab={settingsTab} />
+            <SettingsScreen initialTab={settingsTab} />
           ) : shownPage === "agents" ? (
             <AgentsScreen cwd={cwd} target={agentsTarget} />
           ) : (

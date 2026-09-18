@@ -13,7 +13,7 @@ import { McpServerPanel, type McpServerPanelRow } from "@/components/assistant-u
 import { catalogStatusWords, toolCatalogFresh, useCatalogClock } from "./catalog.js";
 import { failedAgoPhrase, rowKey, scopeLabel, scopeNote, toolCountLabel, transportSummary } from "./model.js";
 
-export function toPanelRow(state: McpServerState, now = Date.now()): McpServerPanelRow {
+export function toPanelRow(state: McpServerState, now = Date.now(), canSignIn = true): McpServerPanelRow {
   const fresh = toolCatalogFresh(state.toolCatalog, now);
   const status = catalogStatusWords(state.status, state.toolCatalog, state.toolCount !== undefined, now);
   const counts = toolCountLabel(state);
@@ -27,7 +27,7 @@ export function toPanelRow(state: McpServerState, now = Date.now()): McpServerPa
     name: state.config.label?.trim() || state.config.name,
     transport: transport?.text ?? "No definition of its own",
     transportKind: transport?.kind ?? "Switched off here",
-    transportFull: transport?.full ?? "This entry only switches the every-project server off.",
+    transportFull: transport?.full ?? "This entry only switches the Global server off.",
     statusLabel: status.label,
     statusHelp: status.help,
     tone: status.tone,
@@ -36,7 +36,7 @@ export function toPanelRow(state: McpServerState, now = Date.now()): McpServerPa
     scope: scopeLabel(state.scope),
     note: scopeNote(state),
     detail,
-    needsAuth: state.status === "needs-auth",
+    needsAuth: canSignIn && state.status === "needs-auth",
     dimmed: state.shadowed || state.status === "off",
   };
 }
@@ -46,17 +46,19 @@ export function McpServerList({
   selectedId,
   onSelect,
   onSignIn,
+  signInScope,
 }: {
   servers: readonly McpServerState[];
   selectedId?: string | undefined;
   onSelect?: ((id: string) => void) | undefined;
   onSignIn?: ((id: string) => void) | undefined;
+  signInScope?: McpScope | undefined;
 }) {
   const nextExpiry = Math.min(...servers.map(server => server.toolCatalog?.expiresAt ?? 0).filter(expiry => expiry > Date.now()));
   const now = useCatalogClock(nextExpiry);
   const groups: Array<{ scope: McpScope; rows: McpServerPanelRow[] }> = [
-    { scope: "project", rows: servers.filter((entry) => entry.scope === "project").map(state => toPanelRow(state, now)) },
-    { scope: "global", rows: servers.filter((entry) => entry.scope === "global").map(state => toPanelRow(state, now)) },
+    { scope: "project", rows: servers.filter((entry) => entry.scope === "project").map(state => toPanelRow(state, now, signInScope === "project")) },
+    { scope: "global", rows: servers.filter((entry) => entry.scope === "global").map(state => toPanelRow(state, now, signInScope === "global")) },
   ];
   return (
     <div className="flex min-w-0 flex-col gap-5">
@@ -70,7 +72,7 @@ export function McpServerList({
             rows={group.rows}
             selectedId={selectedId}
             {...(onSelect ? { onSelect } : {})}
-            {...(onSignIn ? { onSignIn } : {})}
+            {...(onSignIn && signInScope === group.scope ? { onSignIn } : {})}
           />
         ))}
     </div>

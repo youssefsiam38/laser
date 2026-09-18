@@ -18,8 +18,7 @@ import { CapabilityNotice } from "@/components/capability-gate";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn } from "@/lib/utils";
-import { useLaserStable } from "@/runtime";
+import { useLaserStable, type SettingsScopeView } from "@/runtime";
 
 import { McpAddDialog } from "./McpAddDialog.js";
 import { McpGallery } from "./McpGallery.js";
@@ -28,67 +27,121 @@ import { McpInspector } from "./McpInspector.js";
 import { McpServerList } from "./McpServerList.js";
 import { McpSignInDialog, McpSignOutDialog } from "./McpSignIn.js";
 import { rowKey, serverTitle } from "./model.js";
+import { ScopeDraftGuard, type ScopeDraft } from "../ScopeDraftGuard.js";
+import { useCommittedTargetLifetime } from "../useCommittedTargetLifetime.js";
 
-type ScopeFilter = McpScope | "all";
+type McpAddTarget =
+  | { mode: "new" }
+  | { mode: "gallery"; entry: McpCatalogEntry }
+  | { mode: "edit" | "override"; edit: { scope: McpScope; config: McpServerConfig } };
 
-export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: string; projectOpen?: boolean; decision?: import("@/runtime/environment-capabilities").CapabilityDecision | undefined }) {
-  const writable = decision?.state === "available" || decision === undefined;
-  const readOnlyExplanation = decision?.state === "explained" ? decision.explanation : undefined;
+export function McpServersTab({ routeCwd, view, decision }: {
+  routeCwd: string;
+  view: SettingsScopeView;
+  decision?: import("@/runtime/environment-capabilities").CapabilityDecision | undefined;
+}) {
+  const writable = view !== "effective" && (decision?.state === "available" || decision === undefined);
+  const readOnlyExplanation = view === "effective"
+    ? "Effective settings are a read-only preview. Choose Global or Project to change MCP servers."
+    : decision?.state === "explained" ? decision.explanation : undefined;
+  const mutationScope: McpScope = view === "project" ? "project" : "global";
   const { client, actions } = useLaserStable();
   const [servers, setServers] = useState<McpServerState[]>();
   const [conversations, setConversations] = useState<NonNullable<ClientRequests["mcp/list"]["result"]["conversations"]>>([]);
   const [sources, setSources] = useState<McpImportSource[]>([]);
   const [detectFailed, setDetectFailed] = useState(false);
   const [error, setError] = useState<string>();
-  const [scopeFilter, setScopeFilter] = useState<ScopeFilter>("all");
   const [selectedId, setSelectedId] = useState<string>();
-  const [adding, setAdding] = useState<{ entry?: McpCatalogEntry; edit?: { scope: McpScope; config: McpServerConfig } }>();
+  const [adding, setAdding] = useState<McpAddTarget>();
   const [importing, setImporting] = useState(false);
   const [signIn, setSignIn] = useState<{ scope: McpScope; name: string; title: string }>();
   const [signOut, setSignOut] = useState<{ scope: McpScope; name: string; title: string }>();
+  const [drafts, setDrafts] = useState<Record<string, ScopeDraft>>({});
   const generation = useRef(0);
+  const detectGeneration = useRef(0);
+  const reportDraft = useCallback((slot: string, draft: ScopeDraft | undefined) => {
+    setDrafts((current) => {
+      if (!draft && !(slot in current)) return current;
+      const next = { ...current };
+      if (draft) next[slot] = draft;
+      else delete next[slot];
+      return next;
+    });
+  }, []);
+  const reportAddDraft = useCallback((draft: ScopeDraft | undefined) => reportDraft("add", draft), [reportDraft]);
+  const reportImportDraft = useCallback((draft: ScopeDraft | undefined) => reportDraft("import", draft), [reportDraft]);
+  const reportSignInDraft = useCallback((draft: ScopeDraft | undefined) => reportDraft("sign-in", draft), [reportDraft]);
+  const activeDrafts = useMemo(() => Object.values(drafts), [drafts]);
+  const targetKey = `${view}:${routeCwd}`;
+  const target = useCommittedTargetLifetime(targetKey);
+  const reportCurrentAddDraft = useCallback((draft: ScopeDraft | undefined) => {
+    if (target.capture()) reportAddDraft(draft);
+  }, [reportAddDraft, target]);
+  const reportCurrentImportDraft = useCallback((draft: ScopeDraft | undefined) => {
+    if (target.capture()) reportImportDraft(draft);
+  }, [reportImportDraft, target]);
+  const reportCurrentSignInDraft = useCallback((draft: ScopeDraft | undefined) => {
+    if (target.capture()) reportSignInDraft(draft);
+  }, [reportSignInDraft, target]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<boolean> => {
+    const lease = target.capture();
+    if (!lease) return false;
     const request = ++generation.current;
     setError(undefined);
     try {
-      const list = await client.request("mcp/list", { cwd });
-      if (request !== generation.current) return;
+      const list = await client.request("mcp/list", { cwd: routeCwd, view });
+      if (request !== generation.current || !target.isCurrent(lease)) return false;
       setServers(list.servers);
       setConversations(list.conversations ?? []);
+      return true;
     } catch (failure) {
-      if (request === generation.current) {
+      if (request === generation.current && target.isCurrent(lease)) {
         setError(failure instanceof Error ? failure.message : String(failure));
       }
+      return false;
     }
-  }, [client, cwd]);
+  }, [client, routeCwd, target, view]);
+  const reloadProjected = useCallback(() => {
+    void load();
+  }, [load]);
 
   /**
    * Looking for other tools' configurations reads nine places on disk, so it
    * happens when the page opens and when the person asks again — never on
    * every configuration write.
    */
-  const detect = useCallback(async () => {
-    const request = generation.current;
+  const detect = useCallback(async (): Promise<void> => {
+    const lease = target.capture();
+    if (!lease || view === "effective") return;
+    const request = ++detectGeneration.current;
     try {
-      const detected = await client.request("mcp/import/detect", { cwd });
-      if (request !== generation.current) return;
+      const detected = await client.request("mcp/import/detect", { cwd: routeCwd, scope: mutationScope });
+      if (request !== detectGeneration.current || !target.isCurrent(lease)) return;
       setSources(detected.sources);
       setDetectFailed(false);
     } catch {
       // A host that cannot look must not take the page down with it, but the
       // person is told that the search did not run.
-      if (request === generation.current) setDetectFailed(true);
+      if (request === detectGeneration.current && target.isCurrent(lease)) setDetectFailed(true);
     }
-  }, [client, cwd]);
+  }, [client, mutationScope, routeCwd, target, view]);
 
   useEffect(() => {
     setServers(undefined);
     setConversations([]);
+    setSelectedId(undefined);
+    setSources([]);
+    setDetectFailed(false);
+    setAdding(undefined);
+    setImporting(false);
+    setSignIn(undefined);
+    setSignOut(undefined);
     void load();
     void detect();
     return () => {
       generation.current++;
+      detectGeneration.current++;
     };
   }, [load, detect]);
 
@@ -98,41 +151,29 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
   useEffect(() => {
     return client.subscribe((method, params) => {
       if (method !== "mcp/changed") return;
-      if ((params as { cwd: string }).cwd !== cwd) return;
+      if ((params as { cwd: string }).cwd !== routeCwd) return;
       void load();
     });
-  }, [client, cwd, load]);
+  }, [client, routeCwd, load]);
 
   const selected = useMemo(
     () => (selectedId ? servers?.find((entry) => rowKey(entry) === selectedId) : undefined),
     [servers, selectedId],
   );
 
-  // The every-project entry a switch-off row refers to, so the inspector can
-  // offer to edit the definition that actually runs.
-  const globalEntry = useMemo(
-    () =>
-      selected?.overridesGlobal
-        ? servers?.find((entry) => entry.scope === "global" && entry.config.name === selected.config.name)
-        : undefined,
-    [servers, selected],
-  );
-
-  const shown = useMemo(
-    () => (servers ?? []).filter((entry) => scopeFilter === "all" || entry.scope === scopeFilter),
-    [servers, scopeFilter],
-  );
+  const shown = servers ?? [];
 
   const openSignIn = (id: string) => {
+    if (!target.capture()) return;
     const state = servers?.find((entry) => rowKey(entry) === id);
-    if (state) setSignIn({ scope: state.scope, name: state.config.name, title: serverTitle(state.config) });
+    if (state?.scope === mutationScope) setSignIn({ scope: state.scope, name: state.config.name, title: serverTitle(state.config) });
   };
 
   if (!servers) {
     return (
       <div className="p-4">
         {error ? (
-          <ErrorState title="Could not read this project’s servers" detail={error} onRetry={() => void load()} />
+          <ErrorState title={`Could not read ${view === "global" ? "Global" : view === "project" ? "Project" : "Effective"} servers`} detail={error} onRetry={() => void load()} />
         ) : (
           <GenerationLoader label="Loading servers" />
         )}
@@ -140,10 +181,12 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
     );
   }
 
-  const defaultScope: McpScope = projectOpen && scopeFilter === "project" ? "project" : "global";
+  const defaultScope: McpScope = mutationScope;
+  const selectedWritable = writable && selected?.scope === mutationScope;
 
   return (
     <ScrollArea className="h-full">
+      <ScopeDraftGuard drafts={activeDrafts} />
       <div className="mx-auto flex max-w-200 flex-col gap-5 px-4 py-5 md:px-6">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div className="max-w-140">
@@ -155,15 +198,15 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {writable ? <Button type="button" size="sm" onClick={() => setAdding({})}>
+            {writable ? <Button type="button" size="sm" onClick={() => setAdding({ mode: "new" })}>
               <Plus aria-hidden="true" /> Add a server
             </Button> : null}
             <Button type="button" variant="ghost" size="sm" aria-label="Reload servers" onClick={() => void load()}>
               <RefreshCw aria-hidden="true" />
             </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={() => void detect()}>
+            {writable ? <Button type="button" variant="ghost" size="sm" onClick={() => void detect()}>
               <FolderSearch aria-hidden="true" /> Look again
-            </Button>
+            </Button> : null}
           </div>
         </header>
 
@@ -183,38 +226,6 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
 
         {writable ? <McpImportBanner sources={sources} onOpen={() => setImporting(true)} /> : null}
 
-        {!projectOpen && (
-          <p className="text-sm leading-6 text-ink-2">
-            No project is open, so this is the every-project list. Open a project to add a server just for it.
-          </p>
-        )}
-
-        {servers.length > 0 && (
-          // Buttons that press in, not tabs: they filter a list that is always
-          // on screen, and nothing here switches panels.
-          <div role="group" aria-label="Which servers to show" className="flex w-fit items-center gap-0.5 rounded-lg bg-surface-2 p-0.5">
-            {(
-              [
-                { id: "all" as const, label: "All" },
-                { id: "global" as const, label: "Every project" },
-                ...(projectOpen ? [{ id: "project" as const, label: "This project" }] : []),
-              ]
-            ).map((option) => (
-              <Button
-                key={option.id}
-                type="button"
-                aria-pressed={scopeFilter === option.id}
-                variant="ghost"
-                size="sm"
-                onClick={() => setScopeFilter(option.id)}
-                className={cn(scopeFilter === option.id && "bg-surface text-ink")}
-              >
-                {option.label}
-              </Button>
-            ))}
-          </div>
-        )}
-
         {servers.length === 0 && writable ? (
           <section className="flex flex-col gap-4">
             <div>
@@ -223,14 +234,16 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
                 Each one is a tested definition. Pick it, test it, and it is yours; or set one up yourself.
               </p>
             </div>
-            <McpGallery onChoose={(entry) => setAdding({ entry })} />
+            <McpGallery onChoose={(entry) => setAdding({ mode: "gallery", entry })} />
           </section>
         ) : shown.length === 0 ? (
           <p className="text-sm leading-6 text-ink-2">
-            No server is saved for {scopeFilter === "project" ? "this project" : "every project"}. Add one, or look at All.
+            {view === "effective"
+              ? "Nothing is in force for this project. Global and Project settings are both empty."
+              : `No server is saved in ${view === "global" ? "Global" : "Project"} settings.`}
           </p>
         ) : (
-          <McpServerList servers={shown} selectedId={selectedId} {...(writable ? { onSelect: setSelectedId, onSignIn: openSignIn } : {})} />
+          <McpServerList servers={shown} selectedId={selectedId} onSelect={setSelectedId} {...(writable ? { onSignIn: openSignIn, signInScope: mutationScope } : {})} />
         )}
 
         {writable && servers.length > 0 && (
@@ -239,22 +252,26 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
               Add another from the gallery
             </CollapsibleTrigger>
             <CollapsibleContent className="pt-4">
-              <McpGallery onChoose={(entry) => setAdding({ entry })} />
+              <McpGallery onChoose={(entry) => setAdding({ mode: "gallery", entry })} />
             </CollapsibleContent>
           </Collapsible>
         )}
       </div>
 
       {writable ? <McpAddDialog
-        cwd={cwd}
+        cwd={routeCwd}
         open={Boolean(adding)}
-        onOpenChange={(open) => !open && setAdding(undefined)}
-        {...(adding?.entry ? { entry: adding.entry } : {})}
-        {...(adding?.edit ? { edit: adding.edit } : {})}
-        defaultScope={defaultScope}
-        allowProject={projectOpen}
+        onOpenChange={(open) => {
+          if (target.capture() && !open) setAdding(undefined);
+        }}
+        mode={adding?.mode ?? "new"}
+        {...(adding?.mode === "gallery" ? { entry: adding.entry } : {})}
+        {...(adding?.mode === "edit" || adding?.mode === "override" ? { edit: adding.edit } : {})}
+        scope={defaultScope}
+        onDraftChange={reportCurrentAddDraft}
         onSaved={(next, saved) => {
-          setServers(next);
+          if (!target.capture()) return;
+          reloadProjected();
           setAdding(undefined);
           actions.toast("info", `${saved.name} is saved. Conversations you start from now on can use it.`);
           if (saved.needsAuth) {
@@ -267,52 +284,72 @@ export function McpServersTab({ cwd, projectOpen = true, decision }: { cwd: stri
       /> : null}
 
       {writable ? <McpImportDialog
-        cwd={cwd}
+        cwd={routeCwd}
         open={importing}
-        onOpenChange={setImporting}
+        onOpenChange={(open) => {
+          if (target.capture()) setImporting(open);
+        }}
         sources={sources}
-        defaultScope={defaultScope}
-        allowProject={projectOpen}
-        onImported={(next, imported) => {
-          setServers(next);
+        scope={defaultScope}
+        onDraftChange={reportCurrentImportDraft}
+        onImported={(_next, imported) => {
+          if (!target.capture()) return;
           setImporting(false);
           actions.toast("info", imported.length ? `Imported ${imported.join(", ")}.` : "Nothing was imported.");
-          void load();
+          reloadProjected();
         }}
       /> : null}
 
-      {writable ? <McpInspector
+      <McpInspector
         conversations={conversations}
-        cwd={cwd}
+        cwd={routeCwd}
+        writable={Boolean(selectedWritable)}
+        allowProjectOverride={Boolean(writable && view === "project" && selected?.scope === "global")}
         state={selected}
-        globalEntry={globalEntry}
-        scopeFilter={scopeFilter}
-        onOpenChange={(open) => !open && setSelectedId(undefined)}
-        onServers={setServers}
-        onError={(message) => actions.toast("error", message)}
-        onNotice={(message) => actions.toast("info", message)}
-        onEdit={(target) => setAdding({ edit: target })}
+        onOpenChange={(open) => {
+          if (target.capture() && !open) setSelectedId(undefined);
+        }}
+        onServers={reloadProjected}
+        onError={(message) => {
+          if (target.capture()) actions.toast("error", message);
+        }}
+        onNotice={(message) => {
+          if (target.capture()) actions.toast("info", message);
+        }}
+        onEdit={(edit) => {
+          if (!target.capture()) return;
+          setAdding({ mode: edit.mode, edit });
+        }}
         onSignIn={() => {
-          if (selected) setSignIn({ scope: selected.scope, name: selected.config.name, title: serverTitle(selected.config) });
+          if (!target.capture()) return;
+          if (selected?.scope === mutationScope) setSignIn({ scope: selected.scope, name: selected.config.name, title: serverTitle(selected.config) });
         }}
         onSignOut={() => {
-          if (selected) setSignOut({ scope: selected.scope, name: selected.config.name, title: serverTitle(selected.config) });
+          if (!target.capture()) return;
+          if (selected?.scope === mutationScope) setSignOut({ scope: selected.scope, name: selected.config.name, title: serverTitle(selected.config) });
         }}
-      /> : null}
+      />
 
       {writable ? <McpSignInDialog
-        cwd={cwd}
+        cwd={routeCwd}
         target={signIn}
-        onOpenChange={(open) => !open && setSignIn(undefined)}
-        onDone={() => void load()}
+        onOpenChange={(open) => {
+          if (target.capture() && !open) setSignIn(undefined);
+        }}
+        onDone={reloadProjected}
+        view={view}
+        onDraftChange={reportCurrentSignInDraft}
       /> : null}
       {writable ? <McpSignOutDialog
-        cwd={cwd}
+        cwd={routeCwd}
         target={signOut}
-        onOpenChange={(open) => !open && setSignOut(undefined)}
+        onOpenChange={(open) => {
+          if (target.capture() && !open) setSignOut(undefined);
+        }}
         onDone={() => {
+          if (!target.capture()) return;
           actions.toast("info", "Signed out. The server stays configured.");
-          void load();
+          reloadProjected();
         }}
       /> : null}
     </ScrollArea>

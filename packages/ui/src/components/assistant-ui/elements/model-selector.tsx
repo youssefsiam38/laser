@@ -1059,7 +1059,7 @@ function useProjectDefaultModel(cwd: string | undefined, enabled: boolean): { mo
     setLoading(true);
     let pending = defaultModelCache.get(cwd);
     if (!pending) {
-      pending = client.request("pi/models/catalog", { cwd }).then((catalog) => {
+      pending = client.request("pi/models/catalog", { cwd, settingsView: "effective" }).then((catalog) => {
         const { defaultProvider, defaultModel } = catalog;
         if (!defaultProvider || !defaultModel) return null;
         const entry = catalog.models.find((m) => m.provider === defaultProvider && m.id === defaultModel);
@@ -1167,7 +1167,7 @@ export function SessionModelSelector({ className }: { className?: string | undef
     const request: Promise<ModelRef[]> = sessionPath
       ? actions.listModels()
       : Promise.all([
-          client.request("pi/models/catalog", { cwd }),
+          client.request("pi/models/catalog", { cwd, settingsView: "effective" }),
           client.request("pi/providers/list", { cwd }).then(({ providers }) => providers, () => undefined),
         ]).then(([catalog, providers]) => narrowToConnected(catalog.models, providers).models);
     request

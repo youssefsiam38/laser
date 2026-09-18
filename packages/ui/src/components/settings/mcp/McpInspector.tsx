@@ -48,33 +48,31 @@ const TABS: Array<{ id: InspectorTab; label: string }> = [
 
 export interface McpInspectorProps {
   cwd: string;
+  writable: boolean;
+  allowProjectOverride?: boolean;
   conversations?: ClientRequests["mcp/list"]["result"]["conversations"];
   /** The selected row; `undefined` keeps the sheet closed. */
   state: McpServerState | undefined;
-  /** The every-project entry this project row switches off, when there is one. */
-  globalEntry?: McpServerState | undefined;
   onOpenChange: (open: boolean) => void;
   onServers: (servers: McpServerState[]) => void;
-  onEdit: (target: { scope: McpScope; config: McpServerConfig }) => void;
+  onEdit: (target: { mode: "edit" | "override"; scope: McpScope; config: McpServerConfig }) => void;
   onSignIn: () => void;
   onSignOut: () => void;
-  /** The list's scope filter, so Remove can offer the project switch-off instead. */
-  scopeFilter: McpScope | "all";
   onError: (message: string) => void;
   onNotice: (message: string) => void;
 }
 
 export function McpInspector({
   cwd,
+  writable,
+  allowProjectOverride = false,
   conversations = [],
   state,
-  globalEntry,
   onOpenChange,
   onServers,
   onEdit,
   onSignIn,
   onSignOut,
-  scopeFilter,
   onError,
 }: McpInspectorProps) {
   const logicalKey = useLogicalArrowKeys();
@@ -232,31 +230,6 @@ export function McpInspector({
     }
   };
 
-  /**
-   * "Switch it off here" for a server that lives in every project: the project
-   * gets an entry that carries nothing but the name and the switch, so the
-   * global definition stays the one definition (`{ name, disabled: true }`).
-   */
-  const disableHere = async () => {
-    if (!state || state.scope !== "global") return;
-    setBusy(true);
-    try {
-      selfWrite.current = true;
-      const { servers } = await client.request("mcp/save", {
-        cwd,
-        scope: "project",
-        server: { name: state.config.name, disabled: true },
-      });
-      onServers(servers);
-      setConfirmRemove(false);
-      close();
-    } catch (error) {
-      onError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   /** Turning a switched-off global server back on here: drop the project entry. */
   const turnOnHere = async () => {
     if (!state || !switchOffOnly) return;
@@ -278,7 +251,9 @@ export function McpInspector({
   const reportedStatus = ping?.status ?? state?.status ?? "unknown";
   const words = catalogStatusWords(reportedStatus, catalog, state?.toolCount !== undefined, now);
   const transport = transportSummary(state?.config.transport);
-  const tabs = switchOffOnly ? TABS.filter((entry) => entry.id === "overview") : TABS;
+  const tabs = switchOffOnly
+    ? TABS.filter((entry) => entry.id === "overview")
+    : writable ? TABS : TABS.filter((entry) => entry.id !== "run");
 
   const moveTab = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const keys = { ArrowRight: 1, ArrowLeft: -1 } as const;
@@ -362,26 +337,22 @@ export function McpInspector({
                   {tab === "overview" && (
                     <Overview
                       state={state}
+                      writable={writable}
+                      allowProjectOverride={allowProjectOverride}
                       inspection={inspection}
                       ping={ping}
                       busy={busy || connecting}
                       statusLabel={words.label}
                       statusHelp={words.help}
                       switchOffOnly={switchOffOnly}
-                      hasGlobalEntry={Boolean(globalEntry)}
                       onPing={() => void runPing()}
                       onReconnect={() => void reconnect()}
                       onSignIn={onSignIn}
                       onSignOut={onSignOut}
                       onToggleDisabled={() => void save({ disabled: !state.config.disabled })}
                       onTurnOnHere={() => void turnOnHere()}
-                      onEdit={() =>
-                        onEdit(
-                          switchOffOnly && globalEntry
-                            ? { scope: globalEntry.scope, config: globalEntry.config }
-                            : { scope: state.scope, config: state.config },
-                        )
-                      }
+                      onEdit={() => onEdit({ mode: "edit", scope: state.scope, config: state.config })}
+                      onOverride={() => onEdit({ mode: "override", scope: "project", config: state.config })}
                       onRemove={() => setConfirmRemove(true)}
                     />
                   )}
@@ -389,7 +360,7 @@ export function McpInspector({
                     (inspection ? (
                       <>
                         <ConversationTools conversations={conversations} server={config.name} />
-                        <McpToolsPanel config={config} inspection={inspection} busy={busy || connecting} onPolicy={changePolicy} />
+                        <McpToolsPanel config={config} inspection={inspection} busy={busy || connecting || !writable} onPolicy={changePolicy} />
                       </>
                     ) : (
                       <WaitingForConnection connecting={connecting} />
@@ -424,11 +395,6 @@ export function McpInspector({
             <Button type="button" variant="ghost" onClick={() => setConfirmRemove(false)}>
               Keep it
             </Button>
-            {state?.scope === "global" && scopeFilter !== "global" && (
-              <Button type="button" variant="secondary" disabled={busy} onClick={() => void disableHere()}>
-                Switch it off for this project instead
-              </Button>
-            )}
             <Button type="button" variant="destructive" disabled={busy} onClick={() => void remove()}>
               <Trash2 aria-hidden="true" /> Remove it
             </Button>
@@ -449,13 +415,14 @@ function WaitingForConnection({ connecting }: { connecting: boolean }) {
 
 function Overview({
   state,
+  writable,
+  allowProjectOverride,
   inspection,
   ping,
   busy,
   statusLabel,
   statusHelp,
   switchOffOnly,
-  hasGlobalEntry,
   onPing,
   onReconnect,
   onSignIn,
@@ -463,16 +430,18 @@ function Overview({
   onToggleDisabled,
   onTurnOnHere,
   onEdit,
+  onOverride,
   onRemove,
 }: {
   state: McpServerState;
+  writable: boolean;
+  allowProjectOverride: boolean;
   inspection: McpInspection | undefined;
   ping: { status: McpServerStatus; latencyMs?: number; detail?: string } | undefined;
   busy: boolean;
   statusLabel: string;
   statusHelp: string;
   switchOffOnly: boolean;
-  hasGlobalEntry: boolean;
   onPing: () => void;
   onReconnect: () => void;
   onSignIn: () => void;
@@ -480,6 +449,7 @@ function Overview({
   onToggleDisabled: () => void;
   onTurnOnHere: () => void;
   onEdit: () => void;
+  onOverride: () => void;
   onRemove: () => void;
 }) {
   const transport = transportSummary(state.config.transport);
@@ -521,8 +491,7 @@ function Overview({
       )}
       {switchOffOnly && (
         <p className="text-sm leading-6 text-ink-2">
-          This project switches the every-project server of this name off. There is nothing to change here: turn it back on, or edit the
-          every-project entry.
+          This project switches the inherited Global server of this name off. Turn it back on to inherit that definition again.
         </p>
       )}
       {failedAgo && <p className="text-sm leading-6 text-ink-2">It failed {failedAgo}.</p>}
@@ -532,16 +501,11 @@ function Overview({
       ) : null}
 
       <div className="flex flex-wrap gap-2">
-        {switchOffOnly ? (
+        {switchOffOnly && writable ? (
           <>
             <Button type="button" size="sm" disabled={busy} onClick={onTurnOnHere}>
               <Power aria-hidden="true" /> Turn on for this project
             </Button>
-            {hasGlobalEntry && (
-              <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onEdit}>
-                <Pencil aria-hidden="true" /> Edit the every-project entry
-              </Button>
-            )}
           </>
         ) : (
           <>
@@ -551,7 +515,7 @@ function Overview({
             <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onReconnect}>
               <RefreshCw aria-hidden="true" /> Reconnect
             </Button>
-            {oauth && (
+            {oauth && writable && (
               <>
                 <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onSignIn}>
                   <KeyRound aria-hidden="true" /> Sign in
@@ -561,15 +525,24 @@ function Overview({
                 </Button>
               </>
             )}
-            <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onToggleDisabled}>
-              <Power aria-hidden="true" /> {state.config.disabled ? "Turn on" : "Turn off"}
-            </Button>
-            <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onEdit}>
-              <Pencil aria-hidden="true" /> Edit
-            </Button>
-            <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onRemove}>
-              <Trash2 aria-hidden="true" /> Remove
-            </Button>
+            {allowProjectOverride ? (
+              <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onOverride}>
+                <Pencil aria-hidden="true" /> Override for this project
+              </Button>
+            ) : null}
+            {writable ? (
+              <>
+                <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onToggleDisabled}>
+                  <Power aria-hidden="true" /> {state.config.disabled ? "Turn on" : "Turn off"}
+                </Button>
+                <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={onEdit}>
+                  <Pencil aria-hidden="true" /> Edit
+                </Button>
+                <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onRemove}>
+                  <Trash2 aria-hidden="true" /> Remove
+                </Button>
+              </>
+            ) : null}
           </>
         )}
       </div>
@@ -616,7 +589,7 @@ function Overview({
                 {transport.kind} · <span className="typed">{transport.full}</span>
               </>
             ) : (
-              "Nothing of its own — it only switches the every-project server off here."
+              "Nothing of its own — it only switches the Global server off here."
             )}
           </dd>
           <dt className="text-ink-3">Sign-in</dt>

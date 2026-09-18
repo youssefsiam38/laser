@@ -51,7 +51,7 @@ function harness(reply?: unknown) {
 }
 
 const CALLS: Array<[string, Record<string, unknown>]> = [
-  ["mcp/list", {}],
+  ["mcp/list", { view: "project" }],
   ["mcp/save", { scope: "global", server: { name: "fixture", transport: { kind: "stdio", command: "node" }, tools: { alwaysLoad: true } } }],
   ["mcp/remove", { scope: "global", name: "fixture" }],
   ["mcp/inspect", { scope: "global", name: "fixture" }],
@@ -61,7 +61,7 @@ const CALLS: Array<[string, Record<string, unknown>]> = [
   ["mcp/auth/start", { scope: "global", name: "fixture" }],
   ["mcp/auth/complete", { scope: "global", name: "fixture", redirectUrl: "https://example.test/cb?code=1&state=2" }],
   ["mcp/auth/logout", { scope: "global", name: "fixture" }],
-  ["mcp/import/detect", {}],
+  ["mcp/import/detect", { scope: "project" }],
   ["mcp/import/apply", { source: "cursor", names: ["fixture"], scope: "global" }],
 ];
 
@@ -91,9 +91,9 @@ describe("a cwd under a child's worktree", () => {
       const read = { jsonrpc: "2.0" as const, id: 1, method: "pi/project/read", params: { cwd: worktree, path: "src/example.ts" } };
       await router.handle(read as never, LOCAL_ACCESS);
       expect(requests.at(-1)).toEqual({ cwd: CWD, method: "pi/project/read", params: { cwd: CWD, path: `${worktree}/src/example.ts` } });
-      const settings = { jsonrpc: "2.0" as const, id: 2, method: "mcp/list", params: { cwd: worktree } };
+      const settings = { jsonrpc: "2.0" as const, id: 2, method: "mcp/list", params: { cwd: worktree, view: "project" } };
       await router.handle(settings as never, LOCAL_ACCESS);
-      expect(requests.at(-1)).toEqual({ cwd: CWD, method: "mcp/list", params: { cwd: CWD } });
+      expect(requests.at(-1)).toEqual({ cwd: CWD, method: "mcp/list", params: { cwd: CWD, view: "project" } });
       // An absolute path stays as it is; a project's own cwd is untouched.
       const absolute = { jsonrpc: "2.0" as const, id: 3, method: "pi/project/read", params: { cwd: CWD, path: `${CWD}/README.md` } };
       await router.handle(absolute as never, LOCAL_ACCESS);
@@ -113,7 +113,7 @@ it("routes session-scoped discovery diagnostics unchanged without opening anothe
   const result = { servers: [], conversations: [{ sessionPath: "/sessions/one", context: { contextWindow: null, budget: null, share: 0.02, measurement: "utf8-upper-bound", preloaded: [], preloadedTokens: 0, lastDiscoveryTokens: 123, discoveries: [] } }] };
   const h = harness(result);
   try {
-    expect(await h.router.handle({ jsonrpc: "2.0", id: 1, method: "mcp/list", params: { cwd: CWD } }, LOCAL_ACCESS)).toMatchObject({ result });
-    expect(h.requests).toEqual([{ cwd: CWD, method: "mcp/list", params: { cwd: CWD } }]);
+    expect(await h.router.handle({ jsonrpc: "2.0", id: 1, method: "mcp/list", params: { cwd: CWD, view: "project" } }, LOCAL_ACCESS)).toMatchObject({ result });
+    expect(h.requests).toEqual([{ cwd: CWD, method: "mcp/list", params: { cwd: CWD, view: "project" } }]);
   } finally { h.cleanup(); }
 });

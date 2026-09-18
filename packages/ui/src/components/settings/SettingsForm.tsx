@@ -49,7 +49,7 @@ export function SettingsForm({ audience, view, cwd, catalog, snapshot, decision,
     setModelCatalogLoading(true);
     setModelCatalogError(undefined);
     void Promise.all([
-      client.request("pi/models/catalog", { cwd }),
+      client.request("pi/models/catalog", { cwd, settingsView: view === "global" ? "global" : "effective" }),
       // The pickers below choose a model to use, so they show connected
       // providers only (D-145). The enabled-models control keeps the whole
       // catalogue: that one curates it, including for a provider not yet
@@ -72,7 +72,7 @@ export function SettingsForm({ audience, view, cwd, catalog, snapshot, decision,
       if (live) setModelCatalogLoading(false);
     });
     return () => { live = false; };
-  }, [client, cwd]);
+  }, [client, cwd, view]);
 
   const scope: SettingsScope = view === "project" ? "project" : "global";
   const searching = query.trim() !== "";

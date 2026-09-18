@@ -30,8 +30,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { SettingsSwitch } from "@/components/assistant-ui/elements/settings-panel";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
+import type { ScopeDraft } from "../ScopeDraftGuard.js";
+import { useCommittedTargetLifetime } from "../useCommittedTargetLifetime.js";
 
-import { McpServerForm, ScopeChoice } from "./McpServerForm.js";
+import { McpServerForm } from "./McpServerForm.js";
 import {
   catalogForm,
   catalogOptionReason,
@@ -45,31 +47,42 @@ import {
   type ServerForm,
 } from "./model.js";
 
+export type McpAddMode = "new" | "gallery" | "edit" | "override";
+
 export interface McpAddDialogProps {
   cwd: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** A gallery card was clicked: its definition is already composed. */
+  mode: McpAddMode;
+  /** Required mutation target; the dialog never owns an independent scope. */
+  scope: McpScope;
+  /** Present only for gallery mode. */
   entry?: McpCatalogEntry | undefined;
-  /** Editing an existing server rather than adding one. */
+  /** Source definition for edit and Project-override modes. */
   edit?: { scope: McpScope; config: McpServerConfig } | undefined;
-  /** Which scope a new server lands in by default. */
-  defaultScope?: McpScope;
-  /** False with no project open: only the every-project scope exists. */
-  allowProject?: boolean;
+  onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
   onSaved: (servers: McpServerState[], saved: { scope: McpScope; name: string; needsAuth: boolean }) => void;
 }
 
-export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScope = "global", allowProject = true, onSaved }: McpAddDialogProps) {
+function formSignature(form: ServerForm): string {
+  return JSON.stringify({
+    ...form,
+    env: form.env.map(({ id: _id, ...row }) => row),
+    headers: form.headers.map(({ id: _id, ...row }) => row),
+  });
+}
+
+export function McpAddDialog({ cwd, open, onOpenChange, mode, scope, entry, edit, onDraftChange, onSaved }: McpAddDialogProps) {
   const { client } = useLaserStable();
   const [form, setForm] = useState<ServerForm>(() => emptyForm());
-  const [scope, setScope] = useState<McpScope>(defaultScope);
+  const [baseline, setBaseline] = useState(() => formSignature(emptyForm()));
   const [options, setOptions] = useState<Set<string>>(() => new Set());
   const [showIssues, setShowIssues] = useState(false);
   const [testing, setTesting] = useState(false);
   const [inspection, setInspection] = useState<McpInspection>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const lifetime = useCommittedTargetLifetime(`${cwd}:${scope}:${mode}:${entry?.id ?? edit?.config.name ?? "custom"}:${open ? "open" : "closed"}`);
 
   // Opening resets everything: a half-finished definition from last time is
   // never what the person meant this time.
@@ -80,23 +93,26 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
     setError(undefined);
     setTesting(false);
     setSaving(false);
-    if (edit) {
-      setForm(configToForm(edit.config));
-      setScope(edit.scope);
+    if ((mode === "edit" || mode === "override") && edit) {
+      const next = configToForm(edit.config);
+      setForm(next);
+      setBaseline(formSignature(next));
       setOptions(new Set());
       return;
     }
-    if (entry) {
+    if (mode === "gallery" && entry) {
       const chosen = defaultCatalogOptions(entry);
+      const next = catalogForm(entry, chosen);
       setOptions(chosen);
-      setForm(catalogForm(entry, chosen));
-      setScope(defaultScope);
+      setForm(next);
+      setBaseline(formSignature(next));
       return;
     }
-    setForm(emptyForm());
+    const next = emptyForm();
+    setForm(next);
+    setBaseline(formSignature(next));
     setOptions(new Set());
-    setScope(defaultScope);
-  }, [open, entry, edit, defaultScope]);
+  }, [open, entry, edit, mode]);
 
   const chooseOption = (id: string, on: boolean, group?: string) => {
     if (!entry) return;
@@ -112,9 +128,18 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
   };
 
   const issues = formIssues(form);
-  const title = edit ? `Edit ${form.label || form.name}` : entry ? `Add ${entry.name}` : "Add a server";
+  const valid = !hasIssues(issues);
+  const deliberate = mode === "gallery" || mode === "override";
+  const meaningful = deliberate || formSignature(form) !== baseline;
+  const title = mode === "override"
+    ? `Override ${form.label || form.name} for Project settings`
+    : mode === "edit"
+      ? `Edit ${form.label || form.name}`
+      : mode === "gallery" && entry ? `Add ${entry.name}` : "Add a server";
 
   const test = async () => {
+    const lease = lifetime.capture();
+    if (!lease) return;
     setShowIssues(true);
     if (hasIssues(issues)) return;
     setTesting(true);
@@ -122,17 +147,19 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
     setInspection(undefined);
     try {
       const result = await client.request("mcp/inspect", { cwd, scope, server: formToConfig(form) });
-      setInspection(result);
+      if (lifetime.isCurrent(lease)) setInspection(result);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      if (lifetime.isCurrent(lease)) setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
-      setTesting(false);
+      if (lifetime.isCurrent(lease)) setTesting(false);
     }
   };
 
-  const save = async () => {
+  const save = async (): Promise<boolean> => {
+    const lease = lifetime.capture();
+    if (!lease) return false;
     setShowIssues(true);
-    if (hasIssues(issues)) return;
+    if (!meaningful || !valid) return false;
     setSaving(true);
     setError(undefined);
     try {
@@ -140,17 +167,33 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
         cwd,
         scope,
         server: formToConfig(form),
-        ...(edit && edit.config.name !== form.name.trim() ? { originalName: edit.config.name } : {}),
+        ...(mode === "edit" && edit && edit.config.name !== form.name.trim() ? { originalName: edit.config.name } : {}),
       });
+      if (!lifetime.isCurrent(lease)) return false;
       onSaved(servers, { scope, name: form.name.trim(), needsAuth: inspection?.status === "needs-auth" || form.authKind === "oauth" });
       onOpenChange(false);
+      return true;
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      if (lifetime.isCurrent(lease)) setError(failure instanceof Error ? failure.message : String(failure));
+      return false;
     } finally {
-      setSaving(false);
+      if (lifetime.isCurrent(lease)) setSaving(false);
     }
   };
 
+  useEffect(() => {
+    if (!open || !meaningful) {
+      onDraftChange?.(undefined);
+      return;
+    }
+    onDraftChange?.({
+      id: "mcp-server-form",
+      label: mode === "edit" ? `Edit ${edit?.config.label ?? edit?.config.name ?? "MCP server"}` : mode === "override" ? `Override ${edit?.config.label ?? edit?.config.name ?? "MCP server"}` : "New MCP server",
+      ...(valid ? { save } : {}),
+      discard: () => onOpenChange(false),
+    });
+    return () => onDraftChange?.(undefined);
+  }, [edit, meaningful, mode, onDraftChange, open, form, scope, options, valid]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -160,14 +203,16 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
         <DialogHeader className="shrink-0">
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            {edit
-              ? "Changes apply to conversations started after you save."
-              : "Test it first: you will see what it can do before it is saved."}
+            {mode === "override"
+              ? "Creates a Project definition from the inherited Global server. The Global server is unchanged."
+              : mode === "edit"
+                ? "Changes apply to conversations started after you save."
+                : "Test it first: you will see what it can do before it is saved."}
           </DialogDescription>
         </DialogHeader>
         <ScrollArea className="min-h-0 flex-1">
           <div className="flex min-w-0 flex-col gap-4 pe-3">
-            {entry && !edit && (
+            {mode === "gallery" && entry && (
               <section className="flex flex-col gap-3 rounded-xl border border-line bg-surface-2 p-3" aria-label={`${entry.name} options`}>
                 <p className="text-sm leading-6 text-ink-2">{entry.description}</p>
                 {entry.requires && <p className="text-xs leading-5 text-ink-3">Needs: {entry.requires}</p>}
@@ -220,9 +265,9 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
               </section>
             )}
 
-            <ScopeChoice scope={scope} onChange={setScope} disabled={Boolean(edit)} allowProject={allowProject} />
+            <p className="text-sm text-ink-2">Save it for <span className="font-medium text-ink">{scope === "global" ? "Global settings" : "Project settings"}</span>.</p>
 
-            {entry && !edit ? (
+            {mode === "gallery" && entry ? (
               <Collapsible className="min-w-0">
                 <CollapsibleTrigger className="text-start text-sm text-live underline-offset-4 hover:underline">All settings</CollapsibleTrigger>
                 <CollapsibleContent className="pt-3">
@@ -256,9 +301,9 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
           <Button type="button" variant="secondary" onClick={() => void test()} disabled={testing || saving}>
             <Plug aria-hidden="true" /> {inspection ? "Test again" : "Test"}
           </Button>
-          <Button type="button" onClick={() => void save()} disabled={testing || saving}>
+          <Button type="button" onClick={() => void save()} disabled={testing || saving || !meaningful || !valid}>
             <Check aria-hidden="true" />
-            {edit ? "Save changes" : inspection?.status === "needs-auth" ? "Add and sign in" : "Add"}
+            {mode === "edit" ? "Save changes" : mode === "override" ? "Save Project override" : inspection?.status === "needs-auth" ? "Add and sign in" : "Add"}
           </Button>
         </DialogFooter>
       </DialogContent>
