@@ -30,6 +30,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { SettingsSwitch } from "@/components/assistant-ui/elements/settings-panel";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
+import type { ScopeDraft } from "../ScopeDraftGuard.js";
 
 import { McpServerForm, ScopeChoice } from "./McpServerForm.js";
 import {
@@ -57,10 +58,12 @@ export interface McpAddDialogProps {
   defaultScope?: McpScope;
   /** False with no project open: only the every-project scope exists. */
   allowProject?: boolean;
+  lockScope?: boolean;
+  onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
   onSaved: (servers: McpServerState[], saved: { scope: McpScope; name: string; needsAuth: boolean }) => void;
 }
 
-export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScope = "global", allowProject = true, onSaved }: McpAddDialogProps) {
+export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScope = "global", allowProject = true, lockScope = false, onDraftChange, onSaved }: McpAddDialogProps) {
   const { client } = useLaserStable();
   const [form, setForm] = useState<ServerForm>(() => emptyForm());
   const [scope, setScope] = useState<McpScope>(defaultScope);
@@ -130,9 +133,9 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
     }
   };
 
-  const save = async () => {
+  const save = async (): Promise<boolean> => {
     setShowIssues(true);
-    if (hasIssues(issues)) return;
+    if (hasIssues(issues)) return false;
     setSaving(true);
     setError(undefined);
     try {
@@ -144,13 +147,28 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
       });
       onSaved(servers, { scope, name: form.name.trim(), needsAuth: inspection?.status === "needs-auth" || form.authKind === "oauth" });
       onOpenChange(false);
+      return true;
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
+  useEffect(() => {
+    if (!open) {
+      onDraftChange?.(undefined);
+      return;
+    }
+    onDraftChange?.({
+      id: "mcp-server-form",
+      label: edit ? `Edit ${edit.config.label ?? edit.config.name}` : "New MCP server",
+      save,
+      discard: () => onOpenChange(false),
+    });
+    return () => onDraftChange?.(undefined);
+  }, [edit, onDraftChange, open, form, scope, options]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -220,7 +238,11 @@ export function McpAddDialog({ cwd, open, onOpenChange, entry, edit, defaultScop
               </section>
             )}
 
-            <ScopeChoice scope={scope} onChange={setScope} disabled={Boolean(edit)} allowProject={allowProject} />
+            {lockScope ? (
+              <p className="text-sm text-ink-2">Save it for <span className="font-medium text-ink">{scope === "global" ? "Global settings" : "Project settings"}</span>.</p>
+            ) : (
+              <ScopeChoice scope={scope} onChange={setScope} disabled={Boolean(edit)} allowProject={allowProject} />
+            )}
 
             {entry && !edit ? (
               <Collapsible className="min-w-0">

@@ -103,10 +103,12 @@ export class McpService {
 
   // -------------------------------------------------------------- methods
 
-  async list(): Promise<ClientRequests["mcp/list"]["result"]> {
+  async list(view: ClientRequests["mcp/list"]["params"]["view"] = "project"): Promise<ClientRequests["mcp/list"]["result"]> {
     return {
-      servers: await this.states(),
-      conversations: [...this.snapshots].flatMap(([sessionPath, { snapshot }]) => snapshot.context ? [{ sessionPath, context: snapshot.context }] : []),
+      servers: await this.states(view),
+      conversations: view === "global"
+        ? []
+        : [...this.snapshots].flatMap(([sessionPath, { snapshot }]) => snapshot.context ? [{ sessionPath, context: snapshot.context }] : []),
     };
   }
 
@@ -127,7 +129,7 @@ export class McpService {
     if (remembered) this.inspections.set(key, remembered);
     else this.inspections.delete(key);
     this.options.changed();
-    return { servers: await this.states() };
+    return { servers: await this.states("project") };
   }
 
   async remove(params: ClientRequests["mcp/remove"]["params"]): Promise<ClientRequests["mcp/remove"]["result"]> {
@@ -135,7 +137,7 @@ export class McpService {
     await this.inspector.closeServer(params.scope, params.name);
     this.inspections.delete(McpInspector.key(params.scope, params.name));
     this.options.changed();
-    return { servers: await this.states() };
+    return { servers: await this.states("project") };
   }
 
   async inspect(params: ClientRequests["mcp/inspect"]["params"]): Promise<McpInspection> {
@@ -234,14 +236,14 @@ export class McpService {
     return { status: "needs-auth" };
   }
 
-  async importDetect(): Promise<ClientRequests["mcp/import/detect"]["result"]> {
-    const sources = await detectImportSources(this.options.cwd);
+  async importDetect(scope: McpScope): Promise<ClientRequests["mcp/import/detect"]["result"]> {
+    const sources = await detectImportSources(this.options.cwd, scope);
     const existing = await this.existingNames();
     return { sources: sources.map((source) => ({ ...source, servers: markConflicts(source.servers, existing) })) };
   }
 
   async importApply(params: ClientRequests["mcp/import/apply"]["params"]): Promise<ClientRequests["mcp/import/apply"]["result"]> {
-    const sources = await detectImportSources(this.options.cwd);
+    const sources = await detectImportSources(this.options.cwd, params.scope);
     const source = sources.find((candidate) => candidate.id === params.source);
     if (!source) throw new ProtocolError(ErrorCodes.InvalidParams, "That configuration is no longer on this machine. Look again.");
     const entries = await readSourceEntries(source.path, params.source as McpImportSourceId);
@@ -263,7 +265,7 @@ export class McpService {
       imported.push(name);
     }
     if (imported.length > 0) this.options.changed();
-    return { servers: await this.states(), imported };
+    return { servers: await this.states("project"), imported };
   }
 
   // ------------------------------------------------------------ internals
@@ -307,7 +309,7 @@ export class McpService {
 
   /** Latency alone is not a status change; repeated inspection must not flicker. */
   private async reported(): Promise<string> {
-    return JSON.stringify((await this.states()).map(({ scope, config, status, detail, toolCount, directToolCount, resourceCount, promptCount, inspecting }) =>
+    return JSON.stringify((await this.states("project")).map(({ scope, config, status, detail, toolCount, directToolCount, resourceCount, promptCount, inspecting }) =>
       ({ scope, name: config.name, status, detail, toolCount, directToolCount, resourceCount, promptCount, inspecting })));
   }
 
@@ -320,12 +322,13 @@ export class McpService {
   private async find(scope: McpScope, name: string): Promise<{ scope: McpScope; config: McpConfiguredServer }> {
     const { servers } = await this.store.effective(this.options.cwd, this.options.projectTrusted);
     const exact = servers.find((server) => server.scope === scope && server.config.name === name);
-    // A project entry that only switches a global server off carries the
-    // global definition, so naming it at project scope still finds a server.
+    // A project entry that only switches a global server off already carries
+    // the inherited definition at project scope, so no cross-scope fallback is needed.
     if (exact && isConfigured(exact.config)) return { scope, config: exact.config };
-    const fallback = servers.find((server) => server.config.name === name && isConfigured(server.config));
-    if (fallback && isConfigured(fallback.config)) return { scope: fallback.scope, config: fallback.config };
-    throw new ProtocolError(ErrorCodes.InvalidParams, `No MCP server named "${name}" is saved for this project.`);
+    throw new ProtocolError(
+      ErrorCodes.InvalidParams,
+      `No MCP server named "${name}" is saved in ${scope === "global" ? "Global" : "Project"} settings.`,
+    );
   }
 
   private async capture(found: { scope: McpScope; config: McpConfiguredServer }): Promise<readonly McpAuthorizationGeneration[]> {
@@ -399,8 +402,20 @@ export class McpService {
     };
   }
 
-  private async states(): Promise<McpServerState[]> {
-    const { servers, malformed } = await this.store.effective(this.options.cwd, this.options.projectTrusted);
+  private async states(view: ClientRequests["mcp/list"]["params"]["view"]): Promise<McpServerState[]> {
+    let servers: EffectiveServer[];
+    let malformed: Array<{ scope: McpScope; name?: string; label: string; detail: string }>;
+    if (view === "global") {
+      const contents = await this.store.read("global", this.options.cwd);
+      servers = contents.servers.map((config) => ({ scope: "global", config, effective: !config.disabled }));
+      malformed = contents.malformed;
+    } else {
+      const contents = await this.store.effective(this.options.cwd, this.options.projectTrusted);
+      servers = view === "effective"
+        ? contents.servers.filter((server) => server.effective)
+        : contents.servers.filter((server) => server.scope === "project" || !server.shadowed);
+      malformed = contents.malformed;
+    }
     const states: McpServerState[] = [];
     for (const server of servers) states.push(await this.stateOf(server));
     for (const entry of malformed) {

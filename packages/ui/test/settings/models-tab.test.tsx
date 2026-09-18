@@ -20,12 +20,28 @@ vi.mock("../../src/runtime/index.js", () => {
   return { useCapability: () => ({ state: "available" }), useLaserStable: () => stable };
 });
 vi.mock("../../src/components/onboarding/index.js", () => ({ ProviderStep: () => null }));
-vi.mock("../../src/components/settings/WebSearchTab.js", () => ({ WebSearchTab: () => null }));
+vi.mock("../../src/components/settings/WebSearchTab.js", () => ({
+  WebSearchTab: ({ onDraftChange }: { onDraftChange?: (providerId: string, draft: { id: string; label: string; discard: () => void }) => void }) => (
+    <div>
+      <button type="button" onClick={() => onDraftChange?.("a", { id: "web-search-a", label: "Search A", discard: () => {} })}>Dirty Search A</button>
+      <button type="button" onClick={() => onDraftChange?.("b", { id: "web-search-b", label: "Search B", discard: () => {} })}>Dirty Search B</button>
+    </div>
+  ),
+}));
 
 import { ModelsTab } from "../../src/components/settings/ModelsTab.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
+import { WorkbenchProvider, useWorkbench, type WorkbenchState } from "../../src/components/workbench/index.js";
+import { deviceStore } from "../../src/runtime/device-storage.js";
+import { testDescriptor } from "../runtime/environment-fixture.js";
 
 let root: Root, container: HTMLDivElement;
+let workbench: WorkbenchState | undefined;
+
+function WorkbenchProbe() {
+  workbench = useWorkbench();
+  return null;
+}
 let providers: ProviderAuthInfo[];
 let models: ModelCatalogEntry[];
 let patterns: string[] | null;
@@ -71,6 +87,9 @@ function catalogue(): ModelCatalogEntry[] {
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  deviceStore.deactivate();
+  localStorage.clear();
+  deviceStore.activate(testDescriptor());
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -103,9 +122,11 @@ afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
   document.body.innerHTML = "";
+  deviceStore.deactivate();
+  workbench = undefined;
 });
 
-async function render(snap: SettingsSnapshot | undefined = snapshot({ enabledModels: patterns })) {
+async function render(snap: SettingsSnapshot | undefined = snapshot({ enabledModels: patterns }), view: "global" | "project" | "effective" = "global") {
   const onApply = async (scope: SettingsScope, changes: SettingChange[]) => {
     applied.push({ scope, changes });
     if (applyResult) {
@@ -116,7 +137,11 @@ async function render(snap: SettingsSnapshot | undefined = snapshot({ enabledMod
     }
     return applyResult;
   };
-  await act(async () => root.render(<TooltipProvider><ModelsTab cwd="/p" snapshot={snap} onApply={onApply} /></TooltipProvider>));
+  await act(async () => root.render(
+    <TooltipProvider>
+      <ModelsTab settingsRouteCwd="/p" neutralRouteCwd="/neutral" view={view} snapshot={snap} onApply={onApply} />
+    </TooltipProvider>,
+  ));
 }
 
 const rows = () => [...container.querySelectorAll<HTMLTableRowElement>("tbody tr")];
@@ -144,10 +169,45 @@ async function chooseView(label: "All" | "Enabled" | "Hidden") {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
 
+it("keeps each Web Search provider draft in the owning Models guard", async () => {
+  const props = {
+    settingsRouteCwd: "/p",
+    neutralRouteCwd: "/neutral",
+    view: "global" as const,
+    snapshot: snapshot({ enabledModels: patterns }),
+    onApply: async () => true,
+  };
+  await act(async () => root.render(
+    <TooltipProvider>
+      <WorkbenchProvider>
+        <WorkbenchProbe />
+        <ModelsTab {...props} />
+      </WorkbenchProvider>
+    </TooltipProvider>,
+  ));
+  await act(async () => {
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.textContent === "Dirty Search A")!.click();
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.textContent === "Dirty Search B")!.click();
+  });
+  let navigation!: Promise<boolean>;
+  await act(async () => {
+    navigation = workbench!.requestSettingsScope({ view: "project", projectCwd: "/next" });
+    await Promise.resolve();
+  });
+  expect(document.body.textContent).toContain("2 drafts belong to the current Settings target");
+  expect(document.body.textContent).toContain("Search A");
+  expect(document.body.textContent).toContain("Search B");
+  const keep = [...document.querySelectorAll<HTMLButtonElement>("button")].find((entry) => entry.textContent === "Keep editing")!;
+  await act(async () => keep.click());
+  expect(await navigation).toBe(false);
+});
+
 // ---- row states ------------------------------------------------------------
 
 it("gives every row a switch and says why a model is in no picker, with nothing on an offered one", async () => {
   await render();
+  expect(mocks.request).toHaveBeenCalledWith("pi/models/catalog", { cwd: "/p", settingsView: "global", refresh: false });
+  expect(mocks.request).toHaveBeenCalledWith("pi/providers/list", { cwd: "/neutral" });
   expect(stateOf("gpt-5")).toBeUndefined();
   expect(isOn("gpt-5")).toBe(true);
   expect(stateOf("gpt-6-astra")).toBe("hidden-by-list");
@@ -208,8 +268,9 @@ it("lets a pattern-hidden model back in with one switch without discarding the l
   expect(container.querySelector('[data-slot="hidden-by-list"]')?.textContent).toContain("hide no model");
 });
 
-it("writes to the project list when that is where the list lives", async () => {
-  await render(snapshot({ enabledModels: ["claude-*"] }, { enabledModels: patterns }));
+it("writes to the project list when Project is visible", async () => {
+  await render(snapshot({ enabledModels: ["claude-*"] }, { enabledModels: patterns }), "project");
+  expect(mocks.request).toHaveBeenCalledWith("pi/models/catalog", { cwd: "/p", settingsView: "effective", refresh: false });
   await act(async () => switchOf("gpt-6-astra").click());
   expect(applied[0]?.scope).toBe("project");
   expect(note()).toContain("project settings");
@@ -265,7 +326,7 @@ it("keeps a model added to the catalogue later switched on after another was swi
 });
 
 it("writes the disable list to the project when the project sets one", async () => {
-  await render(snapshot({ enabledModels: patterns }, { disabledModels: [] }));
+  await render(snapshot({ enabledModels: patterns }, { disabledModels: [] }), "project");
   await act(async () => switchOf("gpt-5").click());
   expect(applied[0]?.scope).toBe("project");
 });
@@ -282,13 +343,24 @@ it("keeps the row as it was and says nothing when the write is refused", async (
   expect(note()).toBeUndefined();
 });
 
+it("renders Effective models as a read-only projection", async () => {
+  await render(snapshot({ enabledModels: patterns }), "effective");
+  expect(switchOf("gpt-5").disabled).toBe(true);
+  await act(async () => switchOf("gpt-5").click());
+  expect(applied).toEqual([]);
+});
+
 it("holds the switch busy while the write is in flight", async () => {
   await render();
   let resolve!: (ok: boolean) => void;
   const pending = new Promise<boolean>((done) => { resolve = done; });
   await act(async () => root.unmount());
   root = createRoot(container);
-  await act(async () => root.render(<TooltipProvider><ModelsTab cwd="/p" snapshot={snapshot({ enabledModels: patterns })} onApply={() => pending} /></TooltipProvider>));
+  await act(async () => root.render(
+    <TooltipProvider>
+      <ModelsTab settingsRouteCwd="/p" neutralRouteCwd="/neutral" view="global" snapshot={snapshot({ enabledModels: patterns })} onApply={() => pending} />
+    </TooltipProvider>,
+  ));
   await act(async () => switchOf("gpt-5").click());
   expect(switchOf("gpt-5").disabled).toBe(true);
   expect(switchOf("gpt-5").getAttribute("aria-busy")).toBe("true");
@@ -372,8 +444,8 @@ it("says so, in words, when a view is empty", async () => {
 
 // ---- the allow-list editor, under Advanced ----------------------------------
 
-it("keeps the pattern editor folded under Advanced and writes it where the list lives", async () => {
-  await render(snapshot({ enabledModels: ["claude-*"] }, { enabledModels: patterns }));
+it("keeps the pattern editor folded under Advanced and writes to the visible Project", async () => {
+  await render(snapshot({ enabledModels: ["claude-*"] }, { enabledModels: patterns }), "project");
   const trigger = container.querySelector<HTMLButtonElement>('[data-slot="patterns-trigger"]')!;
   expect(trigger.textContent).toContain("Advanced");
   expect(trigger.textContent).toContain("1 pattern");
@@ -383,6 +455,32 @@ it("keeps the pattern editor folded under Advanced and writes it where the list 
   expect(offerEvery).toBeDefined();
   await act(async () => offerEvery.click());
   expect(applied).toEqual([{ scope: "project", changes: [{ path: "enabledModels", op: "unset" }] }]);
+});
+
+it("ignores a delayed catalogue from the previous Settings target", async () => {
+  let resolveOld!: (value: { models: ModelCatalogEntry[]; enabledPatterns: null; disabledModels: string[]; errors: string[] }) => void;
+  const old = model("openai", "old-model", false);
+  const next = model("openai", "new-model", false);
+  mocks.request.mockImplementation(async (method: string, params: { cwd?: string }) => {
+    if (method === "pi/providers/list") return { providers };
+    if (method === "pi/models/catalog" && params.cwd === "/old") {
+      return await new Promise(resolve => { resolveOld = resolve; });
+    }
+    if (method === "pi/models/catalog") return { models: [next], enabledPatterns: null, disabledModels: [], errors: [] };
+    if (method === "pi/transcribe/status") return { available: true };
+    throw new Error(`unexpected ${method}`);
+  });
+  const props = { neutralRouteCwd: "/neutral", view: "global" as const, snapshot: snapshot({}), onApply: async () => true };
+  await act(async () => root.render(
+    <TooltipProvider><ModelsTab {...props} settingsRouteCwd="/old" /></TooltipProvider>,
+  ));
+  await act(async () => root.render(
+    <TooltipProvider><ModelsTab {...props} settingsRouteCwd="/new" /></TooltipProvider>,
+  ));
+  expect(rowIds()).toContain("openai/new-model");
+  await act(async () => resolveOld({ models: [old], enabledPatterns: null, disabledModels: [], errors: [] }));
+  expect(rowIds()).toContain("openai/new-model");
+  expect(rowIds()).not.toContain("openai/old-model");
 });
 
 it("cannot blame a provider list it could not read", async () => {

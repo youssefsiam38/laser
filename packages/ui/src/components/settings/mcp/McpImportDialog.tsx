@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SettingsSwitch } from "@/components/assistant-ui/elements/settings-panel";
 import { useLaserStable } from "@/runtime";
+import type { ScopeDraft } from "../ScopeDraftGuard.js";
 
 import { ScopeChoice } from "./McpServerForm.js";
 import { scopeLabel, transportSummary } from "./model.js";
@@ -64,6 +65,8 @@ export function McpImportDialog({
   sources,
   defaultScope = "global",
   allowProject = true,
+  lockScope = false,
+  onDraftChange,
   onImported,
 }: {
   cwd: string;
@@ -72,6 +75,8 @@ export function McpImportDialog({
   sources: readonly McpImportSource[];
   defaultScope?: McpScope;
   allowProject?: boolean;
+  lockScope?: boolean;
+  onDraftChange?: ((draft: ScopeDraft | undefined) => void) | undefined;
   onImported: (servers: McpServerState[], imported: string[]) => void;
 }) {
   const { client } = useLaserStable();
@@ -103,8 +108,8 @@ export function McpImportDialog({
     setChosen(next);
   };
 
-  const apply = async () => {
-    if (!source || !chosen.size) return;
+  const apply = async (): Promise<boolean> => {
+    if (!source || !chosen.size) return false;
     setBusy(true);
     setError(undefined);
     try {
@@ -117,13 +122,28 @@ export function McpImportDialog({
       });
       onImported(result.servers, result.imported);
       onOpenChange(false);
+      return true;
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
+      return false;
     } finally {
       setBusy(false);
     }
   };
 
+  useEffect(() => {
+    if (!open) {
+      onDraftChange?.(undefined);
+      return;
+    }
+    onDraftChange?.({
+      id: "mcp-import",
+      label: "MCP import selection",
+      save: apply,
+      discard: () => onOpenChange(false),
+    });
+    return () => onDraftChange?.(undefined);
+  }, [chosen, onDraftChange, open, replace, scope, sourceId]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -215,7 +235,11 @@ export function McpImportDialog({
               </>
             )}
 
-            <ScopeChoice scope={scope} onChange={setScope} allowProject={allowProject} label="Import into" />
+            {lockScope ? (
+              <p className="text-sm text-ink-2">Import into <span className="font-medium text-ink">{scope === "global" ? "Global settings" : "Project settings"}</span>.</p>
+            ) : (
+              <ScopeChoice scope={scope} onChange={setScope} allowProject={allowProject} label="Import into" />
+            )}
 
             {conflicting && (
               <div className="flex items-start gap-3">

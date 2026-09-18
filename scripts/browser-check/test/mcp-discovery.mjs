@@ -27,11 +27,11 @@ export default async function acceptance(check) {
     await prompt(state.path, 'Start without discovery');
     return state.path;
   }
-  const config = (await check.rpc('mcp/list', { cwd })).servers.find(server => server.config.name === 'fixture').config;
+  const config = (await check.rpc('mcp/list', { cwd, view: 'project' })).servers.find(server => server.config.name === 'fixture').config;
   const tools = { ...config.tools, alwaysLoad: false };
   await check.rpc('mcp/save', { cwd, scope: 'global', server: { ...config, tools } });
   const progressive = await conversation(`Progressive ${check.state.width} ${check.state.theme}`);
-  const before = (await check.rpc('mcp/list', { cwd })).conversations.find(item => item.sessionPath === progressive).context;
+  const before = (await check.rpc('mcp/list', { cwd, view: 'project' })).conversations.find(item => item.sessionPath === progressive).context;
   assert.deepEqual(before.preloaded, [], 'progressive does not preload');
   assert.deepEqual(before.discoveries, []);
 
@@ -80,7 +80,7 @@ export default async function acceptance(check) {
   await activate(edit.getByRole('button', { name: 'Save changes', exact: true }));
   await edit.waitFor({ state: 'hidden' });
   const next = await conversation(`Preloaded ${check.state.width} ${check.state.theme}`);
-  const snapshots = (await check.rpc('mcp/list', { cwd })).conversations;
+  const snapshots = (await check.rpc('mcp/list', { cwd, view: 'project' })).conversations;
   assert.deepEqual(snapshots.find(item => item.sessionPath === progressive).context.preloaded, []);
   assert.ok(snapshots.find(item => item.sessionPath === next).context.preloaded.includes('fixture_echo'));
   await activate(inspector.getByRole('tab', { name: 'Tools', exact: true }));

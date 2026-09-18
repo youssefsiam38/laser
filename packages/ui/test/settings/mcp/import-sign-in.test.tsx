@@ -95,16 +95,17 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function mount() {
+async function mount(view: "global" | "project" = "global") {
   ({ root } = await render(
     <TooltipProvider>
-      <McpServersTab cwd="/project" />
+      <McpServersTab routeCwd="/project" view={view} />
     </TooltipProvider>,
   ));
 }
 
-it("imports the servers a person chose, into the scope they chose", async () => {
-  await mount();
+it("imports the servers a person chose into the visible Project scope", async () => {
+  sources[0]!.servers[0]!.conflicts = ["project"];
+  await mount("project");
   await click("Import");
   expect(text()).toContain("/home/a/.claude.json");
   expect(text()).toContain("https://mcp.linear.app/mcp/full/path");
@@ -115,7 +116,7 @@ it("imports the servers a person chose, into the scope they chose", async () => 
   expect(text()).toContain("the API_KEY environment variable");
   expect(text()).not.toContain("transport.headers.");
   expect(text()).not.toContain("transport.env.");
-  expect(text()).toContain("already in Every project");
+  expect(text()).toContain("already in This project");
   expect(text()).toContain("kept in the app’s secret store");
   const unsupported = document.querySelector<HTMLElement>('[data-slot="mcp-import-row"][data-server="weird"]')!;
   expect(unsupported.textContent).toContain("it asks for a transport this app does not speak");
@@ -128,7 +129,6 @@ it("imports the servers a person chose, into the scope they chose", async () => 
   await clickElement(document.querySelector<HTMLElement>('[aria-label="Import linear"]')!);
   expect(findButton("Replace the servers of the same name")).toBeDefined();
   await click("Replace the servers of the same name");
-  await click("This project");
   await click("Import 2 servers");
 
   expect(applied).toEqual([{ cwd: "/project", source: "claude-code", names: ["memory", "linear"], scope: "project", replace: true }]);

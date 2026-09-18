@@ -635,7 +635,7 @@ describe("Agents page", () => {
     expect(button("Start chat").disabled).toBe(true);
     expect(button("Start chat").getAttribute("aria-describedby")).toBeTruthy();
     await settle();
-    expect(mocks.request).toHaveBeenCalledWith("pi/models/catalog", { cwd: "/state/beam" });
+    expect(mocks.request).toHaveBeenCalledWith("pi/models/catalog", { cwd: "/state/beam", settingsView: "effective" });
   });
 
   it("shows Namer's qualification states and runs the check", async () => {

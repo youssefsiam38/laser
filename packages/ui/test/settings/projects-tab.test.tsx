@@ -56,9 +56,10 @@ it("shows blocked, trust and legacy resolver state without exposing saved argume
   });
 
   ({ root } = await render(
-    <TooltipProvider><WorkbenchProvider><SettingsScreen ambientCwd="/workspace/api" initialTab="projects" /></WorkbenchProvider></TooltipProvider>,
+    <TooltipProvider><WorkbenchProvider><SettingsScreen initialTab="projects" /></WorkbenchProvider></TooltipProvider>,
   ));
   await act(async () => { await Promise.resolve(); });
+  await click("Expand API project settings");
 
   expect(text()).toContain("Blocked");
   expect(text()).toContain("The saved setup exited before Bash could start.");
@@ -87,9 +88,10 @@ it("replaces Environment with collapsible Projects and saves exactly one Bash pr
   });
 
   ({ root } = await render(
-    <TooltipProvider><WorkbenchProvider><SettingsScreen ambientCwd="/workspace/api" initialTab="projects" /></WorkbenchProvider></TooltipProvider>,
+    <TooltipProvider><WorkbenchProvider><SettingsScreen initialTab="projects" /></WorkbenchProvider></TooltipProvider>,
   ));
   await act(async () => { await Promise.resolve(); });
+  await click("Expand API project settings");
 
   expect(text()).toContain("Projects");
   expect(text()).not.toContain("Environment");
