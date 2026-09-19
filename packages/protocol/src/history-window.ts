@@ -372,29 +372,62 @@ export function historyWindowFits(
  * Plan, bound and materialize a live page with the same limits as durable
  * reads.
  *
- * `bodies`, when given, is RP-5b's per-body limit and the digest the producer
- * signs elided bodies with: a record carrying a larger body is left out of the
- * page and listed in `window.elided` with its identity and body metadata, so a
- * conversation with one enormous turn is still readable a page at a time. No
- * record is ever rewritten.
+ * `bodies`, when given, carries the digest the producer signs elided bodies
+ * with and, optionally, RP-5b's per-body limit: a record carrying a larger
+ * body — or one too large for any page at all, whatever kind of record it is
+ * (M16-T88) — is left out of the page and listed in `window.elided` with its
+ * identity and body metadata, so a conversation with one enormous turn is
+ * still readable a page at a time. No record is ever rewritten.
+ *
+ * With a digest in hand this **cannot** refuse a bounded page for size: a
+ * record that cannot travel is elided, so a single-record page always fits.
+ * `all` and `from` stay indivisible — they are exact projections their caller
+ * asked for by name, and shrinking one would answer a different question.
  */
 export function boundedHistoryWindow(
   snapshot: { entries: unknown[]; leafId: string | null },
   request: HistoryWindowRequest,
   scope: HistoryWindowScope,
-  bodies?: { limit: number; digest: (text: string) => string },
+  bodies?: { limit?: number; digest: (text: string) => string },
 ): { entries: unknown[]; leafId: string | null; window: HistoryWindow } | undefined {
   const nodes = snapshot.entries.map(historyWindowNode);
+  const elide = (indices: readonly number[]): { entries: unknown[]; elided: unknown[] } =>
+    elideOversizedEntries(indices.map(index => snapshot.entries[index]), bodies!.limit, bodies!.digest);
   const fits = (candidate: HistoryWindowPlan): boolean => {
     if (!bodies) return historyWindowFits(snapshot, candidate);
-    const page = elideOversizedEntries(candidate.entryIndices.map(index => snapshot.entries[index]), bodies.limit, bodies.digest);
-    const context = elideOversizedEntries(candidate.contextIndices.map(index => snapshot.entries[index]), bodies.limit, bodies.digest);
+    const page = elide(candidate.entryIndices);
+    const context = elide(candidate.contextIndices);
     if (page.entries.length + page.elided.length > HISTORY_PAGE_ENTRY_LIMIT) return false;
     return historyContentSerializedBytes(page.entries, context.entries)
       + historyContentSerializedBytes(page.elided, context.elided) <= HISTORY_PAGE_BYTE_LIMIT;
   };
   const plan = fitHistoryWindowPlan(nodes, snapshot.leafId, request, scope, fits);
-  if (!plan) return undefined;
+  if (!plan) {
+    // The terminating floor (M16-T88). An indivisible request is refused as
+    // before; a bounded one cannot be, because elision bounds every record it
+    // is handed. If the smallest page's own records still do not fit, elision
+    // failed to bound something and that is a defect here — not a reason to
+    // make the older half of somebody's conversation unreachable for ever.
+    if (bodies && !("all" in request) && !("from" in request) && scope.selection?.kind !== "delta") {
+      const smallest = historyWindowPlan(
+        nodes,
+        snapshot.leafId,
+        "before" in request ? { before: request.before, limit: 1 }
+          : "beforeEntry" in request ? { beforeEntry: request.beforeEntry, limit: 1 }
+            : { tail: 1 },
+        scope,
+        true,
+      );
+      const page = elide(smallest.entryIndices);
+      const records = historyContentSerializedBytes(page.entries, []) + historyContentSerializedBytes(page.elided, []);
+      if (records > HISTORY_PAGE_BYTE_LIMIT) {
+        throw new Error(`A single-record history page is ${records} bytes after elision: elision did not bound this record.`);
+      }
+      // The records fit; only the goal context before them does not. That is
+      // not "one record is too large", and it is the caller's to report.
+    }
+    return undefined;
+  }
   const materialized = materializeHistoryWindow(snapshot, plan);
   return bodies ? withElidedBodies(materialized, bodies.limit, bodies.digest) : materialized;
 }
@@ -402,7 +435,7 @@ export function boundedHistoryWindow(
 /** Apply RP-5b's per-body limit to an already materialized page. */
 export function withElidedBodies(
   page: { entries: unknown[]; leafId: string | null; window: HistoryWindow },
-  bodyLimit: number,
+  bodyLimit: number | undefined,
   digest: (text: string) => string,
 ): { entries: unknown[]; leafId: string | null; window: HistoryWindow } {
   const selected = elideOversizedEntries(page.entries, bodyLimit, digest);

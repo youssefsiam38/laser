@@ -745,7 +745,11 @@ export class WorkerServer {
             // exact tree semantics even when the base is current or a prefix.
             // RP-5b: a caller that cannot hold a large body asks for the page
             // without it; the record is listed in `elided` instead of rewritten.
-            const bodies = req.params.bodyLimit === undefined ? undefined : { limit: req.params.bodyLimit, digest: sha256Hex };
+            // The digest travels even when no body limit was asked for, so a
+            // record too large for any page is still elided rather than
+            // refused: no page is unreachable because one record is too large
+            // (M16-T88).
+            const bodies = { ...(req.params.bodyLimit === undefined ? {} : { limit: req.params.bodyLimit }), digest: sha256Hex };
             if ("tail" in req.params.window && resolved?.base !== "stale" && resolved?.state) {
               const delta = boundedHistoryWindow(snapshot, req.params.window, {
                 ...common,
@@ -758,9 +762,15 @@ export class WorkerServer {
               selection: { kind: "replace" },
             }, bodies);
             if (replacement) return replacement;
+            // Only an indivisible request reaches here: `all` and `from` name
+            // an exact projection, so they are refused rather than shortened
+            // into an answer to a different question. A bounded page is always
+            // served: oversized records travel as identity (M16-T88).
             throw new ProtocolError(
               ErrorCodes.RevisionUnavailable,
-              "Part of this conversation is too large to show.",
+              "all" in req.params.window || "from" in req.params.window
+                ? "That part of this conversation is too large to send at once. Open it and read it a page at a time."
+                : "Part of this conversation is too large to show.",
             );
           }
         }
