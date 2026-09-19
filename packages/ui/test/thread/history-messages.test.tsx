@@ -1,11 +1,16 @@
 // @vitest-environment happy-dom
-import { act, useState } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { AssistantRuntimeProvider, useExternalStoreRuntime, type ThreadMessageLike } from "@assistant-ui/react";
+/**
+ * A row keeps its identity — and everything local to it — when earlier
+ * messages arrive above it.
+ *
+ * Rewritten for M16-T87: the transcript is mounted over a real scroller
+ * (`virtual-rig.tsx`), because the rows it mounts are now chosen from a real
+ * scroll position. The guarantee is unchanged: the prepend must not remount
+ * the row the person is in, so its focus and its own disclosure state survive.
+ */
+import { act } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { WindowedMessages, TranscriptViewportProvider } from "../../src/components/thread/transcript-viewport.js";
-import { createStateStore, LaserStoreProvider } from "../../src/runtime/LaserProvider.js";
-import { initialState } from "../../src/store.js";
+import { mountRig, type Rig } from "./virtual-rig.js";
 
 // Isolate row rendering, not the message-id provider/runtime boundary under test.
 // Local disclosure state must remain with its message when earlier rows arrive.
@@ -18,32 +23,19 @@ vi.mock("../../src/components/thread/messages.js", async () => {
     return <button aria-label={`${id} details`} aria-expanded={open} onClick={() => setOpen(value => !value)}>{id}</button>;
   } };
 });
-let root: Root;
-let container: HTMLDivElement;
-beforeEach(() => {
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-  container = document.createElement("div"); container.style.fontSize = "14px"; container.style.lineHeight = "21px";
-  document.body.append(container); root = createRoot(container);
-});
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
+
+let rig: Rig | undefined;
+beforeEach(() => { globalThis.IS_REACT_ACT_ENVIRONMENT = true; });
+afterEach(async () => { await rig?.dispose(); rig = undefined; });
 
 it("keeps focus and a manual disclosure on the same message across an asynchronous prepend", async () => {
-  let prepend!: () => void;
-  const store = createStateStore({ ...initialState, current: "/history" });
-  function Fixture() {
-    const [messages, setMessages] = useState<ThreadMessageLike[]>([{ id: "tail", role: "assistant", content: "Tail message" }]);
-    prepend = () => setMessages(previous => [{ id: "older", role: "user", content: "Earlier message" }, ...previous]);
-    const runtime = useExternalStoreRuntime({ messages, convertMessage: (message: ThreadMessageLike) => message, isRunning: false, onNew: async () => {} });
-    return <LaserStoreProvider store={store}><AssistantRuntimeProvider runtime={runtime}><TranscriptViewportProvider><WindowedMessages /></TranscriptViewportProvider></AssistantRuntimeProvider></LaserStoreProvider>;
-  }
-  await act(async () => root.render(<Fixture />));
-  const tail = container.querySelector<HTMLButtonElement>('[aria-label="tail details"]')!;
-  tail.focus();
-  await act(async () => tail.click());
+  rig = await mountRig({ ids: ["tail"], height: () => 120, clientHeight: 900 });
+  const tail = rig.container.querySelector<HTMLButtonElement>('[aria-label="tail details"]')!;
+  await act(async () => { tail.focus(); tail.click(); });
   expect(tail.getAttribute("aria-expanded")).toBe("true");
-  await act(async () => { await Promise.resolve(); prepend(); });
-  expect(container.querySelector('[aria-label="tail details"]')).toBe(tail);
+  await rig.setIds(["older", "tail"]);
+  expect(rig.container.querySelector('[aria-label="tail details"]')).toBe(tail);
   expect(document.activeElement).toBe(tail);
   expect(tail.getAttribute("aria-expanded")).toBe("true");
-  expect(container.querySelector('[aria-label="older details"]')?.getAttribute("aria-expanded")).toBe("false");
+  expect(rig.container.querySelector('[aria-label="older details"]')?.getAttribute("aria-expanded")).toBe("false");
 });

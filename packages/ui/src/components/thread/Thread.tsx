@@ -120,7 +120,10 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
           <FileOpenerProvider scope={path}>
           <ThreadPrimitive.Root ref={find.root} data-slot="thread" className="relative flex h-full min-h-0 flex-col bg-bg">
             {find.bar}
-            <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnRunStart={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} data-slot="thread-viewport" className="flex flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain">
+            {/* One system adjusts this scroller: the transcript's virtualizer.
+                The browser's own scroll anchoring would fight it for the same
+                pixels on every prepend (D-303). */}
+            <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnRunStart={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} data-slot="thread-viewport" className="flex flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain [overflow-anchor:none]">
               <TranscriptViewportBinding />
               {/* A long transcript gets a rail of ticks at the viewport's edge, on a wide screen only. */}
               <ConversationMapAui side="right" className="hidden lg:block" />
@@ -153,8 +156,11 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
                   <AuiIf condition={(s) => s.thread.isEmpty}>
                     {(open.phase === "idle" || (open.phase === "ready" && !open.expectsTranscript)) && (emptyState ?? <EmptyState />)}
                   </AuiIf>
-                  <HistoryControls key={path} />
-                  <WindowedMessages />
+                  {/* The history controls scroll with the conversation and are
+                      measured with it: they are the transcript's head item, not
+                      chrome above it, so the control appearing or going moves
+                      nobody (M16-T87). */}
+                  <WindowedMessages head={<HistoryControls key={path} />} />
                 </ConversationLoadingGate>
                 <ThreadPrimitive.ViewportFooter
                   data-slot="thread-footer"

@@ -71,15 +71,21 @@ function stubGeometry(): () => void {
     if ((this as HTMLElement).dataset?.slot === "thread-viewport") {
       return { x: 0, y: 0, top: 0, left: 0, right: 600, bottom: 900, width: 600, height: 900, toJSON: () => ({}) } as DOMRect;
     }
-    const row = this.closest?.("[data-message-id]") as HTMLElement | null;
-    // A row sits where its turn sits in the conversation, not where it sits in
-    // the DOM: releasing older rows must be visible as a scroll compensation,
-    // not hidden by renumbering.
-    const id = row?.dataset.messageId ?? "";
-    const index = /^entry:e(\d+)$/.exec(id) ? Number(/^entry:e(\d+)$/.exec(id)![1]) : -1;
-    const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]');
-    const top = index >= 0 ? index * ROW - (viewport?.scrollTop ?? 0) : 0;
-    return { x: 0, y: top, top, left: 0, right: 600, bottom: top + ROW, width: 600, height: index >= 0 ? ROW : 0, toJSON: () => ({}) } as DOMRect;
+    const top = (node: number) => node - scrolled;
+    const messages = container.querySelector<HTMLElement>('[data-slot="thread-messages"]');
+    if (this === messages) {
+      const height = Number.parseFloat(messages.style.height) || 0;
+      return { x: 0, y: top(0), top: top(0), left: 0, right: 600, bottom: top(height), width: 600, height, toJSON: () => ({}) } as DOMRect;
+    }
+    // The transcript positions its rows itself, so a row is where the
+    // transcript put it — its own inline `top` — and a row's height is the
+    // fixture's, whatever the model guessed. A trim must show up as a scroll
+    // compensation, never be hidden by renumbering.
+    const item = this.closest?.("[data-index]") as HTMLElement | null;
+    if (!item) return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) } as DOMRect;
+    const height = item.dataset.windowMessage ? ROW : 0;
+    const start = top(Number.parseFloat(item.style.top) || 0);
+    return { x: 0, y: start, top: start, left: 0, right: 600, bottom: start + height, width: 600, height, toJSON: () => ({}) } as DOMRect;
   };
   return () => { Element.prototype.getBoundingClientRect = original; };
 }
@@ -175,6 +181,27 @@ async function mount(store: ReturnType<typeof createStateStore>, presentation: T
       </TooltipProvider>
     </LaserStoreProvider>,
   ));
+  // A real scroller around the real transcript: the window is nine hundred
+  // pixels, the range is whatever the transcript rendered, and a write to
+  // `scrollTop` is clamped and reported like a browser's.
+  const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]')!;
+  const content = () => Number.parseFloat(container.querySelector<HTMLElement>('[data-slot="thread-messages"]')?.style.height ?? "0") || 0;
+  Object.defineProperties(viewport, {
+    clientHeight: { value: 900, configurable: true },
+    scrollHeight: { get: content, configurable: true },
+    scrollTop: {
+      configurable: true,
+      get: () => scrolled,
+      set: (value: number) => {
+        const next = Math.min(Math.max(0, value), Math.max(0, content() - 900));
+        if (next === scrolled) return;
+        scrolled = next;
+        queueMicrotask(() => viewport.dispatchEvent(new Event("scroll")));
+      },
+    },
+    scrollTo: { configurable: true, value: (arg: { top?: number } | number) => { viewport.scrollTop = typeof arg === "number" ? arg : arg?.top ?? scrolled; } },
+  });
+  await act(async () => { await Promise.resolve(); });
   return controller!;
 }
 
@@ -274,14 +301,8 @@ describe("a trim while somebody is reading", () => {
     // Read an older part of the conversation: scroll the real viewport there
     // and let the controller do what it does with a scroll.
     const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]')!;
-    scrolled = 24 * ROW - 900;
-    await act(async () => {
-      Object.defineProperty(viewport, "scrollTop", { value: scrolled, configurable: true, writable: true });
-      Object.defineProperty(viewport, "clientHeight", { value: 900, configurable: true });
-      Object.defineProperty(viewport, "scrollHeight", { value: 24 * ROW, configurable: true });
-      viewport.dispatchEvent(new Event("scroll"));
-    });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { controller.latest(); await Promise.resolve(); });
+    await act(async () => { viewport.dispatchEvent(new Event("scroll")); await Promise.resolve(); });
     // The newest turn, which is where a reader lands and which the transcript
     // is showing: the surface picks it, the test only names it.
     const knownId = rowIds().at(-1)!;

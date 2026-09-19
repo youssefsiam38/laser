@@ -1,189 +1,149 @@
 # Reading long conversations
 
-The transcript has one geometric authority: `TranscriptViewport`. It owns the
-live edge, reading anchors, virtual rows and the unloaded-history range. The
-assistant-ui viewport does not independently reposition the conversation.
+The transcript has **one** geometric authority, and it is not Laser's: the
+mounted range and every scroll adjustment that follows a data or measurement
+change belong to `@tanstack/react-virtual` (D-303, `docs/transcript-virtualization.md`).
+`TranscriptViewport` owns what is Laser's — which conversation is on screen,
+which rows are held open, where a destination is going, how much unloaded
+history stands above the loaded rows, and what this surface is standing on —
+and writes no scroll position of its own. The assistant-ui viewport does not
+reposition the conversation either, and the scroller carries
+`overflow-anchor: none` so the browser's own anchoring never competes.
 
-## Earlier-page transaction
+## The shape of the list
 
-An earlier-page request temporarily forbids estimate-based anchor restoration.
-Measured row deltas and the height inserted above the current anchor remain
-allowed. The geometric live-edge branch also remains allowed, so a person at
-the newest message stays there while history arrives above it.
+```
+item 0            the head: history controls, then the unloaded-history placeholder
+item 1 … item n   one per message, in normal chronological order
+```
 
-The request promise owns the transaction. It releases on refusal, rejection,
-cancellation, path change or unmount. For an accepted request it releases on
-the first React commit after the history cursor changes, even if projection
-merges the page into the oldest turn, replaces ids or produces no new message.
-A one-frame fallback prevents a broken producer contract from wedging the
-viewport; acceptance tests require that fallback count to remain zero.
+The head is an item, not chrome above the list, for two reasons. The engine
+measures it and anchors through it exactly as it does a row, so the history
+control appearing or the placeholder shrinking moves nobody. And a list whose
+first key never changes lets the engine detect every prepend, trim and
+replacement from the item count alone.
 
-## The reader never moves on their own
+Rows are positioned absolutely from the engine's own measurements (`top`, never
+a transform, so nothing inside a row loses its containing block) inside a
+container whose height is `getTotalSize()`. Order in the DOM is the order of
+the conversation: never `column-reverse`, never an inverted transform, so
+native selection, Find and the reading order are the ones the browser expects.
 
-One rule covers every arrival: **anything that changes above the reader moves
-the viewport by exactly that amount, once, in the same frame — and "exactly"
-is measured from the browser, never computed from the model.**
+`getItemKey` is the message id, scoped to the conversation. Indices never key a
+row, so a prepend does not renumber what is already measured. Every mounted row
+is measured through `measureElement`; only rows that have never been mounted
+use the estimate, which comes from the active type and spacing scales.
 
-The reader's position is recorded, while the layout is settled, as the block
-they are reading — the markdown paragraph or disclosure trigger at the top edge
-— followed by the row it is in and the rest of what is on screen, each as a top
-in the scroller's own content coordinates (`rect.top - viewport.top +
-scrollTop`). When a layout lands — a React commit, a `ResizeObserver` delivery,
-a measured frame — the same elements are read again and `scrollTop` moves by the
-difference. Content coordinates are scroll-invariant, so the person's own
-scrolling between the two readings cancels out, and a write this controller
-makes never looks like content moving.
+## What the engine does on a prepend
 
-The block comes first because a row's top does not move when content grows
-*inside* it above the reading position — an image decoding, highlighting
-reflowing, a late markdown block, a disclosure opening — and the person's text
-does. The row's own top is the next candidate, for the case where the block
-cannot be found again because the row re-rendered into a different shape.
+When the edge keys change — a page of older messages, a trim, a branch — the
+engine captures the item under the current scroll offset and how far into it
+the reader is, invalidates its measurement cache, resolves that key's new
+start, and sets the scroll offset **in the same update pass**, so the range
+rendered by that pass is already the right one. The DOM write happens in a
+layout effect, with an iOS deferral while a touch is in flight. That ordering
+is the whole point: the bespoke engine chose the window from a model that
+disagreed with the laid-out DOM for at least one commit, and that one frame is
+what a person saw as blocks appearing and disappearing.
 
-The code for this is `packages/ui/src/components/thread/reading-anchor.ts`; its
-only inputs are the viewport element, the mounted rows and their indices.
+## When a measurement moves the reader
 
-Model arithmetic cannot answer this question. Above a reader are measured rows,
-rows whose height is still a guess, an estimated range that changes in the same
-commit and the history controls, and `globalOffset` mixes all four; writing its
-difference to `scrollTop` moves the person by whatever the guess got wrong,
-which is what pushed a reader back page after page in a long real session
-(M16-T85). The estimated index survives as one explicit fallback, named in the
-code: the reader is on loaded rows and not one is mounted — a destination jump,
-or a window that has not caught up with a long wheel.
+One rule, supplied to the engine as its `shouldAdjustScrollPositionOnItemSizeChange`:
 
-Three consequences follow, and acceptance measures them.
+> Content that ends at or above the reading position moves the reading position
+> by exactly what it changed. Content the person can see does not.
 
-- **Nothing on screen, nothing to hold.** When no loaded row is on screen the
-  person is looking at the placeholder for history that has not arrived. The
-  rows that arrive belong exactly there, so no `scrollTop` is written at all.
-  Holding a row below the fold still would push them down for their own reading.
-- **One page, one answer.** While an arrived page is still being reconciled —
-  its rows mounted but not yet measured, its height not yet exchanged with the
-  estimate — the recorded rows are not re-chosen, only re-positioned after each
-  compensation. Re-choosing mid-exchange spends half of it and keeps the other.
-- **One authority.** An away reader's pixels belong to the measured anchor.
-  One predicate decides that, and both writers ask it: `restore()` keeps the
-  live edge and a settled destination (which owns its row against native and
-  queued scrolls until the next person intent), and the measured anchor stands
-  down for exactly those. A disclosure is not an exception — it moves the block
-  the anchor is holding, which is the thing the person is reading.
+An item that merely spans the reading line — the row they are reading, growing
+at its bottom as it streams — is excluded, so nothing drags the viewport
+downwards. The engine's own default adds a scroll-direction guard on top of
+that; Laser removes it, because the placeholder for unloaded history shrinks
+precisely while somebody is reading upwards, and a compensation skipped there
+is a reader thrown by the page they asked for.
 
-- A page is attributed to unloaded history whenever it changes the head of the
-  id list while a cursor still points before it. It is not gated on the page
-  transaction: an accepted page commits over several React commits, and the
-  later ones land after the transaction has released. Growth *inside* an
-  existing row is not a head change and never counts.
-- A page that folds the anchored row into an older group leaves the reader
-  where they are. The row's id is gone, but the conversation is the same, so
-  the place is re-taken from what is on screen. Only a genuine window
-  *replacement* — a reloaded recent tail, a branch that dropped the message —
-  still falls back to the newest turn, and only when the surface is already
-  arriving there.
-- The producer's "there is nothing before this" can commit before the rows that
-  prove it. Removing the estimate then would take pixels from above the reader
-  while their replacement is still arriving, so the estimate is held until that
-  page's own commit, and removed with its compensation in one frame.
-- Compensation the clamp at the top cannot spend stays owed until the geometry
-  allows it: above the content there is nowhere to go, the content that was
-  removed is on its way back, and without the debt the truncated part is lost
-  and the reader stays pinned to the top of the window. A clamp at the *bottom*
-  is not deferred: it means the layout below the reader shrank in the same
-  frame, and paying it later would write `scrollTop` downwards for a change
-  that is no longer above them. Any deliberate movement settles the debt — a
-  wheel, a touch, a key, and a scrollbar drag, which reaches none of the others.
-- Measuring a mounted row never moves the layout — the row is already that tall
-  on screen and the spacers cover unmounted rows only — so it never writes
-  `scrollTop`. It runs in the commit that mounted the row, not a frame later,
-  because a window chosen from a model the browser has already contradicted
-  unmounts rows above the reader and collapses the page that just arrived.
-- A page whose boundary row is not among the rendered entries — an oversized
-  record held as a stub — is inserted at the front rather than refused, so a
-  long conversation cannot ask the producer the same question for ever (D-302).
-- There is no second authority: an absolute "hold" that re-places a surviving
-  row for a run of frames was tried and removed, because it fought the
-  structural shift and the reserve exchange for the same pixels, clamped at 0,
-  and kept the reading place from being re-taken after a merged head.
+**The row is the unit.** The block-level reading anchor that M16-T85 built
+(`reading-anchor.ts`) is gone with the second authority it belonged to. Content
+growing *inside* the row the reader is in, above their line — an image
+decoding, a disclosure opening on its own — moves their text by that much, as
+it would on any page. A row above them growing does not.
+
+## The unloaded-history placeholder
+
+Earlier history that has not arrived is drawn as conversation-shaped
+placeholder turns inside the head item: no words, no card, nothing sticky. Each
+turn is exactly one nominal turn tall whether or not it has been painted, so
+scrolling through the region never changes its height. The engine measures the
+region like any other content; nothing compensates for it by hand.
+
+How many turns:
+
+- the target is the producer's count of unloaded prompts, bounded to three
+  screens (D-302). A producer that says zero or one prompt is saying
+  "unknown" — one tool-heavy prompt can be a page of rows — so that case
+  counts as two turns, not none;
+- an arriving page takes the turns it replaced, from the bottom of the region,
+  because that is where the rows belong;
+- **except the turns the person is looking at.** While the reading position is
+  inside the region, only turns below the fold are given back. A row never
+  materialises in front of somebody who has not reached it yet; the rest of the
+  region follows as they read past it;
+- the region grows back to its bounded size only where growth cannot be felt:
+  at the live edge, or with the reader on loaded rows, where the whole region
+  is above their reading position and the engine moves them with it to the
+  pixel. Never during a gesture, never while a destination is landing, and
+  never while the person is inside the region — there, growth would push the
+  conversation further away from them one page at a time;
+- one turn always remains while the producer still has a cursor, because the
+  region is also the only thing on screen that says "this is not the
+  beginning". It disappears entirely when the cursor does.
+
+Continuous paging is unchanged and still belongs to the history controls: while
+the reading position is inside the region, each accepted page asks for the next
+one, up to twelve per gesture. `history-loader.ts` and its fences are
+untouched (M16-T81/T85).
+
+## The live edge
+
+`anchorTo: "end"` with `followOnAppend`: the transcript follows an appended
+turn only when the reader was already at the end, and a row growing at the end
+— a turn streaming — keeps the end pinned. A conversation opens at its newest
+turn: the engine cannot know that a list which grew from nothing should start
+at its end, so that placement is one explicit intent, made once, in the commit
+that has the rows. Sending always reveals the sent message the same way, and
+"Jump to latest" is the affordance for everything else.
+
+## Destinations
+
+A deep link, a search hit, the map, a question inside a tool row, Edit/Fork/Jump
+and Tab into a row the window had released all go through `ensureVisible`,
+which uses the engine's own `scrollToIndex` to land and then its
+`scrollToOffset` to place the exact block — a text range, a tool call — a third
+of the way down. The destination row is held mounted while it is the target.
+Nothing else writes a scroll position.
+
+## Held rows
+
+The mounted window is the engine's range plus the rows a surface is holding
+open: an edit, an expanded request, the focused row, a destination on its way,
+and every row inside a native selection, which stays whole because the browser
+owns it and a released row would truncate it. Explicit Select All is still the
+documented temporary all-loaded-DOM exception.
+
+The same rows are published for the view cache (RP-5b): the row under the
+reading position, the focused row and the pinned ones, so releasing the older
+part of a conversation never pulls one out from under a person. Inside the
+placeholder, the row under the reading position is the oldest loaded one — the
+row they will be back on.
 
 ## What the person sees
 
-Nothing. The unloaded range is drawn as conversation-shaped placeholder rows
-in normal flow — no words, no card, no border, nothing sticky — and a page
-replaces those pixels with real rows where they were, so arriving history is
-not work the person watches. The only visible sign is a page that is late:
-longer than one `--motion-slow` step while the person is inside the range shows
-the loader's matrix at the viewport's top edge, without copy, until it arrives.
-A screen reader hears one `sr-only` status from the history controls, and the
-transcript region is `aria-busy` while a page is in flight. The refusal state
-is the one case with text and a button, because the person has to act; it is
-inline, styled like the history controls. The explicit "Load earlier messages"
-control remains for keyboard and assistive access.
-
-## What the scrollbar means
-
-A virtual reserve above the loaded rows represents history that still has a
-`before` cursor. Loading a page exchanges that reserve only for the height of
-rows inserted above the prior head. Streaming text, disclosure changes, image
-decode, font loading and width changes do not alter the reserve. The reserve is
-removed only when `before` is absent, which is the producer's proof that the
-branch root is loaded.
-
-Before reading starts, the estimate uses the producer's earlier-user-prompt
-count and the measured average loaded turn height. Once reading starts, only
-accepted earlier pages consume it, so a page lands in the pixels the
-placeholder was holding rather than below them.
-
-A page can consume the whole range while the producer still has hundreds of
-turns before it — the range is bounded to three screens (D-302), not to what
-remains. So while a cursor remains the range grows back to that bounded
-estimate, and the thumb goes on meaning "there is more above this" instead of
-claiming the root of a conversation nowhere near its root. Growth is space
-added above the reader, so it happens only where it can be held perfectly
-still: the person has stopped moving, a loaded row is on screen for the
-measured anchor to hold, and no page is mid-exchange. Nothing is ever added in
-front of a live gesture, where it would be blank to read through.
-
-Whenever the model has geometry above the reader that the DOM has not been laid
-out for yet — a page changing the head of the id list, or the range changing
-height — the next window is chosen from the anchor row's own index, which is in
-loaded-row coordinates and immune to both. Choosing it from a scroll offset
-measured against a range that is no longer there unmounts the rows the person
-is reading. A message appended *below* an away reader changes nothing above
-them and does not take that path.
-
-## Known estimate limit
-
-`userOffset` counts user prompts, not transcript entries. One prompt can contain
-hundreds of assistant and tool rows, so `userOffset` values of zero or one do
-not measure the remaining height well. While a cursor remains, that case uses
-the measured loaded projection as one conservative page estimate. It does not
-multiply the protocol entry limit because many entries may fold into one turn.
-
-The thumb is therefore an honest estimate, not a random-access map. It can be
-larger or smaller than the final measured conversation in a tool-heavy turn.
-It never claims the root while a cursor remains: consumed by pages, it comes
-back to the bounded three screens under a settled reader, and it falls to one
-geometric unit only where that growth cannot be held still. Once that
-conservative range is exchanged, arrived pages grow the range by their
-unabsorbed height. What that does to the person is decided by the
-measured anchor and nothing else: a loaded row on screen keeps its place, so
-the range's growth is absorbed by `scrollTop`; a reader inside the placeholder
-keeps their pixels, so the range grows under content they had not read yet.
-Real-session
-acceptance permits a wider initial/final range ratio for this reason and still
-requires a nonzero reserve, visible loading state, continuous anchors and zero
-reserve at the true root.
-
-## What acceptance measures
-
-`scripts/browser-check/test/scroll-up-repeat.mjs` reads geometry from the DOM,
-not from the controller, so it measures the pixels the person sees. Between
-settle samples — intervals with no input of their own — the row the reader is
-on may not move by more than one pixel, upward reading may not end at the live
-edge, and `scrollTop` 0 is only reached when no earlier history is claimed. A
-late notch of the person's own wheel is recognised by its signature (the row
-moves by exactly the scroll, with no change of range or reserve) and is not
-counted against the app.
+Nothing. A page replaces placeholder pixels with real rows where they were, so
+arriving history is not work the person watches. The only visible sign is a
+page that is late: longer than one `--motion-slow` step while the person is
+inside the region shows the loader's matrix at the viewport's top edge, without
+copy, until it arrives. A screen reader hears one `sr-only` status from the
+history controls, and the transcript region is `aria-busy` while a page is in
+flight. The refusal state is the one case with text and a button, because the
+person has to act.
 
 ## When the base is refused
 
@@ -194,3 +154,15 @@ upward reading stops asking the question that was just refused; and the history
 controls replace "Load earlier messages" with that sentence and one action,
 "Reload recent messages", which performs the bounded current-tail re-read. The
 accepted window carries no refusal, so the ordinary control returns by itself.
+
+## What acceptance measures
+
+`scripts/browser-check/test/scroll-up-repeat.mjs` reads geometry from the DOM,
+not from the controller, so it measures the pixels the person sees. Between
+settle samples — intervals with no input of their own — the row the reader is
+on may not move by more than one pixel, upward reading may not end at the live
+edge, and `scrollTop` 0 is only reached when no earlier history is claimed.
+Every scroll position the transcript writes still passes through one function,
+so `window.__laserScrollTrace` continues to attribute each one; with one
+authority, what it records is the engine's anchoring and Laser's explicit
+destinations, and nothing else.

@@ -82,6 +82,43 @@ surface rather than sitting under ours).
    focus and keyboard traversal through approvals and controls, agent/tool rows,
    reduced motion, both themes, both widths, touch.
 
+## As built (M16-T87)
+
+`@tanstack/react-virtual` 3.14.13 is pinned exactly in `packages/ui`
+(`@tanstack/virtual-core` 3.17.11 comes with it; nothing else was added).
+The transcript is one list: a head item — the history controls and the
+unloaded-history placeholder — then one item per message, keyed by message id,
+in chronological DOM order, positioned absolutely from the engine's own
+measurements. `docs/transcript-reading.md` is the working description.
+
+What was deleted with the second authority: `transcript-window.ts`
+(`HeightIndex`, `windowRanges`), `reading-anchor.ts`, the reserve's pixel model
+and its arrival/refinement exchange, the earlier-page transaction and its
+fallback, clamp debt, `layoutStale`, the disclosure hold, the mutation/theme
+/font observers that existed to re-run that arithmetic, and every `scrollTop`
+write outside the engine.
+
+Three deliberate adaptations, each supplied through an option the engine
+already has, and each recorded here because a reviewer will ask:
+
+1. **`shouldAdjustScrollPositionOnItemSizeChange`** — Laser's rule from
+   M16-T85 (content ending at or above the reading position moves it by
+   exactly what it changed; content in view does not) replaces the engine's
+   default, which skips a re-measurement while the reader travels upwards.
+   That guard would skip the placeholder shrinking, which happens only while
+   somebody reads upwards.
+2. **`measureElement`** — reads the border box directly and rounds both the
+   synchronous and the `ResizeObserver` path the same way, so a row measured in
+   the commit that mounted it and the same row measured by the observer never
+   differ by a sub-pixel.
+3. **`observeElementRect`** — a scroller reporting no height at all (not laid
+   out yet, a hidden tab) reads as the window's height, so the transcript still
+   mounts a reading window for Find, a deep link or a screen reader.
+
+One guarantee was given up on purpose: the block-level reading anchor. The row
+is the unit of identity a virtualizer can express, so content growing *inside*
+the row the reader is in, above their line, moves their text by that much.
+
 ## Acceptance (the person runs the browser pass)
 
 - Reading up through a long real conversation: no row appears or disappears

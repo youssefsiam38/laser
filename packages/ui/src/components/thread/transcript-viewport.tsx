@@ -1,18 +1,13 @@
 import { ThreadPrimitive, useThreadViewport, unstable_useThreadMessageIds } from "@assistant-ui/react";
+import { defaultRangeExtractor, elementScroll, observeElementRect, useVirtualizer, type Range, type Rect, type Virtualizer } from "@tanstack/react-virtual";
 import { createContext, memo, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useLaserState, visibleSessionPath } from "@/runtime";
 import { activityDetailLevel } from "@/runtime/sessionPreferences";
 import { motionMs } from "@/motion";
-import { HeightIndex, windowRanges } from "./transcript-window.js";
 import { clearAnchoredMessages, setAnchoredMessages, setAtLiveEdge, setStandingRows } from "@/runtime/anchored-messages";
 import { ThreadMessage } from "./messages.js";
 import { HistoryReserve } from "./history-reserve-view.js";
-import {
-  HistoryReserveModel,
-  transitionEarlierPage,
-  type EarlierPageTransaction,
-} from "./history-reserve.js";
-import { LANDMARKS, ReadingAnchor, resolveLandmark } from "./reading-anchor.js";
+import { HistoryPlaceholder, PLACEHOLDER_TURN_HEIGHT } from "./history-reserve.js";
 
 export interface TranscriptTarget { messageId: string; toolCallId?: string; leafId?: string | null }
 export interface LocateOptions {
@@ -22,127 +17,152 @@ export interface LocateOptions {
   rect?: (message: HTMLElement) => DOMRect | undefined;
 }
 export type LocateResult = "visible" | "cancelled" | "missing";
-type Anchor = { messageId: string; landmark?: number; toolCallId?: string; offset: number; messageOffset: number };
-type Place = { anchor?: Anchor; following: boolean; revision?: string | undefined };
-/** How many head rows a producer page may fold into one merged group. */
-const MERGED_HEAD_SCAN = 8;
+/** Where the reader is: the newest turn, or a row and how far into it. */
+type Anchor = { messageId: string; offset: number };
+type Place = { anchor?: Anchor; following: boolean };
+
+/**
+ * The transcript's item list is the head item followed by one item per
+ * message, so index 0 is always the head and message `i` is always item
+ * `i + 1`.
+ *
+ * The head carries the history controls and the unloaded-history placeholder.
+ * It is an item rather than content above the list for two reasons: the
+ * virtualizer measures it and anchors through it like any other row, so the
+ * controls appearing or the placeholder shrinking moves nobody; and a list
+ * whose first key never changes lets the engine detect every prepend, trim and
+ * replacement from the item count alone.
+ */
+const HEAD_INDEX = 0;
+const ITEM_OFFSET = 1;
+const HEAD_KEY = "\u0000head";
+/** Rows kept mounted on each side of the reading window. */
+const OVERSCAN = 4;
+/** How close to the newest message still counts as being at the live edge. */
+const LIVE_EDGE = 4;
+/** A row nobody has measured yet, before the type scale is known. */
+const DEFAULT_ROW_ESTIMATE = 150;
+/** What the head is worth before it is measured: the controls and its turns. */
+const HEAD_CONTROLS_ESTIMATE = 48;
+/** A destination gives up rather than chasing a layout that will not settle. */
+const LOCATE_FRAME_BUDGET = 180;
 const COMPONENTS = { Message: ThreadMessage };
 
-/** One instance per rendered thread scope. It never retains a SessionView or an old DOM tree. */
+/**
+ * Measure a row the way the browser sees it. The engine's own default reads
+ * `offsetHeight`, which is rounded to whole pixels only on the asynchronous
+ * path and skips a synchronous read entirely; a transcript needs the size in
+ * the commit that mounted the row — that is the commit whose scroll position
+ * depends on it — so this reads the box directly and rounds both paths the
+ * same way, leaving no sub-pixel difference between a first measurement and
+ * the one the `ResizeObserver` delivers for the identical layout.
+ */
+function measureRow(element: Element, entry: ResizeObserverEntry | undefined): number {
+  const box = entry?.borderBoxSize?.[0];
+  if (box) return Math.round(box.blockSize);
+  return Math.round(element.getBoundingClientRect().height);
+}
+
+/**
+ * The scroller's size, with one substitution: a scroller that reports no
+ * height at all is not a window onto nothing. It is a surface the browser has
+ * not laid out yet, or one in a hidden tab, and a transcript that mounted no
+ * rows there would have nothing for Find, a deep link or a screen reader to
+ * reach when it comes back. The window's own height stands in until the
+ * element has one.
+ */
+function observeReadingWindow(instance: Virtualizer<HTMLElement, HTMLElement>, cb: (rect: Rect) => void) {
+  return observeElementRect(instance, rect => cb({ width: rect.width, height: rect.height || (typeof window === "undefined" ? 0 : window.innerHeight) }));
+}
+
+/**
+ * Every scroll position this transcript ever writes passes through here — the
+ * engine's anchoring and Laser's own explicit destinations alike — so the
+ * browser acceptance harness can attribute each one to the code that asked
+ * for it. Read-only: the harness sets the array, nothing here reads it back.
+ */
+function writeScroll(offset: number, options: { adjustments?: number; behavior?: ScrollBehavior }, instance: Virtualizer<HTMLElement, HTMLElement>) {
+  const trace = (globalThis as { __laserScrollTrace?: unknown[] }).__laserScrollTrace;
+  if (Array.isArray(trace)) {
+    trace.push({
+      at: performance.now(),
+      from: instance.scrollElement?.scrollTop ?? 0,
+      to: offset + (options.adjustments ?? 0),
+      adjustment: options.adjustments ?? 0,
+      stack: new Error().stack,
+    });
+  }
+  elementScroll(offset, options, instance);
+}
+
+/**
+ * One instance per rendered thread scope.
+ *
+ * It owns what is Laser's: which conversation is on screen, which rows are
+ * pinned open, where a destination is going, how much unloaded history stands
+ * above the loaded rows, and what this surface is standing on. It owns no
+ * geometry. The mounted range and every scroll adjustment that follows a data
+ * or measurement change belong to one engine (`@tanstack/react-virtual`,
+ * D-303), and the only `scrollTop` writes are that engine's own — either its
+ * anchoring, or an explicit person/destination intent routed through
+ * `scrollToIndex`/`scrollToOffset`.
+ */
 export class TranscriptViewport {
   path = "";
   ids: readonly string[] = [];
   positions = new Map<string, number>();
-  heights = new HeightIndex([]);
   viewport: HTMLElement | undefined;
   content: HTMLElement | undefined;
-  private estimate = 0;
-  private signature = "";
-  private measured = new Map<string, number>();
-  private places = new Map<string, Place>();
-  private place: Place = { following: true };
+  /** The engine, for as long as a transcript is mounted on this surface. */
+  private engine: Virtualizer<HTMLElement, HTMLElement> | undefined;
+  private listeners = new Set<() => void>();
+  private revision = 0;
   private nodes = new Map<string, HTMLElement>();
+  private rowRefs = new Map<string, (node: HTMLElement | null) => void>();
   private pins = new Map<string, number>();
   private selected: [string, string] | undefined;
   private focused: string | undefined;
-  private frame = 0;
-  private revision = 0;
-  private windowDirty = false;
-  private listeners = new Set<() => void>();
-  private observer: ResizeObserver | undefined;
-  private mutation: MutationObserver | undefined;
-  private intent = 0;
-  private controlIntent = 0;
+  private target: TranscriptTarget | undefined;
+  private place: Place = { following: true };
+  /** Unloaded earlier history, as placeholder turns the engine measures. */
+  private placeholder = new HistoryPlaceholder();
+  private historyUserOffset = 0;
+  private historyBefore: string | undefined;
+  private estimate = DEFAULT_ROW_ESTIMATE;
+  private typeSignature = "";
+  /** Where the transcript starts inside the scroller. */
+  private margin = 0;
+  /** This surface owes the live edge one placement: a session just opened. */
+  private pendingLatest = false;
   private leafId: string | null | undefined;
   private loaded: string | undefined;
-  // A surface that just reloaded its recent tail is on its way to the latest
-  // message; the clamp scrolls that replacement causes are not a person.
-  private arriving = false;
+  private intent = 0;
+  private controlIntent = 0;
   private pendingFrames = new Map<number, () => void>();
   private pendingLocates = new Set<() => void>();
-  private target: TranscriptTarget | undefined;
-  // A measured destination owns its anchor until a new navigation intent.
-  // Native layout/clamp scrolls can arrive even after the target settles.
-  private ownsLocation = false;
-  private expectedTop: number | undefined;
-  private lastTop = 0;
-  private lastHeight = 0;
-  /** A same-path accepted tail replacement gets one placement after its commit. */
-  private pendingTailPlacement = false;
-  /**
-   * The reader's measured position, in the scroller's own coordinates, as of
-   * the last settled layout. Every change above them is spent against it —
-   * `scrollTop += afterTop - beforeTop` — because the browser's own numbers are
-   * the only ones that contain measured rows, still-estimated rows, the
-   * reserve and the controls above the transcript at the same time (M16-T85).
-   * Model offsets contain a mixture of measurements and guesses, so writing
-   * their difference to `scrollTop` moves the person by the guess's error.
-   */
-  private anchor = new ReadingAnchor(() => ({
-    viewport: this.viewport,
-    nodes: this.nodes,
-    positions: this.positions,
-    landmark: this.place.anchor,
-    insideEstimate: this.isReadingHistoryReserve(),
-    reconciling: this.arrivedPage?.refine === true,
-    offsetOf: (id: string) => { const index = this.positions.get(id); return index === undefined ? undefined : this.globalOffset(index); },
-    shift: (delta: number) => this.shiftBy(delta),
-  }));
-  /**
-   * The model has geometry above the reader that the DOM has not been laid out
-   * for yet: a page changed the head of the id list, or the estimated range
-   * changed height. The window is then chosen from the anchor row's own index,
-   * which is in loaded-row coordinates and immune to both, rather than from a
-   * scroll offset that the reserve no longer matches.
-   */
-  private layoutStale = false;
-  /** The person is moving the viewport right now; layout may shift it, never re-place it. */
-  private reading: ReturnType<typeof setTimeout> | undefined;
-  /** Unloaded earlier turns occupy honest scroll range above the loaded window. */
-  private reserve = new HistoryReserveModel();
-  private historyUserOffset = 0;
-  private loadedUserTurns = 0;
-  private historyBefore: string | undefined;
-  /** An earlier page owns estimate-based placement until its store commit. */
-  private earlierPage: EarlierPageTransaction | undefined;
-  private earlierFallbackFrame = 0;
-  private earlierFallbacks = 0;
-  /** Only this arrived prefix may exchange later first-frame measurements. */
-  private arrivedPage: { ids: readonly string[]; removedHeight: number; exchangedHeight: number; refine: boolean } | undefined;
-  /** The last id change kept no part of the previous window: a replacement, not a page. */
-  private replacedWindow = false;
-  /**
-   * Where the transcript starts inside the scroller, last frame. Whatever sits
-   * above it (the history controls appearing or going) is above the reader
-   * too, and its height change moves them exactly like a row's would.
-   */
-  private contentOffset: number | undefined;
-  /**
-   * Compensation the clamp at scrollTop 0 could not spend. Content above the
-   * reader can be removed in one commit and replaced in the next — the estimate
-   * going before the last page's rows arrive — and without this the truncated
-   * movement is lost and the reader stays pinned to the top of the window.
-   */
-  private clampDebt = 0;
-  /**
-   * Root arrived before the page's rows did. The estimate waits for the commit
-   * that brings them, so both compensations happen in one frame; once the page
-   * has settled it goes whether or not any row came with it.
-   */
-  private deferredRootCollapse: { rows: number } | undefined;
-  /** Disclosure anchoring starts at animationstart, after the open state committed. */
-  private disclosureTargets = new Set<Element>();
-  private disclosureFrame = 0;
-  private disclosureFollowing = false;
+  /** Earlier-history requests in flight, for the late-page indicator only. */
+  private pages = 0;
+  private frame = 0;
+  private publishing = 0;
   private disposed = false;
+
   getSnapshot = () => this.revision;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private publish() { this.revision++; this.publishAnchors(); for (const listener of this.listeners) listener(); }
+  /**
+   * Publish after this render. `configure()` and `setIds()` run while React is
+   * rendering the transcript, and a subscriber notified from there would be a
+   * state update during a render.
+   */
+  private publishSoon() {
+    if (this.publishing || this.disposed) return;
+    this.publishing = requestAnimationFrame(() => { this.publishing = 0; if (!this.disposed) this.publish(); });
+  }
 
   /**
    * The rows this surface is standing on, so releasing the older part of the
-   * conversation never pulls one out from under a person (RP-5b): the anchor
-   * the viewport is holding, the focused row, anything a surface pinned while
+   * conversation never pulls one out from under a person (RP-5b): the row the
+   * reading position is on, the focused row, anything a surface pinned while
    * it is open, and the row a navigation is on its way to.
    */
   private publishAnchors() {
@@ -158,585 +178,344 @@ export class TranscriptViewport {
     });
     setAtLiveEdge(this.path, this.place.following === true);
   }
-  private cacheKey(id: string) { return JSON.stringify([this.path, this.signature, id]); }
+
+  // ── What the engine asks this controller ──────────────────────────────
+  // Every one of these is a stable bound method: the engine memoises its
+  // measurements on the identity of `getItemKey`, so a new closure per render
+  // would rebuild the whole list on every commit.
+
+  get itemCount() { return this.ids.length + ITEM_OFFSET; }
+  getScrollElement = () => this.viewport ?? null;
+  itemKey = (index: number) => (index === HEAD_INDEX ? `${this.path}${HEAD_KEY}` : `${this.path}\u0000${this.ids[index - ITEM_OFFSET] ?? index}`);
+  estimateSize = (index: number) => (index === HEAD_INDEX ? HEAD_CONTROLS_ESTIMATE + this.placeholder.turns * PLACEHOLDER_TURN_HEIGHT : this.estimate);
+  measureItem = (element: Element, entry: ResizeObserverEntry | undefined) => measureRow(element, entry);
+  /**
+   * The mounted window: what the engine's own range says, plus the head and
+   * every row a surface is holding open — an edit, an expanded request, the
+   * focused row, a destination on its way, and a native selection, which stays
+   * whole because the browser owns it and a released row would truncate it.
+   */
+  get rangeExtractor() { return this.extractor; }
+  /**
+   * Rebuilt whenever the held rows change. The engine memoises the mounted
+   * window on this function's identity, so a new pin on the same scroll
+   * position would otherwise never reach it.
+   */
+  private held() { this.extractor = (range: Range) => this.extractRange(range); }
+  private extractor = (range: Range) => this.extractRange(range);
+  private extractRange = (range: Range) => {
+    const indexes = new Set<number>(defaultRangeExtractor(range));
+    indexes.add(HEAD_INDEX);
+    const add = (id: string | undefined) => {
+      const index = id === undefined ? undefined : this.positions.get(id);
+      if (index !== undefined) indexes.add(index + ITEM_OFFSET);
+    };
+    for (const id of this.pins.keys()) add(id);
+    add(this.focused);
+    add(this.target?.messageId);
+    if (this.selected) {
+      const a = this.positions.get(this.selected[0]), b = this.positions.get(this.selected[1]);
+      if (a !== undefined && b !== undefined) for (let i = Math.min(a, b); i <= Math.max(a, b); i++) indexes.add(i + ITEM_OFFSET);
+    }
+    return [...indexes].filter(index => index >= 0 && index < range.count).sort((a, b) => a - b);
+  };
+  /** The engine, while a transcript is mounted. Set from its own render. */
+  bind(engine: Virtualizer<HTMLElement, HTMLElement> | undefined) {
+    this.engine = engine;
+    if (engine) engine.shouldAdjustScrollPositionOnItemSizeChange = this.holdsReadingPosition;
+  }
+
+  /**
+   * Whether a measurement that changed an item's height moves the reading
+   * position with it. One rule, and it is Laser's from M16-T85: content that
+   * ends at or above where the person is reading moves them by exactly what it
+   * changed; content they can see does not.
+   *
+   * The engine's own default adds a direction guard — it declines to
+   * compensate a re-measurement while the reader is travelling upwards, so
+   * that a row growing at its bottom cannot drag the viewport. That guard is
+   * unnecessary here because a row spanning the reading line is already
+   * excluded, and it is harmful here because the placeholder for unloaded
+   * history shrinks precisely while somebody reads upwards.
+   */
+  private holdsReadingPosition = (item: { key: string | number | bigint; start: number; end: number }, _delta: number, engine: Virtualizer<HTMLElement, HTMLElement>) => {
+    const offset = (engine.scrollOffset ?? 0) + engine.scrollAdjustments;
+    // Nothing has ever measured this item: the whole estimated block was
+    // above the reading position, so the correction belongs to it as a whole.
+    if (!engine.itemSizeCache.has(item.key)) return item.start < offset;
+    return item.end <= offset + 0.5;
+  };
+  get scrollMargin() { return this.margin; }
+  get placeholderTurns() { return this.placeholder.turns; }
+
+  // ── The conversation on screen ────────────────────────────────────────
+
   configure(path: string, leafId?: string | null, loaded?: string) {
     this.leafId = leafId;
     if (this.path === path) {
-      // This surface read the session's recent tail again. That is not a reason
-      // to take the person back to the latest turn: an authoritative page
-      // replacing what this device painted is the same conversation, and they
-      // are still reading where they were (RP-11). `restore()` keeps the anchor
-      // while its row is still here and falls back to the latest turn only when
-      // the window genuinely no longer holds it — which is the case this reset
-      // was written for. Somebody who *was* at the live edge stays there.
-      if (loaded !== undefined && loaded !== this.loaded) {
-        this.cancel();
-        this.loaded = loaded;
-        this.windowDirty = true;
-        if (this.place.following) {
-          this.arriving = true;
-          this.pendingTailPlacement = true;
-        }
-        this.schedule();
-      }
+      // This surface read the session's recent tail again. That is not a
+      // reason to take the person back to the latest turn: an authoritative
+      // page replacing what this device painted is the same conversation, and
+      // the engine keeps them on the row they are reading (RP-11). Somebody
+      // who *was* at the live edge stays there, because the replacement is an
+      // append at the end and the engine follows it.
+      if (loaded !== undefined && loaded !== this.loaded) this.loaded = loaded;
       return;
     }
-    const leftRevision = this.loaded;
-    this.loaded = loaded;
-    this.expectedTop = undefined;
-    this.pendingTailPlacement = false;
     this.cancel();
-    if (this.path) {
-      this.places.set(this.path, { ...this.place, revision: leftRevision });
-      // The conversation this surface has left stands on nothing: its ids go
-      // with it, so they neither protect its rows from a trim nor linger.
-      clearAnchoredMessages(this.path);
-    }
+    if (this.path) clearAnchoredMessages(this.path);
     this.path = path;
-    this.replacedWindow = false;
-    this.contentOffset = undefined;
-    this.anchor.clear();
-    this.layoutStale = false;
-    this.clampDebt = 0;
-    this.deferredRootCollapse = undefined;
-    this.reserve.reset();
-    this.historyUserOffset = 0;
-    this.loadedUserTurns = 0;
-    this.historyBefore = undefined;
-    this.releaseEarlierPage("path");
-    const saved = this.places.get(path);
-    // The revision stamp proves whether a saved place belongs to this accepted
-    // history window. Leaving the path also ended the visit that captured it,
-    // so re-entry always chooses latest even when that revision is unchanged.
-    const replaced = saved !== undefined && saved.revision !== loaded;
-    if (saved) this.places.delete(path);
-    this.place = { following: true };
-    this.arriving = Boolean(path && (saved || replaced));
+    this.loaded = loaded;
     this.ids = [];
     this.positions.clear();
-    this.heights = new HeightIndex([]);
-    this.pins.clear(); this.selected = undefined; this.focused = undefined;
     this.nodes.clear();
+    this.rowRefs.clear();
+    this.pins.clear();
+    this.selected = undefined;
+    this.focused = undefined;
+    this.placeholder.reset();
+    this.historyUserOffset = 0;
+    this.historyBefore = undefined;
+    this.pages = 0;
+    // A conversation opens at its newest turn. The engine cannot know that:
+    // to it this is a list that grew from nothing, so the placement is an
+    // explicit intent, made once, in the commit that has the rows.
+    this.place = { following: true };
+    this.pendingLatest = Boolean(path);
     this.publishAnchors();
-    // ThreadPrimitive can reset the shared native viewport to zero while this
-    // destination's recent rows commit. A same-size list does not change layout,
-    // so force the configured place to run on the next frame rather than leaving
-    // a returning session at the first row of its tail.
-    this.windowDirty = true;
-    this.schedule();
   }
-  retain(paths: readonly string[]) {
-    const open = new Set(paths);
-    for (const path of this.places.keys()) if (!open.has(path)) this.places.delete(path);
-  }
+
   setIds(ids: readonly string[]) {
     if (this.ids === ids || (this.ids.length === ids.length && this.ids.every((id, i) => ids[i] === id))) return;
     const previous = this.ids;
-    const previousHeights = this.heights;
     this.ids = ids;
     this.positions = new Map(ids.map((id, i) => [id, i]));
-    this.rebuild();
-    // A page may preserve its cursor while replacing or merging rows. The
-    // changed store, not cursor inequality alone, is the
-    // transaction signal; loading-only renders never enter setIds.
-    if (this.earlierPage) this.applyEarlierTransition({ type: "store-change" });
-    // A page can prepend cleanly or merge into the oldest projected group. Find
-    // the preserved suffix and exchange only the positive height inserted above
-    // it; a replacement with no preserved suffix is not attributed to history.
-    //
-    // Not gated on the page transaction: an accepted page commits over several
-    // React commits, and the later ones land after the transaction has
-    // released. Prefix growth while a cursor still points at unloaded history
-    // is that history arriving, whichever commit carries it (M16-T83). Growth
-    // *inside* an existing row — streaming, disclosure, an image — is not a
-    // prefix change and never reaches here.
-    const boundary = previous.length && ids.length ? this.preservedSuffix(previous, ids) : undefined;
-    this.replacedWindow = previous.length > 0 && boundary === undefined;
-    // Only a change at the *head* leaves the DOM laid out for a geometry the
-    // model no longer has. A message appended below an away reader moves
-    // nothing above them, and choosing their window from model offsets for it
-    // would trust the estimate exactly where this milestone says not to.
-    if (boundary === undefined || boundary.previousStart > 0 || boundary.nextStart > 0) this.layoutStale = true;
-    if (boundary && boundary.nextStart > 0 && (this.historyBefore !== undefined || this.deferredRootCollapse !== undefined)) {
-      const removedHeight = previousHeights.offset(boundary.previousStart);
-      const insertedHeight = Math.max(0, this.heights.offset(boundary.nextStart) - removedHeight);
-      // Range honesty only: the estimate gives back the space these rows now
-      // occupy. Whatever that does to the reader's pixels is measured, not
-      // predicted — the reserve must never add a shift of its own on top of
-      // the measured delta, or one commit is compensated twice.
-      this.reserve.arrived(insertedHeight);
-      this.arrivedPage = { ids: ids.slice(0, boundary.nextStart), removedHeight, exchangedHeight: insertedHeight, refine: true };
-    }
-    // A branch replacement cancels a pending destination; appends/prepends do not.
+    for (const id of this.rowRefs.keys()) if (!this.positions.has(id)) this.rowRefs.delete(id);
+    // A branch replacement cancels a pending destination; appends and
+    // prepends do not.
     if (previous.length && previous.some(id => !this.positions.has(id))) this.cancel("structure");
   }
+
   /**
-   * Where a new id list keeps a suffix of the old one, or nothing when the
-   * window was replaced. A page either prepends whole rows or folds the oldest
-   * ones into a merged group, so the search is bounded to the few head rows a
-   * merge can consume rather than comparing every alignment of two long lists.
+   * What the producer says about earlier history. A page that arrives at the
+   * head reduces the prompts it still has before this window, and that
+   * decrease is how many placeholder turns the page just replaced.
    */
-  private preservedSuffix(previous: readonly string[], ids: readonly string[]): { previousStart: number; nextStart: number } | undefined {
-    const shift = ids.length - previous.length;
-    const limit = Math.min(previous.length, MERGED_HEAD_SCAN);
-    for (let start = 0; start < limit; start++) {
-      const nextStart = start + shift;
-      if (nextStart < 0 || nextStart > ids.length) continue;
-      if (previous.length - start !== ids.length - nextStart) continue;
-      let same = true;
-      for (let offset = 0; same && offset < previous.length - start; offset++) same = ids[nextStart + offset] === previous[start + offset];
-      if (same) return { previousStart: start, nextStart };
+  setHistoryWindow(userOffset: number, _loadedUserTurns: number, before: string | undefined) {
+    const offset = Math.max(0, userOffset);
+    const arrived = this.historyBefore !== undefined && before !== undefined ? this.historyUserOffset - offset : 0;
+    this.historyUserOffset = offset;
+    this.historyBefore = before;
+    if (arrived > 0) this.placeholder.arrived(arrived, this.turnsInFrontOfTheReader());
+    this.configurePlaceholder();
+  }
+
+  /** True when the number of placeholder turns changed. */
+  private configurePlaceholder(): boolean {
+    return this.placeholder.configure({
+      hasBefore: this.historyBefore !== undefined,
+      unloadedUserTurns: this.historyUserOffset,
+      viewportHeight: this.viewport?.clientHeight,
+      mayGrow: this.mayGrowPlaceholder(),
+      minimum: this.turnsInFrontOfTheReader(),
+    });
+  }
+
+  /**
+   * How many placeholder turns the region may not give up, because they are
+   * the ones the person is looking at.
+   *
+   * A page arriving takes the pixels the placeholder was holding, which is
+   * right when those pixels are behind the reader or above them, and wrong
+   * when they are on screen: a row would appear in front of somebody who has
+   * not reached it yet. So while the reading position is inside the region,
+   * only the turns below the fold are given back, and the rest follow as the
+   * person reads past them. Outside the region there is nothing to protect:
+   * the whole of it is above the reading position and the engine moves them
+   * with it.
+   */
+  private turnsInFrontOfTheReader(): number {
+    const viewport = this.viewport;
+    const region = this.content?.querySelector('[data-slot="history-reserve"]');
+    if (!viewport || !region || this.placeholder.turns <= 0) return 0;
+    // Measured from the layout on screen, not from the model: the model can
+    // already have moved on, and what must not change is what the person is
+    // looking at.
+    const rect = region.getBoundingClientRect(), view = viewport.getBoundingClientRect();
+    if (rect.bottom <= view.top + 0.5) return 0;
+    return Math.max(0, Math.min(this.placeholder.turns, Math.ceil((view.bottom - rect.top) / PLACEHOLDER_TURN_HEIGHT)));
+  }
+
+  /**
+   * Whether the estimated range in front of the reader may grow back to its
+   * bounded size in this pass. Arrived pages consume it, so after a few pages
+   * it sits at its floor while the producer still has hundreds of turns before
+   * it, and the thumb then tells the person they are at the root of a
+   * conversation they are nowhere near the root of (D-302).
+   *
+   * Growth is content added above the reader, so there are exactly two places
+   * it cannot be felt: at the live edge, where the engine holds the newest
+   * turn against everything above it; and with the reader on loaded rows,
+   * where the whole region is above their reading position and the engine
+   * moves them with it, to the pixel. Never in the middle of a gesture, never
+   * while a destination is landing, and never while the person is inside the
+   * region — there it would push the conversation further away from them, one
+   * page at a time, which is the treadmill this rule exists to prevent.
+   */
+  private mayGrowPlaceholder(): boolean {
+    const engine = this.engine;
+    if (!engine || this.target || engine.isScrolling) return false;
+    if (this.place.following) return true;
+    // A reader on loaded rows has the whole region above their reading
+    // position, so the engine moves them with it and they feel nothing. A
+    // reader inside the region would instead watch the conversation being
+    // pushed further away from them, one page at a time.
+    return !this.isReadingHistoryReserve();
+  }
+
+  /**
+   * Where the scroller is. The engine's own record while it has one, and the
+   * element itself before its first scroll event, so an answer is never a
+   * guess about a viewport that is right there to read.
+   */
+  private offset(): number {
+    return this.engine?.scrollOffset ?? this.viewport?.scrollTop ?? 0;
+  }
+
+  /**
+   * The reading position — the viewport's top edge — is inside the head item:
+   * the person has crossed above the oldest loaded row, into the placeholder
+   * for history that has not arrived. Rows lower down the screen may still be
+   * loaded ones.
+   */
+  isReadingHistoryReserve(): boolean {
+    const engine = this.engine;
+    if (!engine || this.placeholder.turns <= 0) return false;
+    return engine.getVirtualItemForOffset(this.offset())?.index === HEAD_INDEX;
+  }
+
+  // ── Rows ──────────────────────────────────────────────────────────────
+
+  /**
+   * A row's ref, stable for as long as the row exists, so React never detaches
+   * and re-attaches it for a re-render: it records the node for this
+   * controller and hands the same node to the engine to measure.
+   */
+  rowRef(id: string) {
+    let ref = this.rowRefs.get(id);
+    if (!ref) {
+      ref = (node: HTMLElement | null) => {
+        this.register(id, node);
+        this.engine?.measureElement(node);
+      };
+      this.rowRefs.set(id, ref);
     }
-    return undefined;
+    return ref;
   }
-  private rebuild() { this.heights = new HeightIndex(this.ids.map(id => this.measured.get(this.cacheKey(id)) ?? this.estimate)); }
-  get reserveHeight() { return this.reserve.height; }
-  /** Loaded-row coordinate at the viewport top; negative means the reader is in the reserve. */
-  private loadedTop() { return this.top() - this.reserve.height; }
-  private globalOffset(index: number) { return this.reserve.height + this.heights.offset(index); }
-  private top() {
-    if (!this.viewport || !this.content) return 0;
-    return this.viewport.getBoundingClientRect().top - this.content.getBoundingClientRect().top;
-  }
-  ranges() {
-    const height = this.viewport?.clientHeight || window.innerHeight;
-    let top = this.loadedTop();
-    const targetIndex = this.target ? this.positions.get(this.target.messageId) : undefined;
-    // Mount/unmount callbacks can synchronously rerender before the next measured
-    // frame. While locating, the canonical target must own the window: switching
-    // between the live top and an evicted old anchor makes those renders oscillate.
-    if (targetIndex !== undefined) top = this.heights.offset(targetIndex) - height / 3;
-    else if (!this.content || this.place.following) top = this.heights.total - height;
-    else if (this.place.anchor && (this.layoutStale || !this.nodes.has(this.place.anchor.messageId))) top = this.heights.offset(this.positions.get(this.place.anchor.messageId) ?? 0) - this.place.anchor.messageOffset;
-    const pins = [...this.pins.keys(), this.focused, this.target?.messageId].flatMap(id => id && this.positions.has(id) ? [this.positions.get(id)!] : []);
-    if (this.selected) {
-      const a = this.positions.get(this.selected[0]), b = this.positions.get(this.selected[1]);
-      if (a !== undefined && b !== undefined) for (let i = Math.min(a, b); i <= Math.max(a, b); i++) pins.push(i);
-    }
-    return windowRanges(this.heights, top, height, pins);
-  }
-  pin(id: string) {
-    this.pins.set(id, (this.pins.get(id) ?? 0) + 1); this.publish();
-    return () => { const n = (this.pins.get(id) ?? 1) - 1; if (n) this.pins.set(id, n); else this.pins.delete(id); this.publish(); };
-  }
+  /**
+   * The head's ref. The head is an item the engine measures, but it is not a
+   * row: nothing looks it up by message id, and the maps that answer "which
+   * rows are mounted" must not contain it.
+   */
+  headRef = (node: HTMLElement | null) => { this.engine?.measureElement(node); };
   register(id: string, node: HTMLElement | null) {
-    const previous = this.nodes.get(id);
-    if (previous === node) return;
-    if (previous) this.observer?.unobserve(previous);
-    if (node) { this.nodes.set(id, node); this.observer?.observe(node); }
+    if (node) this.nodes.set(id, node);
     else this.nodes.delete(id);
-    this.schedule();
   }
-  setContent(node: HTMLElement | null) {
-    if (this.content === node) return;
-    this.content = node ?? undefined;
-    if (!this.mutation) return;
-    this.mutation.disconnect();
-    if (node) this.mutation.observe(node, { subtree: true, childList: true, characterData: true });
+  setContent = (node: HTMLElement | null) => { this.content = node ?? undefined; };
+  pin(id: string) {
+    this.pins.set(id, (this.pins.get(id) ?? 0) + 1); this.held(); this.publish();
+    return () => { const n = (this.pins.get(id) ?? 1) - 1; if (n) this.pins.set(id, n); else this.pins.delete(id); this.held(); this.publish(); };
   }
-  private edgeGap() {
-    const viewport = this.viewport;
-    return viewport ? viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop : Number.POSITIVE_INFINITY;
-  }
-  /** Raw input may leave follow only when the viewport can move that way. */
-  private canMove(direction: "up" | "down") {
-    const viewport = this.viewport;
-    if (!viewport) return false;
-    return direction === "up" ? viewport.scrollTop > 0 : this.edgeGap() > 2;
-  }
-  /** Move by exactly what changed above the reader, surviving the top clamp. */
-  private shiftBy(delta: number): boolean {
-    if (!this.viewport || (Math.abs(delta) < 0.5 && this.clampDebt === 0)) return false;
-    const target = this.viewport.scrollTop + delta + this.clampDebt;
-    this.scroll(Math.max(0, target));
-    // Above the content there is nowhere to go, so a shift truncated at the top
-    // is deferred, not lost: content above the reader can be removed in one
-    // commit and replaced in the next, and without this they stay pinned to the
-    // top of the window. The clamp at the *bottom* is not the same thing. It
-    // means the layout below the reader shrank in the same frame, and paying it
-    // later would write `scrollTop` downwards for a change that is no longer
-    // above them — the push this milestone removes.
-    const owed = target - this.viewport.scrollTop;
-    this.clampDebt = owed <= -0.5 ? owed : 0;
-    return true;
-  }
+
+  // ── Where the reader is ───────────────────────────────────────────────
+
   /**
-   * The height change, since the last frame, of everything above the
-   * transcript inside the scroller. Measured from the DOM, because none of it
-   * is in this controller's model; compensated like any change above the reader.
+   * Read the reading position from the engine: the newest turn, or the row
+   * under the viewport's top edge and how far into it. Nothing is written
+   * here; this is what the rest of the app is told about.
    */
-  private aboveTranscriptShift(): number {
-    if (!this.viewport || !this.content) return 0;
-    const now = this.content.getBoundingClientRect().top - this.viewport.getBoundingClientRect().top + this.viewport.scrollTop;
-    const before = this.contentOffset;
-    this.contentOffset = now;
-    if (before === undefined || this.place.following) return 0;
-    const delta = now - before;
-    return Math.abs(delta) >= 0.5 ? delta : 0;
-  }
-  /**
-   * Record where the reader is standing, or clear the record for the two
-   * positions this controller places absolutely: the live edge and a
-   * destination still on its way.
-   */
-  private recordMeasuredAnchor() {
-    if (this.place.following || this.target) this.anchor.clear();
-    else this.anchor.record();
-  }
-  /**
-   * Spend the recorded position against the layout the browser has now: the
-   * measured delta already contains the arrived rows, whatever they measured
-   * against their estimate, the reserve giving space back and the controls
-   * above the transcript, so nothing else may shift in the same commit. One
-   * predicate decides whether this writer or `restore()` owns the pixels.
-   */
-  private applyMeasuredAnchor(above: number): boolean {
-    return this.holdsMeasuredAnchor() && this.anchor.apply(above);
-  }
-  private scroll(top: number) {
-    if (!this.viewport) return;
-    const before = this.viewport.scrollTop;
-    // Read-only attribution for the browser harness: it sets the array, and
-    // every write this controller makes is recorded with its call path.
-    const trace = (globalThis as { __laserScrollTrace?: unknown[] }).__laserScrollTrace;
-    if (Array.isArray(trace)) trace.push({ at: performance.now(), from: before, to: top, reserve: this.reserve.height, following: this.place.following, reading: Boolean(this.reading), page: Boolean(this.earlierPage), anchor: this.place.anchor?.messageId, stack: new Error().stack });
-    this.viewport.scrollTop = top;
-    if (Math.abs(this.viewport.scrollTop - before) >= 0.5) this.expectedTop = this.viewport.scrollTop;
-  }
   capture = (): Place => {
-    const viewport = this.viewport;
-    if (!viewport) return this.place;
-    const top = viewport.getBoundingClientRect().top;
-    const row = [...this.nodes.entries()].sort((a, b) => (this.positions.get(a[0]) ?? 0) - (this.positions.get(b[0]) ?? 0))
-      .find(([, node]) => node.getBoundingClientRect().bottom > top);
-    if (!row || row[1].getBoundingClientRect().top >= viewport.getBoundingClientRect().bottom) {
-      const loadedTop = this.loadedTop();
-      const index = this.heights.at(loadedTop);
-      const messageId = this.ids[index];
-      if (messageId) { const offset = this.heights.offset(index) - loadedTop; this.place = { following: this.place.following, anchor: { messageId, offset, messageOffset: offset } }; }
-      return this.place;
-    }
-    const [messageId, node] = row;
-    const landmarks = [...node.querySelectorAll<HTMLElement>(LANDMARKS)];
-    const landmark = landmarks.findIndex(n => n.getBoundingClientRect().height > 0 && n.getBoundingClientRect().top >= top);
-    const mark = landmarks[landmark];
-    const toolCallId = mark?.closest<HTMLElement>("[data-tool-call]")?.dataset.toolCall;
-    this.place = { following: this.place.following, anchor: { messageId, ...(landmark >= 0 ? { landmark } : {}), ...(toolCallId ? { toolCallId } : {}), offset: (mark ?? node).getBoundingClientRect().top - top, messageOffset: node.getBoundingClientRect().top - top } };
+    const engine = this.engine;
+    if (!engine) return this.place;
+    const offset = this.offset();
+    const item = engine.getVirtualItemForOffset(offset);
+    // Inside the head — the placeholder for history that has not arrived — the
+    // row the person is on is the oldest one they have: it is the row they
+    // will be back on, and the one a trim must not release under them.
+    const index = item ? Math.max(item.index, ITEM_OFFSET) : undefined;
+    const messageId = index === undefined ? undefined : this.ids[index - ITEM_OFFSET];
+    const following = this.pendingLatest || engine.isAtEnd(LIVE_EDGE);
+    this.place = { following, ...(messageId && item ? { anchor: { messageId, offset: offset - item.start } } : {}) };
     return this.place;
   };
-  private restore() {
-    const viewport = this.viewport;
-    // While an earlier page is committing, only structural/measurement deltas
-    // may move the viewport. An absolute estimate or latest fallback here is
-    // the root-to-bottom loop this controller exists to prevent.
-    if (!viewport || this.target || (this.earlierPage && !this.place.following)) return;
-    if (this.place.following) {
-      const placeTail = this.pendingTailPlacement || this.edgeGap() > 2;
-      this.pendingTailPlacement = false;
-      if (!placeTail) this.arriving = false;
-      else this.scroll(Math.max(0, viewport.scrollHeight - viewport.clientHeight));
-      return;
-    }
-    const anchor = this.place.anchor;
-    if (!anchor) return;
-    const row = this.nodes.get(anchor.messageId);
-    if (!row) {
-      const index = this.positions.get(anchor.messageId);
-      // While the person is reading upwards, the anchor's row is often not
-      // mounted yet and the index above it is still estimates. Placing it
-      // from those estimates moved the viewport back down under their wheel.
-      // Leave the position alone; measure() shifts by exactly what changes.
-      if (this.reading) return;
-      // An away reader's pixels belong to the measured anchor (M16-T85): it has
-      // already held what they are standing on, against the layout the browser
-      // produced. Placing them again from the index would move them a second
-      // time for the same change, by whatever the estimates got wrong.
-      if (index !== undefined) { if (this.holdsMeasuredAnchor()) return; this.scroll(viewport.scrollTop + this.heights.offset(index) - this.loadedTop() - anchor.messageOffset); return; }
-      // The transcript this place belonged to is not loaded here any more.
-      // When the window was *replaced* — a reloaded recent tail, a branch that
-      // dropped the message — latest is the honest answer. When it was not,
-      // this row was folded into an older group by a page that arrived above
-      // (M16-T83): the conversation is the same, the reader is still in it,
-      // and taking them to the newest turn is the loop this controller exists
-      // to prevent. Re-anchor on what is on screen and leave them there.
-      if (!this.replacedWindow && !this.arriving) { this.capture(); return; }
-      this.place = { following: true };
-      this.arriving = true;
-      this.scroll(Math.max(0, viewport.scrollHeight - viewport.clientHeight));
-      return;
-    }
-    if (this.holdsMeasuredAnchor()) return;
-    const mark = resolveLandmark(row, anchor);
-    const live = mark ?? row;
-    const delta = live.getBoundingClientRect().top - viewport.getBoundingClientRect().top - (live === row ? anchor.messageOffset : anchor.offset);
-    if (Math.abs(delta) >= 0.5) this.scroll(viewport.scrollTop + delta);
-  }
+
   /**
-   * One authority for an away reader's position (D-287), consulted by both
-   * writers. One exception stays with `restore()`: a settled destination owns
-   * its row against native and queued scrolls until the next person intent.
-   *
-   * A disclosure used to be a second exception, because it opens *inside* a
-   * row and the row's own top does not move. The measured anchor now holds the
-   * block the person is reading, which is exactly what a disclosure above it
-   * moves, so there is nothing left to carve out.
+   * The newest turn, now. An explicit intent — the person asked for it, or
+   * they sent something — so it goes through the engine's own scroll and
+   * supersedes whatever else was happening.
    */
-  private holdsMeasuredAnchor() {
-    return this.anchor.recorded && !this.ownsLocation;
+  latest = () => {
+    this.cancel();
+    this.pendingLatest = true;
+    this.place = { following: true };
+    this.placeToLatest();
+    this.publish();
+  };
+  private placeToLatest() {
+    const engine = this.engine;
+    if (!engine || this.ids.length === 0 || !this.viewport) return;
+    this.pendingLatest = false;
+    engine.scrollToIndex(this.itemCount - 1, { align: "end" });
   }
+
   /**
-   * Take every mounted row's measured height into the model. This never moves
-   * the layout — the row is already that tall on screen and the spacers cover
-   * unmounted rows only — it only stops the model from lying about rows the
-   * browser has already laid out. A window chosen from a stale model unmounts
-   * rows above the reader and collapses the page that just arrived.
+   * The layout React just committed. The engine has already synchronised its
+   * own scroll position in its layout effect; this is where Laser's own
+   * state catches up with it — where the transcript starts inside the
+   * scroller, how much unloaded history the head should draw, and what this
+   * surface is standing on.
    */
-  private measureMountedRows(): boolean {
+  committed() {
+    if (this.disposed) return;
+    let changed = this.readLayout();
+    if (this.pendingLatest) this.placeToLatest();
+    const before = this.place;
+    this.capture();
+    if (this.configurePlaceholder()) changed = true;
+    if (changed) this.publish();
+    else if (before.following !== this.place.following || before.anchor?.messageId !== this.place.anchor?.messageId) this.publishAnchors();
+  }
+
+  /**
+   * Where the transcript starts inside the scroller, and what an unmeasured
+   * row is worth. Both are read from the browser, never predicted: the first
+   * is whatever the app renders above the transcript inside the same
+   * scroller, and the second follows the active type and spacing scales.
+   */
+  private readLayout(): boolean {
+    const viewport = this.viewport, content = this.content;
+    if (!viewport || !content) return false;
+    const margin = content.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop;
     let changed = false;
-    for (const [id, node] of this.nodes) {
-      const index = this.positions.get(id);
-      if (index === undefined) continue;
-      // Mounted messages have content-visibility:visible; skipped intrinsic boxes never enter this cache.
-      const height = node.getBoundingClientRect().height;
-      if (height <= 0 || this.heights.height(index) === height) continue;
-      this.heights.update(index, height);
-      const key = this.cacheKey(id);
-      this.measured.delete(key); this.measured.set(key, height);
-      changed = true;
-    }
-    return changed;
-  }
-  private layout() {
-    if (!this.content) return false;
-    const css = getComputedStyle(this.content);
-    // Unknown row estimates derive from the active type and spacing scales.
+    if (Number.isFinite(margin) && Math.abs(margin - this.margin) >= 0.5) { this.margin = margin; changed = true; }
+    const css = getComputedStyle(content);
     const line = Number.parseFloat(css.lineHeight) || Number.parseFloat(css.fontSize) * 1.5;
     const spacing = Number.parseFloat(css.paddingTop) / 5 || line / 4;
-    const signature = [this.content.clientWidth, css.fontFamily, css.fontSize, css.lineHeight, spacing, activityDetailLevel(this.path)].join("|");
-    this.estimate = line * 6 + spacing * 5;
-    if (signature === this.signature) return false;
-    this.signature = signature; this.rebuild();
-    this.configureReserve();
-    return true;
-  }
-  private measure = () => {
-    if (this.frame) cancelAnimationFrame(this.frame);
-    this.frame = 0;
-    if (this.disposed) return;
-    let changed = this.layout();
-    const reserveBefore = this.reserve.height;
-    // A held root estimate is removed on the first measured frame after its
-    // page settles, whether or not another commit follows.
-    if (this.collapseDeferredRoot()) changed = true;
-    if (this.measureMountedRows()) changed = true;
-    // Refine only the prefix this page inserted, and only on its first measured
-    // frame. Streaming, disclosure, image and font growth elsewhere cannot
-    // become fictitious unloaded history.
-    if (this.arrivedPage?.refine) {
-      const pageHeight = Math.max(0, this.arrivedPage.ids.reduce((sum, id) => {
-        const index = this.positions.get(id);
-        return sum + (index === undefined ? 0 : this.heights.height(index));
-      }, 0) - this.arrivedPage.removedHeight);
-      if (this.reserve.refineArrived(pageHeight - this.arrivedPage.exchangedHeight)) changed = true;
-      this.arrivedPage.exchangedHeight = pageHeight;
-      this.arrivedPage.refine = false;
+    const signature = [content.clientWidth, css.fontFamily, css.fontSize, css.lineHeight, spacing, activityDetailLevel(this.path)].join("|");
+    if (signature !== this.typeSignature) {
+      this.typeSignature = signature;
+      const estimate = line * 6 + spacing * 5;
+      if (Number.isFinite(estimate) && estimate > 0 && Math.abs(estimate - this.estimate) >= 0.5) { this.estimate = estimate; changed = true; }
     }
-    // The estimate ahead of the reader may grow back here, and only here: this
-    // is the one place where the growth is measured away in the same pass,
-    // immediately below.
-    if (this.configureReserve(this.mayGrowReserve())) changed = true;
-    // However the range moved in this frame — exchanged for an arrived page,
-    // refined against what that page measured, or grown back — the DOM is still
-    // laid out for the height it had, so the next window comes from the anchor
-    // row's index. Choosing it from a scroll offset measured against a reserve
-    // that is no longer there unmounts the rows the person is reading.
-    if (Math.abs(this.reserve.height - reserveBefore) >= 0.5) { changed = true; this.layoutStale = true; }
-    // A global measurement budget, including layouts and previously visited sessions.
-    while (this.measured.size > 20_000) this.measured.delete(this.measured.keys().next().value!);
-    // Measuring a mounted row does not move the browser's layout: the row is
-    // already that tall on screen, and the spacers cover unmounted rows only.
-    // What this pass *can* move is the rendered geometry it changes above the
-    // reader — the reserve, or a re-estimated index after a type/width change.
-    // Either way the answer comes from the same measured delta, and a zero
-    // delta writes nothing: the model catching up with the DOM is not movement.
-    const compensated = this.applyMeasuredAnchor(0);
-    if (changed || this.windowDirty) {
-      this.windowDirty = false;
-      if (!compensated) this.restore();
-      this.publish();
-    }
-    this.capture();
-    this.recordMeasuredAnchor();
-  };
-  schedule = () => { if (!this.frame && !this.disposed) this.frame = requestAnimationFrame(this.measure); };
-  /**
-   * Remove a held root estimate once the page that reached it has committed.
-   * The removal is a model change: it reaches the person at the layout that
-   * renders it, and that layout's measured anchor delta is what compensates it.
-   */
-  private collapseDeferredRoot(): boolean {
-    const held = this.deferredRootCollapse;
-    if (!held) return false;
-    // While the page is still committing, its rows may still be on their way.
-    if (this.ids.length === held.rows && this.earlierPage) return false;
-    this.deferredRootCollapse = undefined;
-    return this.configureReserve();
-  }
-  /**
-   * Whether the estimate in front of the reader may grow back to its bounded
-   * size in this frame. Arrived pages consume it, so after a few pages it sits
-   * at its floor while the producer still has hundreds of turns before it, and
-   * the thumb then tells the person they are at the root of a conversation
-   * they are nowhere near the root of.
-   *
-   * Growth is space added above the reader, so it is movement until something
-   * measures it away. Two conditions make it invisible: a loaded row is on
-   * screen, so the measured anchor has something to hold it by, and the person
-   * has stopped moving — nothing is ever added in front of a live gesture,
-   * where it would be blank to read through rather than an honest thumb.
-   */
-  private mayGrowReserve() {
-    if (this.reading || this.place.following || this.target || this.arrivedPage?.refine || !this.holdsMeasuredAnchor()) return false;
-    const viewport = this.viewport;
-    if (!viewport) return false;
-    const box = viewport.getBoundingClientRect();
-    for (const [id, node] of this.nodes) {
-      if (!this.positions.has(id)) continue;
-      const rect = node.getBoundingClientRect();
-      if (rect.bottom > box.top && rect.top < box.bottom && rect.height > 0) return true;
-    }
-    return false;
-  }
-  /** True when the estimated range actually changed height. */
-  private configureReserve(mayGrow = false): boolean {
-    const before = this.reserve.height;
-    this.reserve.configure({
-      hasBefore: this.historyBefore !== undefined || this.deferredRootCollapse !== undefined,
-      userOffset: this.historyUserOffset,
-      loadedUserTurns: this.loadedUserTurns,
-      loadedHeight: this.heights.total,
-      rowEstimate: this.estimate,
-      rows: this.ids.length,
-      viewportHeight: this.viewport?.clientHeight,
-      mayGrow,
-    });
-    const changed = Math.abs(this.reserve.height - before) >= 0.5;
-    // The range is model geometry above the reader. Until the render that
-    // carries it lands, the DOM is still laid out for the old one, so the
-    // window must be chosen from the anchor row's index rather than from a
-    // scroll offset measured against a reserve that is no longer there.
-    if (changed) this.layoutStale = true;
     return changed;
   }
-  setHistoryWindow(userOffset: number, loadedUserTurns: number, before: string | undefined) {
-    const changed = this.historyUserOffset !== userOffset || this.loadedUserTurns !== loadedUserTurns || this.historyBefore !== before;
-    const pageChanged = Boolean(this.earlierPage && changed);
-    this.historyUserOffset = Math.max(0, userOffset);
-    this.loadedUserTurns = Math.max(0, loadedUserTurns);
-    this.historyBefore = before;
-    // The producer's "there is nothing before this" can commit before the rows
-    // of the page that proved it. Removing the estimate then takes pixels from
-    // above the reader while their replacement is still arriving, and drags
-    // them to the top of the conversation (M16-T83 invariant 4). Hold the
-    // estimate until the page this belongs to has finished committing.
-    if (before === undefined && changed && this.earlierPage && this.reserve.height > 0) this.deferredRootCollapse ??= { rows: this.ids.length };
-    if (before !== undefined) this.deferredRootCollapse = undefined;
-    this.configureReserve();
-    if (pageChanged) this.applyEarlierTransition({ type: "store-change" });
-    if (changed) this.windowDirty = true;
-  }
-  private applyEarlierTransition(event: Parameters<typeof transitionEarlierPage>[1]) {
-    const result = transitionEarlierPage(this.earlierPage, event);
-    this.earlierPage = result.state;
-    if (result.released && this.earlierFallbackFrame) {
-      cancelAnimationFrame(this.earlierFallbackFrame);
-      this.earlierFallbackFrame = 0;
-    }
-    return result.released;
-  }
-  private releaseEarlierPage(_reason: "cancel" | "path" | "unmount" | "fallback") {
-    const released = this.applyEarlierTransition({ type: "cancel" });
-    if (this.earlierFallbackFrame) cancelAnimationFrame(this.earlierFallbackFrame);
-    this.earlierFallbackFrame = 0;
-    this.arrivedPage = undefined;
-    if (released) { this.publish(); this.schedule(); }
-  }
-  beginEarlierPage() {
-    this.capture();
-    this.reserve.startReading();
-    this.applyEarlierTransition({ type: "begin", before: this.historyBefore });
-    this.arrivedPage = undefined;
-    this.arriving = false;
-    this.expectedTop = undefined;
-    // Keep following intact: its geometric placement remains authoritative
-    // while only estimate-based reading restoration is fenced.
-    this.publish();
-  }
-  finishEarlierPage() {
-    if (!this.earlierPage) return;
-    const released = this.applyEarlierTransition({ type: "settled" });
-    if (released) { this.publish(); this.schedule(); return; }
-    const transaction = this.earlierPage;
-    if (this.earlierFallbackFrame) cancelAnimationFrame(this.earlierFallbackFrame);
-    this.earlierFallbackFrame = requestAnimationFrame(() => {
-      this.earlierFallbackFrame = 0;
-      if (this.earlierPage !== transaction || !transaction?.settled) return;
-      this.earlierFallbacks++;
-      this.releaseEarlierPage("fallback");
-    });
-  }
-  cancelEarlierPage() { this.releaseEarlierPage("cancel"); }
-  /**
-   * The reading position — the viewport's top edge — is inside the estimated
-   * range: the person has crossed above the oldest loaded row. Rows lower down
-   * the screen may still be loaded ones; "nothing to hold" is a separate
-   * question, answered by the measured anchor finding no row on screen.
-   */
-  isReadingHistoryReserve() {
-    return Boolean(this.viewport && this.reserve.height > 0 && this.loadedTop() < 0);
-  }
-  get loadingEarlier() { return this.earlierPage !== undefined; }
-  get earlierPageFallbackCount() { return this.earlierFallbacks; }
-  committed() {
-    // Typography and width are already what they are in the DOM; this is the
-    // model catching up with a layout that has happened, so it runs before
-    // anything reads either.
-    if (this.layout()) this.windowDirty = true;
-    // The rows this commit mounted are already laid out at their real heights;
-    // taking them into the model now costs nothing and stops the next render
-    // from choosing its window — and its spacers — from numbers the browser has
-    // already contradicted, which unmounts rows above the reader and collapses
-    // the page that just arrived.
-    if (this.measureMountedRows()) this.windowDirty = true;
-    // React has mutated the DOM and the browser has laid it out; nothing has
-    // painted yet. This is the one place the arithmetic is honest: whatever
-    // arrived above the reader — rows, the estimate giving space back, the
-    // controls above the transcript — has moved the row they were standing on
-    // by a measurable amount, and that amount is the only thing written.
-    const above = this.aboveTranscriptShift();
-    const compensated = this.applyMeasuredAnchor(above);
-    // The DOM is now laid out for the model this render carried.
-    this.layoutStale = false;
-    // Browser default scrolling updates scrollTop before its scroll event lets
-    // capture() move the anchor. A layout commit can land in that gap. Never
-    // restore the stale mounted anchor over active wheel/touch/key movement;
-    // the measured delta above is the only safe change.
-    if (!compensated && (!this.reading || this.place.following)) this.restore();
-    // The layout is settled again, so this is where the next change is
-    // measured from — before any model change below, which the render that
-    // carries it will compensate in its own commit.
-    this.recordMeasuredAnchor();
-    // The page that reached the beginning has committed: its rows now hold the
-    // pixels the estimate was holding, so the estimate goes rather than leaving
-    // a range that claims unloaded history.
-    if (this.collapseDeferredRoot()) this.windowDirty = true;
-    if (this.earlierPage && this.applyEarlierTransition({ type: "commit" })) this.publish();
-    this.schedule();
-  }
+
+  // ── Destinations ──────────────────────────────────────────────────────
+
   cancel = (reason?: unknown) => {
-    this.ownsLocation = false;
     this.intent++;
-    if (this.target) { this.target = undefined; this.windowDirty = true; this.schedule(); }
+    if (this.target) { this.target = undefined; this.held(); this.publishSoon(); }
     if (reason !== "structure") this.controlIntent++;
     for (const [frame, resolve] of this.pendingFrames) { cancelAnimationFrame(frame); resolve(); }
     this.pendingFrames.clear();
@@ -763,6 +542,13 @@ export class TranscriptViewport {
       this.pendingFrames.set(frame, resolve);
     });
   }
+
+  /**
+   * Take a row — and a block inside it — to the reading position. The engine
+   * owns every scroll: a coarse landing by index, which keeps reconciling as
+   * the rows on the way measure, and then the exact offset once the row is
+   * mounted and its own rectangle can be read.
+   */
   async ensureVisible(target: TranscriptTarget, options: LocateOptions): Promise<LocateResult> {
     this.cancel();
     const intent = this.intent, path = this.path;
@@ -770,204 +556,97 @@ export class TranscriptViewport {
     const abort = () => { if (this.intent === intent) this.cancel(); };
     options.signal?.addEventListener("abort", abort, { once: true });
     try {
-    if (cancelled()) return "cancelled";
-    if (!this.positions.has(target.messageId) && options.locate) {
-      let wake!: () => void;
-      const stopped = new Promise<void>(resolve => { wake = resolve; this.pendingLocates.add(resolve); });
-      try { await Promise.race([options.locate(), stopped]); }
-      catch { return cancelled() ? "cancelled" : "missing"; }
-      finally { this.pendingLocates.delete(wake); }
       if (cancelled()) return "cancelled";
-      await this.nextFrame();
-      if (cancelled()) return "cancelled";
-    }
-    if (!this.positions.has(target.messageId)) return "missing";
-    // An explicit destination supersedes recent-tail arrival. Otherwise a
-    // native locate scroll could be mistaken for the replacement clamp and
-    // silently turn following back on before the target settles.
-    this.arriving = false;
-    this.place.following = false;
-    this.ownsLocation = true;
-    this.target = target;
-    this.publish();
-    let stable = 0;
-    let settledAfter: number | undefined;
-    for (;;) {
-      await this.nextFrame();
-      if (cancelled()) return "cancelled";
-      if (!this.positions.has(target.messageId)) { this.cancel(); return "missing"; }
-      const viewport = this.viewport;
-      if (!viewport) { this.cancel(); return "missing"; }
-      const row = this.nodes.get(target.messageId);
-      if (!row) { this.scroll(viewport.scrollTop + this.heights.offset(this.positions.get(target.messageId)!) - this.loadedTop()); this.publish(); continue; }
-      settledAfter ??= performance.now() + motionMs("--motion-fast");
-      this.measure();
-      const message = row.querySelector<HTMLElement>("[data-message-id]") ?? row;
-      const tool = target.toolCallId ? message.querySelector<HTMLElement>(`[data-tool-call="${CSS.escape(target.toolCallId)}"]`) : undefined;
-      const rect = options.rect?.(message) ?? (tool ?? message).getBoundingClientRect();
-      const footer = viewport.querySelector<HTMLElement>('[data-slot="thread-footer"]')?.getBoundingClientRect().height ?? 0;
-      const delta = rect.top - viewport.getBoundingClientRect().top - Math.max(0, viewport.clientHeight - footer) / 3;
-      const before = viewport.scrollTop;
-      this.scroll(before + delta);
-      stable = Math.abs(viewport.scrollTop - before) < 0.5 ? stable + 1 : 0;
-      if (stable >= 2 && performance.now() >= settledAfter) {
-        this.target = undefined; this.capture(); this.publish();
-        return target.toolCallId && !tool ? "missing" : "visible";
+      if (!this.positions.has(target.messageId) && options.locate) {
+        let wake!: () => void;
+        const stopped = new Promise<void>(resolve => { wake = resolve; this.pendingLocates.add(resolve); });
+        try { await Promise.race([options.locate(), stopped]); }
+        catch { return cancelled() ? "cancelled" : "missing"; }
+        finally { this.pendingLocates.delete(wake); }
+        if (cancelled()) return "cancelled";
+        await this.nextFrame();
+        if (cancelled()) return "cancelled";
       }
-    }
+      if (!this.positions.has(target.messageId)) return "missing";
+      // An explicit destination supersedes the live edge and any placement
+      // this surface still owed.
+      this.pendingLatest = false;
+      this.place = { ...this.place, following: false };
+      this.target = target;
+      this.held();
+      this.publish();
+      let stable = 0;
+      let settledAfter: number | undefined;
+      for (let frames = 0; frames < LOCATE_FRAME_BUDGET; frames++) {
+        await this.nextFrame();
+        if (cancelled()) return "cancelled";
+        const index = this.positions.get(target.messageId);
+        const engine = this.engine, viewport = this.viewport;
+        if (index === undefined || !engine || !viewport) { this.cancel(); return "missing"; }
+        const row = this.nodes.get(target.messageId);
+        if (!row) { engine.scrollToIndex(index + ITEM_OFFSET, { align: "center" }); this.publish(); continue; }
+        settledAfter ??= performance.now() + motionMs("--motion-fast");
+        const message = row.querySelector<HTMLElement>("[data-message-id]") ?? row;
+        const tool = target.toolCallId ? message.querySelector<HTMLElement>(`[data-tool-call="${CSS.escape(target.toolCallId)}"]`) : undefined;
+        const rect = options.rect?.(message) ?? (tool ?? message).getBoundingClientRect();
+        const footer = viewport.querySelector<HTMLElement>('[data-slot="thread-footer"]')?.getBoundingClientRect().height ?? 0;
+        const delta = rect.top - viewport.getBoundingClientRect().top - Math.max(0, viewport.clientHeight - footer) / 3;
+        if (Math.abs(delta) < 0.5) stable++;
+        else { stable = 0; engine.scrollToOffset(this.offset() + delta); }
+        if (stable >= 2 && performance.now() >= settledAfter) {
+          this.target = undefined; this.held(); this.capture(); this.publish();
+          return target.toolCallId && !tool ? "missing" : "visible";
+        }
+      }
+      // The layout never settled. Say what is true: the row is mounted where
+      // the engine put it, or it is not there at all.
+      const landed = this.nodes.has(target.messageId);
+      this.target = undefined; this.held(); this.capture(); this.publish();
+      return landed ? "visible" : "missing";
     } finally { options.signal?.removeEventListener("abort", abort); }
   }
-  latest = () => {
-    this.cancel(); this.clampDebt = 0; this.place.following = true; this.publish();
-    if (this.viewport) this.scroll(Math.max(0, this.viewport.scrollHeight - this.viewport.clientHeight));
-    // `scroll()` owns an event only when this placement actually moved.
-    // Follow geometry handles later growth when latest was already in place.
-    this.schedule();
-  };
-  private disclosureTick = () => {
-    this.disclosureFrame = 0;
-    if (this.disposed) return;
-    for (const target of this.disclosureTargets) if (!target.isConnected || !this.viewport?.contains(target)) this.disclosureTargets.delete(target);
-    // Only the live edge is placed here. An away reader's pixels belong to the
-    // measured anchor, which holds the block the person is reading — exactly
-    // what a disclosure opening above it moves — frame by frame, from the
-    // `ResizeObserver` that the animation's own height changes deliver.
-    if (this.disclosureFollowing && this.place.following) this.restore();
-    if (this.disclosureTargets.size > 0) this.disclosureFrame = requestAnimationFrame(this.disclosureTick);
-  };
-  private startDisclosureHold(target: Element) {
-    const first = this.disclosureTargets.size === 0;
-    this.disclosureTargets.add(target);
-    if (!first) return;
-    // animationstart is dispatched only after the disclosure's open state has
-    // committed. Take the away reader's place here, not in the click handler:
-    // the block they are reading becomes the measured anchor's first
-    // candidate, and the animation's own `ResizeObserver` deliveries hold it,
-    // frame by frame, without a second placement.
-    this.disclosureFollowing = this.place.following;
-    if (!this.disclosureFollowing) { this.capture(); this.recordMeasuredAnchor(); return; }
-    if (!this.disclosureFrame) this.disclosureFrame = requestAnimationFrame(this.disclosureTick);
-  }
-  private endDisclosureHold(target: Element) {
-    if (!this.disclosureTargets.delete(target)) return;
-    // One post-animation correction settles the final keyframe of a followed
-    // edge. An away reader has no correction to make: nothing placed them.
-    if (this.disclosureFollowing && this.disclosureTargets.size === 0 && !this.disclosureFrame) this.disclosureFrame = requestAnimationFrame(this.disclosureTick);
-  }
-  private stopDisclosureHold() {
-    this.disclosureTargets.clear();
-    if (this.disclosureFrame) cancelAnimationFrame(this.disclosureFrame);
-    this.disclosureFrame = 0;
-  }
+
+  // ── Earlier history ───────────────────────────────────────────────────
+  //
+  // The page itself is the history loader's (M16-T81/T85). All this surface
+  // keeps is whether one is in flight, so a page that is late while the person
+  // is inside the placeholder can say so.
+
+  beginEarlierPage() { this.pages++; this.publish(); }
+  finishEarlierPage() { if (this.pages > 0) { this.pages--; this.publish(); } }
+  cancelEarlierPage() { if (this.pages > 0) { this.pages = 0; this.publish(); } }
+  get loadingEarlier() { return this.pages > 0; }
+
+  // ── Input ─────────────────────────────────────────────────────────────
+
   attach(viewport: HTMLElement) {
-    this.disposed = false; this.viewport = viewport;
-    this.lastTop = viewport.scrollTop;
-    this.lastHeight = viewport.scrollHeight;
-    this.observer = new ResizeObserver(() => {
-      // ResizeObserver runs after layout and before paint. Pin here, rather
-      // than one rAF later, so a batched row expansion never paints a gap.
-      // Every growth class takes this path: streamed text, a late block in an
-      // existing row, image decode, highlighting and viewport reflow.
-      if (this.place.following || !this.holdsMeasuredAnchor()) this.restore();
-      else {
-        // A row above the reader growing is the same question as a page
-        // arriving above them, and has the same measured answer. It reaches
-        // here rather than a commit: a row re-renders on its own subscription.
-        this.applyMeasuredAnchor(0);
-        this.recordMeasuredAnchor();
-      }
-      this.schedule();
-    });
-    this.observer.observe(viewport);
-    for (const node of this.nodes.values()) this.observer.observe(node);
-    this.mutation = new MutationObserver(() => {
-      // Text/child commits can paint before a descendant ResizeObserver is
-      // delivered. Only the followed transcript needs this earlier correction;
-      // ResizeObserver and commits maintain an away reader's measured anchor.
-      if (!this.place.following) return;
-      this.restore();
-      this.schedule();
-    });
-    if (this.content) this.mutation.observe(this.content, { subtree: true, childList: true, characterData: true });
-    const markReading = () => {
-      this.reserve.startReading();
-      if (this.reading) clearTimeout(this.reading);
-      this.reading = setTimeout(() => { this.reading = undefined; this.schedule(); }, 400);
+    this.disposed = false;
+    this.viewport = viewport;
+    // The engine reads its scroll element from this controller; the render
+    // that follows this publication is where it picks it up.
+    this.publish();
+    const schedule = () => {
+      if (this.frame || this.disposed) return;
+      this.frame = requestAnimationFrame(() => {
+        this.frame = 0;
+        if (this.disposed) return;
+        const before = this.place;
+        this.capture();
+        if (before.following !== this.place.following || before.anchor?.messageId !== this.place.anchor?.messageId) this.publishAnchors();
+      });
     };
-    let scrollbarDrag = false;
-    const scroll = () => {
-      const top = viewport.scrollTop;
-      const height = viewport.scrollHeight;
-      const previousTop = this.lastTop;
-      const previousHeight = this.lastHeight;
-      const moved = Math.abs(top - previousTop) >= 0.5;
-      const geometryChanged = Math.abs(height - previousHeight) >= 0.5;
-      const dragged = scrollbarDrag && moved;
-      if (dragged) scrollbarDrag = false;
-      this.lastTop = top;
-      this.lastHeight = height;
-      // Every write through `scroll()` is ours. Input that can move clears this
-      // expectation synchronously, so a person's next movement cannot be
-      // consumed as a delayed correction.
-      if (this.expectedTop !== undefined) {
-        this.expectedTop = undefined;
-        this.windowDirty = true;
-        this.schedule();
-        return;
-      }
-      // A thumb drag is measured user movement even if streamed growth changed
-      // scrollHeight in the same frame. It also supersedes any destination, and
-      // like every other deliberate movement it settles whatever a clamp still
-      // owed: the drag never reaches `user()`, and spending the debt on some
-      // later shift would be a jump the person cannot attribute to anything.
-      if (dragged) { this.cancel(); this.arriving = false; this.clampDebt = 0; }
-      if (this.arriving) { this.place.following = true; this.windowDirty = true; this.schedule(); return; }
-      if (this.ownsLocation) {
-        // Only wheel/touch/pointer/keyboard or another explicit destination can
-        // relinquish this anchor. A scroll event itself is not user intent.
-        this.windowDirty = true; this.schedule(); return;
-      }
-      // Geometry at the edge always re-arms follow, including a reader who
-      // scrolls back without sending. Growth alone changes scrollHeight, not
-      // scrollTop, so it never masquerades as departure.
-      if (this.edgeGap() <= 2) {
-        this.place.following = true;
-        this.capture(); this.publish(); this.schedule();
-        return;
-      }
-      // A downward input can reach the physical end just before mounting the
-      // tail refines the virtual spacer. Re-arm against the geometry the input
-      // actually reached, then place the newly measured end once.
-      if (!this.place.following && moved && top > previousTop && Math.abs(previousHeight - viewport.clientHeight - top) <= 2) {
-        this.place.following = true;
-        this.windowDirty = true;
-        this.restore(); this.capture(); this.publish(); this.schedule();
-        return;
-      }
-      // Release only for a measured position change that was not one of our
-      // writes. Resize/mutation scroll events with a stationary top stay owned
-      // by the existing follow intent. A measured thumb drag wins even while
-      // streaming changes the geometry in the same frame.
-      if (this.place.following && (!moved || (geometryChanged && !dragged))) { this.windowDirty = true; this.schedule(); return; }
-      markReading();
-      this.place.following = false;
-      this.capture(); this.publish(); this.schedule();
-    };
-    const user = (direction?: "up" | "down") => {
-      if (direction === undefined || !this.canMove(direction)) return false;
-      this.cancel(); this.arriving = false; this.expectedTop = undefined;
-      // A deliberate movement settles whatever the clamp still owed.
-      this.clampDebt = 0;
-      this.place.following = false;
-      this.stopDisclosureHold();
-      markReading();
-      this.publish();
-      return true;
-    };
+    const scrolled = () => { this.pendingLatest = false; schedule(); };
+    /**
+     * Deliberate movement by the person. It ends a destination — the row they
+     * were being taken to is no longer where they are going — and it ends this
+     * surface's claim on the live edge. It never writes a scroll position:
+     * the browser is already doing that, and the engine follows it.
+     */
+    const user = () => { this.cancel(); this.pendingLatest = false; schedule(); };
     const selection = () => {
       const selected = document.getSelection();
       if (selected && !selected.isCollapsed && selected.anchorNode === this.content && selected.focusNode === this.content && this.ids.length) {
-        this.selected = [this.ids[0]!, this.ids.at(-1)!]; this.publish(); return;
+        this.selected = [this.ids[0]!, this.ids.at(-1)!]; this.held(); this.publish(); return;
       }
       const id = (node: Node | null) => (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>("[data-window-message]")?.dataset.windowMessage;
       const start = id(selected?.anchorNode ?? null), end = id(selected?.focusNode ?? null);
@@ -975,13 +654,14 @@ export class TranscriptViewport {
       if (!selected || selected.isCollapsed) this.selected = undefined;
       else if (a !== undefined && b !== undefined) this.selected = [start!, end!];
       else if (selected.rangeCount && this.content && selected.getRangeAt(0).intersectsNode(this.content)) {
-        // A drag can end on a spacer/container boundary before the next window
+        // A drag can end on a container boundary before the next window
         // commits. Preserve the already selected interval through that gap.
         const range = selected.getRangeAt(0);
         const intersecting = [...this.nodes].filter(([, node]) => range.intersectsNode(node)).map(([id]) => this.positions.get(id)!);
         if (this.selected) for (const id of this.selected) { const index = this.positions.get(id); if (index !== undefined) intersecting.push(index); }
         if (intersecting.length) this.selected = [this.ids[Math.min(...intersecting)]!, this.ids[Math.max(...intersecting)]!];
       } else this.selected = undefined;
+      this.held();
       this.publish();
     };
     const focus = (event: FocusEvent) => {
@@ -989,18 +669,17 @@ export class TranscriptViewport {
       // Portalled menus retain their originating row until focus returns to the thread.
       if (!(target instanceof Element) || !viewport.contains(target)) return;
       this.focused = target.closest<HTMLElement>("[data-window-message]")?.dataset.windowMessage;
+      this.held();
       this.publish();
     };
     const key = (event: KeyboardEvent) => {
       const target = event.target;
       const editsText = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable);
       const inComposer = target instanceof Element && target.closest('[data-slot="composer"]') !== null;
-      const direction = event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || ((event.key === " " || event.key === "Spacebar") && event.shiftKey)
-        ? "up"
-        : event.key === "ArrowDown" || event.key === "PageDown" || event.key === "End" || event.key === " " || event.key === "Spacebar"
-          ? "down"
-          : undefined;
-      if (direction && !editsText && !inComposer) user(direction);
+      const moves = event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home"
+        || event.key === "ArrowDown" || event.key === "PageDown" || event.key === "End"
+        || event.key === " " || event.key === "Spacebar";
+      if (moves && !editsText && !inComposer) user();
       else this.cancel();
       if (event.key === "Tab" && event.target instanceof HTMLElement) {
         const row = event.target.closest<HTMLElement>("[data-window-message]");
@@ -1034,79 +713,46 @@ export class TranscriptViewport {
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) {
         // Explicit native Select All is the documented temporary all-loaded DOM exception.
-        event.preventDefault(); this.selected = this.ids.length ? [this.ids[0]!, this.ids.at(-1)!] : undefined; this.publish();
+        event.preventDefault(); this.selected = this.ids.length ? [this.ids[0]!, this.ids.at(-1)!] : undefined; this.held(); this.publish();
         const intent = this.intent;
         requestAnimationFrame(() => { if (intent !== this.intent || !this.content) return; const range = document.createRange(); range.selectNodeContents(this.content); const selection = document.getSelection(); selection?.removeAllRanges(); selection?.addRange(range); });
       }
     };
     const pointer = (event: PointerEvent) => {
-      // A click in the wide transcript gutter is not a scroll intent. Classic
-      // scrollbars land outside clientWidth; overlay scrollbars occupy the edge
-      // inside it, on either side according to writing direction.
+      // A click in the wide transcript gutter is not a scroll intent, and a
+      // click on a row is not one either: only the scrollbar moves the view.
       const unit = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--space-unit"));
       const overlayEdge = Number.isFinite(unit) ? unit * 3 : 0;
       const rtl = viewport.dir === "rtl" || getComputedStyle(viewport).direction === "rtl";
       const overScrollbar = event.offsetX < 0 || event.offsetX > viewport.clientWidth || (rtl ? event.offsetX <= overlayEdge : event.offsetX >= viewport.clientWidth - overlayEdge);
-      if (event.target === viewport && viewport.scrollHeight > viewport.clientHeight && overScrollbar) {
-        // A thumb click has no direction and is not intent by itself. Its first
-        // measured movement releases follow, even while content is growing.
-        scrollbarDrag = true; this.expectedTop = undefined; markReading();
-      } else this.cancel();
+      if (event.target === viewport && viewport.scrollHeight > viewport.clientHeight && overScrollbar) user();
+      else this.cancel();
     };
-    const pointerEnd = () => { scrollbarDrag = false; };
-    const wheel = (event: WheelEvent) => {
-      if (event.deltaY < 0) user("up");
-      else if (event.deltaY > 0) user("down");
-    };
-    let touchY: number | undefined;
-    const touchstart = (event: TouchEvent) => {
-      user();
-      touchY = event.touches?.[0]?.clientY;
-    };
-    const touchmove = (event: TouchEvent) => {
-      const next = event.touches?.[0]?.clientY;
-      if (next === undefined || touchY === undefined) return;
-      const delta = next - touchY;
-      touchY = next;
-      if (Math.abs(delta) < 0.5) return;
-      user(delta > 0 ? "up" : "down");
-    };
-    const touchend = () => { touchY = undefined; };
-    const disclosure = (event: AnimationEvent) => {
-      const target = event.target;
-      if (!(target instanceof Element) || !target.matches('[data-slot="tool-group-content"], [data-slot="reasoning-content"]')) return;
-      if (event.type === "animationstart") this.startDisclosureHold(target);
-      else this.endDisclosureHold(target);
-    };
-    // The reading position decides which rows answer "did anything move", and
-    // a scroll is the one thing that changes it without changing the layout.
-    // It is recorded here rather than one frame later because a commit or a
-    // `ResizeObserver` delivery can land between this event and the frame, and
-    // it would then be spent against rows the person has already scrolled past.
-    // The cost is one pass per frame, not per event: browsers deliver at most
-    // one scroll event per frame, and no write happens in between, so the
-    // rectangles are the ones the browser already has.
-    const scrolled = () => { scroll(); this.recordMeasuredAnchor(); };
+    const wheel = () => user();
+    const touchstart = () => user();
+    const touchmove = () => user();
     viewport.addEventListener("scroll", scrolled, { passive: true });
     viewport.addEventListener("wheel", wheel, { passive: true });
-    viewport.addEventListener("touchstart", touchstart, { passive: true }); viewport.addEventListener("touchmove", touchmove, { passive: true }); viewport.addEventListener("touchend", touchend, { passive: true }); viewport.addEventListener("touchcancel", touchend, { passive: true });
-    viewport.addEventListener("animationstart", disclosure); viewport.addEventListener("animationend", disclosure); viewport.addEventListener("animationcancel", disclosure);
+    viewport.addEventListener("touchstart", touchstart, { passive: true });
+    viewport.addEventListener("touchmove", touchmove, { passive: true });
     viewport.addEventListener("pointerdown", pointer, { passive: true });
-    document.addEventListener("pointerup", pointerEnd, { passive: true }); document.addEventListener("pointercancel", pointerEnd, { passive: true });
     viewport.addEventListener("focusin", focus); viewport.addEventListener("focusout", focus); viewport.addEventListener("keydown", key);
     document.addEventListener("selectionchange", selection);
-    const theme = new MutationObserver(this.schedule); theme.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class", "data-theme"] });
-    document.fonts?.addEventListener("loadingdone", this.schedule);
-    this.schedule();
     return () => {
-      this.cancel(); this.disposed = true; this.releaseEarlierPage("unmount"); clearAnchoredMessages(this.path); cancelAnimationFrame(this.frame); this.frame = 0; this.stopDisclosureHold(); if (this.reading) { clearTimeout(this.reading); this.reading = undefined; }
-      this.observer?.disconnect(); this.observer = undefined; this.mutation?.disconnect(); this.mutation = undefined; theme.disconnect();
-      viewport.removeEventListener("scroll", scrolled); viewport.removeEventListener("wheel", wheel); viewport.removeEventListener("touchstart", touchstart); viewport.removeEventListener("touchmove", touchmove); viewport.removeEventListener("touchend", touchend); viewport.removeEventListener("touchcancel", touchend);
-      viewport.removeEventListener("animationstart", disclosure); viewport.removeEventListener("animationend", disclosure); viewport.removeEventListener("animationcancel", disclosure);
+      this.cancel();
+      this.disposed = true;
+      clearAnchoredMessages(this.path);
+      if (this.frame) cancelAnimationFrame(this.frame);
+      this.frame = 0;
+      if (this.publishing) cancelAnimationFrame(this.publishing);
+      this.publishing = 0;
+      viewport.removeEventListener("scroll", scrolled);
+      viewport.removeEventListener("wheel", wheel);
+      viewport.removeEventListener("touchstart", touchstart);
+      viewport.removeEventListener("touchmove", touchmove);
       viewport.removeEventListener("pointerdown", pointer);
-      document.removeEventListener("pointerup", pointerEnd); document.removeEventListener("pointercancel", pointerEnd);
       viewport.removeEventListener("focusin", focus); viewport.removeEventListener("focusout", focus); viewport.removeEventListener("keydown", key);
-      document.removeEventListener("selectionchange", selection); document.fonts?.removeEventListener("loadingdone", this.schedule);
+      document.removeEventListener("selectionchange", selection);
       this.viewport = undefined;
     };
   }
@@ -1132,7 +778,6 @@ export function TranscriptViewportProvider({ children }: { children: ReactNode }
   // confirmed the paint — and take the person back to the latest turn, in the
   // middle of reading.
   const path = useLaserState(s => visibleSessionPath(s) ?? "");
-  const paths = useLaserState(s => Object.keys(s.open).join("\0"));
   const destination = useLaserState(s => s.destination);
   const epoch = useLaserState(s => { const target = visibleSessionPath(s); return target ? s.open[target]?.updateEpoch : undefined; });
   const leafId = useLaserState(s => { const target = visibleSessionPath(s); return target ? s.open[target]?.leafId : undefined; });
@@ -1143,7 +788,6 @@ export function TranscriptViewportProvider({ children }: { children: ReactNode }
     previous.current = { destination, epoch };
   }
   controller.configure(path, leafId, loaded);
-  useLayoutEffect(() => { controller.retain(paths.split("\0")); }, [controller, paths]);
   return <Context value={controller}>{children}</Context>;
 }
 export function TranscriptViewportBinding() {
@@ -1152,21 +796,50 @@ export function TranscriptViewportBinding() {
   useLayoutEffect(() => viewport && controller ? controller.attach(viewport) : undefined, [controller, viewport]);
   return null;
 }
-export function WindowedMessages() {
+
+/**
+ * The transcript itself: the head — history controls and the placeholder for
+ * unloaded history — followed by the rows the engine has chosen, each in
+ * normal chronological order and positioned by the engine's own measurements.
+ *
+ * `head` is content, not chrome: it scrolls with the conversation and it is
+ * measured with it, so the controls appearing or the placeholder being
+ * replaced by real rows is a size change the engine anchors through, not a
+ * push nobody accounted for.
+ */
+export function WindowedMessages({ head }: { head?: ReactNode } = {}) {
   const controller = useTranscriptViewport();
   const ids = unstable_useThreadMessageIds();
   const userOffset = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.history?.userOffset ?? 0 : 0; });
   const before = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.history?.before : undefined; });
   const loadedUserTurns = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.blocks.filter(block => block.kind === "user" && !block.optimistic).length ?? 0 : 0; });
-  // Ids/heights must exist before unloaded-history geometry can become ready.
+  useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   controller.setIds(ids);
   controller.setHistoryWindow(userOffset, loadedUserTurns, before);
-  useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
-  const ranges = controller.ranges();
+  const engine = useVirtualizer<HTMLElement, HTMLElement>({
+    count: controller.itemCount,
+    getScrollElement: controller.getScrollElement,
+    estimateSize: controller.estimateSize,
+    getItemKey: controller.itemKey,
+    rangeExtractor: controller.rangeExtractor,
+    measureElement: controller.measureItem,
+    scrollMargin: controller.scrollMargin,
+    overscan: OVERSCAN,
+    // The transcript is a chat: the newest turn is the end, a page of older
+    // messages is a prepend, and the reader's row keeps its position through
+    // both because the engine resolves its anchor in the same pass that
+    // renders the new range.
+    anchorTo: "end",
+    followOnAppend: "auto",
+    scrollToFn: writeScroll,
+    observeElementRect: observeReadingWindow,
+  });
+  controller.bind(engine);
   useLayoutEffect(() => { controller.committed(); });
+  useEffect(() => () => controller.bind(undefined), [controller]);
   // Arriving history is not something the person should have to watch. The
   // one visible sign is a page that is late — longer than a slow motion step
-  // — while they are inside the estimated range, and it goes on arrival.
+  // — while they are inside the placeholder, and it goes on arrival.
   const loading = controller.loadingEarlier;
   const [overdue, setOverdue] = useState(false);
   useEffect(() => {
@@ -1174,29 +847,56 @@ export function WindowedMessages() {
     const timer = setTimeout(() => { if (controller.isReadingHistoryReserve()) setOverdue(true); }, motionMs("--motion-slow"));
     return () => clearTimeout(timer);
   }, [controller, loading]);
-  let cursor = 0;
-  return <div ref={node => { controller.setContent(node); }} data-slot="thread-messages" aria-busy={loading || undefined} className="flex flex-col pt-5 empty:hidden" style={{ overflowAnchor: "none" }}>
-    <HistoryReserve height={controller.reserveHeight} overdue={overdue} />
-    {ranges.flatMap(range => {
-      const gap = controller.heights.offset(range.start) - controller.heights.offset(cursor); cursor = range.end;
-      return [
-        ...(gap > 0 ? [<div key={`gap:${range.start}`} aria-hidden="true" data-slot="transcript-spacer" style={{ height: gap, flexShrink: 0 }} />] : []),
-        ...ids.slice(range.start, range.end).map(id => <WindowRow key={`${controller.path}:${id}`} id={id} controller={controller} />),
-      ];
-    })}
-    {cursor < ids.length && <div aria-hidden="true" data-slot="transcript-spacer" style={{ height: controller.heights.total - controller.heights.offset(cursor), flexShrink: 0 }} />}
+  const items = engine.getVirtualItems();
+  const margin = controller.scrollMargin;
+  return <div
+    ref={controller.setContent}
+    data-slot="thread-messages"
+    aria-busy={loading || undefined}
+    // `shrink-0`: the transcript's height is the engine's measurement, and the
+    // column around it is a flex container that would otherwise compress it.
+    className="relative w-full shrink-0"
+    style={{ height: engine.getTotalSize(), overflowAnchor: "none" }}
+  >
+    {items.map(item => (item.index === HEAD_INDEX
+      ? <TranscriptHead key="head" top={item.start - margin} index={item.index} controller={controller} turns={controller.placeholderTurns} overdue={overdue}>{head}</TranscriptHead>
+      : <WindowRow key={controller.itemKey(item.index)} id={ids[item.index - ITEM_OFFSET]!} index={item.index} top={item.start - margin} controller={controller} />))}
+    {/* Nothing else: the head and the rows are the transcript, and their
+        positions come from the one engine that measured them. */}
   </div>;
 }
+
+/** Everything that belongs above the first message, measured with it. */
+function TranscriptHead({ top, index, controller, turns, overdue, children }: { top: number; index: number; controller: TranscriptViewport; turns: number; overdue: boolean; children?: ReactNode }) {
+  return <div
+    ref={controller.headRef}
+    data-index={index}
+    data-slot="transcript-head"
+    className="absolute inset-x-0 flex flex-col pt-5"
+    style={{ top }}
+  >
+    {children}
+    <HistoryReserve turns={turns} overdue={overdue} />
+  </div>;
+}
+
 /**
- * Memoised on purpose. The window republishes whenever a row is measured, a
- * pin changes or the transcript grows — several times per streamed batch — and
- * every one of those rebuilt this list. A settled row's props (its id and this
- * surface's controller) do not change, so it must not re-render with the list:
- * its own message subscription is what tells it that its content moved.
+ * Memoised on purpose. The transcript re-renders whenever a row is measured, a
+ * pin changes or the conversation grows — several times per streamed batch —
+ * and a row whose position has not changed must not re-render with it: its own
+ * message subscription is what tells it that its content moved.
  */
-const WindowRow = memo(function WindowRow({ id, controller }: { id: string; controller: TranscriptViewport }) {
-  const register = useRef<(node: HTMLDivElement | null) => void>(node => controller.register(id, node));
-  return <div ref={register.current} data-window-message={id} className="pb-5 [&_[data-message-id]]:[content-visibility:visible]">
+const WindowRow = memo(function WindowRow({ id, index, top, controller }: { id: string; index: number; top: number; controller: TranscriptViewport }) {
+  // Positioned with `top`, never a transform: a transform would make this row
+  // the containing block for anything sticky or fixed inside it, and rows
+  // carry both.
+  return <div
+    ref={controller.rowRef(id)}
+    data-index={index}
+    data-window-message={id}
+    className="absolute inset-x-0 pb-5 [&_[data-message-id]]:[content-visibility:visible]"
+    style={{ top }}
+  >
     <ThreadPrimitive.Unstable_MessageById messageId={id} components={COMPONENTS} />
   </div>;
 });
