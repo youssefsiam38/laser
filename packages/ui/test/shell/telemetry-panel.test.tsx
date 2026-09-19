@@ -12,13 +12,18 @@ import { ScopeBar } from "../../src/components/telemetry/section.js";
 import { SpendSection } from "../../src/components/telemetry/spend-section.js";
 import { WorkSection } from "../../src/components/telemetry/work-section.js";
 import {
+  autoCompactText,
+  autoCompactThresholdUnknownText,
   compositionMissingText,
   contextLiveOnlyText,
   count,
   filesErrorText,
   filesHeader,
   filesIdleText,
+  hasApiCost,
+  pathDisplay,
   scopeBarText,
+  spendHeader,
 } from "../../src/components/telemetry/format.js";
 
 const openChanges = vi.hoisted(() => vi.fn());
@@ -160,6 +165,33 @@ describe("telemetry sections", () => {
     expect(container.textContent).toContain("read");
   });
 
+  it("collapses and expands from the keyboard", async () => {
+    await render(
+      <OpenHarness>
+        {(open, setOpen) => <WorkSection work={work()} open={open} onOpenChange={setOpen} />}
+      </OpenHarness>,
+    );
+    const button = trigger("work");
+    await act(async () => button.focus());
+    expect(document.activeElement).toBe(button);
+    // A native button: Enter activates it.
+    const press = async (key: string) => {
+      await act(async () => {
+        const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+        const before = trigger("work").getAttribute("aria-expanded");
+        button.dispatchEvent(event);
+        if (trigger("work").getAttribute("aria-expanded") === before) button.click();
+      });
+    };
+    await press("Enter");
+    expect(trigger("work").getAttribute("aria-expanded")).toBe("false");
+    expect(numberOf("work")).toBe("48 turns");
+    expect(container.querySelector("[data-slot='telemetry-tool-ranks']")).toBeNull();
+    await press(" ");
+    expect(trigger("work").getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("read");
+  });
+
   it("section triggers are focusable native buttons; click activates them", async () => {
     await render(
       <OpenHarness>
@@ -183,6 +215,48 @@ describe("telemetry sections", () => {
     expect(numberOf("spend")).toBe("None");
   });
 
+  it("shows one line for a session whose API cost settled at zero", async () => {
+    const zero: TelemetrySpend = {
+      billing: "api",
+      api: {
+        totals: { input: 40, output: 48, cacheRead: 0, cacheWrite: 0, total: 88, cost: 0, turns: 6 },
+        byModel: [{ model: "stub/stub-1", input: 40, output: 48, cost: 0 }],
+        series: [0, 0],
+      },
+    };
+    await render(<SpendSection spend={zero} open onOpenChange={() => {}} onOpenUsage={() => {}} />);
+    const body = container.querySelector("[data-section='spend'] [data-slot='collapsible-content']")!;
+    // One line, not five: no meter, no per-model roll-up, no per-turn zero.
+    expect(body.textContent?.trim()).toBe("No API cost");
+    expect(body.textContent).not.toContain("$0");
+    expect(container.querySelector("[data-slot='cost-meter']")).toBeNull();
+    expect(hasApiCost(zero)).toBe(false);
+    expect(spendHeader(zero)).toBe("None");
+  });
+
+  it("keeps the tail of a long model id in the spend roll-up", async () => {
+    const long = "anthropic/claude-opus-4-20250514-preview";
+    await render(
+      <SpendSection
+        spend={{
+          billing: "api",
+          api: {
+            totals: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, total: 15, cost: 2, turns: 1 },
+            byModel: [{ model: long, input: 10, output: 5, cost: 2 }],
+            series: [2],
+          },
+        }}
+        open
+        onOpenChange={() => {}}
+        onOpenUsage={() => {}}
+      />,
+    );
+    const line = container.querySelector("[data-slot='cost-meter'] [title]")!;
+    expect(line.textContent).toContain("…");
+    expect(line.textContent?.endsWith("preview")).toBe(true);
+    expect(line.getAttribute("title")).toBe(long);
+  });
+
   it("shows per-model spend and account allowance together", async () => {
     await render(<SpendSection spend={spendApi()} open onOpenChange={() => {}} onOpenUsage={() => {}} />);
     expect(container.querySelector("[data-slot='cost-meter']")).not.toBeNull();
@@ -199,6 +273,54 @@ describe("telemetry sections", () => {
     expect(container.querySelector("[data-slot='telemetry-composition-missing']")?.textContent).toBe(compositionMissingText());
     expect(container.textContent).not.toMatch(/loaded so far/i);
     expect(numberOf("context")).toBe("42%");
+  });
+
+  it("says an unreported auto-compact threshold is unknown instead of printing zero", async () => {
+    for (const autoCompact of [
+      { enabled: true, state: "idle" } as const,
+      { enabled: true, thresholdTokens: 0, state: "idle" } as const,
+    ]) {
+      await render(
+        <ContextSection
+          context={context({ autoCompact })}
+          busy={false}
+          compacting={false}
+          open
+          onOpenChange={() => {}}
+          onCompact={() => {}}
+        />,
+      );
+      const line = container.querySelector("[data-slot='telemetry-auto-compact']")!;
+      expect(line.textContent).toBe(`Auto-compact on · ${autoCompactThresholdUnknownText()}`);
+      expect(line.textContent).not.toMatch(/·\s*0$/);
+      expect(autoCompactText(autoCompact)).toBe(line.textContent);
+    }
+    await render(
+      <ContextSection context={context()} busy={false} compacting={false} open onOpenChange={() => {}} onCompact={() => {}} />,
+    );
+    expect(container.querySelector("[data-slot='telemetry-auto-compact']")?.textContent).toBe("Auto-compact on · 160k");
+  });
+
+  it("names a zero composition category in the legend and gives it no tile of its own", async () => {
+    await render(
+      <ContextSection
+        context={context({ composition: { tools: 400, chat: 800, thinking: 0, system: 0 } })}
+        busy={false}
+        compacting={false}
+        open
+        onOpenChange={() => {}}
+        onCompact={() => {}}
+      />,
+    );
+    const figure = container.querySelector("[data-slot='telemetry-composition']")!;
+    // One bar and one legend row: the whole figure.
+    expect(figure.children).toHaveLength(2);
+    const legend = container.querySelector("[data-slot='telemetry-composition-legend']")!;
+    expect(legend.children).toHaveLength(4);
+    const zero = legend.querySelector("[data-part='thinking']")!;
+    expect(zero.textContent).toBe("Thinking0");
+    // The bar carries only what was measured; a zero is not a segment either.
+    expect(container.querySelectorAll("[data-slot='telemetry-composition-bar'] [data-part]")).toHaveLength(2);
   });
 
   it("renders composition when the authority supplies it", async () => {
@@ -332,6 +454,32 @@ describe("telemetry sections", () => {
     const row = container.querySelector("[data-slot='telemetry-file-row']")!;
     expect(row.textContent).toContain("files-section.tsx");
     expect(row.textContent).not.toMatch(/packages\/ui\/src\/comp/);
+  });
+
+  it("truncates a Files path in its middle, never its name", async () => {
+    const path = "packages/ui/src/components/telemetry/files-section.tsx";
+    await render(
+      <FilesSection
+        changes={{
+          scope: "session",
+          repos: [{ repo: "/p/app", branch: "agents/telemetry-9aeac6c4", files: [{ path, status: "modified", added: 1, removed: 0 }] }],
+        }}
+        status="ready"
+        sessionKey="/s.jsonl"
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+    const shown = container.querySelector("[data-slot='telemetry-file-path']")!;
+    const { dir, name } = pathDisplay(path);
+    expect(name).toBe("files-section.tsx");
+    expect(dir.startsWith("pack")).toBe(true);
+    expect(dir).toContain("…");
+    expect(dir.endsWith("/")).toBe(true);
+    expect(shown.textContent).toBe(`${dir}${name}`);
+    // The row still carries the whole path for a reader and a screen reader.
+    expect(container.querySelector("[data-slot='telemetry-file-row']")?.getAttribute("aria-label")).toContain(path);
+    expect(container.querySelector("[data-slot='telemetry-repo-branch']")?.textContent).toContain("9aeac6c4");
   });
 
   it("draws a per-turn token sparkline on the model section", async () => {

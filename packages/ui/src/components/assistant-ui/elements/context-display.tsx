@@ -20,6 +20,11 @@
  *   - One `Tooltip`, no nested `TooltipProvider`; the app mounts one.
  *   - `ContextRingButton` binds the ring to the open session and makes it the
  *     compact control when the session is idle, as the composer had.
+ *   - A second preset, `ContextDisplayMeter`, draws the same reading as a slim
+ *     bar with the window figure and the percentage beside it. A 64px ring
+ *     showing `0%` is decoration: it says nothing the number does not and it
+ *     costs a third of the telemetry Context section. Same context, same
+ *     tones, same inspector — a third of the height.
  */
 import { createContext, useContext, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import { BatteryMedium, BrainCircuit, Cpu, Database, Gauge, Sparkles, TriangleAlert, type LucideIcon } from "lucide-react";
@@ -191,12 +196,67 @@ function ContextDisplayRing({ window, tokens, percent, showLabel = false, side, 
   );
 }
 
+/** The window reading as a 4px bar: the ring's geometry, flattened. */
+function BarVisual({ className }: { className?: string | undefined }) {
+  const { percent } = useContextDisplay();
+  const tone = toneForPercent(percent ?? 0);
+  const used = Math.max(0, Math.min(100, percent ?? 0));
+  return (
+    <span aria-hidden="true" className={cn("block h-1 w-full overflow-hidden rounded-full bg-surface-2", className)}>
+      <span
+        className={cn(
+          "block h-full rounded-full transition-[width] duration-(--motion-slow) motion-reduce:transition-none",
+          used > 0 && "min-w-px",
+          TONE_BAR[tone],
+        )}
+        style={{ width: `${used}%` }}
+      />
+    </span>
+  );
+}
+
+export interface ContextDisplayMeterProps extends Omit<ComponentProps<"button">, "children"> {
+  window: number;
+  tokens: number | null;
+  percent: number | null;
+  /** The name of the figure, at the start of the row. */
+  label?: string | undefined;
+  side?: "top" | "bottom" | "left" | "right" | undefined;
+  hint?: string | undefined;
+}
+
+/** The slim preset: name, window figure and percentage over a 4px meter. */
+function ContextDisplayMeter({ window, tokens, percent, label = "Window", side, hint, className, ...props }: ContextDisplayMeterProps) {
+  return (
+    <ContextDisplayRoot window={window} tokens={tokens} percent={percent}>
+      <ContextDisplayTrigger
+        aria-label={`Context ${percent === null ? "unknown" : formatPercent(percent)} used`}
+        className={cn("w-full flex-col items-stretch gap-1.5", className)}
+        {...props}
+      >
+        <span className="flex w-full min-w-0 items-baseline gap-2">
+          <span className="text-xs leading-xs text-ink-2">{label}</span>
+          <span className="ms-auto min-w-0 truncate typed text-ink">
+            {tokens === null ? "—" : formatTokens(tokens)}
+            <span className="text-ink-3"> / {formatTokens(window)}</span>
+          </span>
+          <RingPercentLabel />
+        </span>
+        <BarVisual />
+      </ContextDisplayTrigger>
+      <ContextDisplayContent side={side} hint={hint} />
+    </ContextDisplayRoot>
+  );
+}
+
 const ContextDisplay = {
   Root: ContextDisplayRoot,
   Trigger: ContextDisplayTrigger,
   Content: ContextDisplayContent,
   Ring: ContextDisplayRing,
+  Meter: ContextDisplayMeter,
   RingVisual,
+  BarVisual,
   RingPercentLabel,
 };
 
@@ -210,12 +270,17 @@ function ContextRingButton({
   side = "top",
   size,
   stroke,
+  variant = "ring",
+  label,
 }: {
   className?: string | undefined;
   showLabel?: boolean | undefined;
   side?: "top" | "bottom" | "left" | "right" | undefined;
   size?: number | undefined;
   stroke?: number | undefined;
+  /** `meter` is the slim preset for a narrow column; the inspector is the same. */
+  variant?: "ring" | "meter" | undefined;
+  label?: string | undefined;
 }) {
   const { actions } = useLaserStable();
   const { contextUsage, running, compacting, model } = useSessionMeta();
@@ -223,20 +288,27 @@ function ContextRingButton({
   if (!contextUsage) return null;
   const idle = !running && !compacting && contextUsage.percent !== null;
   const remaining = contextUsage.tokens === null ? null : Math.max(0, contextUsage.contextWindow - contextUsage.tokens);
+  const shared = {
+    window: contextUsage.contextWindow,
+    tokens: contextUsage.tokens,
+    percent: contextUsage.percent,
+    side,
+    hint: "Open context details",
+    onClick: () => setOpen(true),
+    className: cn("cursor-pointer", compacting && "motion-safe:animate-attention", className),
+  };
   return (
     <>
-      <ContextDisplayRing
-        window={contextUsage.contextWindow}
-        tokens={contextUsage.tokens}
-        percent={contextUsage.percent}
-        showLabel={showLabel}
-        side={side}
-        {...(size !== undefined ? { size } : {})}
-        {...(stroke !== undefined ? { stroke } : {})}
-        hint="Open context details"
-        onClick={() => setOpen(true)}
-        className={cn("cursor-pointer", compacting && "motion-safe:animate-attention", className)}
-      />
+      {variant === "meter" ? (
+        <ContextDisplayMeter {...shared} {...(label !== undefined ? { label } : {})} />
+      ) : (
+        <ContextDisplayRing
+          {...shared}
+          showLabel={showLabel}
+          {...(size !== undefined ? { size } : {})}
+          {...(stroke !== undefined ? { stroke } : {})}
+        />
+      )}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-xl">
           <DialogHeader className="gap-3">
@@ -343,4 +415,4 @@ function ContextGuidance({ percent }: { percent: number | null }) {
   );
 }
 
-export { ContextDisplay, ContextDisplayRoot, ContextDisplayTrigger, ContextDisplayContent, ContextDisplayRing, ContextRingButton };
+export { ContextDisplay, ContextDisplayRoot, ContextDisplayTrigger, ContextDisplayContent, ContextDisplayRing, ContextDisplayMeter, ContextRingButton };

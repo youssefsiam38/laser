@@ -3,6 +3,9 @@ import type { ProjectChanges, TelemetryContext, TelemetryHistory, TelemetrySpend
 
 import {
   autoCompactText,
+  autoCompactThresholdUnknownText,
+  noApiCostText,
+  pathDisplay,
   compositionMissingText,
   contextHeader,
   contextLiveOnlyText,
@@ -60,6 +63,45 @@ describe("telemetry format", () => {
     };
     expect(contextHeader(context)).toBe("12%");
     expect(autoCompactText(context.autoCompact)).toBe("Auto-compact on · 160k");
+  });
+
+  it("never prints an unreported auto-compact threshold as zero", () => {
+    const unknown = `Auto-compact on · ${autoCompactThresholdUnknownText()}`;
+    expect(autoCompactText({ enabled: true, state: "idle" })).toBe(unknown);
+    expect(autoCompactText({ enabled: true, thresholdTokens: 0, state: "idle" })).toBe(unknown);
+    expect(autoCompactText({ enabled: true, thresholdTokens: 160_000, state: "idle" })).toBe("Auto-compact on · 160k");
+    expect(autoCompactText({ enabled: false, state: "off" })).toBe("Auto-compact off");
+    expect(autoCompactText({ enabled: true, state: "compacting" })).toBe("Compacting");
+  });
+
+  it("treats a settled zero API cost as no API cost", () => {
+    const zero: TelemetrySpend = {
+      billing: "api",
+      api: {
+        totals: { input: 40, output: 48, cacheRead: 0, cacheWrite: 0, total: 88, cost: 0, turns: 6 },
+        byModel: [{ model: "stub/stub-1", input: 40, output: 48, cost: 0 }],
+        series: [0, 0],
+      },
+    };
+    expect(hasApiCost(zero)).toBe(false);
+    expect(spendHeader(zero)).toBe("None");
+    expect(spendHeader({ ...zero, billing: "mixed" })).toBe("Account");
+    expect(noApiCostText(zero)).toBe("No API cost");
+    expect(noApiCostText({ ...zero, billing: "mixed" })).toBe("No API cost — account billed");
+  });
+
+  it("truncates the middle of a path and never its name", () => {
+    expect(pathDisplay("packages/ui/src/components/telemetry/files-section.tsx")).toEqual({
+      dir: "pack…lemetry/",
+      name: "files-section.tsx",
+    });
+    expect(pathDisplay("src/a.ts")).toEqual({ dir: "src/", name: "a.ts" });
+    expect(pathDisplay("README.md")).toEqual({ dir: "", name: "README.md" });
+    // A name that fills the budget on its own keeps its own middle cut.
+    const long = pathDisplay("a/b/c/an-extremely-long-file-name-that-fills-the-row.tsx");
+    expect(long.dir).toBe("…/");
+    expect(long.name).toContain("…");
+    expect(long.name.endsWith(".tsx")).toBe(true);
   });
 
   it("shows one spend header for no API cost", () => {

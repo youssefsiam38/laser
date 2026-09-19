@@ -9,7 +9,7 @@ import { useShell } from "@/components/shell/shell-context.js";
 import { historyRows } from "@/components/shell/model.js";
 
 import { count, historyHeader } from "./format.js";
-import { TelemetrySection } from "./section.js";
+import { Datum, TelemetrySection } from "./section.js";
 
 /**
  * History counts come from the authority. The tree is the loaded page, for
@@ -68,19 +68,19 @@ export function HistorySection({ history }: { history?: TelemetryHistory | undef
         ) : null
       }
     >
-      <dl className="mb-3 grid grid-cols-2 gap-2 px-4" data-slot="telemetry-history-counts">
-        <Count label="Prompts" value={history ? count(history.prompts) : "—"} />
-        <Count
-          label="Records"
+      <dl className="mb-3 flex flex-col gap-1 px-3" data-slot="telemetry-history-counts">
+        <Datum label="Prompts" value={history ? count(history.prompts) : "—"} />
+        <Datum
+          slot="telemetry-held-records"
+          label={history && recordsHeld < history.records ? "Records (this client)" : "Records"}
           value={historyHeader(history, recordsHeld, rows.length)}
-          note={history && recordsHeld < history.records ? "this client" : undefined}
         />
-        <Count label="Compactions" value={history ? count(history.compactions) : "—"} />
-        <Count label="Branches" value={history ? count(history.branches) : "—"} />
+        <Datum label="Compactions" value={history ? count(history.compactions) : "—"} />
+        <Datum label="Branches" value={history ? count(history.branches) : "—"} />
       </dl>
-      {partial && !history ? <p className="mb-3 px-4 text-xs leading-4 text-ink-2">{count(rows.length)} loaded</p> : null}
+      {partial && !history ? <p className="mb-3 px-3 text-xs leading-xs text-ink-2">{count(rows.length)} loaded</p> : null}
       {wholeTranscript.paused && (
-        <p data-slot="history-refresh-paused" className="mb-3 px-4 text-sm text-ink-2">
+        <p data-slot="history-refresh-paused" className="mb-3 px-3 text-sm text-ink-2">
           {wholeTranscript.explanation}
         </p>
       )}
@@ -94,14 +94,3 @@ export function HistorySection({ history }: { history?: TelemetryHistory | undef
   );
 }
 
-function Count({ label, value, note }: { label: string; value: string; note?: string | undefined }) {
-  return (
-    <div className="rounded-lg bg-surface-2 px-2 py-1.5">
-      <dt className="text-xs leading-4 text-ink-3">{label}</dt>
-      <dd data-slot={label === "Records" ? "telemetry-held-records" : undefined} className="font-mono text-xs text-ink tnum">
-        {value}
-        {note ? <span className="ms-1 font-sans text-ink-3">{note}</span> : null}
-      </dd>
-    </div>
-  );
-}

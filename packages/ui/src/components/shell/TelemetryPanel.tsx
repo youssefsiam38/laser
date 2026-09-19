@@ -55,19 +55,19 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
       aria-label="Telemetry"
       className={cn("flex h-full min-h-0 flex-col bg-surface", variant === "panel" && "w-80 shrink-0 hairline-s")}
     >
-      <header className={cn("flex h-12 shrink-0 items-center gap-2 px-4 hairline-b", variant === "sheet" && "pe-12")}>
-        <span className="relative flex size-7 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-live">
+      <header className={cn("flex h-11 shrink-0 items-center gap-2 px-3 hairline-b", variant === "sheet" && "pe-12")}>
+        <span className="relative flex size-4 shrink-0 items-center justify-center text-live">
           <Activity className="size-4" aria-hidden="true" />
           {meta.running ? (
             <span
               aria-label="Agent is working"
-              className="absolute -end-0.5 -top-0.5 size-2 rounded-full border border-surface bg-live motion-safe:animate-attention"
+              className="absolute -end-1 -top-1 size-2 rounded-full border border-surface bg-live motion-safe:animate-attention"
             />
           ) : null}
         </span>
         <h2 className="eyebrow">Telemetry</h2>
         {meta.session && (
-          <span className="truncate font-mono text-xs text-ink-3" title={meta.path}>
+          <span className="truncate typed text-ink-3" title={meta.path}>
             {meta.session.id.slice(0, 8)}
           </span>
         )}
