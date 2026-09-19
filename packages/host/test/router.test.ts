@@ -95,7 +95,7 @@ const WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-worksp
 const WORKSPACES = { beam: join(WORKSPACE_ROOT, "beam"), chat: join(WORKSPACE_ROOT, "chat") };
 
 /** A Router with fakes for everything but the piece under test. */
-function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; reserved?: string[]; agents?: boolean; features?: boolean; workspaces?: { beam: string; chat: string }; exclude?: string[]; now?: () => number; workerRequest?: (method: string, params: unknown) => Promise<unknown>; admission?: PressureAdmission; activation?: RuntimeActivationGate } = {}) {
+function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; reserved?: string[]; agents?: boolean; features?: boolean; workspaces?: { beam: string; chat: string }; exclude?: string[]; now?: () => number; workerRequest?: (method: string, params: unknown) => Promise<unknown>; liveCwd?: string; admission?: PressureAdmission; activation?: RuntimeActivationGate } = {}) {
   const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-`));
   const catalogRows = options.catalogRows ?? [];
   const open = options.open ?? { [CWD_A]: [PATH_A] };
@@ -116,7 +116,18 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   const pool = {
     prepare,
     cwds: () => Object.keys(open),
-    liveClients: () => [],
+    liveClients: () => options.liveCwd
+      ? [{
+          cwd: options.liveCwd,
+          client: {
+            request: async (method: string, params: unknown) => {
+              workerRequests.push({ cwd: options.liveCwd!, method, params });
+              if (options.workerRequest) return options.workerRequest(method, params);
+              return { ok: true };
+            },
+          },
+        }]
+      : [],
     hasReservedWorker: (cwd: string) => (options.reserved ?? Object.keys(open)).includes(cwd),
     openSessions: (cwd: string) => open[cwd] ?? [],
     cwdOfSession: (path: string) => bound.get(path),
@@ -1188,11 +1199,39 @@ describe("Router · workspace shape and isolation", () => {
     try {
       h.projects.add(CWD_A);
       const saved = await rpc(h.router, "pi/project/isolation/set", { cwd: CWD_A, isolation: "share" });
-      expect(saved).toMatchObject({ result: { project: { cwd: CWD_A, agentIsolation: "share" } } });
+      expect(saved).toMatchObject({ result: { ok: true } });
       expect(h.projects.agentIsolationOf(CWD_A)).toBe("share");
       expect(h.workerRequests).toHaveLength(0);
     } finally {
       h.cleanup();
+    }
+  });
+
+  it("forwards isolation/set to a live worker and does not persist when the worker rejects it", async () => {
+    const live = harness({ liveCwd: CWD_A });
+    try {
+      live.projects.add(CWD_A);
+      const saved = await rpc(live.router, "pi/project/isolation/set", { cwd: CWD_A, isolation: "share" });
+      expect(saved).toMatchObject({ result: { ok: true } });
+      expect(live.projects.agentIsolationOf(CWD_A)).toBe("share");
+      expect(live.workerRequests).toEqual([{ cwd: CWD_A, method: "pi/project/isolation/set", params: { cwd: CWD_A, isolation: "share" } }]);
+    } finally {
+      live.cleanup();
+    }
+
+    const failing = harness({
+      liveCwd: CWD_A,
+      workerRequest: async () => {
+        throw new Error("disconnected");
+      },
+    });
+    try {
+      failing.projects.add(CWD_A);
+      const failed = await rpc(failing.router, "pi/project/isolation/set", { cwd: CWD_A, isolation: "isolate" });
+      expect(failed).toMatchObject({ error: { message: expect.stringMatching(/live worker could not take/) } });
+      expect(failing.projects.agentIsolationOf(CWD_A)).toBe("decide");
+    } finally {
+      failing.cleanup();
     }
   });
 });

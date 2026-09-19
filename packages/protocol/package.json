@@ -25,6 +25,10 @@
     "./revision-node": {
       "types": "./dist/session-revision-node.d.ts",
       "import": "./dist/session-revision-node.js"
+    },
+    "./workspace-node": {
+      "types": "./dist/workspace-node.d.ts",
+      "import": "./dist/workspace-node.js"
     }
   },
   "files": ["dist"],

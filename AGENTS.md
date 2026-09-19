@@ -607,13 +607,14 @@ blockers, not advice.
   reports control failure without auto-resume. Late aborts cannot reach a
   successor; detached background commands are not implicitly killed.
 - The parent chooses isolation per child: `start_agent`'s `worktree` defaults
-  to true, and true means a worktree under `<project>/.worktrees/` on
-  `agents/<slug>` or a person-facing refusal (not a repository, no commit, a
-  path another agent owns) — and a refusal names both ways forward, git or
-  `worktree: false`. `false` runs the child in the parent's checkout with every
-  tool and nothing refused: the judgement is the parent's, and the child is told
-  in its role block that it is not isolated (D-156). A project with no git
-  accepts only `false`. The result always says where the child is working, and
+  to true, and true isolates when the workspace can (a worktree under the
+  common-dir parent's `.worktrees/` on `agents/<slug>`) and otherwise shares
+  **and says so**. The per-project default (Isolate agents · Share my checkout ·
+  Decide per agent) sits in front of `true`. Only `"strict"` refuses, still
+  naming both ways forward (git, or `worktree: false`). `false` runs the child
+  in the parent's checkout with every tool and nothing refused: the judgement
+  is the parent's, and the child is told in its role block that it is not
+  isolated (D-156). The result always says where the child is working, and
   carries a branch only when there is one.
 - A child's worktree belongs to its parent (D-157): reviewing, merging and
   removing it are the parent's, both agents are told so in their prompts, and

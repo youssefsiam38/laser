@@ -24,6 +24,8 @@ export * from "./method-policy.js";
 export * from "./environment-policy.js";
 export * from "./project-env.js";
 export * from "./workspace.js";
+// Node git runner lives behind `./workspace-node`, so the UI bundle never
+// reaches `node:child_process` through this barrel.
 export * from "./attention.js";
 export * from "./tasks.js";
 export * from "./pending.js";

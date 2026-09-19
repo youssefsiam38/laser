@@ -1,7 +1,7 @@
 /**
  * Child worktrees (D-140: "worktrees are not optional for subagents").
  *
- * Every child agent works in `<git toplevel>/.worktrees/<slug>` on branch
+ * Every child agent works in `<common-dir parent>/.worktrees/<slug>` on branch
  * `agents/<slug>`, checked out at the commit its parent is on, so two agents
  * never write into one checkout. The directory is excluded through
  * `<gitdir>/info/exclude` — never the person's `.gitignore`, which is theirs.
@@ -14,7 +14,7 @@ import { execFile, spawn } from "node:child_process";
 import { noteWorkerProcess } from "../process-registry.js";
 import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { PROJECT_DIR_NAME, WORKTREES_DIR_NAME, type WorktreeEnvironment, type WorktreeSetup, type WorkspaceShape } from "@lasercode/protocol";
+import { PROJECT_DIR_NAME, WORKTREES_DIR_NAME, worktreesHome, type WorktreeEnvironment, type WorktreeSetup, type WorkspaceShape } from "@lasercode/protocol";
 import { createWorkspaceResolver } from "../workspace.js";
 import { HarnessError } from "./errors.js";
 
@@ -187,7 +187,7 @@ export class WorktreeManager {
     const common = await gitQuiet(cwd, ["rev-parse", "--git-common-dir"]);
     if (!common.ok) return toplevel;
     const commonDir = resolve(cwd, common.stdout.trim());
-    return basename(commonDir) === ".git" ? dirname(commonDir) : toplevel;
+    return worktreesHome(commonDir, toplevel, { basename, dirname });
   }
 
   /**

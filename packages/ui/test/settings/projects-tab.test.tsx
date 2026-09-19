@@ -129,7 +129,7 @@ it("saves the per-project agent isolation default with token-only controls", asy
       return { status: { cwd: params.cwd, state: "not-configured", approved: false } };
     }
     if (method === "pi/project/isolation/set") {
-      return { project: { cwd: params.cwd, name: "API", addedAt: "2026-01-01T00:00:00.000Z", trust: "trusted", pinned: true, sessionCount: 2, agentIsolation: params.isolation } };
+      return { ok: true };
     }
     return {};
   });
@@ -140,6 +140,10 @@ it("saves the per-project agent isolation default with token-only controls", asy
   await act(async () => { await Promise.resolve(); });
   await click("Expand API project settings");
   expect(text()).toContain("Decide per agent");
+  expect(text()).toContain("Each new agent isolates when this project can");
+  expect(text()).not.toContain("start_agent");
+  expect(text()).not.toContain("worktree strict");
+  expect(text()).not.toContain("The caller's worktree");
   await click("Share my checkout");
   expect(mocks.request).toHaveBeenCalledWith("pi/project/isolation/set", { cwd: "/workspace/api", isolation: "share" });
   expect(text()).toContain("New agents share this checkout");

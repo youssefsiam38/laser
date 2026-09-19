@@ -41,7 +41,7 @@ describe("roles and records", () => {
     expect(rootRecord("beam")).toEqual({ agentName: "beam", kind: "beam" });
   });
   it("parses a record strictly", () => {
-    expect(parseSessionAgentRecord({ agentName: "worker", kind: "child", subagentName: "w", parentPath: "/p", runId: "run_1", worktree: { path: "/w", branch: "agents/w", baseCommit: "abc" }, junk: 1 })).toEqual({ agentName: "worker", kind: "child", subagentName: "w", parentPath: "/p", runId: "run_1", worktree: { path: "/w", branch: "agents/w", baseCommit: "abc" } });
+    expect(parseSessionAgentRecord({ agentName: "worker", kind: "child", subagentName: "w", parentPath: "/p", runId: "run_1", worktree: { path: "/w", branch: "agents/w", baseCommit: "abc" }, isolation: { mode: "worktree", shape: "repo", reason: "isolated" }, junk: 1 })).toEqual({ agentName: "worker", kind: "child", subagentName: "w", parentPath: "/p", runId: "run_1", worktree: { path: "/w", branch: "agents/w", baseCommit: "abc" }, isolation: { mode: "worktree", shape: "repo", reason: "isolated" } });
     expect(parseSessionAgentRecord({ agentName: "x", kind: "weird" })).toBeUndefined();
     expect(parseSessionAgentRecord({ kind: "root" })).toBeUndefined();
     expect(parseSessionAgentRecord("nope")).toBeUndefined();

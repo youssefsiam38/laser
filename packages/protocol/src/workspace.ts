@@ -51,30 +51,55 @@ export interface WorkspaceRepository {
   name: string;
   /** True when this repository's working tree is the directory we resolved. */
   projectRoot: boolean;
+  /** Absolute git common dir (`rev-parse --git-common-dir`). */
+  gitDir: string;
+  /**
+   * `rev-parse --is-inside-work-tree`. False for a bare repository, which the
+   * checkpoint engine must never write refs into.
+   */
+  insideWorkTree: boolean;
 }
 
 export interface WorkspaceShape {
   cwd: string;
   kind: WorkspaceShapeKind;
   repositories: WorkspaceRepository[];
+  /** Whether `cwd` has a commit (`rev-parse --verify HEAD`). */
+  hasCommit: boolean;
+  /**
+   * True when discovery stopped at {@link WORKSPACE_SCAN_MAX_REPOS} with
+   * unvisited directories remaining, so the repository count is a floor.
+   */
+  truncated: boolean;
+}
+
+/**
+ * A work tree the checkpoint engine may write refs into.
+ *
+ * `path` is the work-tree root (`rev-parse --show-toplevel`). `gitDir` is the
+ * absolute common dir (`rev-parse --git-common-dir`).
+ */
+export interface WorkspaceWorkTree {
+  path: string;
+  gitDir: string;
 }
 
 /**
  * Child-repository discovery depth. A workspace of repos is typically one
  * level down; 3 covers org/team/repo layouts without walking a home directory.
+ *
+ * The harness (isolation) and the checkpoint engine (which repositories a
+ * session belongs to) share this bound: disagreeing depths would checkpoint a
+ * different set than `start_agent` described.
  */
 export const WORKSPACE_SCAN_MAX_DEPTH = 3;
 /**
  * A workspace of many repositories is real (one fixture on the author's
  * machine has 41). Unbounded discovery is not: stop after this many.
+ *
+ * Shared with the checkpoint engine, same reason as {@link WORKSPACE_SCAN_MAX_DEPTH}.
  */
 export const WORKSPACE_SCAN_MAX_REPOS = 64;
-/**
- * Parent-directory walk when detecting a repository nested inside another.
- * Eight steps is enough to leave a typical working tree and not enough to
- * crawl from a deep path to `/`.
- */
-export const WORKSPACE_PARENT_WALK_MAX = 8;
 
 /** Directory names that are never repositories and never worth opening. */
 export const WORKSPACE_SCAN_SKIP_NAMES: ReadonlySet<string> = new Set([
@@ -124,8 +149,28 @@ async function gitToplevel(io: WorkspaceIO, cwd: string): Promise<string | undef
   return top ? io.resolve(top) : undefined;
 }
 
-function repoOf(io: WorkspaceIO, root: string, cwd: string): WorkspaceRepository {
-  return { root, name: io.basename(root) || root, projectRoot: samePath(io, root, cwd) };
+async function gitCommonDir(io: WorkspaceIO, cwd: string): Promise<string | undefined> {
+  const common = await gitText(io, cwd, ["rev-parse", "--git-common-dir"]);
+  return common ? io.resolve(cwd, common) : undefined;
+}
+
+async function isInsideWorkTree(io: WorkspaceIO, cwd: string): Promise<boolean> {
+  return (await gitText(io, cwd, ["rev-parse", "--is-inside-work-tree"])) === "true";
+}
+
+async function hasHead(io: WorkspaceIO, cwd: string): Promise<boolean> {
+  return (await gitText(io, cwd, ["rev-parse", "--verify", "HEAD"])) !== undefined;
+}
+
+async function describeRepo(io: WorkspaceIO, root: string, cwd: string): Promise<WorkspaceRepository> {
+  const gitDir = (await gitCommonDir(io, root)) ?? io.resolve(root, ".git");
+  return {
+    root,
+    name: io.basename(root) || root,
+    projectRoot: samePath(io, root, cwd),
+    gitDir,
+    insideWorkTree: await isInsideWorkTree(io, root),
+  };
 }
 
 function skipDir(name: string): boolean {
@@ -135,18 +180,26 @@ function skipDir(name: string): boolean {
 /**
  * Bounded walk for nested `.git` directories. `rev-parse` runs only where a
  * `.git` entry exists, so a subdirectory of a monorepo is not a git spawn.
+ * A directory already identified as a repository is not descended into:
+ * vendored copies inside it must not inflate the count or burn the cap.
  */
-async function findGitDirs(io: WorkspaceIO, root: string, maxDepth: number, maxRepos: number): Promise<string[]> {
+async function findGitDirs(
+  io: WorkspaceIO,
+  root: string,
+  maxDepth: number,
+  maxRepos: number,
+): Promise<{ roots: string[]; truncated: boolean }> {
   const found: string[] = [];
   const queue: Array<{ path: string; depth: number }> = [{ path: root, depth: 0 }];
-  while (queue.length > 0 && found.length < maxRepos) {
+  while (queue.length > 0) {
+    if (found.length >= maxRepos) return { roots: found, truncated: true };
     const next = queue.shift();
     if (!next) break;
     const { path, depth } = next;
     if (depth > 0 && (await io.exists(io.join(path, ".git")))) {
       const top = await gitToplevel(io, path);
       if (top && !found.some((existing) => samePath(io, existing, top))) found.push(top);
-      if (found.length >= maxRepos) break;
+      continue;
     }
     if (depth >= maxDepth) continue;
     const entries = await io.list(path);
@@ -155,19 +208,7 @@ async function findGitDirs(io: WorkspaceIO, root: string, maxDepth: number, maxR
       queue.push({ path: entry.path, depth: depth + 1 });
     }
   }
-  return found;
-}
-
-async function parentIsOtherRepo(io: WorkspaceIO, toplevel: string): Promise<boolean> {
-  let dir = io.dirname(toplevel);
-  for (let i = 0; i < WORKSPACE_PARENT_WALK_MAX; i++) {
-    const parent = io.dirname(dir);
-    const top = await gitToplevel(io, dir);
-    if (top && !samePath(io, top, toplevel)) return true;
-    if (samePath(io, dir, parent)) break;
-    dir = parent;
-  }
-  return false;
+  return { roots: found, truncated: false };
 }
 
 async function isBare(io: WorkspaceIO, cwd: string): Promise<boolean> {
@@ -179,60 +220,84 @@ async function isSubmodule(io: WorkspaceIO, cwd: string): Promise<boolean> {
   return (await gitText(io, cwd, ["rev-parse", "--show-superproject-working-tree"])) !== undefined;
 }
 
+function emptyShape(cwd: string, kind: WorkspaceShapeKind, repositories: WorkspaceRepository[], extra?: { hasCommit?: boolean; truncated?: boolean }): WorkspaceShape {
+  return {
+    cwd,
+    kind,
+    repositories,
+    hasCommit: extra?.hasCommit ?? false,
+    truncated: extra?.truncated ?? false,
+  };
+}
+
 /**
  * Resolve the workspace shape of `cwd`. Discovery is depth-limited, skips
  * `node_modules`, `.git`, other dot-directories and obvious build output, and
- * stops after {@link WORKSPACE_SCAN_MAX_REPOS} repositories.
+ * stops after {@link WORKSPACE_SCAN_MAX_REPOS} repositories. Parent directories
+ * are not walked: an ancestor repository (a dotfiles-style `$HOME`, a linked
+ * worktree's main checkout) must not relabel an ordinary project.
  */
 export async function resolveWorkspaceShape(cwd: string, io: WorkspaceIO): Promise<WorkspaceShape> {
   const resolved = io.resolve(cwd);
   const toplevel = await gitToplevel(io, resolved);
   if (toplevel) {
-    const nestedChildren = (await findGitDirs(io, resolved, WORKSPACE_SCAN_MAX_DEPTH, WORKSPACE_SCAN_MAX_REPOS)).filter(
-      (root) => !samePath(io, root, toplevel),
-    );
-    const nestedParent = await parentIsOtherRepo(io, toplevel);
-    const gitmodules = await io.exists(io.join(toplevel, ".gitmodules"));
+    const nested = await findGitDirs(io, resolved, WORKSPACE_SCAN_MAX_DEPTH, WORKSPACE_SCAN_MAX_REPOS);
+    const nestedChildren = nested.roots.filter((root) => !samePath(io, root, toplevel));
     const submodule = await isSubmodule(io, resolved);
     const bare = await isBare(io, resolved);
-    const repositories = [repoOf(io, toplevel, resolved)];
+    const repositories = [await describeRepo(io, toplevel, resolved)];
     for (const root of nestedChildren) {
-      if (!repositories.some((row) => samePath(io, row.root, root))) repositories.push(repoOf(io, root, resolved));
+      if (!repositories.some((row) => samePath(io, row.root, root))) {
+        repositories.push(await describeRepo(io, root, resolved));
+      }
     }
     let kind: WorkspaceShapeKind = "repo";
-    if (bare || submodule || gitmodules) kind = "bare-or-submodule";
-    else if (nestedChildren.length > 0 || nestedParent) kind = "nested-repo";
-    return { cwd: resolved, kind, repositories };
+    if (bare || submodule) kind = "bare-or-submodule";
+    else if (nestedChildren.length > 0) kind = "nested-repo";
+    return {
+      cwd: resolved,
+      kind,
+      repositories,
+      hasCommit: await hasHead(io, resolved),
+      truncated: nested.truncated,
+    };
   }
 
   if (await isBare(io, resolved)) {
-    const common = await gitText(io, resolved, ["rev-parse", "--git-common-dir"]);
-    const root = common ? io.resolve(resolved, common) : resolved;
-    // No working tree, so this directory is not a project root we can isolate.
-    return {
-      cwd: resolved,
-      kind: "bare-or-submodule",
-      repositories: [{ root, name: io.basename(root) || root, projectRoot: false }],
-    };
+    const common = await gitCommonDir(io, resolved);
+    const root = common ?? resolved;
+    return emptyShape(resolved, "bare-or-submodule", [
+      {
+        root,
+        name: io.basename(root) || root,
+        projectRoot: false,
+        gitDir: root,
+        insideWorkTree: false,
+      },
+    ], { hasCommit: await hasHead(io, resolved) });
   }
 
   const children = await findGitDirs(io, resolved, WORKSPACE_SCAN_MAX_DEPTH, WORKSPACE_SCAN_MAX_REPOS);
-  if (children.length > 0) {
+  if (children.roots.length > 0) {
     return {
       cwd: resolved,
       kind: "workspace-of-repos",
-      repositories: children.map((root) => repoOf(io, root, resolved)),
+      repositories: await Promise.all(children.roots.map((root) => describeRepo(io, root, resolved))),
+      hasCommit: false,
+      truncated: children.truncated,
     };
   }
-  return { cwd: resolved, kind: "no-git", repositories: [] };
+  return emptyShape(resolved, "no-git", []);
 }
 
 /**
  * Results are cached per resolved cwd and dropped only on an explicit rescan.
- * There is no filesystem watcher (not in this leap).
+ * In-flight resolves share one promise so a parent starting several children
+ * does not walk the tree once per child. There is no filesystem watcher
+ * (not in this leap).
  */
 export class WorkspaceResolver {
-  private readonly cache = new Map<string, WorkspaceShape>();
+  private readonly cache = new Map<string, Promise<WorkspaceShape>>();
 
   constructor(private readonly io: WorkspaceIO) {}
 
@@ -241,67 +306,82 @@ export class WorkspaceResolver {
     if (options?.rescan) this.cache.delete(key);
     const cached = this.cache.get(key);
     if (cached) return cached;
-    const shape = await resolveWorkspaceShape(key, this.io);
-    this.cache.set(key, shape);
-    return shape;
+    const pending = resolveWorkspaceShape(key, this.io);
+    this.cache.set(key, pending);
+    try {
+      return await pending;
+    } catch (error) {
+      if (this.cache.get(key) === pending) this.cache.delete(key);
+      throw error;
+    }
   }
 }
 
 /**
  * True when this workspace can give a child its own git worktree. A working
- * tree we can attach one to counts, including a nested repository and a
- * repository that happens to list submodules. A workspace of many repositories,
- * a directory with no git, and a bare repository cannot.
+ * tree with a commit counts, including a nested repository. A workspace of
+ * many repositories, a directory with no git, a repository with no commits,
+ * and a bare repository cannot. A submodule with a working tree and a commit
+ * still can — the harness isolates from its own common dir.
+ *
+ * Listing `.gitmodules` does not change this: a superproject is an ordinary
+ * repository as far as isolation is concerned.
  */
 export function workspaceCanIsolate(shape: WorkspaceShape): boolean {
   if (shape.kind === "no-git" || shape.kind === "workspace-of-repos") return false;
+  if (!shape.hasCommit) return false;
   if (shape.kind === "bare-or-submodule") {
-    return shape.repositories.some((row) => row.projectRoot);
+    return shape.repositories.some((row) => row.projectRoot && row.insideWorkTree);
   }
   return true;
 }
 
 /**
- * Isolation precedence (L1):
- *
- * 1. `worktree: false` always shares. The project default cannot override an
- *    explicit share (D-156).
- * 2. `worktree: "strict"` always demands isolation and refuses without it.
- *    The project default cannot override that.
- * 3. `worktree: true` / absent follows the project default:
- *    - `"isolate"` → same as `"strict"` (demand isolation; refuse without it)
- *    - `"share"` → share the checkout
- *    - `"decide"` (default) → isolate if {@link workspaceCanIsolate}, else share
+ * The checkout `.worktrees/` belongs in: the parent of `--git-common-dir`
+ * when that dir is named `.git`, otherwise the git toplevel. A linked
+ * worktree's children land beside siblings under the main checkout, never
+ * nested inside the linked worktree.
  */
-export function isolationDemandsWorktree(
-  worktree: WorktreeArg,
-  projectDefault: AgentIsolationDefault,
-): boolean {
-  if (worktree === false) return false;
-  if (worktree === "strict") return true;
-  return projectDefault === "isolate";
+export function worktreesHome(
+  gitCommonDir: string,
+  toplevel: string,
+  pathIo: Pick<WorkspaceIO, "basename" | "dirname">,
+): string {
+  return pathIo.basename(gitCommonDir) === ".git" ? pathIo.dirname(gitCommonDir) : toplevel;
 }
 
-export function isolationPrefersShare(
-  worktree: WorktreeArg,
-  projectDefault: AgentIsolationDefault,
-): boolean {
-  return worktree === true && projectDefault === "share";
+/**
+ * Repositories the checkpoint engine may write refs into.
+ *
+ * Same discovery bounds as the harness ({@link WORKSPACE_SCAN_MAX_DEPTH},
+ * {@link WORKSPACE_SCAN_MAX_REPOS}). Bare repositories are excluded: they
+ * have no work tree (`insideWorkTree` is false).
+ *
+ * The worker's `sessionRepositories` and the host's checkpoint cleanup should
+ * become `return listCheckpointRepositories(await resolver.resolve(cwd))`.
+ */
+export function listCheckpointRepositories(shape: WorkspaceShape): WorkspaceWorkTree[] {
+  return shape.repositories
+    .filter((row) => row.insideWorkTree)
+    .map((row) => ({ path: row.root, gitDir: row.gitDir }));
 }
 
-export function decideIsolation(input: {
-  worktree: WorktreeArg;
-  projectDefault: AgentIsolationDefault;
-  shape: WorkspaceShape;
-}): { isolate: boolean; demand: boolean } {
-  if (input.worktree === false) return { isolate: false, demand: false };
-  if (isolationPrefersShare(input.worktree, input.projectDefault)) return { isolate: false, demand: false };
-  const demand = isolationDemandsWorktree(input.worktree, input.projectDefault);
-  if (demand) return { isolate: true, demand: true };
-  return { isolate: workspaceCanIsolate(input.shape), demand: false };
+function repositoryCountLabel(shape: WorkspaceShape): string {
+  if (shape.truncated) return `more than ${WORKSPACE_SCAN_MAX_REPOS}`;
+  return String(shape.repositories.length);
 }
 
-export function sharedCheckoutReason(input: {
+export type IsolationResolution =
+  | { kind: "worktree"; isolation: AgentIsolation }
+  | { kind: "shared"; isolation: AgentIsolation }
+  | { kind: "refused"; message: string };
+
+function isolatedWorktreeReason(shape: WorkspaceShape): string {
+  if (shape.kind === "nested-repo") return "This nested repository is isolated on its own.";
+  return "This agent works in its own worktree, isolated from your checkout.";
+}
+
+function sharedCheckoutReason(input: {
   worktree: WorktreeArg;
   projectDefault: AgentIsolationDefault;
   shape: WorkspaceShape;
@@ -316,51 +396,77 @@ export function sharedCheckoutReason(input: {
     case "no-git":
       return "No repository here, so this agent shares your checkout.";
     case "workspace-of-repos": {
-      const n = input.shape.repositories.length;
-      return `This workspace holds ${n} ${n === 1 ? "repository" : "repositories"}, so an agent cannot be isolated from all of them; sharing your checkout.`;
+      const n = repositoryCountLabel(input.shape);
+      const noun = n === "1" ? "repository" : "repositories";
+      return `This workspace holds ${n} ${noun}, so an agent cannot be isolated from all of them; sharing your checkout.`;
     }
     case "bare-or-submodule":
       return "This repository is a bare repository or a submodule, so this agent shares your checkout.";
     default:
+      if (!input.shape.hasCommit) {
+        return "This repository has no commits yet, so this agent shares your checkout.";
+      }
       return "This agent shares your checkout.";
   }
 }
 
-export function isolatedWorktreeReason(shape: WorkspaceShape): string {
-  if (shape.kind === "nested-repo") return "This nested repository is isolated on its own.";
-  return "This agent works in its own worktree, isolated from your checkout.";
-}
-
 /**
  * D-156 refusal: isolation was demanded and this workspace cannot give it.
- * Always names both ways forward (git, or `worktree: false`).
+ * Always names both ways forward (git, or `worktree: false`). Fires only for
+ * `"strict"` or a project default of `"isolate"` — never for default `true`.
  */
-export function strictIsolationRefusal(shape: WorkspaceShape): string {
+function strictIsolationRefusal(shape: WorkspaceShape): string {
   switch (shape.kind) {
     case "no-git":
       return "This project is not a git repository, so agents cannot get an isolated worktree. Either initialise git in the project, or start this agent with worktree false so it works in this checkout.";
     case "workspace-of-repos": {
-      const n = shape.repositories.length;
-      return `This workspace holds ${n} ${n === 1 ? "repository" : "repositories"}, so agents cannot get an isolated worktree. Either initialise git in the project, or start this agent with worktree false so it works in this checkout.`;
+      const n = repositoryCountLabel(shape);
+      const noun = n === "1" ? "repository" : "repositories";
+      return `This workspace holds ${n} ${noun}, so agents cannot get an isolated worktree. Either initialise git in the project, or start this agent with worktree false so it works in this checkout.`;
     }
     case "bare-or-submodule":
       return "This project cannot give an isolated worktree (it is a bare repository or a submodule). Either initialise git in the project, or start this agent with worktree false so it works in this checkout.";
     default:
+      if (!shape.hasCommit) {
+        return "This project has no commits yet, so agents cannot get an isolated worktree. Either make a first commit, or start this agent with worktree false so it works in this checkout.";
+      }
       return "This project cannot give an isolated worktree. Either initialise git in the project, or start this agent with worktree false so it works in this checkout.";
   }
 }
 
-export function describeIsolation(input: {
-  isolate: boolean;
+/**
+ * Isolation precedence (L1):
+ *
+ * 1. `worktree: false` always shares. The project default cannot override an
+ *    explicit share (D-156).
+ * 2. `worktree: "strict"` always demands isolation and refuses without it.
+ *    The project default cannot override that.
+ * 3. `worktree: true` / absent follows the project default:
+ *    - `"isolate"` → same as `"strict"` (demand isolation; refuse without it)
+ *    - `"share"` → share the checkout
+ *    - `"decide"` (default) → isolate if {@link workspaceCanIsolate}, else share
+ */
+export function resolveIsolation(input: {
   worktree: WorktreeArg;
   projectDefault: AgentIsolationDefault;
   shape: WorkspaceShape;
-}): AgentIsolation {
-  return {
-    mode: input.isolate ? "worktree" : "shared",
+}): IsolationResolution {
+  const isolationOf = (isolate: boolean): AgentIsolation => ({
+    mode: isolate ? "worktree" : "shared",
     shape: input.shape.kind,
-    reason: input.isolate
+    reason: isolate
       ? isolatedWorktreeReason(input.shape)
       : sharedCheckoutReason(input),
-  };
+  });
+
+  if (input.worktree === false) return { kind: "shared", isolation: isolationOf(false) };
+  if (input.worktree === true && input.projectDefault === "share") {
+    return { kind: "shared", isolation: isolationOf(false) };
+  }
+
+  const demand = input.worktree === "strict" || input.projectDefault === "isolate";
+  const can = workspaceCanIsolate(input.shape);
+  if (demand && !can) return { kind: "refused", message: strictIsolationRefusal(input.shape) };
+  if (can) return { kind: "worktree", isolation: isolationOf(true) };
+  return { kind: "shared", isolation: isolationOf(false) };
 }

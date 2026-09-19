@@ -1052,7 +1052,7 @@ export class WorkerServer {
       case "pi/project/isolation/set": {
         this.assertCwd(req.params.cwd);
         this.harness.setIsolationDefault(req.params.isolation);
-        return { project: { cwd: this.options.cwd, name: "", addedAt: "", trust: "not_required", pinned: false, sessionCount: 0, agentIsolation: req.params.isolation } } satisfies Result<"pi/project/isolation/set">;
+        return { ok: true } satisfies Result<"pi/project/isolation/set">;
       }
       case "pi/project/git/hosts":
         this.assertCwd(req.params.cwd);

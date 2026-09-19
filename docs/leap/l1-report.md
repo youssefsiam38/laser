@@ -88,3 +88,23 @@ No browser acceptance, Playwright, or `scripts/browser-check` was run.
 - Filesystem watchers to invalidate the shape cache (not in this leap; rescan is explicit).
 - Viewer empty states for the five shapes (L5 overlay / telemetry).
 - Changing `core-instructions.md` (see decisions).
+
+## Corrections
+
+Independent review rejected the first merge. This section is the fix.
+
+**Seam rewire (B3).** The two `TODO(M18-T1)` files are owned by another worker and were not edited. They should become:
+
+```ts
+return listCheckpointRepositories(await resolver.resolve(cwd));
+```
+
+`listCheckpointRepositories(shape: WorkspaceShape): WorkspaceWorkTree[]` where `WorkspaceWorkTree` is `{ path: string; gitDir: string }` (`path` = work-tree root, `gitDir` = absolute `--git-common-dir`). Bare repositories are excluded (`insideWorkTree === false`). Depth/cap policy, shared by the harness and the checkpoint engine: `WORKSPACE_SCAN_MAX_DEPTH = 3`, `WORKSPACE_SCAN_MAX_REPOS = 64`.
+
+**Resolver.** `WorkspaceShape.hasCommit` from `rev-parse --verify HEAD`; `truncated` when the cap stops the walk; `WorkspaceRepository.gitDir` + `insideWorkTree`. Default `start_agent` on an empty `git init` shares with "This repository has no commits yet, so this agent shares your checkout."; only `"strict"` / Isolate agents refuses with the first-commit wording. A superproject that merely lists `.gitmodules` is `repo`, not `bare-or-submodule`. Parent directories are not walked. Found repositories are not descended into. The cache stores the in-flight promise. Node IO lives once at `@lasercode/protocol/workspace-node`.
+
+**Harness.** One `resolveIsolation({ worktree, projectDefault, shape })` returning `{kind:"worktree"}|{kind:"shared"}|{kind:"refused"}`. `WorktreeProvider.shape` is required. A cached "cannot isolate" is re-resolved with `rescan` when isolation was asked for. Isolation is written on `SessionAgentRecord` and restored on attach (derived from `worktree` for old records). `pi/project/isolation/set` is `{ ok: true }`; the host forwards to a live worker and does not persist if that forward fails.
+
+**Worktrees.** Host and worker share `worktreesHome(gitCommonDir, toplevel, pathIo)` so a linked worktree's children are owned under the main checkout's `.worktrees/`.
+
+**Copy.** `AGENTS.md` harness bullet, `docs/agents.md` path and refusal notes, and Settings → Projects speak to a person. `Segmented` takes a real `disabled`.

@@ -195,7 +195,13 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true, isolationDefault
   let admitNewWork = true;
   let facts: WorktreeFacts = { exists: true, unmergedCommits: 0, uncommittedFiles: 0 };
   let root: string | undefined = "/repo";
-  let workspaceShape: WorkspaceShape = { cwd: projectCwd, kind: "repo", repositories: [{ root: projectCwd, name: "repo", projectRoot: true }] };
+  let workspaceShape: WorkspaceShape = {
+    cwd: projectCwd,
+    kind: "repo",
+    repositories: [{ root: projectCwd, name: "repo", projectRoot: true, gitDir: `${projectCwd}/.git`, insideWorkTree: true }],
+    hasCommit: true,
+    truncated: false,
+  };
   /** The worker's task index, as the harness reads it: commands by the session that ran them. */
   const tasks = new Map<string, IndexedTask[]>();
   const worktrees: WorktreeProvider & { created: CreateWorktreeInput[]; removed: string[]; removedWith: Array<{ root: string; path: string; branch?: string }> } = {
@@ -1847,7 +1853,7 @@ describe("AgentHarness", () => {
 
   it("shares the checkout in a no-git directory instead of failing, and strict still refuses", async () => {
     const root = world.openRoot("lead");
-    world.setWorkspaceShape({ cwd: "/repo", kind: "no-git", repositories: [] });
+    world.setWorkspaceShape({ cwd: "/repo", kind: "no-git", repositories: [], hasCommit: false, truncated: false });
     const shared = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "iso", task: "t" });
     expect(shared).toMatchObject({
       status: "running",
@@ -1868,7 +1874,9 @@ describe("AgentHarness", () => {
     world.setWorkspaceShape({
       cwd: "/repo",
       kind: "workspace-of-repos",
-      repositories: Array.from({ length: 41 }, (_, i) => ({ root: `/repo/r${i}`, name: `r${i}`, projectRoot: false })),
+      repositories: Array.from({ length: 41 }, (_, i) => ({ root: `/repo/r${i}`, name: `r${i}`, projectRoot: false, gitDir: `/repo/r${i}/.git`, insideWorkTree: true })),
+      hasCommit: false,
+      truncated: false,
     });
     const shared = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "many", task: "t" });
     expect(shared.isolation).toEqual({
@@ -1890,7 +1898,7 @@ describe("AgentHarness", () => {
 
     const isolateWorld = makeWorld("/repo", true, "isolate");
     isolateWorld.definitions.sync(snapshotWith([PARENT, WORKER, REVIEWER]));
-    isolateWorld.setWorkspaceShape({ cwd: "/repo", kind: "no-git", repositories: [] });
+    isolateWorld.setWorkspaceShape({ cwd: "/repo", kind: "no-git", repositories: [], hasCommit: false, truncated: false });
     const isolateRoot = isolateWorld.openRoot("lead");
     await expect(isolateRoot.handle.bridge.startAgent({ agentName: "worker", subagentName: "i", task: "t" })).rejects.toThrow(/not a git repository/);
     const forcedShare = await isolateRoot.handle.bridge.startAgent({ agentName: "worker", subagentName: "ok", task: "t", worktree: false });
@@ -1899,6 +1907,106 @@ describe("AgentHarness", () => {
     world.harness.setIsolationDefault("share");
     const after = await world.openRoot("lead").handle.bridge.startAgent({ agentName: "worker", subagentName: "later", task: "t" });
     expect(after.isolation?.mode).toBe("shared");
+  });
+
+  it("surfaces a create-time worktree refusal", async () => {
+    world.setRefuseWorktrees("A worktree already exists at /repo/.worktrees/x; another agent owns it. Choose another subagent_name for a new git worktree, or start this agent with worktree false so it works in this checkout.");
+    const root = world.openRoot("lead");
+    await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "iso", task: "t" })).rejects.toThrow(/another agent owns it/);
+    expect(world.worktrees.created).toHaveLength(0);
+  });
+
+  it("rescans when a cached shape cannot isolate and isolation was requested", async () => {
+    const calls: Array<boolean | undefined> = [];
+    world.worktrees.shape = async (_cwd, rescan) => {
+      calls.push(rescan);
+      if (calls.length === 1) {
+        return { cwd: "/repo", kind: "no-git", repositories: [], hasCommit: false, truncated: false };
+      }
+      return {
+        cwd: "/repo",
+        kind: "repo",
+        repositories: [{ root: "/repo", name: "repo", projectRoot: true, gitDir: "/repo/.git", insideWorkTree: true }],
+        hasCommit: true,
+        truncated: false,
+      };
+    };
+    const root = world.openRoot("lead");
+    const result = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "iso", task: "t" });
+    expect(calls).toEqual([undefined, true]);
+    expect(result.isolation?.mode).toBe("worktree");
+    expect(world.worktrees.created).toHaveLength(1);
+  });
+
+  it("carries isolation onto a follow-up run after reload attach", () => {
+    const isolation = {
+      mode: "shared" as const,
+      shape: "no-git" as const,
+      reason: "No repository here, so this agent shares your checkout.",
+    };
+    const def = world.definitions.definition("worker")!;
+    const handle = world.harness.prepareSession({
+      role: {
+        agentName: "worker",
+        kind: "child",
+        subagentName: "Review",
+        depth: 1,
+        isolated: false,
+        parent: { sessionPath: "/sessions/root.jsonl", sessionId: "root-1", agentName: "lead" },
+        runId: "run_old",
+      },
+      definition: def,
+      record: {
+        agentName: "worker",
+        kind: "child",
+        subagentName: "Review",
+        parentPath: "/sessions/root.jsonl",
+        parentSessionId: "root-1",
+        runId: "run_old",
+        isolation,
+      },
+      projectCwd: "/repo",
+    });
+    const driver = new FakeDriver(stateFor("/sessions/reloaded.jsonl", "child-reloaded", "/repo"));
+    world.drivers.set("/sessions/reloaded.jsonl", driver);
+    handle.attach("/sessions/reloaded.jsonl", "child-reloaded");
+    const follow = world.harness.startUserRun("/sessions/reloaded.jsonl", "continue");
+    expect(follow?.isolation).toEqual(isolation);
+  });
+
+  it("derives isolation from a persisted worktree when the record has none", () => {
+    const def = world.definitions.definition("worker")!;
+    const handle = world.harness.prepareSession({
+      role: {
+        agentName: "worker",
+        kind: "child",
+        subagentName: "Review",
+        depth: 1,
+        isolated: true,
+        parent: { sessionPath: "/sessions/root.jsonl", sessionId: "root-1", agentName: "lead" },
+        runId: "run_old",
+      },
+      definition: def,
+      record: {
+        agentName: "worker",
+        kind: "child",
+        subagentName: "Review",
+        parentPath: "/sessions/root.jsonl",
+        parentSessionId: "root-1",
+        runId: "run_old",
+        worktree: { path: "/repo/.worktrees/review", branch: "agents/review", baseCommit: "abc" },
+      },
+      projectCwd: "/repo",
+    });
+    const driver = new FakeDriver(stateFor("/sessions/reloaded-wt.jsonl", "child-wt", "/repo/.worktrees/review"));
+    world.drivers.set("/sessions/reloaded-wt.jsonl", driver);
+    handle.attach("/sessions/reloaded-wt.jsonl", "child-wt");
+    const follow = world.harness.startUserRun("/sessions/reloaded-wt.jsonl", "continue");
+    expect(follow?.isolation).toEqual({
+      mode: "worktree",
+      shape: "repo",
+      reason: "This agent works in its own worktree, isolated from your checkout.",
+    });
   });
 
   it("removes nothing when a child with no worktree fails to open, ends, or has its session deleted", async () => {

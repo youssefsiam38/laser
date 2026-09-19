@@ -215,6 +215,14 @@ describe("WorkerServer", () => {
       expect(drivers).toBe(0);
     } finally { rmSync(cwd, { recursive: true, force: true }); }
   });
+  it("acks isolation/set and leaves workspace to the host", async () => {
+    const h = harness();
+    const set = await h.call(1, "pi/project/isolation/set", { cwd: "/tmp/fake", isolation: "share" });
+    expect(set).toMatchObject({ result: { ok: true } });
+    const workspace = await h.call(2, "pi/project/workspace", { cwd: "/tmp/fake" });
+    expect(workspace).toMatchObject({ error: { message: expect.stringMatching(/answered by the host/) } });
+  });
+
   it("applies a saved project Bash pre-command to the next call in an already-open parent session", async () => {
     const h = harness();
     await h.call(1, "session/new", { cwd: "/tmp/fake" });

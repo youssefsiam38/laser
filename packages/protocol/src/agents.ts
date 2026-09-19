@@ -537,6 +537,11 @@ export interface SessionAgentRecord {
   runId?: string;
   /** Absent when the parent started this child without a worktree of its own. */
   worktree?: AgentWorktree;
+  /**
+   * Isolated worktree or shared checkout, and why. Optional so records written
+   * before L1 stay readable; a missing field is derived from `worktree` on attach.
+   */
+  isolation?: AgentIsolation;
 }
 
 /** The custom entry type the worker writes `SessionAgentRecord` under. */

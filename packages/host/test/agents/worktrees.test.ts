@@ -115,6 +115,31 @@ describe("removeRunWorktree", () => {
     expect(existsSync(path)).toBe(false);
   });
 
+  it("reads and removes a child of a project opened as a linked worktree", async () => {
+    const base = mkdtempSync(join(tmpdir(), "host-worktrees-linked-"));
+    const main = join(base, "main");
+    execFileSync("git", ["init", "-q", "-b", "main", main]);
+    writeFileSync(join(main, "a.txt"), "one\n");
+    git(main, ...AUTHOR, "add", "-A");
+    git(main, ...AUTHOR, "commit", "-q", "-m", "one");
+    const linked = join(base, "linked");
+    git(main, "worktree", "add", "--detach", "-q", linked);
+    const path = join(main, ".worktrees", "explorer-1");
+    const branch = "agents/explorer-1";
+    git(main, "worktree", "add", "-q", path, "-b", branch, "HEAD");
+
+    expect(isOwnedWorktreePath(linked, path)).toBe(false);
+    expect(isOwnedWorktreePath(linked, path, main)).toBe(true);
+
+    const status = await worktreeStatus(owner(linked, path, branch));
+    expect(status).toMatchObject({ path, branch, exists: true, unmergedCommits: 0, uncommittedFiles: 0 });
+    expect(status?.detail).toBeUndefined();
+
+    const removed = await removeRunWorktree(owner(linked, path, branch));
+    expect(removed?.removed).toBe(true);
+    expect(existsSync(path)).toBe(false);
+  });
+
   it("reads and removes a child of a project opened in a subdirectory of its repository", async () => {
     const { repo, project, path, branch } = nestedProjectWithChild();
     // The predicate on its own: the git toplevel's `.worktrees` is ours too.

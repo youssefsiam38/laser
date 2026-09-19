@@ -78,9 +78,11 @@ export interface SegmentedProps<T extends string> {
   onChange: (value: T) => void;
   /** Extra content between the label and the row (a live specimen, a warning). */
   children?: ReactNode;
+  /** When set, the group stays readable but neither click nor arrow keys change it. */
+  disabled?: boolean | undefined;
 }
 
-export function Segmented<T extends string>({ label, value, options, onChange, children }: SegmentedProps<T>) {
+export function Segmented<T extends string>({ label, value, options, onChange, children, disabled }: SegmentedProps<T>) {
   const logicalKey = useLogicalArrowKeys();
   const labelId = useId();
   const container = useRef<HTMLDivElement>(null);
@@ -118,8 +120,13 @@ export function Segmented<T extends string>({ label, value, options, onChange, c
         ref={container}
         role="radiogroup"
         aria-labelledby={labelId}
-        className="flex w-fit max-w-full flex-wrap items-center gap-0.5 rounded-lg bg-surface-2 p-0.5"
+        aria-disabled={disabled === true || undefined}
+        className={cn(
+          "flex w-fit max-w-full flex-wrap items-center gap-0.5 rounded-lg bg-surface-2 p-0.5",
+          disabled === true && "opacity-60",
+        )}
         onKeyDown={(event) => {
+          if (disabled === true) return;
           const key = logicalKey(event.key);
           if (key === "ArrowRight" || key === "ArrowDown") {
             event.preventDefault();
@@ -144,8 +151,10 @@ export function Segmented<T extends string>({ label, value, options, onChange, c
               type="button"
               role="radio"
               aria-checked={checked}
-              tabIndex={checked ? 0 : -1}
-              onClick={() => onChange(option.value)}
+              aria-disabled={disabled === true || undefined}
+              disabled={disabled === true}
+              tabIndex={disabled === true ? -1 : checked ? 0 : -1}
+              onClick={() => { if (disabled !== true) onChange(option.value); }}
               className={cn(
                 "h-7 rounded-md px-2.5 text-xs font-medium outline-none",
                 "transition-[background-color,color] duration-(--motion-instant) motion-reduce:transition-none",

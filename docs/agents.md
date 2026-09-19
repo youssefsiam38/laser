@@ -505,8 +505,10 @@ map's inspector, and `laser runs --json` (`cwd`).
 Everything below is the isolated case
 (`packages/worker/src/agents/worktrees.ts`):
 
-- Path: `<git toplevel>/.worktrees/<slug>` where `slug` is the sanitised
-  `subagent_name` plus the run id suffix (`[a-z0-9-]`, ≤ 60 chars).
+- Path: `<common-dir parent>/.worktrees/<slug>` where `slug` is the sanitised
+  `subagent_name` plus the run id suffix (`[a-z0-9-]`, ≤ 60 chars). The common-dir
+  parent is the main checkout, so a linked worktree's children land beside
+  siblings rather than nested inside the linked worktree.
 - Branch: `agents/<slug>`, created at the commit the parent's working
   directory is on. The child's cwd is the project's directory relative to the
   toplevel, inside the worktree.
@@ -544,9 +546,11 @@ Everything below is the isolated case
   path is refused; a run owns at most one worktree; removal is `worktree
   remove --force`, branch delete, prune — only for a path that passes the same
   check.
-- Refusals are person-facing: not a git repository ("Initialise git in the
-  project first"), no commits yet ("Make a first commit"), a path another
-  agent owns, or a worktree that did not land on the parent's commit.
+- Refusals are person-facing. Not a git repository and no commits yet fire
+  only under `worktree: "strict"` or a project default of Isolate agents —
+  default `true` shares the checkout and says so. A path another agent owns,
+  or a worktree that did not land on the parent's commit, still refuse at
+  create time.
 
 A worktree of a project runs in that project's worker: invariant 5 reads a
 `.worktrees/` child as part of its project, never as a second project

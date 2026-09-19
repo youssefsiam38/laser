@@ -1626,7 +1626,7 @@ export interface ClientRequests {
    */
   "pi/project/isolation/set": {
     params: { cwd: string; isolation: AgentIsolationDefault };
-    result: { project: ProjectInfo };
+    result: { ok: true };
   };
   /**
    * Per-repository host discovery for git actions (L6). Each named repository
