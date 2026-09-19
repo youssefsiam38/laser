@@ -928,6 +928,8 @@ describe("scoped transcript destinations", () => {
 
       viewport.scrollTop = 0; viewport.dispatchEvent(new Event("scroll")); controller.capture();
       const before = { top: viewport.scrollTop, height: viewport.scrollHeight, reserve: controller.reserveHeight };
+      const trace: { from: number; to: number }[] = [];
+      (globalThis as { __laserScrollTrace?: unknown[] }).__laserScrollTrace = trace;
       controller.beginEarlierPage();
       ids = ["merged-head", "tail"]; controller.setIds(ids);
       const merged = document.createElement("div");
@@ -939,10 +941,14 @@ describe("scoped transcript destinations", () => {
       // The merged group is taller than the rows it folded, so the scroll range
       // grows by that difference, less the floor the estimate was still holding.
       expect(after.height - before.height).toBeGreaterThanOrEqual(900 - 584 - before.reserve - 1);
-      // And the person, who was at the top of exactly that content, has not moved.
+      // And the person has not moved: the merged head begins exactly at the
+      // top edge of the viewport, where the oldest row it folded began, and
+      // the controller moved the viewport not at all to put it there.
+      expect(merged.getBoundingClientRect().top).toBe(0);
       expect(after.top).toBe(before.top);
+      expect(trace.filter(write => Math.abs(write.to - write.from) >= 0.5)).toEqual([]);
       expect(controller.earlierPageFallbackCount).toBe(0);
-    } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); }
+    } finally { detach(); viewport.remove(); delete (globalThis as { __laserScrollTrace?: unknown[] }).__laserScrollTrace; vi.unstubAllGlobals(); }
   });
 
   it("keeps the reader's row still when a replacing page measures taller than its estimate", async () => {

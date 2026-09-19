@@ -58,7 +58,7 @@ export class HistoryReserveModel {
     this.lastPageHeight = 0;
   }
 
-  configure(input: Omit<HistoryReserveEstimate, "lastPageHeight"> & { rows: number }) {
+  configure(input: Omit<HistoryReserveEstimate, "lastPageHeight"> & { rows: number; mayGrow?: boolean }) {
     this.hasBefore = input.hasBefore;
     if (!input.hasBefore) {
       this.height = 0;
@@ -68,12 +68,22 @@ export class HistoryReserveModel {
     // An empty index cannot make an honest estimate. Wait until ids and their
     // initial heights exist; the caller deliberately invokes this after setIds.
     if (input.rows <= 0 || input.loadedHeight <= 0 || input.rowEstimate <= 0) return;
+    const estimate = estimateHistoryReserve({ ...input, lastPageHeight: this.lastPageHeight });
     if (!this.ready || !this.reading) {
-      this.height = estimateHistoryReserve({ ...input, lastPageHeight: this.lastPageHeight });
+      this.height = estimate;
       this.ready = true;
-    } else {
-      this.height = Math.max(this.height, this.floor());
+      return;
     }
+    // Arrived pages consume the estimate, so that the next page lands in the
+    // pixels the placeholder was holding. After a few pages it sits at its
+    // floor while the producer still has hundreds of turns before it: the
+    // thumb then says "this is the root" of a conversation nowhere near its
+    // root, and the reading position is never "inside the estimate" again.
+    // While a cursor remains, the range ahead is grown back to the bounded
+    // estimate (D-302) — but only when the caller says the growth can be held
+    // still, because space added above the reader is movement until something
+    // measures it away.
+    this.height = Math.max(this.height, input.mayGrow ? estimate : this.floor());
   }
 
   startReading() { this.reading = true; }
