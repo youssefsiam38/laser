@@ -16,7 +16,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { useLaserStable, useLaserState } from "@/runtime";
-import { FILE_CHANGING_TOOLS, deltaParts, githubCompareUrl, pullRequestCommands } from "./project-git.js";
+import { FILE_CHANGING_TOOLS, deltaParts, githubCompareUrl, pullRequestCommands, subscribeProjectGitRefresh } from "./project-git.js";
 import { useSessionUpdates } from "./session-updates.js";
 
 const POLL_MS = 30_000;
@@ -52,6 +52,8 @@ function useProjectGit(cwd: string | undefined, path: string | undefined): Proje
     setStatus(undefined);
     refresh();
   }, [refresh]);
+
+  useEffect(() => subscribeProjectGitRefresh(refresh), [refresh]);
 
   // After a turn that could have changed files.
   const touched = useRef(false);
