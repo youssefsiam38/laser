@@ -229,10 +229,10 @@ green again.
 ### Mitigations, unchanged
 
 Renderer still lazy: `pnpm -F @lasercode/ui build` puts `@pierre/diffs` in
-`dist/assets/diff-body-ODMF5fC1.js` (310.16 kB / 80.31 kB gzip). The startup
-chunk `dist/assets/index-cdqguqD5.js` (2,428.44 kB / 733.28 kB gzip) contains
-no library code from it — the only `pierre` substring in it is our own
-`pierreType` field in `classify.ts`.
+`dist/assets/diff-body-CrBN4PA5.js` (310.16 kB / 80.31 kB gzip). The startup
+chunk `dist/assets/index-p8rbKHRT.js` (2,428.44 kB / 733.27 kB gzip) contains
+no library code from it — the only `pierre` substrings in it are our own
+`pierreType` field from `classify.ts`.
 
 Measured against this branch's base (`e2ebfcb7`, the same tree with this
 leap's `src/source-control` and `test/source-control` checked out and the new
@@ -240,10 +240,10 @@ files removed):
 
 | chunk | before | after |
 | --- | --- | --- |
-| startup `index-*.js` | 2,423.81 kB / 731.56 kB gzip | 2,428.44 kB / 733.28 kB gzip |
+| startup `index-*.js` | 2,423.81 kB / 731.56 kB gzip | 2,428.44 kB / 733.27 kB gzip |
 | renderer `diff-body-*.js` | 310.16 kB / 80.31 kB gzip | 310.16 kB / 80.31 kB gzip |
 
-— `+4.63 kB` raw, `+1.72 kB` gzip in the startup chunk for the toolbar plan,
+— `+4.63 kB` raw, `+1.71 kB` gzip in the startup chunk for the toolbar plan,
 the totals component, the hints and the longer state copy; the renderer chunk
 is byte-identical and still nowhere near startup.
 `test/source-control/diff-body-guard.test.ts` still pins the split. Our own
@@ -259,6 +259,11 @@ pnpm -F @lasercode/ui typecheck   # clean
 pnpm -F @lasercode/ui build       # chunks above
 pnpm identity:check               # after git add: clean
 ```
+
+Two of the three full runs finished green end to end; one intermediate run
+exited non-zero under load without naming the file in the captured tail, and
+nothing in this tree reproduced it across the runs after it (the known
+load-flaky files are listed in `STATUS_DETAILED.md`).
 
 Source-control tests alone: 21 files, 91 passed. New: `overlay-chrome.test.tsx`
 (6, mount-shaped, pointer and keyboard), `toolbar-fit.test.tsx` (4, the 288px
