@@ -37,7 +37,13 @@ import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX, TASK_LOG_SEGMENTS_MAX } from "./tasks.js";
 import { ENVIRONMENT_KEY_PATTERN, SESSION_REVISION_PATTERN } from "./session-revision.js";
 import { BODY_COMPONENT_KINDS, BODY_REGION_MAX_ITEMS, ENTRY_RANGE_MAX_BYTES } from "./body-range.js";
-import { CHANGE_SCOPES, CHECKPOINT_RETENTION_VALUES, FILE_DIFF_MAX_BYTES, RESTORE_TARGETS } from "./source-control.js";
+import {
+  CHANGE_SCOPES,
+  CHECKPOINT_RETENTION_VALUES,
+  FILE_BLOB_PAGE_MAX_BYTES,
+  FILE_DIFF_MAX_BYTES,
+  RESTORE_TARGETS,
+} from "./source-control.js";
 import { HISTORY_PAGE_BYTE_LIMIT, HISTORY_PAGE_TURN_MAX } from "./history-window.js";
 import { TELEMETRY_SECTIONS } from "./telemetry.js";
 import { AGENT_ISOLATION_DEFAULTS } from "./workspace.js";
@@ -876,6 +882,20 @@ export const clientParamsSchemas = {
     runId: z.string().min(1).max(256).optional(),
     offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
     limit: z.number().int().min(4).max(FILE_DIFF_MAX_BYTES).optional(),
+  }).strict(),
+  // One side's bytes for a file with no textual diff. Same shape as
+  // `file_source` minus the text-only fields; `limit` is a page of bytes, and
+  // the ceiling on the whole file is the engine's, not the caller's.
+  "pi/project/file_blob": z.object({
+    cwd: z.string().min(1),
+    path: sessionPath,
+    repo: z.string().min(1).max(4096),
+    file: z.string().min(1).max(4096),
+    ref: z.string().min(1).max(512).optional(),
+    workdir: z.string().min(1).max(4096).optional(),
+    runId: z.string().min(1).max(256).optional(),
+    offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    limit: z.number().int().min(4).max(FILE_BLOB_PAGE_MAX_BYTES).optional(),
   }).strict(),
   "pi/project/checkpoint/list": z.object({ cwd: z.string().min(1), path: sessionPath }).strict(),
   "pi/project/checkpoint/retention/set": z

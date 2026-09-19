@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { AgentRun, FileSlice, ProjectChanges } from "@lasercode/protocol";
+import { FILE_BLOB_PAGE_MAX_BYTES } from "@lasercode/protocol";
 import {
   checkpointCommitFor,
   createHostChangesAdapter,
@@ -15,13 +16,48 @@ import { CHANGES_NEED_SESSION, CHANGES_UNAVAILABLE } from "../../src/source-cont
 import { getChangesAdapter, resetChangesAdapter } from "../../src/source-control/data.js";
 import { resetWorkspaceShapeReader, workspaceShapeRequestCount } from "../../src/source-control/workspace-shape.js";
 
-it("maps a binary numstat file onto our binary status", () => {
+it("maps a binary numstat file onto our binary status, keeping what happened to it", () => {
   expect(mapChangedFile({ path: "logo.png", status: "modified", added: null, removed: null })).toMatchObject({
     path: "logo.png",
     status: "binary",
     added: 0,
     removed: 0,
+    // Without this an added picture and a deleted one are the same row, and
+    // neither can be drawn.
+    change: "modified",
   });
+  expect(mapChangedFile({ path: "logo.png", status: "added", added: null, removed: null }).change).toBe("added");
+  expect(mapChangedFile({ path: "logo.png", status: "deleted", added: null, removed: null }).change).toBe("deleted");
+});
+
+it("asks for a picture's bytes at the same two ends the patch spans", async () => {
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const adapter = createHostChangesAdapter({
+    request: (async (method: string, params: Record<string, unknown>) => {
+      calls.push({ method, params });
+      return {
+        repo: "/p",
+        path: "logo.png",
+        ref: String(params.ref),
+        mediaType: "image/png",
+        totalBytes: 79,
+        offset: 0,
+        bytes: 79,
+        truncated: false,
+        data: "iVBORw0KGgo=",
+      };
+    }) as never,
+    session: () => ({ cwd: "/p", path: "/s.jsonl" }),
+  });
+  const old = await adapter.getFileBytes?.({ kind: "uncommitted" }, "/p", "logo.png", "old");
+  const next = await adapter.getFileBytes?.({ kind: "uncommitted" }, "/p", "logo.png", "new");
+  expect(calls.map((call) => call.method)).toEqual(["pi/project/file_blob", "pi/project/file_blob"]);
+  // The uncommitted scope's own ends, never the working tree standing in for HEAD.
+  expect(calls.map((call) => call.params.ref)).toEqual(["HEAD", "worktree"]);
+  expect(old?.ref).toBe("HEAD");
+  expect(next?.ref).toBe("worktree");
+  // A page is asked for one page at a time, bounded by the protocol.
+  expect(calls[0]?.params.limit).toBe(FILE_BLOB_PAGE_MAX_BYTES);
 });
 
 it("maps a paged slice, including truncated next offsets", () => {

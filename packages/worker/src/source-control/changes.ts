@@ -10,7 +10,7 @@ import {
   type ProjectChanges,
   type RepoChanges,
 } from "@lasercode/protocol";
-import { readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { writeIsolatedTree } from "./capture.js";
 import { runGit } from "./git-run.js";
@@ -171,24 +171,44 @@ async function diffFiles(repo: RepoRef, from: string, to: string | undefined): P
 }
 
 async function uncommittedFiles(repo: RepoRef, from: string): Promise<ChangedFile[]> {
-  const [nameStatus, numstat, porcelain] = await Promise.all([
+  const [nameStatus, numstat, untracked] = await Promise.all([
     runGit({ cwd: repo.path, args: ["diff", "--name-status", "--no-renames", "-z", "--no-ext-diff", from, "--"], timeoutMs: 15_000 }),
     runGit({ cwd: repo.path, args: ["diff", "--numstat", "--no-renames", "-z", "--no-ext-diff", from, "--"], timeoutMs: 15_000 }),
-    runGit({ cwd: repo.path, args: ["status", "--porcelain=v1", "-z", "--untracked-files=all"], timeoutMs: 8000 }),
+    untrackedPaths(repo),
   ]);
-  if (nameStatus.timedOut || nameStatus.overflow || numstat.timedOut || numstat.overflow || porcelain.timedOut || porcelain.overflow) {
+  if (nameStatus.timedOut || nameStatus.overflow || numstat.timedOut || numstat.overflow) {
     throw new ProtocolError(ErrorCodes.Internal, "Reading those changes took too long or the result was too large.");
   }
   if (nameStatus.exitCode > 1 || numstat.exitCode > 1) return [];
   const files = mergeChangeLists(parseNameStatus(nameStatus.stdout), parseNumstatFiles(numstat.stdout));
   const known = new Set(files.map((file) => file.path));
-  for (const path of untrackedFromPorcelain(porcelain.exitCode === 0 ? porcelain.stdout : "")) {
+  for (const path of untracked) {
     if (known.has(path)) continue;
     files.push(untrackedAsAdded(repo, path));
     known.add(path);
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
   return files;
+}
+
+/**
+ * What "added" means in the uncommitted scope: a path `git status` reports as
+ * new and unignored. **The one definition**, shared by the file list and by
+ * the patch (`fileDiff`), because they disagreed before — the list counted an
+ * untracked file's lines from disk while `git diff HEAD` said nothing at all
+ * about a path git does not track, so every added file was listed with `+N`
+ * and opened empty.
+ */
+export async function untrackedPaths(repo: RepoRef): Promise<Set<string>> {
+  const porcelain = await runGit({
+    cwd: repo.path,
+    args: ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    timeoutMs: 8000,
+  });
+  if (porcelain.timedOut || porcelain.overflow) {
+    throw new ProtocolError(ErrorCodes.Internal, "Reading those changes took too long or the result was too large.");
+  }
+  return new Set(untrackedFromPorcelain(porcelain.exitCode === 0 ? porcelain.stdout : ""));
 }
 
 function untrackedFromPorcelain(text: string): string[] {
@@ -208,6 +228,9 @@ function untrackedFromPorcelain(text: string): string[] {
 function untrackedAsAdded(repo: RepoRef, path: string): ChangedFile {
   try {
     const target = resolve(repo.path, path);
+    // A symlink is one line to git — the path it points at — and following it
+    // would promise the target's line count for a body that shows one line.
+    if (lstatSync(target).isSymbolicLink()) return { path, status: "added", added: 1, removed: 0 };
     const info = statSync(target);
     if (!info.isFile()) return { path, status: "added", added: 0, removed: 0 };
     if (info.size > 8 * 1024 * 1024) return { path, status: "added", added: null, removed: 0 };

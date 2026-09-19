@@ -1,4 +1,4 @@
-import type { AgentScopeFacts } from "@lasercode/protocol";
+import type { AgentScopeFacts, FileBlob } from "@lasercode/protocol";
 
 /**
  * Shapes the overlay consumes. Local until M18-T2 lands the protocol types.
@@ -24,6 +24,13 @@ export type ChangedFile = {
   status: FileChangeStatus;
   added: number;
   removed: number;
+  /**
+   * What git says happened to the file, kept even when `status` collapses to
+   * `binary` because there are no line counts. A picture that was added and
+   * one that was deleted are not the same change, and the overlay has to be
+   * able to tell them apart to draw either.
+   */
+  change?: "added" | "modified" | "deleted";
   oldPath?: string;
   /** Bytes, when the authority knows them (binary, added). */
   size?: number;
@@ -52,6 +59,8 @@ export type FileDiffPage = {
   status: FileChangeStatus;
   added: number;
   removed: number;
+  /** See `ChangedFile.change`. */
+  change?: "added" | "modified" | "deleted";
   oldPath?: string;
   mode?: string;
   prevMode?: string;
@@ -81,6 +90,14 @@ export type FileSource = {
    */
   truncated?: boolean;
 };
+
+/**
+ * One page of one side's raw bytes, for a file with no textual diff. The
+ * protocol shape travels unchanged: it already carries the media type, the
+ * total size and the header's pixel size, and inventing a second vocabulary
+ * for it here would only be a place for the two to disagree.
+ */
+export type FileBytesPage = FileBlob;
 
 export type AgentCheckoutKind = "worktree" | "shared";
 

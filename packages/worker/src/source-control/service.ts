@@ -1,14 +1,17 @@
 import {
   ErrorCodes,
+  FILE_BLOB_PAGE_MAX_BYTES,
   FILE_DIFF_MAX_BYTES,
   ProtocolError,
   checkpointRetentionKeep,
   type AgentRun,
   type AgentScopeFacts,
   type CheckpointList,
+  type FileBlob,
   type FileSlice,
   type ProjectChanges,
   type ProjectChangesParams,
+  type ProjectFileBlobParams,
   type ProjectFileDiffParams,
   type ProjectFileSourceParams,
   type ProjectRestoreParams,
@@ -26,6 +29,7 @@ import {
   resolveScopeRange,
   type ScopeQuery,
 } from "./changes.js";
+import { fileBlob } from "./blob.js";
 import { fileDiff, fileSource } from "./diff.js";
 import { deleteAllCheckpointRefs, listSessionCheckpoints } from "./refs.js";
 import { sessionRepositories, type RepoRef } from "./repositories.js";
@@ -204,6 +208,24 @@ export class SourceControlService {
   }
 
   async fileSource(params: ProjectFileSourceParams): Promise<FileSlice> {
+    const { repo, ref } = await this.resolveSide(params);
+    return fileSource(repo, params.file, ref, params.offset ?? 0, params.limit ?? FILE_DIFF_MAX_BYTES);
+  }
+
+  /**
+   * One side's bytes for a file with no textual diff. Same side resolution as
+   * `fileSource` — including the agent run whose worktree is gone, which is
+   * answered from its branch head — and the same refusal when the branch is
+   * gone too. What it will actually send is `blob.ts`'s to decide.
+   */
+  async fileBlob(params: ProjectFileBlobParams): Promise<FileBlob> {
+    const { repo, ref } = await this.resolveSide(params);
+    return fileBlob(repo, params.file, ref, params.offset ?? 0, params.limit ?? FILE_BLOB_PAGE_MAX_BYTES);
+  }
+
+  private async resolveSide(
+    params: ProjectFileSourceParams | ProjectFileBlobParams,
+  ): Promise<{ repo: RepoRef; ref: string | undefined }> {
     const workdir = this.workdir(params.path, params.workdir);
     const resolved = await this.resolveScope(workdir, { ...params, scope: params.runId ? "agent" : "session" });
     if (resolved.agent?.branchGone) {
@@ -217,7 +239,7 @@ export class SourceControlService {
       const heads = run?.worktree ? headsRef(run.worktree.branch) : undefined;
       if (heads) ref = heads;
     }
-    return fileSource(repo, params.file, ref, params.offset ?? 0, params.limit ?? FILE_DIFF_MAX_BYTES);
+    return { repo, ...(ref !== undefined ? { ref } : { ref: undefined }) };
   }
 
   async list(path: string, cwd: string): Promise<CheckpointList> {

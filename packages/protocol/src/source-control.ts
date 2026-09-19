@@ -175,6 +175,90 @@ export interface CheckpointList {
   lastError?: string;
 }
 
+/**
+ * The most bytes one side of an image is worth pulling into a modal.
+ *
+ * 4 MiB. A reviewer opening a picture wants to see it; they do not want a
+ * window that stalls fetching a 40 MB texture to draw a thumbnail. Above this
+ * the engine answers with the media type and the size and no bytes at all, and
+ * the overlay states both rather than drawing nothing.
+ */
+export const FILE_BLOB_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * One page of those bytes. Base64 inflates by 4/3, so a page is about 700 KB
+ * of JSON — comfortably inside the relay's 4 MiB message ceiling, and at most
+ * eight pages for a file at {@link FILE_BLOB_MAX_BYTES}.
+ */
+export const FILE_BLOB_PAGE_MAX_BYTES = 512 * 1024;
+
+/**
+ * Extensions whose bytes the app will actually draw, and the media type it
+ * declares for them. Deliberately not a general MIME table (the worker's
+ * `files.ts` owns that one): this is the narrower question of what a browser
+ * paints from an `<img>`, so TIFF and HEIC are absent and SVG is too — an SVG
+ * is text and already has a textual diff.
+ */
+export const IMAGE_MEDIA_TYPES: Readonly<Record<string, string>> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".avif": "image/avif",
+  ".bmp": "image/bmp",
+  ".ico": "image/x-icon",
+};
+
+/** Bytes we are prepared to serve and draw, or `undefined` for anything else. */
+export function imageMediaTypeForPath(path: string): string | undefined {
+  const at = path.lastIndexOf(".");
+  if (at < 0) return undefined;
+  return IMAGE_MEDIA_TYPES[path.slice(at).toLowerCase()];
+}
+
+/** Why a blob page carries no bytes. The size it reports is still true. */
+export const FILE_BLOB_REFUSALS = ["not-an-image", "too-large", "empty"] as const;
+export type FileBlobRefusal = (typeof FILE_BLOB_REFUSALS)[number];
+
+/**
+ * One page of one side's raw bytes (M20-T5).
+ *
+ * Separate from {@link FileSlice} on purpose: a slice is a *text* page — its
+ * `text` is UTF-8 and its offsets fall on character boundaries — and it carries
+ * no media type, no pixel size and no ceiling of its own. Bytes need all three,
+ * and the text path must not grow a second meaning for `truncated`.
+ *
+ * The engine serves bytes **only** for a media type in {@link IMAGE_MEDIA_TYPES}
+ * and only below {@link FILE_BLOB_MAX_BYTES}; an archive, a font or a `.wasm`
+ * comes back as its size alone, which is exactly what the overlay shows for it.
+ */
+export interface FileBlob {
+  repo: string;
+  path: string;
+  /** The end these bytes came from: a git revision, or `"worktree"`. */
+  ref: string;
+  /** From the path's extension; `application/octet-stream` when it is not one we draw. */
+  mediaType: string;
+  /** Size of the whole side, always — even when no bytes are sent. */
+  totalBytes: number;
+  offset: number;
+  bytes: number;
+  /** Byte offset of the next page; absent when this page ends the file. */
+  next?: number;
+  truncated: boolean;
+  /** base64 of exactly `bytes` bytes from `offset`. Absent when refused. */
+  data?: string;
+  /**
+   * Pixel size the image's own header declares, from the first page only and
+   * never from a decode (`image-header.ts`). Absent for a format whose header
+   * we do not read, or a size its own bytes could not carry.
+   */
+  width?: number;
+  height?: number;
+  refused?: FileBlobRefusal;
+}
+
 /** One page of a patch or of a file's bytes. */
 export interface FileSlice {
   repo: string;
@@ -261,7 +345,26 @@ export interface ProjectFileSourceParams {
   file: string;
   /**
    * Git revision, a checkpoint ref, or `"worktree"` for the file on disk.
-   * Default is the scope's right-hand side.
+   * A missing ref reads the working tree; this request carries no scope, so it
+   * has no side to default to (`docs/leap/overlay-diff-report.md` §8.1).
+   */
+  ref?: string;
+  workdir?: string;
+  /** Agent-scope source: the run whose worktree `repo` was listed from. */
+  runId?: string;
+  offset?: number;
+  limit?: number;
+}
+
+export interface ProjectFileBlobParams {
+  cwd: string;
+  path: string;
+  repo: string;
+  file: string;
+  /**
+   * Git revision, a checkpoint ref, or `"worktree"` for the file on disk.
+   * A missing ref reads the working tree — it is never the scope's other end,
+   * because this request carries no scope to take a side from.
    */
   ref?: string;
   workdir?: string;

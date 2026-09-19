@@ -25,6 +25,8 @@ import { getChangesAdapter, getChangesAdapterSource } from "./data.js";
 import { DiffBodyBoundary } from "./diff-boundary.js";
 import { appendPatchPage } from "./diff-files.js";
 import { CHANGES_FILE_FAILED, CHANGES_LIST_FAILED, personFacingChangesError } from "./errors.js";
+import { BinaryFileBody } from "./image-body.js";
+import { binaryFileView } from "./image-diff.js";
 import { useBindHostChangesAdapter } from "./host-bind.js";
 import { nextHunkIndex } from "./hunk.js";
 import { overlayKeyAction } from "./keyboard.js";
@@ -296,6 +298,10 @@ function ChangesOverlay() {
 
   const totals = listTotals(visibleRepos);
   const emptyBody = page ? classifyDiffPage(page) : null;
+  // A file git has no lines for. Computed from the patch and the list row
+  // together: the row knows it is binary and what happened to it, the patch
+  // knows when git said so itself.
+  const binary = page ? binaryFileView(page, activeFile) : null;
   const lineCount = activeFile ? fileLineCount(activeFile) : 0;
   const large = Boolean(active && activeFile && shouldBoundExpansion(lineCount) && !isLargeRevealed(active.repo, active.path, ui.revealedLarge));
   const effectiveStyle = ui.unifiedFallback || ui.diffStyle === "unified" ? "unified" : "split";
@@ -313,6 +319,7 @@ function ChangesOverlay() {
     pageLoading,
     pageError,
     emptyBody,
+    binary,
     page,
     large,
     lineCount,
@@ -422,6 +429,9 @@ function ChangesOverlay() {
       break;
     case "empty-body":
       body = <EmptyBodyState body={bodyState.body} />;
+      break;
+    case "binary":
+      body = <BinaryFileBody view={bodyState.view} scope={ui.scope} diffStyle={effectiveStyle} />;
       break;
     case "deleted":
       body = <DeletedFileState path={bodyState.path} />;

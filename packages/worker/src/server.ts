@@ -1058,6 +1058,10 @@ export class WorkerServer {
         this.assertCwd(req.params.cwd);
         return (await this.sourceControl().fileSource(req.params)) satisfies Result<"pi/project/file_source">;
       }
+      case "pi/project/file_blob": {
+        this.assertCwd(req.params.cwd);
+        return (await this.sourceControl().fileBlob(req.params)) satisfies Result<"pi/project/file_blob">;
+      }
       case "pi/project/checkpoint/list": {
         this.assertCwd(req.params.cwd);
         return (await this.sourceControl().list(req.params.path, req.params.cwd)) satisfies Result<"pi/project/checkpoint/list">;

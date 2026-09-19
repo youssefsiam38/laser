@@ -5,6 +5,7 @@ import type {
   GitHostStatus,
   GitProseKind,
 } from "@lasercode/protocol";
+import { imageMediaTypeForPath } from "@lasercode/protocol";
 
 import type {
   AgentChangesContext,
@@ -81,7 +82,8 @@ function hugePatch(): string {
 const FILES: Record<string, ChangedFile> = {
   "src/body-range.ts": { path: "src/body-range.ts", status: "modified", added: 12, removed: 3 },
   "src/transcript-viewport.tsx": { path: "src/transcript-viewport.tsx", status: "modified", added: 40, removed: 8 },
-  "src/logo.png": { path: "src/logo.png", status: "binary", added: 0, removed: 0, size: 24_576 },
+  "src/logo.png": { path: "src/logo.png", status: "binary", added: 0, removed: 0, size: 24_576, change: "modified" },
+  "src/bundle.wasm": { path: "src/bundle.wasm", status: "binary", added: 0, removed: 0, size: 274_432, change: "modified" },
   "src/script.sh": { path: "src/script.sh", status: "mode", added: 0, removed: 0, mode: "100755", prevMode: "100644" },
   "src/moved.ts": { path: "src/moved.ts", status: "renamed", added: 0, removed: 0, oldPath: "src/old.ts" },
   "src/gone.ts": { path: "src/gone.ts", status: "deleted", added: 0, removed: 18 },
@@ -194,6 +196,37 @@ function pageFor(scope: ChangesScope, repo: string, path: string): FileDiffPage 
   };
 }
 
+/**
+ * Both sides of the binary files the mock can draw. Real PNG bytes (16×16 red
+ * before, 32×24 blue after), so the sandbox's image change is an actual
+ * picture rather than a description of one.
+ */
+const BLOBS: Record<string, { old?: { data: string; width: number; height: number }; next?: { data: string; width: number; height: number } }> = {
+  "src/logo.png": {
+    old: {
+      data: "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGO4Y2NDEmIY1TCqYfhqAABhl1QQ50OvrwAAAABJRU5ErkJggg==",
+      width: 16,
+      height: 16,
+    },
+    next: {
+      data: "iVBORw0KGgoAAAANSUhEUgAAACAAAAAYCAIAAAAUMWhjAAAAJElEQVR4nGOwqbhDU8QwasGoBaMWjFowasGoBaMWjFowNCwAAKi5sD1kziExAAAAAElFTkSuQmCC",
+      width: 32,
+      height: 24,
+    },
+  },
+};
+
+/** Decoded length of a base64 payload, padding included in the arithmetic. */
+function rawByteLength(base64: string): number {
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return (base64.length * 3) / 4 - padding;
+}
+
+/** A binary the app does not draw: its sizes are the whole of what changed. */
+const OPAQUE_SIZES: Record<string, { old: number; next: number }> = {
+  "src/bundle.wasm": { old: 262_144, next: 274_432 },
+};
+
 const AGENTS: Record<string, AgentChangesContext> = {
   "run-worktree": {
     runId: "run-worktree",
@@ -285,6 +318,30 @@ export function createMockAdapter(): ChangesDataAdapter {
       const pair = SOURCES[path];
       if (!pair) return null;
       return { repo, path, ref, contents: ref === "old" ? pair.old : pair.next };
+    },
+    async getFileBytes(_scope, repo, path, side) {
+      const pair = BLOBS[path];
+      const bytes = side === "old" ? pair?.old : pair?.next;
+      const mediaType = imageMediaTypeForPath(path) ?? "application/octet-stream";
+      if (!bytes) {
+        const opaque = OPAQUE_SIZES[path];
+        const totalBytes = opaque ? (side === "old" ? opaque.old : opaque.next) : 0;
+        return { repo, path, ref: side === "old" ? "HEAD" : "worktree", mediaType, totalBytes, offset: 0, bytes: 0, truncated: false, refused: mediaType.startsWith("image/") ? "empty" : "not-an-image" };
+      }
+      const totalBytes = rawByteLength(bytes.data);
+      return {
+        repo,
+        path,
+        ref: side === "old" ? "HEAD" : "worktree",
+        mediaType,
+        totalBytes,
+        offset: 0,
+        bytes: totalBytes,
+        truncated: false,
+        data: bytes.data,
+        width: bytes.width,
+        height: bytes.height,
+      };
     },
     async getAgentContext(runId) {
       return AGENTS[runId] ?? {
