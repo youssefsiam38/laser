@@ -2925,7 +2925,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M17-T8 | Commit and push without a terminal | dropped | — | absorbed by M18-T6 | leap §9 |
 | M17-T9 | Permissions a person can set once | todo | — | — | audit §4 |
 | M17-T10 | Always allow this command | todo | — | — | audit §4 |
-| M17-T11 | Plan mode | todo | — | — | audit §4 |
+| M17-T11 | Plan mode | dropped | — | D-330 | absorbed by M21: Explore/Build are permission modes; Plan is a project artifact |
 | M17-T12 | The engine's keymap leaves the Help tab | todo | — | — | audit §4 |
 | M17-T13 | Every key is findable | todo | — | — | audit §4 |
 | M17-T14 | Projects you can tell apart | todo | — | — | audit §4 |
@@ -5850,3 +5850,122 @@ session (`scripts/sandbox.mjs`).
 Consequences: the sandbox gives every session its own ids. The fleet keeps the
 guards written while chasing this — row identity independent of the section, and
 live work holding its row when a snapshot thins — because both are real hazards.
+
+## M21 · The project lifecycle leap
+
+| ID | Task | State | Owner | Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| M21-T0 | Binding product contract and dependency plan | done | orchestrator-2026-09-20-project-leap | `PLAN.md` M21; D-329–D-333 | see notes |
+| M21-T1 | Protocol domain, revisions and transition rules | todo | — | — | `PLAN.md` M21 |
+| M21-T2 | Stable project identity and canonical store | todo | — | — | `PLAN.md` M21 |
+| M21-T3 | Host authority, methods, policy and event stream | todo | — | — | `PLAN.md` M21 |
+| M21-T4 | Bounded bodies, search and derived projections | todo | — | — | `PLAN.md` M21 |
+| M21-T5 | UI client store, reconcile and deep links | todo | — | — | `PLAN.md` M21 |
+| M21-T6 | Embedded workspace shell | todo | — | — | `PLAN.md` M21 |
+| M21-T7 | Specs and Research experience | todo | — | — | `PLAN.md` M21 |
+| M21-T8 | Comments, reviews and approval gates | todo | — | — | `PLAN.md` M21 |
+| M21-T9 | Cross-session and cross-project mentions | todo | — | — | `PLAN.md` M21 |
+| M21-T10 | Design-system manifest and adapter contract | todo | — | — | `PLAN.md` M21 |
+| M21-T11 | Framework-neutral DesignTree and React composition engine | todo | — | — | `PLAN.md` M21 |
+| M21-T12 | Native validation runner and source selection | todo | — | — | `PLAN.md` M21 |
+| M21-T13 | Design workspace and anchored review | todo | — | — | `PLAN.md` M21 |
+| M21-T14 | Greenfield design foundation | todo | — | — | `PLAN.md` M21 |
+| M21-T15 | Plan DAG and Project Task engine | todo | — | — | `PLAN.md` M21 |
+| M21-T16 | Plans and Tasks workspace | todo | — | — | `PLAN.md` M21 |
+| M21-T17 | Model tools and execution linking | todo | — | — | `PLAN.md` M21 |
+| M21-T18 | Checkpoints, changes and delivery evidence | todo | — | — | `PLAN.md` M21 |
+| M21-T19 | Verification and convergence | todo | — | — | `PLAN.md` M21 |
+| M21-T20 | Cross-session continuity and recovery | todo | — | — | `PLAN.md` M21 |
+| M21-T21 | Import, export and repository publication | todo | — | — | `PLAN.md` M21 |
+| M21-T22 | Security, privacy, relay and resource hardening | todo | — | — | `PLAN.md` M21 |
+| M21-T23 | Product-language and element reconciliation | todo | — | — | `PLAN.md` M21 |
+| M21-T24 | End-to-end project lifecycle acceptance | todo | — | — | `PLAN.md` M21 |
+| M21-T25 | Release the project lifecycle leap | todo | — | — | `PLAN.md` M21 |
+
+#### M21-T0 notes
+- 2026-09-20 claimed: define the complete project-owned lifecycle for Specs, Research, Designs, Plans and Tasks; keep every entity independent of sessions and referenceable from any session; specify the embedded Laser workspace, framework-neutral design contract, storage, protocol, approvals, execution and verification before implementation starts.
+- 2026-09-20 checkpoint: resolved the apparent React/framework conflict by separating Laser's React composition engine, the framework-neutral `DesignTree`, the project's real design system, native framework validation and project-native production code.
+- 2026-09-20 done: `PLAN.md` M21 is the binding contract and dependency-ordered implementation plan; D-329–D-333 record the choices future work must not silently reverse.
+
+### D-329 · 2026-09-20 · Project lifecycle artifacts belong to projects, not sessions
+
+Decision: Specs, Research, Designs, Plans and Project Tasks are durable
+project-owned entities. Any permitted session may mention or revise an exact
+revision, including a projectless Chat or a session in another project, but a
+session is never the owner and deleting it never cascades into project work.
+The embedded Specs workspace is a closed Laser product destination, not an
+extension-declared panel.
+
+Why: the same product intent must survive many conversations, agents, restarts
+and implementation attempts. Session ownership would strand or duplicate it,
+while reviving the general panel bus would reverse D-147.
+
+Consequences: this narrowly supersedes D-140's “runs and nothing above them”
+for project planning artifacts only. The harness, run model, session tree and
+fleet remain unchanged; project entities never become fleet kinds.
+
+### D-330 · 2026-09-20 · Plan is an artifact; Project Task and Command are distinct nouns
+
+Decision: **Plan** names the durable project dependency graph. Permission modes
+are **Explore** and **Build**, so M17-T11 is dropped as absorbed. **Project Task**
+names a planned unit in the workspace. Existing long-running shell work is
+called **Command** on person-facing surfaces; its `BackgroundTask` wire type and
+`task_output` / `task_stop` model tools remain compatible.
+
+Why: one visible noun cannot truthfully mean a planning document, a permission
+mode and a process, and the person explicitly requires Tasks in the project
+lifecycle.
+
+Consequences: `ProjectTask` never enters `tasks/list`; a run or command may be
+linked as an attempt but cannot automatically complete it. Product-language
+work includes the Fleet copy change without renaming stable wire/tool contracts.
+
+### D-331 · 2026-09-20 · One host-owned project store is canonical
+
+Decision: the canonical lifecycle store is a host-owned, transactional,
+project-partitioned store under the product state root, keyed by stable
+`projectId`. Large bodies are content-addressed and ranged. Worktree sessions
+resolve to their parent project through the shared workspace/common-dir model.
+Repository files, including `<project>/.laser/work/`, are explicit imports or
+exports and never a second live authority.
+
+Why: lifecycle drafts must not dirty a repository, diverge per worktree, depend
+on a live worker or disappear with a session. One transactional writer also
+makes immutable revisions, approvals and optimistic concurrency enforceable.
+
+Consequences: reads/search work without spawning a worker; project relocation
+uses explicit relinking; removing a project retains its work until separately
+deleted; export/import always previews a revision and conflict policy.
+
+### D-332 · 2026-09-20 · Approvals bind immutable revision sets
+
+Decision: Brief, Design (unless explicitly skipped for no UI impact) and Build
+are separate hard gates. Each approval records the exact revision ids and
+digests it covers. Material upstream changes mark only reachable downstream
+artifacts stale. Lifecycle approval uses its own project-review method scope,
+not the existing `approval` scope for answering session/tool questions.
+
+Why: approving a title or mutable document is not informed consent, and using
+the session-question scope would grant phones or remote clients authority they
+were never given.
+
+Consequences: blocking comments prevent approval; agents may address but not
+resolve a person's comment; Enter never approves; verification can produce
+evidence but cannot silently invent acceptance.
+
+### D-333 · 2026-09-20 · React composes; the project framework validates and ships
+
+Decision: React powers Laser's embedded design workspace and composition
+canvas. The persisted `DesignTree` and `DesignSystemManifest` are
+framework-neutral. The project adapter supplies its real tokens, components,
+assets, constraints and philosophy; a native validation runner uses the
+project's actual framework; production implementation always stays in that
+framework.
+
+Why: Laser needs one coherent interactive editor without pretending React can
+execute Vue, Svelte, Angular, Flutter, SwiftUI, Compose or another framework's
+components.
+
+Consequences: every preview is labelled Native, Mapped or Proposed. Mapped is
+never called Native. React-specific OSS such as Puck or react-grab may sit
+behind replaceable adapters but cannot shape protocol or canonical storage.

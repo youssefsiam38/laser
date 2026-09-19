@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-20T01:45:51+03:00 · orchestrator-2026-09-19-leap · HEAD: 82969dcf
-**Current focus:** M20 — the source-control leap, built end to end and gated; the person's acceptance is the only step left (`docs/leap/uat.md`).
+**Last updated:** 2026-09-20T02:34:52+03:00 · orchestrator-2026-09-20-project-leap · HEAD: 87e193e0
+**Current focus:** M20 — the source-control leap is built and gated; the person's acceptance is the remaining dependency before M21 implementation begins.
 
 | Milestone | State |
 | --- | --- |
@@ -27,12 +27,11 @@
 | M18 Resource containment | done |
 | M19 Runtime recovery/update activation | done |
 | M20 Source-control leap | in-progress |
+| M21 Project lifecycle leap | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** none. Nothing is released until the person accepts the sandbox (spec §13.5).
-**In flight:** M20 awaiting the person's acceptance. M16-T92 (the client still reads `image.data`) remains open behind it.
-**Published:** v0.9.2 from `dc7a8979` — CI 35396133026, release 35396492469, 12 assets, Latest, checkpoint `verified`. Two attempts abandoned first on load-only test flakes (host access.e2e timeout, UI image macrotask wait), both now wait for state.
-**Next up:** the person's UAT on the seeded sandbox (four workspace shapes, a session with real turns), then the decisions it produces, then a release only with explicit authorization.
-**Recently done:** M20-T1 workspace shapes and the harness (`acc1b4a6`+`009a49a2`); M20-T2 checkpoints, restore and undo-this-turn (`d7c6d62c`+`85a74e4a`+`90e191f4`, baseline no longer races the first turn); M20-T3 telemetry over the whole session (`69a3fbea`+`6662afd2`); M20-T4 both columns redrawn and the filter row fitted (`82969dcf`); M20-T5 the changes modal on `@pierre/diffs`, crash-free, in our own type (`b3ced7f5`); M20-T6 git actions engine and toolbar (`bc00695b`, `bb786d1c`).
-
-**Published:** v0.9.4 (`6d50a050`) is Latest. Autonomous completion/commits/push authorized; the person performs browser acceptance on a parent-built sandbox before any release. Active history outranks soft cache targets (D-295); MCP forms stay modal (D-296); Agents mutations name their location (D-297); project agent files are trust-gated (D-298); Backspace only deletes (D-299); the mention picker browses the machine (D-300); T82 deferred to 0.9.3 (D-301); the transcript copies a shipping chat client (D-305, superseding D-303).
+**Blockers:** none. M21 implementation is dependency-gated on the person's M20 sandbox acceptance, not marked blocked.
+**In flight:** M20 awaits acceptance from `docs/leap/uat.md`; M21's binding project-owned lifecycle contract and task graph are complete; M16-T92 remains open behind M20.
+**Published:** v0.9.4 (`6d50a050`) is Latest. Autonomous completion/commits/push require the established authorization and release gates.
+**Next up:** the person's M20 UAT; resolve any acceptance findings; then M21-T1 protocol/domain work becomes ready.
+**Recently done:** M21-T0 project lifecycle contract (`PLAN.md` M21, D-329–D-333); M20-T6 git actions (`bc00695b`, `bb786d1c`); M20-T5 changes modal (`b3ced7f5`); M20-T4 fleet/telemetry columns (`82969dcf`); M20-T3 authority telemetry (`69a3fbea`, `6662afd2`).
