@@ -100,7 +100,7 @@ const adapter: RemoteThreadListAdapter = {
 function useEmptyRuntime() { return useExternalStoreRuntime({ messages: [], isRunning: false, onNew: async () => {} }); }
 const shell: ShellContextValue = {
   layout: "desktop", sessionsOpen: true, telemetryOpen: false, setSessionsOpen: () => {}, setTelemetryOpen: () => {}, toggleSessions: () => {}, toggleTelemetry: () => {},
-  historyOpen: false, setHistoryOpen: () => {}, openHistory: () => {}, toolsOpen: false, setToolsOpen: () => {}, addProjectOpen: false, setAddProjectOpen: () => {},
+  historyOpen: false, setHistoryOpen: () => {}, openHistory: () => {}, addProjectOpen: false, setAddProjectOpen: () => {},
   newSession: async () => {}, canCreate: true, showChat: () => {}, returnToChat: () => {},
 };
 

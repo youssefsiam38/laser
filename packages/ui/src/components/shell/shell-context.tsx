@@ -24,9 +24,6 @@ export interface ShellContextValue {
   setHistoryOpen(open: boolean): void;
   /** Reveal the telemetry surface and expand the history section. */
   openHistory(): void;
-  /** Tools section inside the telemetry panel (the tool timeline). */
-  toolsOpen: boolean;
-  setToolsOpen(open: boolean): void;
   addProjectOpen: boolean;
   setAddProjectOpen(open: boolean): void;
   /** Open an unstarted session in the current project (Cmd+N). Surfaces its own errors. */

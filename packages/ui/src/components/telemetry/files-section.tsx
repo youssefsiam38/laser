@@ -1,17 +1,17 @@
-import { FileCode2 } from "lucide-react";
+import { FileCode2, RefreshCw } from "lucide-react";
 import type { ChangedFile, ProjectChanges, RepoChanges } from "@lasercode/protocol";
 
 import { DiffStat } from "@/components/assistant-ui/elements/code-diff";
 import { ControlHint } from "@/components/ui/hint";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { openChanges } from "@/source-control/store.js";
-import { shortCwd } from "@/format";
-import { suffixTruncate } from "@/fleet/truncate.js";
+import { PATH_BUDGET, suffixTruncate } from "@/fleet/truncate.js";
 import { cn } from "@/lib/utils";
 
-import { count, fileTotals, filesHeader } from "./format.js";
+import { count, fileTotals, filesErrorText, filesHeader, filesIdleText, repoLabel, type FilesStatus } from "./format.js";
 import { InstrumentCard, TelemetrySection } from "./section.js";
 
-export type FilesStatus = "idle" | "loading" | "ready" | "error";
+export type { FilesStatus };
 
 export function FilesSection({
   changes,
@@ -20,6 +20,7 @@ export function FilesSection({
   sessionKey,
   open,
   onOpenChange,
+  onRefresh,
 }: {
   changes: ProjectChanges | undefined;
   status: FilesStatus;
@@ -27,19 +28,46 @@ export function FilesSection({
   sessionKey: string | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onRefresh?: (() => void) | undefined;
 }) {
   const totals = fileTotals(changes);
   return (
-    <TelemetrySection id="files" title="Files" icon={FileCode2} number={filesHeader(totals)} open={open} onOpenChange={onOpenChange}>
+    <TelemetrySection
+      id="files"
+      title="Files"
+      icon={FileCode2}
+      number={filesHeader(totals, status)}
+      open={open}
+      onOpenChange={onOpenChange}
+      action={
+        onRefresh && status !== "idle" ? (
+          <TooltipIconButton
+            tooltip="Refresh files"
+            size="icon-xs"
+            className="text-ink-3"
+            disabled={status === "loading"}
+            onClick={onRefresh}
+          >
+            <RefreshCw />
+          </TooltipIconButton>
+        ) : null
+      }
+    >
       {status === "loading" ? (
         <p className="text-xs leading-4 text-ink-3">Reading changes…</p>
       ) : status === "error" ? (
-        <p className="text-xs leading-4 text-ink-2">{message ?? "Could not read changes."}</p>
+        <p data-slot="telemetry-files-error" className="text-xs leading-4 text-ink-2">
+          {message ?? filesErrorText()}
+        </p>
+      ) : status === "idle" ? (
+        <p data-slot="telemetry-files-idle" className="text-xs leading-4 text-ink-2">
+          {filesIdleText()}
+        </p>
       ) : changes?.pruned ? (
         <p data-slot="telemetry-files-pruned" className="text-xs leading-4 text-ink-2">
           {changes.pruned.detail}
         </p>
-      ) : totals.files === 0 ? (
+      ) : !changes || totals.files === 0 ? (
         <p className="text-xs leading-4 text-ink-2">No changes in this workspace.</p>
       ) : (
         <>
@@ -50,7 +78,7 @@ export function FilesSection({
             </div>
           </InstrumentCard>
           <div className="flex flex-col gap-3">
-            {changes!.repos.map((repo) => (
+            {changes.repos.map((repo) => (
               <RepoGroup key={repo.repo} repo={repo} sessionKey={sessionKey} />
             ))}
           </div>
@@ -63,7 +91,7 @@ export function FilesSection({
 function RepoGroup({ repo, sessionKey }: { repo: RepoChanges; sessionKey: string | undefined }) {
   const added = repo.files.reduce((sum, file) => sum + (file.added ?? 0), 0);
   const removed = repo.files.reduce((sum, file) => sum + (file.removed ?? 0), 0);
-  const name = shortCwd(repo.repo);
+  const name = repoLabel(repo.repo);
   const branch = suffixTruncate(repo.branch);
   return (
     <div data-slot="telemetry-repo" data-repo={repo.repo}>
@@ -88,14 +116,6 @@ function RepoGroup({ repo, sessionKey }: { repo: RepoChanges; sessionKey: string
 }
 
 function FileRow({ repo, file, sessionKey }: { repo: string; file: ChangedFile; sessionKey: string | undefined }) {
-  const open = (): void => {
-    openChanges({
-      scope: { kind: "session" },
-      repo,
-      path: file.path,
-      ...(sessionKey ? { sessionKey } : {}),
-    });
-  };
   return (
     <li>
       <ControlHint hint={file.path}>
@@ -105,19 +125,21 @@ function FileRow({ repo, file, sessionKey }: { repo: string; file: ChangedFile; 
           data-repo={repo}
           data-path={file.path}
           aria-label={`${file.path} ${churnLabel(file)}`}
-          onClick={open}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" && event.key !== " ") return;
-            event.preventDefault();
-            open();
-          }}
+          onClick={() =>
+            openChanges({
+              scope: { kind: "session" },
+              repo,
+              path: file.path,
+              ...(sessionKey ? { sessionKey } : {}),
+            })
+          }
           className={cn(
             "flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1 text-start outline-none",
             "pointer-coarse:min-h-11",
             "hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
           )}
         >
-          <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink">{file.path}</span>
+          <span className="min-w-0 flex-1 font-mono text-xs text-ink">{suffixTruncate(file.path, PATH_BUDGET)}</span>
           <FileChurn file={file} />
         </button>
       </ControlHint>

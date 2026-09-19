@@ -1,26 +1,20 @@
 "use client";
 /**
  * `elements-file-tree` (assistant-ui registry), de-demoed and restyled:
- * everything a session touched, as a tree, with the churn per file
- * (docs/ux-elements.md "File tree"). Also the shape for a project browser.
+ * a tree of files with per-file churn (docs/ux-elements.md "File tree").
  *
  * The registry copy takes pre-flattened nodes and a `visibleCount`. Here
  * `fileTreeFromChanges` builds the nodes from `{path, additions, deletions}`
  * — collapsing single-child folder chains so `packages/ui/src/…` reads as
- * one line — and `useSessionFileChanges` collects those changes from the
- * thread's edit and write calls. Folders are structure, not controls: the
- * tree is short (what one session touched), so nothing collapses.
+ * one line. The changes overlay rail is the production caller of that helper;
+ * the telemetry column lists git groups instead of this widget.
  */
-import { useAui, useAuiState, type ToolCallMessagePart, type ToolCallMessagePartStatus } from "@assistant-ui/react";
 import { File, Folder } from "lucide-react";
 import { useMemo, type ComponentProps } from "react";
 
-import { diffStats, diffViewForTool } from "@/components/thread/diff";
-import { resultDetails, toolKind } from "@/components/thread/tool-summary";
 import { cn } from "@/lib/utils";
 
 import { DiffStat } from "./code-diff.js";
-import { toolTimelineKey } from "./tool-timeline.js";
 import { mono } from "./surfaces.js";
 
 export interface FileChange {
@@ -88,39 +82,6 @@ export function fileTreeFromChanges(changes: readonly FileChange[]): FileTreeNod
   };
   emit(root, "", 0);
   return out;
-}
-
-/** The shape both `thread.messages` and a projected message satisfy; parts are narrowed by `type`. */
-export type MessageLike = { readonly id?: string; readonly parts: readonly { readonly type: string }[] };
-type ToolPart = ToolCallMessagePart & { readonly status: ToolCallMessagePartStatus };
-
-/** Per-file churn from every settled edit/write in `messages`. */
-export function fileChangesFromParts(messages: readonly MessageLike[]): FileChange[] {
-  const byPath = new Map<string, FileChange>();
-  for (const message of messages) {
-    for (const part of message.parts) {
-      if (part.type !== "tool-call") continue;
-      const p = part as ToolPart;
-      const kind = toolKind(p.toolName);
-      if (kind !== "edit" && kind !== "write") continue;
-      if (p.isError === true || p.status.type !== "complete") continue;
-      const view = diffViewForTool(kind, p.args, resultDetails(p.result));
-      if (!view?.path) continue;
-      const { added, removed } = view.stats ?? diffStats(view.hunks);
-      const prev = byPath.get(view.path);
-      byPath.set(view.path, { path: view.path, additions: (prev?.additions ?? 0) + added, deletions: (prev?.deletions ?? 0) + removed });
-    }
-  }
-  return [...byPath.values()];
-}
-
-export function useSessionFileChanges(): FileChange[] {
-  const aui = useAui();
-  // A file footprint changes when a tool call does, not when a token arrives:
-  // the timeline's key describes exactly the tool state this reads, so the
-  // monitor's Files section stays still through a streamed reply (M16-T32).
-  const key = useAuiState((s) => toolTimelineKey(s.thread.messages as readonly MessageLike[]));
-  return useMemo(() => fileChangesFromParts(aui.thread.getState().messages as unknown as readonly MessageLike[]), [aui, key]);
 }
 
 export interface FileTreeProps extends Omit<ComponentProps<"div">, "children"> {

@@ -33,8 +33,6 @@ const shell: ShellContextValue = {
   historyOpen: false,
   setHistoryOpen: () => {},
   openHistory: () => {},
-  toolsOpen: false,
-  setToolsOpen: () => {},
   addProjectOpen: false,
   setAddProjectOpen: () => {},
   newSession: async () => {},

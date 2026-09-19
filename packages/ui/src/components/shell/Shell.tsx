@@ -148,7 +148,6 @@ function ShellFrame() {
   const [prefs, setPrefs] = useState<ColumnPrefs>(readPrefs);
   const [sheets, setSheets] = useState({ sessions: false, telemetry: false });
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [toolsOpen, setToolsOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const sessionsLoaded = useLaserState((s) => s.sessionsLoaded);
@@ -343,8 +342,6 @@ function ShellFrame() {
       historyOpen,
       setHistoryOpen,
       openHistory,
-      toolsOpen,
-      setToolsOpen,
       addProjectOpen,
       setAddProjectOpen,
       newSession,
@@ -367,7 +364,6 @@ function ShellFrame() {
       setTelemetryOpen,
       showChat,
       telemetryOpen,
-      toolsOpen,
       toggleFleet,
       toggleSessions,
       toggleTelemetry,

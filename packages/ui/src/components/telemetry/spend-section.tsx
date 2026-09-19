@@ -29,7 +29,7 @@ export function SpendSection({
           No API cost
         </p>
       ) : (
-        <ApiSpend spend={spend!} />
+        <ApiSpend spend={spend} />
       )}
       {account ? (
         <div className={api ? "mt-4" : "mt-3"}>
@@ -43,10 +43,10 @@ export function SpendSection({
   );
 }
 
-function ApiSpend({ spend }: { spend: TelemetrySpend }) {
-  const usage = spend.api!.totals;
-  const lines = spend.api!.byModel;
-  const series = spend.api!.series;
+function ApiSpend({ spend }: { spend: TelemetrySpend & { api: NonNullable<TelemetrySpend["api"]> } }) {
+  const usage = spend.api.totals;
+  const lines = spend.api.byModel;
+  const series = spend.api.series;
   const lastTurn = series.length > 1 ? series[series.length - 1]! - series[series.length - 2]! : series[0];
   return (
     <InstrumentCard>

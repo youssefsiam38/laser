@@ -51,7 +51,7 @@ const showChat = vi.fn();
 const setSessionsOpen = vi.fn();
 const shellFor = (layout: ShellContextValue["layout"]): ShellContextValue => ({
   layout, sessionsOpen: true, fleetOpen: false, telemetryOpen: false, setSessionsOpen, setFleetOpen: () => {}, setTelemetryOpen: () => {}, toggleSessions: () => {}, toggleFleet: () => {}, toggleTelemetry: () => {},
-  historyOpen: false, setHistoryOpen: () => {}, openHistory: () => {}, toolsOpen: false, setToolsOpen: () => {}, addProjectOpen: false, setAddProjectOpen: () => {},
+  historyOpen: false, setHistoryOpen: () => {}, openHistory: () => {}, addProjectOpen: false, setAddProjectOpen: () => {},
   newSession: async () => {}, canCreate: true, showChat, returnToChat: () => {},
 });
 function Fixture({ store, variant }: { store: StateStore; variant: "panel" | "sheet" }) {
