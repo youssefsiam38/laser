@@ -44,7 +44,7 @@ source as `docs/transcript-parity.md` and D-305.
 | 10 | Commit messages, PR titles and descriptions are written by **the session's current model**, never the Namer. |
 | 11 | Git actions live in the **overlay's toolbar only** this leap. |
 | 12 | A fleet row **opens its agent's changes** in the same overlay (in scope, §10 L5). |
-| 13 | The overlay adopts **`@pierre/diffs`** for rendering, subject to the L0 spike; our own elements plus `parse-git-diff` are the fallback (§8.3). |
+| 13 | The overlay adopts **`@pierre/diffs`** for rendering. The L0 spike passed with named mitigations (§8.3a); the fallback is not taken. |
 | 14 | **Split** is the default view; unified is a toggle that is remembered. |
 | 15 | Checkpoint retention defaults to the **last 200 turns per session**, configurable per project, and deleting a session deletes its checkpoints. |
 | 16 | A repository in the workspace that the session never touched is **not listed**. |
@@ -448,7 +448,8 @@ variables recolours without re-highlighting**. We generate their theme from our
 own tokens, so the person's theme still drives every colour and no literal
 value enters a component — which is exactly what AGENTS.md demands.
 
-Three risks remain, and they are what the spike is for, not reasons to refuse:
+Three risks were identified before the spike, and the spike answered all three
+(§8.3a):
 
 1. **Find inside a shadow root.** `CSS.highlights` is window-wide, but a
    `::highlight()` rule only paints in the tree whose stylesheet carries it,
@@ -475,6 +476,43 @@ Either way, the rule that does not move: a diff in the overlay and a diff in
 the transcript must look like the same product. If we adopt Pierre for the
 overlay, the transcript's `code-diff.tsx` is re-examined in L5 so the two do
 not diverge.
+
+### F.3a What the spike proved, and what we must own
+
+L0 ran against the real library (evidence: `docs/source-control-spike-evidence.md`).
+**Verdict: adopt with mitigations.**
+
+| Criterion | Result |
+| --- | --- |
+| Theming from Laser's tokens | **Pass.** A Shiki theme built from `var(--syntax-*)` registered as `laser`; switching dark → light recoloured every token with **zero** shadow-root mutations — the CSS custom properties did it, exactly as documented |
+| Find inside the Shadow DOM | **Pass.** Their roots are `open`; an adopted stylesheet plus per-root `Range`s and `CSS.highlights` painted, verified by differing screenshot bytes: **17 matches across 9 roots** |
+| Selection and copy | **Pass.** The clipboard carries source code with no line numbers and no `+`/`−` markers |
+| Keyboard and focus | **Pass.** No tabbables inside the roots; `Escape` and `Ctrl/Cmd+F` reach `document` and are not swallowed |
+| Bundle | **Partial.** One Shiki (4.4.3), grammars stay lazy, but **+449 KB** on the main chunk (782 KB vs 333 KB) and ~10 extra chunks |
+| Real patches | **Partial.** Add, delete, rename-with-changes and no-newline-at-EOF render. **Binary, mode-only and 100 % renames render an empty body.** A 10 000-line file collapses instantly, but expand-all produced **20 000 DOM nodes / 6.4 MB of HTML**, and `WorkerPoolContextProvider` throws without an explicit `workerFactory` |
+| 320 px, themes, motion | **Partial.** Reduced-motion output is byte-identical, but split does **not** auto-unify at 320 px — it becomes two 159 px scrolling columns |
+
+**The five things L5 must own**, each a named acceptance criterion:
+
+1. **Load the overlay lazily.** 449 KB may not sit in the main chunk: the
+   overlay and its renderer are a dynamic import, fetched when a person first
+   opens a file, with our own loading state. Startup weight does not change.
+2. **Empty bodies get our states.** Binary, mode-only and pure-rename changes
+   render Laser's own row — what changed, in words, with the file's size or its
+   old and new paths — never the library's blank body.
+3. **The 320 px fallback is ours.** Below the width where two columns of code
+   fit, we switch to unified ourselves and say so once (D-315 already requires
+   this; the library will not do it for us).
+4. **Their `Virtualizer` is mandatory, and expand-all is bounded.** No path may
+   mount a whole large file's split diff: expansion is by hunk, and a file over
+   a stated line count opens collapsed with an explicit control.
+5. **The worker pool stays off** until it is given an explicit `workerFactory`
+   and proved in our build. Highlighting on the main thread is acceptable for
+   the sizes the overlay opens.
+
+One more thing the spike found, in our favour and outside the spec: selecting
+from a file header **into** code picks up the header's `+/−` counts, so the
+overlay's copy path must start its range at the code, not at the header.
 
 ### F.4 The bar
 
@@ -548,12 +586,12 @@ action needs a credential that lives on another machine.
 
 | # | Title | Done when |
 | --- | --- | --- |
-| **L0** | Diff-renderer spike | A throwaway prototype mounts `FileDiff` and `CodeView` with a Shiki theme generated from our tokens and proves, with evidence: (1) switching Laser's theme recolours through `--hls-*` with no re-highlight and no literal colour in our code; (2) their shadow roots are `open`, an adopted stylesheet carrying `::highlight(...)` paints inside them, and find counts and steps across roots; (3) selecting and copying yields source text with no gutter contamination; (4) keyboard focus and our shortcuts survive retargeting; (5) one Shiki copy in the bundle, with the size delta measured; (6) real patches render — rename, mode change, binary, no-newline-at-EOF, a 10 000-line file; (7) 320px, both themes, reduced motion. All seven pass, or the fallback in §8.3 is taken and D-313 is superseded |
+| **L0** | Diff-renderer spike · **done** | A throwaway prototype mounts `FileDiff` and `CodeView` with a Shiki theme generated from our tokens and proves, with evidence: (1) switching Laser's theme recolours through `--hls-*` with no re-highlight and no literal colour in our code; (2) their shadow roots are `open`, an adopted stylesheet carrying `::highlight(...)` paints inside them, and find counts and steps across roots; (3) selecting and copying yields source text with no gutter contamination; (4) keyboard focus and our shortcuts survive retargeting; (5) one Shiki copy in the bundle, with the size delta measured; (6) real patches render — rename, mode change, binary, no-newline-at-EOF, a 10 000-line file; (7) 320px, both themes, reduced motion. All seven pass, or the fallback in §8.3 is taken and D-313 is superseded |
 | **L1** | Workspace shapes and the harness | `workspaceShape` resolves all five shapes with tests over real layouts (a repo, a monorepo, a 41-repo workspace, a nested repo, no git); `start_agent` never fails over shape; `worktree: "strict"` keeps D-156's refusal; the project default exists in Settings; no wasted turn in `~/projects/kwentra` |
 | **L2** | Checkpoints, scopes, restore | Checkpoints captured per turn per repository through an isolated index; the person's index, working tree, branches and reflog provably untouched; `project/changes` returns numstat for all five scopes; live and durable authorities agree; undo-this-turn restores files and staging behind one confirmation; retention cap and off switch |
 | **L3** | Telemetry query | `pi/session/telemetry` computes over the whole session, incrementally, fenced by revision; both authorities identical; opening a 27 MB session performs no full re-read; every client-side aggregation deleted; the panel's apology gone |
 | **L4** | The two columns | Fleet rows as §3, telemetry sections as §4, at 320px, both themes, both pointers, with interaction tests for the asking state, nesting, filters and truncation order |
-| **L5** | The overlay | Files open full-screen, tabs, tree grouped by repository, split and unified, Shiki tokens, viewed ticks, all designed states, keyboard path, phone layout; a fleet row's **Changes** opens it scoped to that run (§F.5) |
+| **L5** | The overlay | Files open full-screen, tabs, tree grouped by repository, split and unified, Shiki tokens from our theme, viewed ticks, all designed states, keyboard path, phone layout; a fleet row's **Changes** opens it scoped to that run (§F.5); **and the five mitigations in §8.3a**: lazy chunk, our own empty states for binary/mode-only/rename, our own 320px unified fallback, mandatory virtualization with bounded expansion, worker pool off |
 | **L6** | Git actions | Commit, push, branch, PR create / read / checkout / merge for GitHub and Bitbucket through installed CLIs, per-repository discovery, session-model prose, explicit confirmations, no interpolation |
 
 L0, L1 and L3 are independent of each other; L2 depends on L1; L4 depends on
@@ -579,6 +617,7 @@ a parent-built sandbox before any release (the working agreement since 0.9.2).
 | D-314 | A fleet row opens its agent's changes in the same overlay, scoped from the run's `baseCommit`; the reader never merges |
 | D-315 | Split is the default diff view, remembered per person, falling back to unified when two columns of code do not fit |
 | D-316 | Checkpoint retention defaults to the last 200 turns per session, is configurable per project, and follows the session's deletion |
+| D-317 | The overlay and its renderer load lazily: `@pierre/diffs` adds 449 KB, and no weight that only a file reader needs may sit in the startup bundle |
 
 ---
 
@@ -688,7 +727,7 @@ notes written for the people who install it.
 
 ## 14 · Open questions
 
-One, and it is a spike rather than a question: whether `@pierre/diffs` survives
-L0's seven criteria (§8.3, D-313). The other three are settled: split as the
-default (D-315), retention (§7.1, D-316) and untouched repositories (§7.3). The next unknown will come from L1's contact with real workspaces, and
+None. L0 answered the last one: `@pierre/diffs` is adopted with the five
+mitigations in §8.3a (D-313, D-317). Split as the default (D-315), retention
+(§7.1, D-316) and untouched repositories (§7.3) were already settled. The next unknown will come from L1's contact with real workspaces, and
 belongs in `STATUS_DETAILED.md` as it is found.
