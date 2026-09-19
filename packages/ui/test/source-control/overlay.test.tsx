@@ -155,7 +155,10 @@ it("closes a tab with middle click and restores the set when reopened", async ()
 it("renders designed states for binary, rename, mode, huge, failed repo, empty, and a gone agent branch", async () => {
   await mount();
   await open({ scope: { kind: "session" }, repo: "app", path: "src/logo.png" });
-  expect(overlay().textContent).toMatch(/binary file/i);
+  // A changed picture is the picture and its two sizes, not the sentence
+  // "Binary file" this used to assert (M20-T5, `image-diff.test.tsx`).
+  expect(overlay().querySelector('[data-slot="changes-binary"]')).toBeTruthy();
+  expect(overlay().textContent).toMatch(/went from 79 B to 93 B/);
   await act(async () => {
     openChanges({ scope: { kind: "session" }, repo: "app", path: "src/moved.ts" });
     await Promise.resolve();

@@ -28,9 +28,11 @@ import type {
   CheckpointListParams,
   CheckpointRetention,
   CheckpointRetentionSetParams,
+  FileBlob,
   FileSlice,
   ProjectChanges,
   ProjectChangesParams,
+  ProjectFileBlobParams,
   ProjectFileDiffParams,
   ProjectFileSourceParams,
   ProjectRestoreParams,
@@ -1570,6 +1572,16 @@ export interface ClientRequests {
   "pi/project/file_source": {
     params: ProjectFileSourceParams;
     result: FileSlice;
+  };
+  /**
+   * One side's raw bytes, base64, for a file that has no textual diff: the
+   * changes overlay draws an image change rather than explaining that git has
+   * no lines to show. Bytes only for an image media type and only below
+   * `FILE_BLOB_MAX_BYTES`; anything else answers with its size alone.
+   */
+  "pi/project/file_blob": {
+    params: ProjectFileBlobParams;
+    result: FileBlob;
   };
   /** The session's captured checkpoints, oldest first. */
   "pi/project/checkpoint/list": {

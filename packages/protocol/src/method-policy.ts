@@ -165,6 +165,7 @@ export const METHOD_POLICY = {
   "pi/project/changes": { scope: "read", reach: "any" },
   "pi/project/file_diff": { scope: "read", reach: "any" },
   "pi/project/file_source": { scope: "read", reach: "any" },
+  "pi/project/file_blob": { scope: "read", reach: "any" },
   "pi/project/checkpoint/list": { scope: "read", reach: "any" },
   "pi/project/workspace": { scope: "read", reach: "any" },
   "pi/project/git/hosts": { scope: "read", reach: "any" },

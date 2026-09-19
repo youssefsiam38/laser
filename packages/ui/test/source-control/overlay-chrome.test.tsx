@@ -202,7 +202,9 @@ async function noticeLines(args: Parameters<typeof openChanges>[0]): Promise<str
 it("says what happened and what it means in every designed state", async () => {
   await mount();
   for (const args of [
-    { scope: { kind: "session" } as const, repo: "app", path: "src/logo.png" },
+    // A picture is drawn rather than described (M20-T5); the written state is
+    // the one for a binary this app cannot draw, which is this file.
+    { scope: { kind: "session" } as const, repo: "app", path: "src/bundle.wasm" },
     { scope: { kind: "session" } as const, repo: "app", path: "src/moved.ts" },
     { scope: { kind: "session" } as const, repo: "app", path: "src/script.sh" },
     { scope: { kind: "session" } as const, repo: "app", path: "src/huge.ts" },

@@ -10,7 +10,7 @@ import type {
   ProjectChanges,
   ProjectChangesParams,
 } from "@lasercode/protocol";
-import { FILE_DIFF_MAX_BYTES } from "@lasercode/protocol";
+import { FILE_BLOB_PAGE_MAX_BYTES, FILE_DIFF_MAX_BYTES } from "@lasercode/protocol";
 
 import type { AppState } from "@/store";
 
@@ -56,6 +56,9 @@ export function mapChangedFile(file: ProtocolChangedFile): ChangedFile {
   return {
     path: file.path,
     status: binary ? "binary" : file.status,
+    // Kept whether or not `status` collapsed: without it an added picture and
+    // a deleted one are indistinguishable, and neither can be drawn.
+    change: file.status,
     added: file.added ?? 0,
     removed: file.removed ?? 0,
   };
@@ -78,6 +81,7 @@ export function mapFileSlice(slice: FileSlice, meta?: ChangedFile): FileDiffPage
     status: binary ? "binary" : (meta?.status ?? "modified"),
     added: meta?.added ?? 0,
     removed: meta?.removed ?? 0,
+    ...(meta?.change !== undefined ? { change: meta.change } : {}),
     ...(meta?.oldPath !== undefined ? { oldPath: meta.oldPath } : {}),
     ...(meta?.mode !== undefined ? { mode: meta.mode } : {}),
     ...(meta?.prevMode !== undefined ? { prevMode: meta.prevMode } : {}),
@@ -320,6 +324,37 @@ export function createHostChangesAdapter(opts: {
         contents: slice.text,
         ...(slice.truncated === true ? { truncated: true } : {}),
       };
+    },
+    /**
+     * One page of one side's bytes, for a file with no textual diff. The side
+     * is resolved exactly as `getFileSource` resolves it — same table, same
+     * refusal when we cannot name an end — so the picture a person sees is
+     * the one the patch was computed from, never the working tree standing in
+     * for a ref.
+     */
+    async getFileBytes(scope, repo, path, side, options) {
+      const session = withAgentWorkdir(needSession(), scope, opts.agentRun);
+      const run = scope.kind === "agent" ? opts.agentRun?.(scope.runId) : undefined;
+      const agent: AgentEnds | undefined =
+        scope.kind === "agent"
+          ? {
+              isolated: Boolean(run?.worktree),
+              ...(run?.worktree?.baseCommit ? { baseCommit: run.worktree.baseCommit } : {}),
+            }
+          : undefined;
+      const ref = await resolveEnd(scopeSourceEnds(scope, agent)[side], session, repo);
+      if (!ref) return null;
+      return opts.request("pi/project/file_blob", {
+        cwd: session.cwd,
+        path: session.path,
+        repo,
+        file: path,
+        ref,
+        ...(scope.kind === "agent" ? { runId: scope.runId } : {}),
+        ...(session.workdir ? { workdir: session.workdir } : {}),
+        offset: options?.offset ?? 0,
+        limit: FILE_BLOB_PAGE_MAX_BYTES,
+      });
     },
     async getAgentContext(runId) {
       const run = opts.agentRun?.(runId);

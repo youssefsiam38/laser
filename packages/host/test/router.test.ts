@@ -1089,6 +1089,7 @@ describe("Router · source-control methods", () => {
         ["pi/project/changes", { cwd, path, scope: "session" }],
         ["pi/project/file_diff", { cwd, path, scope: "turn", repo: cwd, file: "a.ts", turn: 1 }],
         ["pi/project/file_source", { cwd, path, repo: cwd, file: "a.ts" }],
+        ["pi/project/file_blob", { cwd, path, repo: cwd, file: "logo.png", ref: "worktree" }],
         ["pi/project/checkpoint/list", { cwd, path }],
         ["pi/project/restore", { cwd, path, turn: 1, restore: "files" }],
       ];

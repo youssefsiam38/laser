@@ -24,6 +24,7 @@ import type {
   AgentChangesContext,
   ChangesList,
   ChangesScope,
+  FileBytesPage,
   FileDiffPage,
   FileSource,
 } from "./contract.js";
@@ -33,6 +34,18 @@ export type ChangesDataAdapter = {
   listChanges(scope: ChangesScope): Promise<ChangesList>;
   getFileDiff(scope: ChangesScope, repo: string, path: string, options?: { offset?: number }): Promise<FileDiffPage>;
   getFileSource?(scope: ChangesScope, repo: string, path: string, ref: "old" | "new"): Promise<FileSource | null>;
+  /**
+   * One page of one side's raw bytes, for a file with no textual diff.
+   * Nothing calls this until a person opens that file, and the page it
+   * returns is bounded by the engine, not by the caller.
+   */
+  getFileBytes?(
+    scope: ChangesScope,
+    repo: string,
+    path: string,
+    side: "old" | "new",
+    options?: { offset?: number },
+  ): Promise<FileBytesPage | null>;
   getWorkspace?(options?: { rescan?: boolean }): Promise<WorkspaceShape>;
   getAgentContext?(runId: string): Promise<AgentChangesContext>;
   gitHosts?(repos?: string[]): Promise<GitHostsResult>;
