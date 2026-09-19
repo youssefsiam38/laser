@@ -2,9 +2,12 @@ import { useSyncExternalStore } from "react";
 
 import type { ChangesScope, OpenChangesArgs } from "./contract.js";
 import { fileKey } from "./classify.js";
+import type { GitActionKind } from "./git-model.js";
 import { readDiffStylePref, writeDiffStylePref, type DiffStylePref } from "./prefs.js";
 
 export type OpenFile = { repo: string; path: string };
+
+export type GitActionRequest = { kind: GitActionKind; repo: string };
 
 export type ChangesUiSnapshot = {
   open: boolean;
@@ -21,6 +24,7 @@ export type ChangesUiSnapshot = {
   unifiedFallback: boolean;
   fallbackSaid: boolean;
   revealedLarge: ReadonlySet<string>;
+  gitAction: GitActionRequest | null;
 };
 
 const listeners = new Set<() => void>();
@@ -35,6 +39,7 @@ let findOpen = false;
 let diffStyle: DiffStylePref = readDiffStylePref();
 let unifiedFallback = false;
 let fallbackSaid = false;
+let gitAction: GitActionRequest | null = null;
 
 const tabsBySession = new Map<string, OpenFile[]>();
 const activeBySession = new Map<string, OpenFile>();
@@ -82,6 +87,7 @@ function snapshot(): ChangesUiSnapshot {
     unifiedFallback,
     fallbackSaid,
     revealedLarge: revealedOf(sessionKey),
+    gitAction,
   };
 }
 
@@ -111,6 +117,18 @@ export function closeChanges(): void {
   treeOpen = false;
   fallbackSaid = false;
   unifiedFallback = false;
+  gitAction = null;
+  refresh();
+}
+
+export function requestGitAction(next: GitActionRequest): void {
+  gitAction = next;
+  refresh();
+}
+
+export function clearGitAction(): void {
+  if (!gitAction) return;
+  gitAction = null;
   refresh();
 }
 
@@ -228,6 +246,7 @@ export function resetChangesUi(): void {
   activeBySession.clear();
   viewedBySession.clear();
   revealedLargeBySession.clear();
+  gitAction = null;
   diffStyle = readDiffStylePref();
   refresh();
 }

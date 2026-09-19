@@ -1,4 +1,12 @@
 import type {
+  GitActionConfirmation,
+  GitActionExpect,
+  GitActionResult,
+  GitHostStatus,
+  GitProseKind,
+} from "@lasercode/protocol";
+
+import type {
   AgentChangesContext,
   ChangesList,
   ChangesScope,
@@ -212,6 +220,53 @@ const AGENTS: Record<string, AgentChangesContext> = {
   },
 };
 
+function mockHost(repo: string, branch: string): GitHostStatus {
+  return {
+    repo,
+    host: "github",
+    remote: "origin",
+    remoteUrl: `https://github.com/example/${repo}`,
+    defaultBranch: "main",
+    branch,
+    cli: "gh",
+    cliPresent: true,
+    signedIn: true,
+    usable: true,
+  };
+}
+
+function mockConfirmation(repo: string, files?: string[]): GitActionConfirmation {
+  return {
+    repo,
+    branch: repo === "connecting" ? "agents/review" : "main",
+    remote: "origin",
+    ...(files ? { files } : {}),
+    summary: files?.length
+      ? `Commit ${files.length} files on ${repo === "connecting" ? "agents/review" : "main"}.`
+      : `Push ${repo === "connecting" ? "agents/review" : "main"} to origin.`,
+  };
+}
+
+function mockExpect(files?: string[]): GitActionExpect {
+  return { branch: "main", ...(files ? { files } : {}), head: "abc1234" };
+}
+
+function mockPreview(confirmation: GitActionConfirmation, argv: string[], extra?: Partial<GitActionResult>): GitActionResult {
+  return {
+    outcome: "preview",
+    confirmation,
+    expect: mockExpect(confirmation.files),
+    copyable: { argv, cwd: "/p" },
+    ...extra,
+  };
+}
+
+const MOCK_PROSE: Record<GitProseKind, string> = {
+  commit: "Fix the overlay toolbar.\n\nThe commit set is chosen in Changes.",
+  pr_title: "Fix the overlay toolbar",
+  pr_description: "The overlay can commit, push and open a pull request from its toolbar.\n",
+};
+
 export function createMockAdapter(): ChangesDataAdapter {
   return {
     async listChanges(scope) {
@@ -233,6 +288,111 @@ export function createMockAdapter(): ChangesDataAdapter {
         branch: `agents/${runId}`,
         baseCommit: "abc1234",
       };
+    },
+    async gitHosts(repos) {
+      const names = repos?.length ? repos : ["app", "connecting"];
+      return {
+        hosts: names.map((repo) => mockHost(repo, repo === "connecting" ? "agents/review" : "main")),
+      };
+    },
+    async gitProse(params) {
+      return { kind: params.kind, text: MOCK_PROSE[params.kind], model: { provider: "test", id: "session-model" } };
+    },
+    async gitCommit(params) {
+      const confirmation = mockConfirmation(params.repo ?? "app", params.paths);
+      if (params.confirm !== true) {
+        return { ...mockPreview(confirmation, ["git", "commit", "-m", params.message, "--", ...params.paths]) };
+      }
+      return {
+        outcome: "done",
+        confirmation,
+        commit: { hash: "def5678", subject: params.message.split("\n")[0] ?? params.message },
+      };
+    },
+    async gitPush(params) {
+      const confirmation = mockConfirmation(params.repo ?? "app");
+      confirmation.branch = params.branch;
+      confirmation.remote = params.remote;
+      confirmation.summary = `Push ${params.branch} to ${params.remote}.`;
+      if (params.confirm !== true) {
+        return { ...mockPreview(confirmation, ["git", "push", params.remote, params.branch]) };
+      }
+      return { outcome: "done", confirmation, pushed: { remote: params.remote, branch: params.branch } };
+    },
+    async gitBranch(params) {
+      const confirmation: GitActionConfirmation = {
+        repo: params.repo ?? "app",
+        branch: params.name,
+        summary: `Create ${params.name} from ${params.base}.`,
+      };
+      if (params.confirm !== true) {
+        return { ...mockPreview(confirmation, ["git", "switch", "-c", params.name, params.base]) };
+      }
+      return {
+        outcome: "done",
+        confirmation,
+        created: { name: params.name, base: params.base, checkedOut: params.checkout === true },
+      };
+    },
+    async gitPrCreate(params) {
+      const confirmation: GitActionConfirmation = {
+        repo: params.repo ?? "app",
+        branch: params.head,
+        remote: "origin",
+        summary: `Open a pull request from ${params.head} into ${params.base}.`,
+      };
+      if (params.confirm !== true) {
+        return { ...mockPreview(confirmation, ["gh", "pr", "create", "--title", params.title]) };
+      }
+      return {
+        outcome: "done",
+        confirmation,
+        pullRequest: { host: "github", number: 12, url: "https://github.com/example/app/pull/12", title: params.title },
+      };
+    },
+    async gitPrRead(params) {
+      const confirmation: GitActionConfirmation = {
+        repo: params.repo ?? "app",
+        branch: "feature",
+        summary: `Read pull request ${params.number}.`,
+      };
+      return {
+        outcome: "done",
+        confirmation,
+        pullRequest: {
+          host: "github",
+          number: params.number,
+          title: "Fix the overlay toolbar",
+          body: "The overlay can commit from its toolbar.",
+          url: `https://github.com/example/app/pull/${params.number}`,
+          state: "open",
+          base: "main",
+          head: "feature",
+          comments: [{ id: "1", author: "reviewer", body: "Looks good." }],
+          checks: [{ name: "tests", status: "success" }],
+          files: [{ path: "src/body-range.ts", viewed: false }],
+        },
+      };
+    },
+    async gitPrCheckout(params) {
+      const confirmation: GitActionConfirmation = {
+        repo: params.repo ?? "app",
+        branch: "feature",
+        summary: `Check out pull request ${params.number}.`,
+      };
+      if (params.confirm !== true) return { ...mockPreview(confirmation, ["gh", "pr", "checkout", String(params.number)]) };
+      return { outcome: "done", confirmation, checkedOut: { branch: "feature" } };
+    },
+    async gitPrMerge(params) {
+      const confirmation: GitActionConfirmation = {
+        repo: params.repo ?? "app",
+        branch: "feature",
+        summary: `Merge pull request ${params.number} with ${params.method}.`,
+      };
+      if (params.confirm !== true) {
+        return { ...mockPreview(confirmation, ["gh", "pr", "merge", String(params.number), `--${params.method}`]) };
+      }
+      return { outcome: "done", confirmation, merged: { number: params.number, method: params.method } };
     },
   };
 }

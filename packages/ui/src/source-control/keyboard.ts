@@ -24,7 +24,11 @@ export function isEditingTarget(target: EventTarget | null): boolean {
  * Overlay shortcuts. Find and close still fire while typing in the find field;
  * file/hunk motion does not.
  */
-export function overlayKeyAction(event: KeyboardEvent): OverlayKeyAction | undefined {
+export function overlayKeyAction(
+  event: KeyboardEvent,
+  opts?: { gitActionOpen?: boolean },
+): OverlayKeyAction | undefined {
+  if (opts?.gitActionOpen) return undefined;
   const editing = isEditingTarget(event.target);
   const key = event.key;
   const lower = key.toLowerCase();

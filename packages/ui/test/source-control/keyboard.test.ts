@@ -24,6 +24,12 @@ it("maps overlay keys for close, find, files, hunks, viewed, tabs and unified", 
   expect(overlayKeyAction(key({ key: "b" }))).toBe("toggle-tree");
 });
 
+it("does not steal overlay keys while a git action dialog is open", () => {
+  expect(overlayKeyAction(key({ key: "Escape" }), { gitActionOpen: true })).toBeUndefined();
+  expect(overlayKeyAction(key({ key: "j" }), { gitActionOpen: true })).toBeUndefined();
+  expect(overlayKeyAction(key({ key: "f", ctrlKey: true }), { gitActionOpen: true })).toBeUndefined();
+});
+
 it("does not steal file motion while typing in an input", () => {
   const input = document.createElement("input");
   document.body.append(input);

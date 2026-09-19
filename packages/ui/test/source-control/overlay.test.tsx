@@ -169,10 +169,11 @@ it("selects a file without hiding the other repositories", async () => {
   expect(overlay().textContent).toContain("body-range.ts");
 });
 
-it("opens find with Ctrl+F and leaves a git-action slot for a later milestone", async () => {
+it("opens find with Ctrl+F and keeps the git-action slot", async () => {
   await mount();
   await open({ scope: { kind: "session" }, repo: "app", path: "src/body-range.ts" });
   expect(overlay().querySelector('[data-slot="changes-git-actions"]')).toBeTruthy();
+  expect([...overlay().querySelectorAll("button")].some((item) => item.textContent?.includes("Commit"))).toBe(true);
   await act(async () => overlay().dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true })));
   expect(overlay().querySelector('[data-slot="conversation-search"]')).toBeTruthy();
 });

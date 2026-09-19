@@ -58,6 +58,7 @@ import {
   useChangesUi,
   type OpenFile,
 } from "./store.js";
+import { GitActionDialog } from "./git-dialog.js";
 import { CHANGES_DIFF_PANEL_ID, ChangesTabStrip } from "./tabs.js";
 import { ChangesToolbar } from "./toolbar.js";
 
@@ -95,7 +96,12 @@ function HostChangesBinder() {
 function ChangesOverlaySurface() {
   const ui = useChangesUi();
   if (!ui.open && !ui.request) return null;
-  return <ChangesOverlay />;
+  return (
+    <>
+      <ChangesOverlay />
+      <GitActionDialog />
+    </>
+  );
 }
 
 function ChangesOverlay() {
@@ -292,14 +298,14 @@ function ChangesOverlay() {
   useEffect(() => {
     if (!ui.open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      const action = overlayKeyAction(event);
+      const action = overlayKeyAction(event, { gitActionOpen: Boolean(ui.gitAction) });
       if (!action) return;
       event.preventDefault();
       runActionRef.current(action);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [ui.open]);
+  }, [ui.open, ui.gitAction]);
 
   const openFile = (repo: string, file: ChangedFile) => {
     addTab(repo, file.path);
@@ -421,6 +427,7 @@ function ChangesOverlay() {
           onDiffStyle={setDiffStyle}
           onClose={closeChanges}
           onOpenTree={() => setTreeOpen(true)}
+          {...(active ? { activeRepo: active.repo } : {})}
         />
         {find.bar}
         <ChangesTabStrip

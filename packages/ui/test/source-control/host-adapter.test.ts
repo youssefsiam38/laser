@@ -133,3 +133,43 @@ it("calls the protocol methods with the session context", async () => {
   expect(page.truncated).toBe(false);
   expect(calls.map((call) => call.method)).toEqual(["pi/project/changes", "pi/project/file_diff"]);
 });
+
+it("omits confirm on a git preview and round-trips expect on the write", async () => {
+  const calls: Array<{ method: string; params: unknown }> = [];
+  const adapter = createHostChangesAdapter({
+    request: (async (method, params) => {
+      calls.push({ method, params });
+      if (method === "pi/project/git/commit") {
+        return {
+          outcome: (params as { confirm?: boolean }).confirm === true ? "done" : "preview",
+          confirmation: { repo: "/p", branch: "main", files: ["a.ts"], summary: "Commit a.ts on main." },
+          expect: { branch: "main", files: ["a.ts"], head: "abc" },
+        };
+      }
+      if (method === "pi/project/git/hosts") {
+        return { hosts: [{ repo: "/p", host: "github", usable: true }] };
+      }
+      if (method === "pi/project/git/prose") {
+        return { kind: "commit", text: "Fix it." };
+      }
+      return {};
+    }) as never,
+    session: () => ({ cwd: "/p", path: "/s.jsonl" }),
+  });
+  await adapter.gitCommit?.({ paths: ["a.ts"], message: "Fix it.", repo: "/p" });
+  await adapter.gitCommit?.({
+    paths: ["a.ts"],
+    message: "Fix it.",
+    repo: "/p",
+    confirm: true,
+    expect: { branch: "main", files: ["a.ts"], head: "abc" },
+  });
+  const preview = calls[0]?.params as { confirm?: boolean; expect?: unknown; cwd: string };
+  const confirm = calls[1]?.params as { confirm?: boolean; expect?: unknown };
+  expect(calls.map((call) => call.method)).toEqual(["pi/project/git/commit", "pi/project/git/commit"]);
+  expect(preview.cwd).toBe("/p");
+  expect(preview.confirm).toBeUndefined();
+  expect(preview.expect).toBeUndefined();
+  expect(confirm.confirm).toBe(true);
+  expect(confirm.expect).toEqual({ branch: "main", files: ["a.ts"], head: "abc" });
+});

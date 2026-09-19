@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 
 import { scopeLabel } from "./classify.js";
 import type { AgentChangesContext, ChangesScope, ChangesScopeKind, ChangedRepo } from "./contract.js";
+import { ChangesGitActions } from "./git-toolbar.js";
 import type { DiffStylePref } from "./prefs.js";
 import { AgentCheckoutLine } from "./states.js";
 
@@ -43,6 +44,7 @@ export function ChangesToolbar({
   onDiffStyle,
   onClose,
   onOpenTree,
+  activeRepo,
 }: {
   scope: ChangesScope;
   repos: readonly ChangedRepo[];
@@ -64,6 +66,7 @@ export function ChangesToolbar({
   onDiffStyle: (style: DiffStylePref) => void;
   onClose: () => void;
   onOpenTree: () => void;
+  activeRepo?: string;
 }) {
   const namedRepos = repos.filter((repo) => !repo.error);
   const showRepos = namedRepos.length > 1;
@@ -135,8 +138,12 @@ export function ChangesToolbar({
           >
             {diffStyle === "split" ? <Rows2 /> : <Columns2 />}
           </TooltipIconButton>
-          {/* TODO(M18-T6): git actions (commit, push, branch, PR) live in this slot. Do not invent them in this milestone. */}
-          <div data-slot="changes-git-actions" />
+          <ChangesGitActions
+            repos={repos}
+            repoFilter={repoFilter}
+            chrome={chrome}
+            {...(activeRepo ? { activeRepo } : {})}
+          />
           <Kbd className="hidden sm:inline-flex">Esc</Kbd>
           <TooltipIconButton tooltip="Close" shortcut="Esc" onClick={onClose}>
             <X />
