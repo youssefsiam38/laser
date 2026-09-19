@@ -1,6 +1,6 @@
 import { ComposerPrimitive, useAui, useAuiState, unstable_useMentionAdapter, unstable_useSlashCommandAdapter, type Unstable_TriggerItem } from "@assistant-ui/react";
 import type { CommandInfo } from "@lasercode/protocol";
-import { AtSign, FileText, FolderOpen, GitFork, History, ListX, Pencil, Plus, Shrink, SlashSquare, Sparkles } from "lucide-react";
+import { AtSign, Bot, ChevronLeft, ChevronRight, FileText, FolderOpen, GitFork, History, ListX, Pencil, Plus, Shrink, SlashSquare, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { SessionAgentSelector } from "@/components/assistant-ui/elements/agent-selector";
@@ -35,7 +35,7 @@ import { StatusLine } from "./StatusLine.js";
 import { LAST_PROMPT_MESSAGES, lastPromptEntry, lastPromptMessage } from "./last-prompt.js";
 import { SessionPreparationProvider, useSessionPreparation } from "./session-preparation.js";
 import { useDirectoryPage } from "./use-directory-page.js";
-import { ComposerMentionField, MENTION_ICONS } from "./composer-mention-tags.js";
+import { ComposerMentionField } from "./composer-mention-tags.js";
 import { createFinishedMentions, type FinishedMentions } from "./finished-mentions.js";
 import { explorerItems, explorerNavigation, explorerPageItem, mentionFormatter, mentionItemId } from "./project-explorer-model.js";
 import { useTranscriptViewport } from "./transcript-viewport.js";
@@ -118,7 +118,7 @@ function ComposerBody() {
             onInputKeyDown={onInputKeyDown}
             disabled={inert}
             placeholder={placeholder}
-            mentions={mention.mentions}
+            renderInput={(field) => <ComposerMentionField mentions={mention.mentions} {...field} />}
           />
         ) : (
           <ComposerPrimitive.AttachmentDropzone asChild>
@@ -406,6 +406,9 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
 // agent's command is written out for its arguments, and one of laser's own
 // runs, because choosing it is what asking for it looks like.
 // ---------------------------------------------------------------------------
+
+/** The `@` picker's rows: what each kind of result looks like in the list. */
+const MENTION_ICONS = { agent: Bot, file: FileText, directory: FolderOpen, next: ChevronRight, previous: ChevronLeft } as const;
 
 const SLASH_ICONS = {
   compact: Shrink,

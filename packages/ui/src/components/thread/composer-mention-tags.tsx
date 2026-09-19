@@ -25,15 +25,11 @@
  *     yet; the moment the person chooses, the words become one tag.
  */
 import { ComposerPrimitive, useAuiState } from "@assistant-ui/react";
-import { Bot, ChevronLeft, ChevronRight, FileText, FolderOpen } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, type ComponentProps, type ReactNode, type RefObject } from "react";
 
 import { cn } from "@/lib/utils";
 
-import type { FinishedMentions } from "./finished-mentions.js";
-
-/** The picker's rows: what each kind of result looks like in the list. */
-export const MENTION_ICONS = { agent: Bot, file: FileText, directory: FolderOpen, next: ChevronRight, previous: ChevronLeft } as const;
+import type { FinishedMentions, MentionKind } from "./finished-mentions.js";
 
 /**
  * One tag. Tonal like the rest of the system (DESIGN.md "Colour"): a tint of
@@ -45,7 +41,7 @@ export const MENTION_ICONS = { agent: Bot, file: FileText, directory: FolderOpen
 const TAG_CLASS =
   "box-decoration-clone rounded-sm -mx-0.5 px-0.5 py-px outline-1 " +
   "bg-[color-mix(in_oklab,var(--live)_12%,transparent)] outline-[color-mix(in_oklab,var(--live)_35%,transparent)]";
-const KIND_CLASS: Record<string, string> = {
+const KIND_CLASS: Record<MentionKind, string> = {
   file: "outline-solid",
   directory: "outline-dashed",
   agent: "outline-solid bg-[color-mix(in_oklab,var(--live)_18%,transparent)]",
@@ -56,24 +52,47 @@ const KIND_CLASS: Record<string, string> = {
  * around it does not re-render for a keystroke, and it renders nothing at all
  * until there is a finished mention to draw.
  */
-export function ComposerMentionTags({ mentions, className }: { mentions: FinishedMentions; className?: string | undefined }) {
+export function ComposerMentionTags({
+  mentions,
+  field,
+  className,
+}: {
+  mentions: FinishedMentions;
+  /** The textarea this layer mirrors. The field owns it; the layer only reads it. */
+  field: RefObject<HTMLTextAreaElement | null>;
+  className?: string | undefined;
+}) {
   const text = useAuiState((state) => state.composer.text);
   const tags = useMemo(() => mentions.advance(text), [mentions, text]);
   const layer = useRef<HTMLDivElement>(null);
 
-  // The textarea scrolls once the draft outgrows it (`maxRows`); the mirror
-  // has to travel with it, or a tag would come loose from its word.
+  // The textarea scrolls once the draft outgrows it (`maxRows`), and it gives
+  // up part of its width to the scrollbar when it does. The mirror has to
+  // travel and narrow with it, or a tag comes loose from its word — wrapping
+  // one word earlier is the worse of the two, because it moves every tag after
+  // it.
   const follow = () => {
-    const field = layer.current?.parentElement?.querySelector("textarea");
-    if (field && layer.current) layer.current.scrollTop = field.scrollTop;
+    const input = field.current;
+    const mirror = layer.current;
+    if (!input || !mirror) return;
+    mirror.scrollTop = input.scrollTop;
+    const style = getComputedStyle(input);
+    const borders = (parseFloat(style.borderInlineStartWidth) || 0) + (parseFloat(style.borderInlineEndWidth) || 0);
+    const gutter = Math.max(0, Math.round(input.offsetWidth - input.clientWidth - borders));
+    mirror.style.marginInlineEnd = gutter ? `${gutter}px` : "";
   };
   useLayoutEffect(follow, [text, tags]);
+  // This component stays mounted while it renders nothing, so the listener is
+  // attached once for the composer's life — a composer opens empty and gains
+  // its first tag much later, and a layer that only existed after the first
+  // tag would never have been listening.
   useEffect(() => {
-    const field = layer.current?.parentElement?.querySelector("textarea");
-    if (!field) return;
-    field.addEventListener("scroll", follow);
-    return () => field.removeEventListener("scroll", follow);
-  }, []);
+    const input = field.current;
+    if (!input) return;
+    input.addEventListener("scroll", follow);
+    return () => input.removeEventListener("scroll", follow);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `follow` reads live refs; the listener outlives every render
+  }, [field]);
 
   if (tags.length === 0) return null;
   const parts: ReactNode[] = [];
@@ -86,7 +105,7 @@ export function ComposerMentionTags({ mentions, className }: { mentions: Finishe
         data-slot="composer-mention-tag"
         data-mention-kind={tag.type}
         data-mention-label={tag.label}
-        className={cn(TAG_CLASS, KIND_CLASS[tag.type] ?? "outline-solid")}
+        className={cn(TAG_CLASS, KIND_CLASS[tag.type])}
       >
         {tag.token}
       </span>,
@@ -124,14 +143,18 @@ export function ComposerMentionTags({ mentions, className }: { mentions: Finishe
 export function ComposerMentionField({
   mentions,
   className,
-  fieldClassName,
+  wrapperClassName,
   ...input
-}: { mentions: FinishedMentions; fieldClassName?: string | undefined } & ComponentProps<typeof ComposerPrimitive.Input>) {
+}: { mentions: FinishedMentions; wrapperClassName?: string | undefined } & ComponentProps<typeof ComposerPrimitive.Input>) {
+  const field = useRef<HTMLTextAreaElement>(null);
   return (
-    <div data-slot="composer-mention-field" className={cn("relative min-w-0", fieldClassName)}>
-      <ComposerMentionTags mentions={mentions} className={className} />
+    // `flex`, not a plain block: a textarea in normal flow is inline-level, and
+    // an inline-level box leaves a baseline gap under itself. Every composer
+    // this field replaced had the textarea as a flex item, and it stays one.
+    <div data-slot="composer-mention-field" className={cn("relative flex min-w-0", wrapperClassName)}>
+      <ComposerMentionTags mentions={mentions} field={field} className={className} />
       {/* Positioned, so the person's own text paints over the tags. */}
-      <ComposerPrimitive.Input {...input} className={cn(className, "relative")} />
+      <ComposerPrimitive.Input ref={field} {...input} className={cn(className, "relative min-w-0")} />
     </div>
   );
 }

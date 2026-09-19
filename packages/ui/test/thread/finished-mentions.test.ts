@@ -92,12 +92,19 @@ it("re-anchors a finished mention when earlier text changes, and keeps its tag",
 it("editing inside a finished mention returns it to ordinary text and matches again", () => {
   const mentions = createFinishedMentions();
   const chosen = choose(mentions, "@ser", 4, file("server/index.ts"));
+  // Deleting the space the picker added, with nothing after it, is not an edit
+  // of the mention: the token still ends the draft, so it is still a mention.
+  const alone = chosen.text.slice(0, 18);
+  expect(mentions.matcher(alone, "@", 18)).toBeNull();
+  expect(mentions.advance(alone)).toHaveLength(1);
   const typed = typeOn(mentions, chosen, "later");
-  // Deleting the space the picker added is not an edit of the mention.
+  // Deleting it in front of a word is: `@./server/index.tslater` is one word,
+  // and the transcript renders that as prose, so the composer stops tagging it
+  // and the text may match as a query again.
   const space = typed.text.slice(0, 18) + typed.text.slice(19);
-  expect(mentions.matcher(space, "@", 18)).toBeNull();
-  expect(mentions.advance(space)).toHaveLength(1);
-  // Deleting a character of the path is.
+  expect(mentions.advance(space)).toEqual([]);
+  expect(mentions.matcher(space, "@", 18)).toMatchObject({ offset: 0, query: "./server/index.ts" });
+  // Deleting a character of the path is an edit of the mention itself.
   const cut = space.slice(0, 17) + space.slice(18);
   expect(mentions.matcher(cut, "@", 17)).toMatchObject({ offset: 0, query: "./server/index.t" });
   expect(mentions.advance(cut)).toEqual([]);
@@ -124,6 +131,133 @@ it("treats a draft that arrives whole as finished: a paste, and a restored draft
   const half = createFinishedMentions();
   expect(half.matcher("look at @./ser", "@", 14)).toBeNull();
   expect(half.matcher("look at @./se", "@", 13)).toMatchObject({ query: "./se", offset: 8 });
+});
+
+it("finishes a handle that arrived whole: a restored draft, and a paste", () => {
+  // The reported defect, for the other kind of mention: a handle the person
+  // chose before a reload is not a path, so the transcript's scanner never
+  // sees it (D-284) and only the arrival itself says it was chosen.
+  const restored = createFinishedMentions();
+  const draft = "ask @audit about @./server/index.ts today";
+  expect(restored.matcher(draft, "@", draft.length)).toBeNull();
+  expect(restored.advance(draft).map((tag) => [tag.start, tag.token, tag.type])).toEqual([
+    [4, "@audit", "agent"],
+    [17, "@./server/index.ts", "file"],
+  ]);
+  expect(typeOn(restored, { text: draft, caret: draft.length }, " please").opened).toEqual([]);
+
+  // The same text pasted into a draft that is already open.
+  const pasted = createFinishedMentions();
+  pasted.matcher("Hey ", "@", 4);
+  const after = `Hey ${draft}`;
+  expect(pasted.advance(after).map((tag) => tag.token)).toEqual(["@audit", "@./server/index.ts"]);
+  expect(pasted.matcher(after, "@", after.length)).toBeNull();
+
+  // Typing one is still a question: the list opens on every keystroke of it.
+  const typing = createFinishedMentions();
+  const typed = typeOn(typing, { text: "ask ", caret: 4 }, "@aud");
+  expect(typed.opened).toEqual(["ask @", "ask @a", "ask @au", "ask @aud"]);
+  expect(typing.matcher(typed.text, "@", typed.caret)).toMatchObject({ query: "aud", offset: 4 });
+  expect(typing.advance(typed.text)).toEqual([]);
+  // And a handle that ends where the paste ends is where the caret is, so it
+  // stays a query too.
+  const half = createFinishedMentions();
+  half.matcher("ask ", "@", 4);
+  expect(half.matcher("ask @aud", "@", 8)).toMatchObject({ query: "aud", offset: 4 });
+});
+
+it("drops a mention that loses its boundary, and takes it back when the boundary returns", () => {
+  // A mention is not its characters. The transcript chips none of these, so
+  // the composer tags none of them either.
+  const before = createFinishedMentions();
+  const chosen = choose(before, "hi @ser", 7, file("server/index.ts"));
+  expect(chosen.text).toBe("hi @./server/index.ts ");
+  const glued = "hi@./server/index.ts ";
+  expect(before.advance(glued)).toEqual([]);
+  // The record survives the broken state: typing a word in front of a mention
+  // passes through it on the way to a boundary that is whole again.
+  expect(before.advance("hi @./server/index.ts ").map((tag) => tag.start)).toEqual([3]);
+
+  const between = createFinishedMentions();
+  const first = choose(between, "@a", 2, file("a.ts"));
+  const second = choose(between, `${first.text}@b`, first.caret + 2, file("b.ts"));
+  expect(second.text).toBe("@./a.ts @./b.ts ");
+  expect(between.advance("@./a.ts@./b.ts ")).toEqual([]);
+
+  const ahead = createFinishedMentions();
+  const only = choose(ahead, "@a", 2, file("a.ts"));
+  expect(only.text).toBe("@./a.ts ");
+  expect(ahead.advance("y@./a.ts ")).toEqual([]);
+});
+
+it("survives undo and redo, which replace the whole draft at once", () => {
+  const mentions = createFinishedMentions();
+  const chosen = choose(mentions, "@ser", 4, file("server/index.ts"));
+  const typed = typeOn(mentions, chosen, "please read it");
+  expect(mentions.advance(typed.text)).toHaveLength(1);
+  // Undo writes the earlier text in one go; redo writes the later one.
+  expect(mentions.advance(chosen.text).map((tag) => tag.start)).toEqual([0]);
+  expect(mentions.advance(typed.text).map((tag) => tag.start)).toEqual([0]);
+  expect(typeOn(mentions, { text: typed.text, caret: typed.text.length }, " now").opened).toEqual([]);
+  // An undo that takes the mention itself away leaves ordinary text behind.
+  expect(mentions.advance("@ser")).toEqual([]);
+});
+
+it("a paste over a selection replaces what it covers and finishes what it brings", () => {
+  const mentions = createFinishedMentions();
+  const chosen = choose(mentions, "Read @a", 7, file("a.ts"));
+  const draft = typeOn(mentions, chosen, "now");
+  expect(draft.text).toBe("Read @./a.ts now");
+  // Select `now` and paste a mention and a word over it.
+  const replaced = "Read @./a.ts @./b.ts here";
+  expect(mentions.advance(replaced).map((tag) => [tag.start, tag.token])).toEqual([
+    [5, "@./a.ts"],
+    [13, "@./b.ts"],
+  ]);
+  // A selection that straddles the first mention takes it with it.
+  const straddled = "Read @./a and @./b.ts here";
+  expect(mentions.advance(straddled).map((tag) => tag.token)).toEqual(["@./b.ts"]);
+});
+
+it("two composers never see each other's mentions", () => {
+  const session = createFinishedMentions();
+  const bubble = createFinishedMentions();
+  const chosen = choose(session, "@ser", 4, file("server/index.ts"));
+  bubble.matcher("", "@", 0);
+  // The same characters, typed into the other composer: nothing was chosen
+  // there, so the question is still open there.
+  const typed = typeOn(bubble, { text: "", caret: 0 }, chosen.text.trimEnd());
+  expect(bubble.matcher(typed.text, "@", typed.caret)).toMatchObject({ offset: 0, query: "./server/index.ts" });
+  expect(bubble.advance(typed.text)).toEqual([]);
+  expect(session.advance(chosen.text)).toHaveLength(1);
+});
+
+it("an IME commit beside a mention is text, not a choice", () => {
+  const mentions = createFinishedMentions();
+  const chosen = choose(mentions, "@ser", 4, file("server/index.ts"));
+  // A composition commits several characters at once, the way a paste does.
+  const committed = `${chosen.text}\u3053\u3093\u306b\u3061\u306f`;
+  expect(mentions.advance(committed).map((tag) => tag.start)).toEqual([0]);
+  // And a word the composition starts with `@` is a query, not a finished
+  // mention: it ends where the commit ends, which is where the caret is.
+  const asking = `${committed} @\u3042\u3044`;
+  expect(mentions.advance(asking).map((tag) => tag.start)).toEqual([0]);
+  expect(mentions.matcher(asking, "@", asking.length)).toMatchObject({ query: "\u3042\u3044" });
+});
+
+it("recovers from a render that advanced it with text the composer never kept", () => {
+  const mentions = createFinishedMentions();
+  const chosen = choose(mentions, "@ser", 4, file("server/index.ts"));
+  const typed = typeOn(mentions, chosen, "please");
+  const tags = mentions.advance(typed.text).map((tag) => [tag.start, tag.token]);
+  // A render React threw away, one keystroke behind, then the committed text
+  // again: the record is a reduction over text, so it has to land in the same
+  // place whatever order it sees.
+  mentions.advance(typed.text.slice(0, -1));
+  expect(mentions.advance(typed.text).map((tag) => [tag.start, tag.token])).toEqual(tags);
+  // Even a text from much earlier cannot corrupt it.
+  mentions.advance(chosen.text);
+  expect(mentions.advance(typed.text).map((tag) => [tag.start, tag.token])).toEqual(tags);
 });
 
 it("a Tab completion and a slash descent are not choices", () => {

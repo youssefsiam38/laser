@@ -222,6 +222,39 @@ it('a pasted message that already carries a path is finished, not an open query'
   expect(input().value).toBe(`${pasted} please`);
 });
 
+it('a handle in a draft that arrived whole is finished too, and typing one still asks', async () => {
+  // A handle is never a chip in the transcript (D-284), so nothing in the text
+  // says it was chosen: only the fact that the draft arrived whole does. A
+  // person who picks `@audit`, reloads, and keeps typing must not be back in
+  // the defect.
+  await type('Ask @audit about @./server/index.ts today');
+  expect(listbox()).toBeNull();
+  expect(tags().map(tag => [tag.dataset.mentionKind, tag.textContent])).toEqual([['agent', '@audit'], ['file', '@./server/index.ts']]);
+  expect(await typeOn(' please')).toEqual([]);
+  // Typing a handle is still a question, and the list opens on it.
+  expect((await typeOn(' @ser')).length).toBeGreaterThan(0);
+  await tick();
+  expect(options().length).toBeGreaterThan(0);
+});
+
+it('the tag layer follows a textarea that scrolls, on a composer that opened empty', async () => {
+  // The listener has to be attached before the first tag exists: every
+  // ordinary composer opens with an empty draft and gains one much later.
+  await type('@ser'); await tick(); await key('Enter');
+  expect(tags()).toHaveLength(1);
+  const layer = container.querySelector<HTMLElement>('[data-slot="composer-mention-layer"]')!;
+  let followed: number | undefined;
+  Object.defineProperty(layer, 'scrollTop', { configurable: true, get: () => followed ?? 0, set: (value: number) => { followed = value; } });
+  // Past `maxRows` the field scrolls and gives up part of its width to the
+  // scrollbar; the mirror has to do both or the tags leave their words.
+  Object.defineProperty(input(), 'scrollTop', { configurable: true, get: () => 42 });
+  Object.defineProperty(input(), 'offsetWidth', { configurable: true, get: () => 320 });
+  Object.defineProperty(input(), 'clientWidth', { configurable: true, get: () => 306 });
+  await act(async () => { input().dispatchEvent(new Event('scroll')); });
+  expect(followed).toBe(42);
+  expect(layer.style.marginInlineEnd).toBe('14px');
+});
+
 it('More entries reads one next page while keeping the composer query', async () => {
   request.mockResolvedValueOnce({ path: '/project', home: '/home/test', entries: [], truncated: true, nextOffset: 80, commonPrefix: '' });
   await type('@'); await tick(); await key('Enter'); await tick();
