@@ -9,8 +9,40 @@ const changed = (): never => { throw new ProtocolError(ErrorCodes.InvalidParams,
 
 /** A durable page is deliberately recognizable without carrying a path or process identity. */
 export const DURABLE_HISTORY_EPOCH = "durable-v1";
+/**
+ * The raw-entry ceiling on one page — the bound that makes a turn window safe.
+ *
+ * A turn is a person's unit, not a size: one prompt can drag in five hundred
+ * tool rows from a long agent run. This is the ceiling those raw rows meet
+ * (the reference's `maxRawTurns` in the shape our rows actually have), and a
+ * page that reaches it is shrunk — fewer turns, and inside one turn if even a
+ * single turn cannot fit — never refused. Two hundred rows is about six
+ * screens of the densest transcript we draw and comfortably inside the byte
+ * ceiling for ordinary records, so it binds fan-out without ever being the
+ * thing an ordinary page notices.
+ */
 export const HISTORY_PAGE_ENTRY_LIMIT = 200;
 export const HISTORY_PAGE_BYTE_LIMIT = 1024 * 1024;
+
+/**
+ * The newest page: the last ten user-anchored turns (M16-T90).
+ *
+ * Ten is the reference's own first-page size, and it is a person's answer to
+ * "where was I": the last ten things they said, with everything that happened
+ * in between. It is deliberately not a byte budget — the byte ceiling is a net
+ * below this, not the policy.
+ */
+export const HISTORY_FIRST_PAGE_TURNS = 10;
+
+/** Each "load earlier": twenty more turns, as the reference loads them. */
+export const HISTORY_EARLIER_PAGE_TURNS = 20;
+
+/**
+ * The most turns one request may name. A turn carries at least one entry, so a
+ * page can never hold more turns than it can hold rows; asking for more is a
+ * malformed request rather than a large one.
+ */
+export const HISTORY_PAGE_TURN_MAX = HISTORY_PAGE_ENTRY_LIMIT;
 
 /** The body-free row retained by the host's read-only session index. */
 export interface HistoryWindowNode {
@@ -210,16 +242,29 @@ export function historyWindowPlan(
     start = branch.findIndex(index => nodes[index]!.id === request.from);
     if (start < 0) changed();
   } else if (!all) {
-    const limit = "tail" in request ? request.tail : "before" in request || "beforeEntry" in request ? request.limit ?? 40 : 40;
-    let messages = 0;
-    start = end;
-    while (start > 0 && messages < limit) if (nodes[branch[--start]!]!.isMessage) messages++;
-    // A tool result cannot be separated from its call, or an assistant action
-    // from its prompt. A single unusually long turn may exceed the row target.
-    // A turn too large for any page (a long agent run) splits between an
-    // assistant action and the next, never between a call and its result.
-    if (splitTurns) while (start > 0 && start < end && nodes[branch[start]!]!.isToolResult) start--;
-    else while (start > 0 && !nodes[branch[start]!]!.isUser) start--;
+    const turns = windowTurns(request);
+    if (turns !== undefined) {
+      // Count user messages backwards along the branch. Everything between two
+      // of them belongs to the later turn, and the user message that anchors
+      // the oldest turn is part of the page it anchors — so a page always
+      // begins at a prompt and never halfway through an exchange. A compaction,
+      // a goal record or an assistant reply is not an anchor: only a user
+      // message on the rendered branch is (M16-T90).
+      start = end;
+      let anchors = 0;
+      while (start > 0 && anchors < turns) if (nodes[branch[--start]!]!.isUser) anchors++;
+    } else {
+      const limit = "tail" in request ? request.tail : "limit" in request ? request.limit ?? 40 : 40;
+      let messages = 0;
+      start = end;
+      while (start > 0 && messages < limit) if (nodes[branch[--start]!]!.isMessage) messages++;
+      // A tool result cannot be separated from its call, or an assistant action
+      // from its prompt. A single unusually long turn may exceed the row target.
+      // A turn too large for any page (a long agent run) splits between an
+      // assistant action and the next, never between a call and its result.
+      if (splitTurns) while (start > 0 && start < end && nodes[branch[start]!]!.isToolResult) start--;
+      else while (start > 0 && !nodes[branch[start]!]!.isUser) start--;
+    }
     // Attribution and other turn-local custom markers precede the prompt.
     while (start > 0 && !nodes[branch[start - 1]!]!.isMessage) start--;
   }
@@ -263,12 +308,45 @@ export function historyWindowPlan(
   };
 }
 
+/** The turns a request counts in, or undefined when it counts entries. */
+export function windowTurns(request: HistoryWindowRequest): number | undefined {
+  return "turns" in request && Number.isInteger(request.turns) && request.turns > 0 ? request.turns : undefined;
+}
+
+/** The messages an entry-counted request asks for. */
+function windowEntries(request: HistoryWindowRequest): number {
+  return "tail" in request ? request.tail : "limit" in request ? request.limit ?? 40 : 40;
+}
+
 /**
- * Keep an exact request shape while fitting tail/before pages at complete-turn
- * boundaries, splitting inside a turn only when no complete turn fits. `all`
- * and `from` are indivisible: callers must refuse them when their exact
- * projection is too large. The search is logarithmic, never one
- * full branch replan per possible message count.
+ * A request for the newest page — the only shape a proved delta may answer.
+ *
+ * Turn and entry windows are the same question asked in different units, so a
+ * client that pages in turns keeps the append-delta reply a client that pages
+ * in entries already had.
+ */
+export function isLiveEdgeWindow(request: HistoryWindowRequest): boolean {
+  if ("before" in request || "beforeEntry" in request || "from" in request || "all" in request) return false;
+  return "tail" in request || "turns" in request;
+}
+
+/** The same request asked for a smaller page, in one unit or the other. */
+function windowWithCount(request: HistoryWindowRequest, unit: "turns" | "entries", count: number): HistoryWindowRequest {
+  if ("before" in request) return unit === "turns" ? { before: request.before, turns: count } : { before: request.before, limit: count };
+  if ("beforeEntry" in request) return unit === "turns" ? { beforeEntry: request.beforeEntry, turns: count } : { beforeEntry: request.beforeEntry, limit: count };
+  return unit === "turns" ? { turns: count } : { tail: count };
+}
+
+/**
+ * Keep an exact request shape while fitting a page inside the wire ceilings.
+ *
+ * Three steps, and the last one always answers something: the request as asked;
+ * then fewer of whatever it counted — turns for a turn window, messages for an
+ * entry window — at complete-turn boundaries; then, only when not even one turn
+ * fits, a page *inside* that turn, counted in rows. A byte or row ceiling can
+ * therefore shrink a page and can never refuse one (M16-T90). `all` and `from`
+ * are indivisible: callers must refuse them when their exact projection is too
+ * large. Every search is logarithmic, never one full branch replan per count.
  */
 export function fitHistoryWindowPlan(
   nodes: readonly HistoryWindowNode[],
@@ -281,52 +359,34 @@ export function fitHistoryWindowPlan(
   if (fits(initial)) return initial;
   if ("all" in request || "from" in request || scope.selection?.kind === "delta") return undefined;
 
-  const maximum = Math.min("tail" in request ? request.tail : request.limit ?? 40, HISTORY_PAGE_ENTRY_LIMIT);
-  let low = 1;
-  let high = maximum - 1;
-  let best: HistoryWindowPlan | undefined;
-  while (low <= high) {
-    const limit = low + Math.floor((high - low) / 2);
-    const candidate = historyWindowPlan(
-      nodes,
-      leafId,
-      "before" in request ? { before: request.before, limit }
-        : "beforeEntry" in request ? { beforeEntry: request.beforeEntry, limit }
-          : { tail: limit },
-      scope,
-    );
-    if (fits(candidate)) {
-      best = candidate;
-      low = limit + 1;
-    } else {
-      high = limit - 1;
+  const search = (unit: "turns" | "entries", maximum: number, splitTurns: boolean): HistoryWindowPlan | undefined => {
+    let low = 1;
+    let high = maximum;
+    let best: HistoryWindowPlan | undefined;
+    while (low <= high) {
+      const count = low + Math.floor((high - low) / 2);
+      const candidate = historyWindowPlan(nodes, leafId, windowWithCount(request, unit, count), scope, splitTurns);
+      if (fits(candidate)) {
+        best = candidate;
+        low = count + 1;
+      } else {
+        high = count - 1;
+      }
     }
-  }
-  if (best) return best;
+    return best;
+  };
+
+  const turns = windowTurns(request);
+  const asked = turns === undefined
+    ? Math.min(windowEntries(request), HISTORY_PAGE_ENTRY_LIMIT)
+    : Math.min(turns, HISTORY_PAGE_TURN_MAX);
+  const fewer = search(turns === undefined ? "entries" : "turns", asked - 1, false);
+  if (fewer) return fewer;
 
   // Not even the newest complete turn fits: page inside it rather than leave
-  // the conversation unreadable. Older pages continue from the cursor.
-  low = 1;
-  high = maximum;
-  while (low <= high) {
-    const limit = low + Math.floor((high - low) / 2);
-    const candidate = historyWindowPlan(
-      nodes,
-      leafId,
-      "before" in request ? { before: request.before, limit }
-        : "beforeEntry" in request ? { beforeEntry: request.beforeEntry, limit }
-          : { tail: limit },
-      scope,
-      true,
-    );
-    if (fits(candidate)) {
-      best = candidate;
-      low = limit + 1;
-    } else {
-      high = limit - 1;
-    }
-  }
-  return best;
+  // the conversation unreadable. Older pages continue from the cursor, so a
+  // split turn is still read whole, one page at a time.
+  return search("entries", turns === undefined ? asked : HISTORY_PAGE_ENTRY_LIMIT, true);
 }
 
 /** Materialize one already planned page from an in-memory snapshot. */

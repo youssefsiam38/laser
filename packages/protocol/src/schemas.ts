@@ -36,7 +36,7 @@ import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX, TASK_LOG_SEGMENTS_MAX } from "./tasks.js";
 import { ENVIRONMENT_KEY_PATTERN, SESSION_REVISION_PATTERN } from "./session-revision.js";
 import { BODY_COMPONENT_KINDS, BODY_REGION_MAX_ITEMS, ENTRY_RANGE_MAX_BYTES } from "./body-range.js";
-import { HISTORY_PAGE_BYTE_LIMIT } from "./history-window.js";
+import { HISTORY_PAGE_BYTE_LIMIT, HISTORY_PAGE_TURN_MAX } from "./history-window.js";
 
 /** Opt-in browse replies must not silently reinterpret legacy folders as files. */
 export const explorerListingSchema = z.object({
@@ -751,6 +751,11 @@ export const clientParamsSchemas = {
       z.object({ tail: z.number().int().min(1).max(200) }).strict(),
       z.object({ before: z.string().min(1).max(8192), limit: z.number().int().min(1).max(200).optional() }).strict(),
       z.object({ beforeEntry: z.string().min(1).max(1024), limit: z.number().int().min(1).max(200).optional() }).strict(),
+      // Counted in user-anchored turns (M16-T90). A turn carries at least one
+      // row, so more turns than the raw-entry ceiling is a malformed request.
+      z.object({ turns: z.number().int().min(1).max(HISTORY_PAGE_TURN_MAX) }).strict(),
+      z.object({ before: z.string().min(1).max(8192), turns: z.number().int().min(1).max(HISTORY_PAGE_TURN_MAX) }).strict(),
+      z.object({ beforeEntry: z.string().min(1).max(1024), turns: z.number().int().min(1).max(HISTORY_PAGE_TURN_MAX) }).strict(),
       z.object({ from: z.string().min(1).max(1024) }).strict(),
       z.object({ all: z.literal(true) }).strict(),
     ]).optional(),

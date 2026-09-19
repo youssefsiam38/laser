@@ -442,6 +442,54 @@ describe("WorkerServer", () => {
     } finally { await h.server.dispose(); }
   });
 
+  it("pages the live authority in user-anchored turns, delta included, and refuses a malformed turn count (M16-T90)", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    driver.header = { id: "s1", cwd: "/tmp/fake", version: 3 };
+    // Twelve turns of three rows: a prompt, a tool call, its result.
+    const rows: unknown[] = [];
+    let parent: string | null = null;
+    for (let turn = 0; turn < 12; turn++) {
+      for (const [suffix, message] of [
+        ["u", { role: "user", content: [{ type: "text", text: `Prompt ${turn}` }] }],
+        ["a", { role: "assistant", content: [{ type: "toolCall", id: `c${turn}`, name: "bash", arguments: {} }] }],
+        ["r", { role: "toolResult", toolCallId: `c${turn}`, content: [{ type: "text", text: "ok" }] }],
+      ] as const) {
+        const id = `${suffix}${turn}`;
+        rows.push({ type: "message", id, parentId: parent, message });
+        parent = id;
+      }
+    }
+    driver.history = { entries: rows, leafId: "r11" };
+    const ids = (result: unknown) => (result as { entries: Array<{ id: string }> }).entries.map(entry => entry.id);
+    try {
+      const first = (await h.call(2, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { turns: 2 } })).result as { window: { before: string; revision: string; mode: string } };
+      expect(ids(first)).toEqual(["u10", "a10", "r10", "u11", "a11", "r11"]);
+      expect(first.window.mode).toBe("replace");
+
+      const earlier = await h.call(3, "pi/session/entries", {
+        path: "/tmp/fake/s1.jsonl", window: { before: first.window.before, turns: 3 }, baseRevision: first.window.revision,
+      });
+      expect(ids(earlier.result)).toEqual(["u7", "a7", "r7", "u8", "a8", "r8", "u9", "a9", "r9"]);
+      expect(earlier.result).not.toHaveProperty("window.live");
+
+      // One more turn: a newest-page turn read is a proved append delta, exactly
+      // as a tail read is.
+      driver.history = { entries: [...rows,
+        { type: "message", id: "u12", parentId: "r11", message: { role: "user", content: [{ type: "text", text: "Prompt 12" }] } },
+        { type: "message", id: "a12", parentId: "u12", message: { role: "assistant", content: [{ type: "text", text: "Done" }] } },
+      ], leafId: "a12" };
+      const delta = await h.call(4, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { turns: 2 }, baseRevision: first.window.revision });
+      expect(delta.result).toMatchObject({ window: { mode: "delta", authority: "live" } });
+      expect(ids(delta.result)).toEqual(["u12", "a12"]);
+
+      for (const window of [{ turns: 0 }, { turns: 10, tail: 10 }, { turns: 201 }]) {
+        expect((await h.call(5, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window })).error?.code).toBe(ErrorCodes.InvalidParams);
+      }
+    } finally { await h.server.dispose(); }
+  });
+
   it("keeps an in-memory navigated live branch authoritative for authority:any", async () => {
     const h = harness();
     await h.call(1, "session/new", { cwd: "/tmp/fake" });

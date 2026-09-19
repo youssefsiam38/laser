@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { boundedHistoryWindow, fitHistoryWindowPlan, historyWindow, historyWindowNode, historyWindowPlan, parseClientRequest } from "../src/index.js";
+import {
+  HISTORY_EARLIER_PAGE_TURNS,
+  HISTORY_FIRST_PAGE_TURNS,
+  HISTORY_PAGE_BYTE_LIMIT,
+  HISTORY_PAGE_ENTRY_LIMIT,
+  HISTORY_PAGE_TURN_MAX,
+  boundedHistoryWindow,
+  fitHistoryWindowPlan,
+  historyContentSerializedBytes,
+  historyWindow,
+  historyWindowNode,
+  historyWindowPlan,
+  isLiveEdgeWindow,
+  parseClientRequest,
+} from "../src/index.js";
 
 const PATH = "/project/session.jsonl";
 const scope = {
@@ -189,7 +203,11 @@ describe("history windows", () => {
   });
 
   it("round-trips every request variant, authority and base revision, and refuses invalid values", () => {
-    for (const window of [{ tail: 40 }, { before: "cursor", limit: 40 }, { beforeEntry: "entry", limit: 40 }, { from: "entry" }, { all: true }]) {
+    for (const window of [
+      { tail: 40 }, { before: "cursor", limit: 40 }, { beforeEntry: "entry", limit: 40 }, { from: "entry" }, { all: true },
+      // Turn windows (M16-T90), additive beside the entry-counted ones.
+      { turns: HISTORY_FIRST_PAGE_TURNS }, { before: "cursor", turns: HISTORY_EARLIER_PAGE_TURNS }, { beforeEntry: "entry", turns: HISTORY_EARLIER_PAGE_TURNS },
+    ]) {
       const request = { jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path: PATH, window, authority: "any", baseRevision: scope.revision } };
       expect(parseClientRequest(JSON.parse(JSON.stringify(request)))).toEqual(request);
     }
@@ -203,8 +221,209 @@ describe("history windows", () => {
       { path: PATH, window: { beforeEntry: "" }, baseRevision: scope.revision },
       { path: PATH, authority: "durable" },
       { path: PATH, baseRevision: "" },
+      // A turn count is a positive integer no larger than the raw-entry ceiling,
+      // it is never mixed with an entry count, and an older turn page still
+      // needs the revision the caller already holds.
+      { path: PATH, window: { turns: 0 } },
+      { path: PATH, window: { turns: HISTORY_PAGE_TURN_MAX + 1 } },
+      { path: PATH, window: { turns: 2.5 } },
+      { path: PATH, window: { turns: 10, tail: 10 } },
+      { path: PATH, window: { turns: 10, limit: 10 } },
+      { path: PATH, window: { before: "cursor", turns: 20 } },
+      { path: PATH, window: { beforeEntry: "entry", turns: 20 } },
     ]) {
       expect(() => parseClientRequest({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params })).toThrow();
     }
+  });
+});
+
+/**
+ * M16-T90: a page is a number of **turns**, not a number of bytes.
+ *
+ * A turn is anchored by a user message on the rendered branch; everything after
+ * it up to the next user message rides along. The first page is the last ten
+ * turns, each "load earlier" is twenty more, the cursor is the identity of the
+ * oldest row the page carries, and "is there more" is answered by the branch
+ * rather than by a byte budget. The byte and row ceilings stay as nets: they may
+ * shrink a page, never refuse one.
+ */
+describe("a page is a number of turns", () => {
+  const replace = { ...scope, selection: { kind: "replace" as const } };
+  const ids = (page: { entries: unknown[] }): string[] => page.entries.map(entry => (entry as { id: string }).id);
+  const users = (page: { entries: unknown[] }): string[] =>
+    page.entries.filter(entry => (entry as { message?: { role?: string } }).message?.role === "user").map(entry => (entry as { id: string }).id);
+
+  /**
+   * `count` turns of four rows each: a prompt, a reply that calls a tool, the
+   * tool's result, and a closing reply. Only the prompt anchors a turn.
+   */
+  function turns(count: number, options: { reply?: string } = {}): unknown[] {
+    const entries: unknown[] = [];
+    let parent: string | null = null;
+    const push = (id: string, value: Record<string, unknown>): void => {
+      entries.push({ type: "message", id, parentId: parent, ...value });
+      parent = id;
+    };
+    for (let turn = 0; turn < count; turn++) {
+      push(`u${turn}`, { message: { role: "user", content: [{ type: "text", text: `Prompt ${turn}` }] } });
+      push(`a${turn}`, { message: { role: "assistant", content: [{ type: "toolCall", id: `c${turn}`, name: "read", arguments: {} }] } });
+      push(`r${turn}`, { message: { role: "toolResult", toolCallId: `c${turn}`, content: [{ type: "text", text: "Output" }] } });
+      push(`z${turn}`, { message: { role: "assistant", content: [{ type: "text", text: options.reply ?? `Reply ${turn}` }] } });
+    }
+    return entries;
+  }
+
+  it("carries exactly ten user turns, with everything that rode along in them", () => {
+    const entries = turns(200);
+    const snapshot = { entries, leafId: "z199" };
+    const page = historyWindow(snapshot, { turns: HISTORY_FIRST_PAGE_TURNS }, replace);
+    expect(users(page)).toEqual(Array.from({ length: 10 }, (_, index) => `u${190 + index}`));
+    // Four rows a turn: the prompt and the three rows that rode along with it.
+    expect(page.entries).toEqual(entries.slice(-40));
+    expect(ids(page)[0]).toBe("u190");
+    expect(page.window).toMatchObject({ anchor: "u190", complete: false, userOffset: 190 });
+    // The cursor is the identity of the oldest row the page carries, and its
+    // presence is the answer to "is there more".
+    expect(page.window.before).toBeTypeOf("string");
+  });
+
+  it("loads twenty more turns that start exactly where the last page ended", () => {
+    const entries = turns(200);
+    const snapshot = { entries, leafId: "z199" };
+    const first = historyWindow(snapshot, { turns: HISTORY_FIRST_PAGE_TURNS }, replace);
+    const earlier = historyWindow(snapshot, { before: first.window.before!, turns: HISTORY_EARLIER_PAGE_TURNS }, replace);
+    expect(users(earlier)).toHaveLength(20);
+    expect(earlier.entries).toEqual(entries.slice(-120, -40));
+    // No gap and no duplicate across the seam.
+    expect([...ids(earlier), ...ids(first)]).toEqual(entries.slice(-120).map(entry => (entry as { id: string }).id));
+    // The same page is recoverable by the row it ends before (D-302's path).
+    const anchored = historyWindow(snapshot, { beforeEntry: "u190", turns: HISTORY_EARLIER_PAGE_TURNS }, replace);
+    expect(anchored.entries).toEqual(earlier.entries);
+    expect(anchored.window.before).toBe(earlier.window.before);
+  });
+
+  it("reaches the root in bounded pages, once, in order, and only then says there is no more", () => {
+    const entries = turns(200);
+    const snapshot = { entries, leafId: "z199" };
+    const seen: string[] = [];
+    let page = historyWindow(snapshot, { turns: HISTORY_FIRST_PAGE_TURNS }, replace);
+    let pages = 1;
+    for (; page.window.before && pages < 100; pages++) {
+      seen.unshift(...ids(page));
+      page = historyWindow(snapshot, { before: page.window.before, turns: HISTORY_EARLIER_PAGE_TURNS }, replace);
+    }
+    seen.unshift(...ids(page));
+    // Ten turns, then twenty at a time: 1 + ceil(190 / 20) pages.
+    expect(pages).toBe(11);
+    expect(seen).toEqual(entries.map(entry => (entry as { id: string }).id));
+    // False exactly at the root, and there the window is complete.
+    expect(page.window.before).toBeUndefined();
+    expect(page.window).toMatchObject({ complete: false, userOffset: 0, anchor: "u0" });
+    expect(historyWindow(snapshot, { turns: 200 }, replace).window).toMatchObject({ complete: true });
+    expect(historyWindow(snapshot, { turns: 200 }, replace).window.before).toBeUndefined();
+  });
+
+  it("does not let a compaction, a goal record or a reply anchor a turn", () => {
+    const entries = [
+      { type: "message", id: "u0", parentId: null, message: { role: "user", content: "First" } },
+      { type: "message", id: "a0", parentId: "u0", message: { role: "assistant", content: "Working" } },
+      { type: "compaction", id: "compact", parentId: "a0", summary: "Earlier context" },
+      { type: "custom", id: "goal", parentId: "compact", customType: "goal-state", data: { goal: { id: "g1" } } },
+      { type: "message", id: "u1", parentId: "goal", message: { role: "user", content: "Second" } },
+      { type: "message", id: "a1", parentId: "u1", message: { role: "assistant", content: "Done" } },
+    ];
+    const snapshot = { entries, leafId: "a1" };
+    // One turn is the last prompt and its reply. Neither the compaction nor the
+    // goal record anchors a turn; both ride into the page ahead of the prompt
+    // they precede, exactly as an attribution marker does for an entry window.
+    const one = historyWindow(snapshot, { turns: 1 }, replace);
+    expect(ids(one)).toEqual(["compact", "goal", "u1", "a1"]);
+    expect(users(one)).toEqual(["u1"]);
+    const two = historyWindow(snapshot, { turns: 2 }, replace);
+    expect(ids(two)).toEqual(entries.map(entry => (entry as { id: string }).id));
+    expect(two.window.before).toBeUndefined();
+    // A branch whose newest rows are not messages still pages from its prompt.
+    const trailing = { entries: [...entries, { type: "compaction", id: "compact2", parentId: "a1", summary: "Later" }], leafId: "compact2" };
+    expect(users(historyWindow(trailing, { turns: 1 }, replace))).toEqual(["u1"]);
+    expect(ids(historyWindow(trailing, { turns: 1 }, replace)).at(-1)).toBe("compact2");
+  });
+
+  it("bounds one page by rows when a turn drags in five hundred tool steps, and still pages through it", () => {
+    const entries: unknown[] = [
+      { type: "message", id: "u0", parentId: null, message: { role: "user", content: "Earlier" } },
+      { type: "message", id: "z0", parentId: "u0", message: { role: "assistant", content: "Done" } },
+      { type: "message", id: "u1", parentId: "z0", message: { role: "user", content: "Run the fleet" } },
+    ];
+    let parent = "u1";
+    for (let step = 0; step < 250; step++) {
+      entries.push({ type: "message", id: `a${step}`, parentId: parent, message: { role: "assistant", content: [{ type: "toolCall", id: `c${step}`, name: "bash", arguments: {} }] } });
+      entries.push({ type: "message", id: `r${step}`, parentId: `a${step}`, message: { role: "toolResult", toolCallId: `c${step}`, content: [{ type: "text", text: "x".repeat(1_000) }] } });
+      parent = `r${step}`;
+    }
+    const snapshot = { entries, leafId: parent };
+    let page = boundedHistoryWindow(snapshot, { turns: HISTORY_FIRST_PAGE_TURNS }, replace);
+    expect(page).toBeDefined();
+    const seen: string[] = [];
+    let pages = 0;
+    for (; page && pages < 50; pages++) {
+      const rows = ids(page);
+      expect(rows.length).toBeGreaterThan(0);
+      // The raw-entry ceiling bounds the page whatever the turn dragged in.
+      expect(rows.length).toBeLessThanOrEqual(HISTORY_PAGE_ENTRY_LIMIT);
+      // A page never begins with a tool result orphaned from its call.
+      expect((page.entries[0] as { message?: { role?: string } }).message?.role).not.toBe("toolResult");
+      seen.unshift(...rows);
+      if (!page.window.before) break;
+      page = boundedHistoryWindow(snapshot, { before: page.window.before, turns: HISTORY_EARLIER_PAGE_TURNS }, replace);
+      expect(page).toBeDefined();
+    }
+    expect(seen).toEqual(entries.map(entry => (entry as { id: string }).id));
+    expect(pages).toBeGreaterThan(1);
+  });
+
+  it("lets the byte ceiling shrink a turn page and never refuse one", () => {
+    // Ten turns whose replies are 400 KB each: three turns already exceed the
+    // page, and every record travels whole (no per-body limit is asked for).
+    const entries = turns(10, { reply: "y".repeat(400_000) });
+    const snapshot = { entries, leafId: "z9" };
+    const page = boundedHistoryWindow(snapshot, { turns: HISTORY_FIRST_PAGE_TURNS }, replace);
+    expect(page).toBeDefined();
+    expect(users(page!).length).toBeLessThan(10);
+    expect(users(page!).length).toBeGreaterThan(0);
+    expect(historyContentSerializedBytes(page!.entries, page!.window.context)).toBeLessThanOrEqual(HISTORY_PAGE_BYTE_LIMIT);
+    // And the pages behind it still reach the root, twenty turns at a time.
+    let walked = page!;
+    const seen = [...ids(walked)];
+    for (let guard = 0; walked.window.before && guard < 50; guard++) {
+      walked = boundedHistoryWindow(snapshot, { before: walked.window.before, turns: HISTORY_EARLIER_PAGE_TURNS }, replace)!;
+      expect(walked).toBeDefined();
+      seen.unshift(...ids(walked));
+    }
+    expect(seen).toEqual(entries.map(entry => (entry as { id: string }).id));
+  });
+
+  it("answers a newest-page turn read with a proved append delta, exactly as a tail read", () => {
+    const entries = turns(4);
+    const snapshot = { entries, leafId: "z3" };
+    expect(isLiveEdgeWindow({ turns: 10 })).toBe(true);
+    expect(isLiveEdgeWindow({ tail: 40 })).toBe(true);
+    for (const window of [{ before: "cursor", turns: 20 }, { beforeEntry: "u1", turns: 20 }, { from: "u1" }, { all: true }] as const) {
+      expect(isLiveEdgeWindow(window)).toBe(false);
+    }
+    const delta = historyWindow(snapshot, { turns: HISTORY_FIRST_PAGE_TURNS }, { ...scope, authority: "live", selection: { kind: "delta", after: "z2" } });
+    expect(ids(delta)).toEqual(["u3", "a3", "r3", "z3"]);
+    expect(delta.window).toMatchObject({ mode: "delta", authority: "live" });
+  });
+
+  it("leaves entry-counted windows exactly as they were", () => {
+    const entries = turns(50);
+    const snapshot = { entries, leafId: "z49" };
+    // Messages, not turns: forty rows, cut at the turn boundary above them.
+    const tail = historyWindow(snapshot, { tail: 40 }, replace);
+    expect(tail.entries).toEqual(entries.slice(-40));
+    expect(users(tail)).toHaveLength(10);
+    const older = historyWindow(snapshot, { before: tail.window.before!, limit: 8 }, replace);
+    expect(older.entries).toEqual(entries.slice(-48, -40));
+    expect(historyWindow(snapshot, { all: true }, replace).entries).toEqual(entries);
   });
 });

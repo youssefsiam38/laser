@@ -484,6 +484,139 @@ describe("worker-free session projection", () => {
     }
   });
 
+  /**
+   * `count` turns of four stored rows: a prompt, a reply that calls a tool, the
+   * tool's result and a closing reply. `outputBytes` is the tool result's own
+   * text, which is what makes a real session large.
+   */
+  function turnEntries(count: number, outputBytes = 64): unknown[] {
+    const entries: unknown[] = [];
+    let parent: string | null = null;
+    const push = (id: string, message: Record<string, unknown>): void => {
+      entries.push({ type: "message", id, parentId: parent, timestamp: "2026-01-01T00:00:01.000Z", message });
+      parent = id;
+    };
+    for (let turn = 0; turn < count; turn++) {
+      push(`u${turn}`, { role: "user", content: [{ type: "text", text: `Prompt ${turn}` }] });
+      push(`a${turn}`, { role: "assistant", content: [{ type: "toolCall", id: `c${turn}`, name: "bash", arguments: { command: "ls" } }] });
+      push(`r${turn}`, { role: "toolResult", toolCallId: `c${turn}`, content: [{ type: "text", text: "o".repeat(outputBytes) }] });
+      push(`z${turn}`, { role: "assistant", content: [{ type: "text", text: `Reply ${turn}` }] });
+    }
+    return entries;
+  }
+
+  it("pages a stored conversation in user-anchored turns, identically to the live authority (M16-T90)", async () => {
+    const entries = turnEntries(200);
+    const f = fixture(entries);
+    try {
+      const service = services();
+      const revision = await service.revisions.read(f.path);
+      if (revision.kind !== "answer") throw new Error("missing revision");
+      const liveScope = {
+        sessionId: "session-1", epoch: "live", seq: 7,
+        revision: revision.result.revision, environmentKey: revision.result.environmentKey,
+        authority: "live" as const, selection: { kind: "replace" as const },
+      };
+      const live = (window: HistoryWindowRequest) => boundedHistoryWindow({ entries, leafId: "z199" }, window, liveScope, { limit: 16 * 1024, digest: sha256Hex });
+      const userIds = (rows: unknown[]) => rows.filter(row => (row as { message?: { role?: string } }).message?.role === "user").map(row => (row as { id: string }).id);
+
+      const first = await project(service.projection, f.path, { turns: 10 }, undefined, 16 * 1024);
+      expect(userIds(first.entries)).toEqual(Array.from({ length: 10 }, (_, index) => `u${190 + index}`));
+      expect(first.entries).toHaveLength(40);
+      expect(JSON.stringify(first.entries)).toBe(JSON.stringify(live({ turns: 10 })!.entries));
+      expect(stableWindow(first.window!)).toEqual(stableWindow(live({ turns: 10 })!.window));
+
+      const earlier = await project(service.projection, f.path, { before: first.window!.before!, turns: 20 }, first.window!.revision, 16 * 1024);
+      expect(userIds(earlier.entries)).toHaveLength(20);
+      expect(earlier.entries).toHaveLength(80);
+      const liveEarlier = live({ before: first.window!.before!, turns: 20 })!;
+      expect(JSON.stringify(earlier.entries)).toBe(JSON.stringify(liveEarlier.entries));
+      expect(stableWindow(earlier.window!)).toEqual(stableWindow(liveEarlier.window));
+
+      // Every row of the conversation, once, in order, in bounded pages, and
+      // "there is more" is false exactly at the root.
+      const seen: string[] = [...earlier.entries, ...first.entries].map(row => (row as { id: string }).id);
+      let page = earlier;
+      let pages = 2;
+      while (page.window?.before) {
+        page = await project(service.projection, f.path, { before: page.window.before, turns: 20 }, page.window.revision, 16 * 1024);
+        seen.unshift(...page.entries.map(row => (row as { id: string }).id));
+        pages++;
+        expect(pages).toBeLessThan(50);
+      }
+      expect(pages).toBe(11);
+      expect(seen).toEqual(entries.map(row => (row as { id: string }).id));
+      expect(page.window?.before).toBeUndefined();
+
+      // A newest-page turn read still answers a proved append delta.
+      const appended = turnEntries(1).map((row, index) => ({ ...(row as object), id: `n${index}`, parentId: index ? `n${index - 1}` : "z199" }));
+      for (const row of appended) appendFileSync(f.path, `${JSON.stringify(row)}\n`);
+      const delta = await project(service.projection, f.path, { turns: 10 }, first.window!.revision, 16 * 1024);
+      expect(delta.window?.mode).toBe("delta");
+      expect(delta.entries.map(row => (row as { id: string }).id)).toEqual(["n0", "n1", "n2", "n3"]);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("pages a conversation the size of the one that failed, in turns and in entries (M16-T90)", async () => {
+    // About 27 MB of stored conversation: 200 turns whose tool results carry
+    // 128 KB of output each, and the two screenshots that broke it.
+    const entries = [...turnEntries(200, 128 * 1024)];
+    entries.splice(400, 0,
+      screenshot("shot-a", "z99", png(2560, 1440, 2_421_366)),
+      screenshot("shot-b", "shot-a", png(2560, 1440, 2_405_990)),
+    );
+    // Re-link the branch across the inserted rows.
+    (entries[402] as { parentId: string }).parentId = "shot-b";
+    const f = fixture(entries);
+    try {
+      const { projection } = services();
+      const stored = statSync(f.path).size;
+      const walk = async (first: HistoryWindowRequest, earlier: (before: string) => HistoryWindowRequest) => {
+        let page = await project(projection, f.path, first, undefined, 16 * 1024);
+        const rows: string[] = page.entries.map(row => (row as { id: string }).id);
+        const elided: string[] = (page.window?.elided ?? []).map(row => row.id);
+        let pages = 1;
+        while (page.window?.before) {
+          page = await project(projection, f.path, earlier(page.window.before), page.window.revision, 16 * 1024);
+          rows.unshift(...page.entries.map(row => (row as { id: string }).id));
+          elided.push(...(page.window?.elided ?? []).map(row => row.id));
+          pages++;
+          expect(pages).toBeLessThan(400);
+        }
+        return { pages, rows, elided };
+      };
+      const byTurns = await walk({ turns: 10 }, before => ({ before, turns: 20 }));
+      const byEntries = await walk({ tail: 40 }, before => ({ before, limit: 40 }));
+      console.info(`M16-T90 ${(stored / 1024 / 1024).toFixed(1)} MB session, ${entries.length} entries: `
+        + `${byTurns.pages} pages by turns (10 then 20), ${byEntries.pages} pages by entries (40)`);
+
+      // The live authority serves the same first page of this heavy session,
+      // byte for byte: an elided row is priced for what it will really cost.
+      const revision = await services().revisions.read(f.path);
+      if (revision.kind !== "answer") throw new Error("missing revision");
+      const durableFirst = await project(projection, f.path, { turns: 10 }, undefined, 16 * 1024);
+      const liveFirst = boundedHistoryWindow({ entries, leafId: "z199" }, { turns: 10 }, {
+        sessionId: "session-1", epoch: "live", seq: 3,
+        revision: revision.result.revision, environmentKey: revision.result.environmentKey,
+        authority: "live", selection: { kind: "replace" },
+      }, { limit: 16 * 1024, digest: sha256Hex });
+      if (!liveFirst) throw new Error("the live authority refused the first page");
+      expect(JSON.stringify(durableFirst.entries)).toBe(JSON.stringify(liveFirst.entries));
+      expect(JSON.stringify(durableFirst.window!.elided ?? [])).toBe(JSON.stringify(liveFirst.window.elided ?? []));
+      expect(stableWindow(durableFirst.window!)).toEqual(stableWindow(liveFirst.window));
+      // Both families reach the root, and neither loses or repeats a row.
+      const all = entries.map(row => (row as { id: string }).id);
+      expect([...byTurns.rows, ...byTurns.elided].sort()).toEqual([...all].sort());
+      expect([...byEntries.rows, ...byEntries.elided].sort()).toEqual([...all].sort());
+      expect(byTurns.rows).toEqual(all.filter(id => byTurns.rows.includes(id)));
+      expect(byTurns.pages).toBeLessThan(byEntries.pages);
+    } finally {
+      f.cleanup();
+    }
+  }, 120_000);
+
   it("reindexes once across an append race and refuses a second stale-line interleaving", async () => {
     const appended = fixture(messages(2));
     try {
