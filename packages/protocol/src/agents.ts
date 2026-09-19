@@ -12,6 +12,7 @@
  * implementation, or its files. The worker maps this onto the engine.
  */
 import { PROJECT_DIR_NAME } from "./identity.js";
+import type { AgentIsolation } from "./workspace.js";
 import type { ModelRef, ThinkingLevel } from "./messages.js";
 
 // ---------- names and limits ----------
@@ -421,6 +422,11 @@ export interface AgentRun extends AgentRunIdentity {
    * the run worked on is history, and history is not deleted.
    */
   worktree: AgentWorktree | null;
+  /**
+   * Isolated worktree or shared checkout, and why. Optional so runs persisted
+   * before L1 stay readable; a missing field is not a guess at isolation.
+   */
+  isolation?: AgentIsolation;
   /**
    * The directory this run actually works in: its worktree when it has one,
    * otherwise the checkout its parent is working in. Absent only on a run

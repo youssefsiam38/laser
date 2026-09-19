@@ -37,6 +37,7 @@ import { TASK_COMMAND_MAX, TASK_LINE_MAX, TASK_LOG_SEGMENTS_MAX } from "./tasks.
 import { ENVIRONMENT_KEY_PATTERN, SESSION_REVISION_PATTERN } from "./session-revision.js";
 import { BODY_COMPONENT_KINDS, BODY_REGION_MAX_ITEMS, ENTRY_RANGE_MAX_BYTES } from "./body-range.js";
 import { HISTORY_PAGE_BYTE_LIMIT, HISTORY_PAGE_TURN_MAX } from "./history-window.js";
+import { AGENT_ISOLATION_DEFAULTS } from "./workspace.js";
 
 /** Opt-in browse replies must not silently reinterpret legacy folders as files. */
 export const explorerListingSchema = z.object({
@@ -817,6 +818,10 @@ export const clientParamsSchemas = {
     .object({ cwd: z.string().min(1), trusted: z.boolean(), remember: z.boolean().optional() })
     .strict(),
   "pi/project/git": z.object({ cwd: z.string().min(1), path: sessionPath.optional() }).strict(),
+  "pi/project/workspace": z.object({ cwd: z.string().min(1), rescan: z.boolean().optional() }).strict(),
+  "pi/project/isolation/set": z
+    .object({ cwd: z.string().min(1), isolation: z.enum(AGENT_ISOLATION_DEFAULTS) })
+    .strict(),
   "pi/project/browse": z.object({
     path: z.string().min(1).max(4096).optional(),
     explorer: z.object({

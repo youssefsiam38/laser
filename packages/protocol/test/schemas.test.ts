@@ -154,6 +154,8 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/remove": { cwd: "/p" },
   "pi/project/trust": { cwd: "/p", trusted: true, remember: true },
   "pi/project/git": { cwd: "/p", path: "/s.jsonl" },
+  "pi/project/workspace": { cwd: "/p", rescan: true },
+  "pi/project/isolation/set": { cwd: "/p", isolation: "decide" },
   "pi/project/browse": { path: "~\\code", explorer: { mode: "explorer", cwd: "/home/me/code", prefix: "node", offset: 80, limit: 80 } },
   "pi/project/env/status": { cwd: "/home/me/code/app" },
   "pi/project/env/set": {

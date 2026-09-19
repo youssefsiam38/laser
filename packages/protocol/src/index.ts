@@ -21,6 +21,7 @@ export * from "./environment.js";
 export * from "./method-policy.js";
 export * from "./environment-policy.js";
 export * from "./project-env.js";
+export * from "./workspace.js";
 export * from "./attention.js";
 export * from "./tasks.js";
 export * from "./pending.js";

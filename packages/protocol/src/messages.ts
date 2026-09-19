@@ -14,6 +14,7 @@ import type { RuntimeFailure, WorkerMode } from "./runtime-recovery.js";
 import { WIRE_NAMESPACE } from "./identity.js";
 import type { HostEnvironmentParams } from "./environment.js";
 import type { ProjectEnvStatus } from "./project-env.js";
+import type { AgentIsolationDefault, WorkspaceShape } from "./workspace.js";
 import type { AccountUsageState, PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
 import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
 import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
@@ -215,6 +216,11 @@ export interface ProjectInfo {
   pinned: boolean;
   /** Sessions in the catalog for this directory. */
   sessionCount: number;
+  /**
+   * How `start_agent` treats `worktree: true` / absent in this project.
+   * Absent from older stored projects; readers treat missing as `decide`.
+   */
+  agentIsolation?: AgentIsolationDefault;
 }
 
 /**
@@ -1491,6 +1497,20 @@ export interface ClientRequests {
    * worker uses the baseline of the first session it opened.
    */
   "pi/project/git": { params: { cwd: string; path?: string }; result: ProjectGitStatus };
+  /**
+   * The workspace shape of `cwd` and the repositories in it. Answered by the
+   * host from git alone, so a project with no live worker can still be shown.
+   * `rescan` drops the per-project cache and walks again.
+   */
+  "pi/project/workspace": { params: { cwd: string; rescan?: boolean }; result: WorkspaceShape };
+  /**
+   * Per-project default for how `start_agent` treats `worktree: true` / absent.
+   * Isolate agents, share the checkout, or decide per agent (the default).
+   */
+  "pi/project/isolation/set": {
+    params: { cwd: string; isolation: AgentIsolationDefault };
+    result: { project: ProjectInfo };
+  };
   /**
    * Subdirectories of `path` (the home directory when omitted), for picking a
    * project without typing a path (M10-T6). Directories only, hidden ones
