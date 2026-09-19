@@ -175,7 +175,7 @@ describe("the fleet column", () => {
     expect(context.getAttribute("data-context")).toBe("true");
     expect(context.getAttribute("data-state")).toBe("running");
     expect(context.getAttribute("data-attention")).toBe("finished_unread");
-    expect(context.textContent).toContain("Working");
+    expect(context.querySelector('[data-slot="status-dot"]')?.getAttribute("aria-label")).toMatch(/below/);
     expect(context.textContent).toContain("context");
     expect(context.textContent).toContain("Parent of work shown here.");
     expect(context.textContent).not.toContain("ready in 412 ms");
@@ -236,9 +236,9 @@ describe("the fleet column", () => {
     await act(async () => rowFor("explorer").querySelector("button")!.click());
     expect(rowFor("explorer").getAttribute("data-expanded")).toBeNull();
     // Collapsed really hides: the detail is gone from the DOM, not merely
-    // unseen. The row's own one-line summary stays, which is the point of it.
+    // unseen. Line 2 is never the task brief — a run with no activity says nothing there.
     expect(rowFor("explorer").querySelector("dl")).toBeNull();
-    expect(rowFor("explorer").textContent).toContain("Read the router");
+    expect(rowFor("explorer").textContent).not.toContain("Read the router");
   });
 
   it("names the branch of an agent that has a worktree", async () => {
@@ -364,8 +364,7 @@ describe("the fleet column", () => {
     await openFinished();
     const row = rowFor("explorer");
     expect(row.getAttribute("data-state")).toBe("blocked");
-    expect(row.textContent).toContain("Blocked");
-    expect(row.textContent).toContain("The schema owner must choose.");
+    expect(row.querySelector('[data-slot="fleet-headline"]')?.textContent).toContain("The schema owner must choose.");
     expect(row.querySelector('[data-slot="status-dot"]')?.getAttribute("data-status")).toBe("idle");
     expect(row.querySelector('[data-slot="status-dot"]')?.className).not.toContain("animate-attention");
   });
@@ -385,8 +384,10 @@ describe("the fleet column", () => {
     const row = rowFor("explorer");
     expect(row.getAttribute("data-state")).toBe("needs_input");
     expect(row.querySelector('[data-slot="status-dot"]')?.getAttribute("data-status")).toBe("waiting_for_input");
-    expect(row.textContent).toContain("Asking");
-    expect(row.textContent).toContain("Which token store?");
+    expect(row.querySelector('[data-slot="status-dot"]')?.getAttribute("aria-label")).toBe("Asking");
+    expect(row.querySelector('[data-slot="fleet-headline"]')?.textContent).toContain("Which token store?");
+    expect(row.querySelector('[data-slot="fleet-answer"]')).not.toBeNull();
+    expect(row.querySelector('[data-slot="fleet-open-chat"]')).not.toBeNull();
     expect(row.textContent).not.toContain("Running ask_person");
     expect(container.textContent).toContain("1 needs you");
     await act(async () => row.querySelector("button")!.click());
@@ -897,5 +898,206 @@ describe("the fleet is one session's tree (M13-T51)", () => {
       // The tree's live work is untouched.
       expect(container.textContent).toContain("Explorer");
     });
+  });
+});
+
+describe("the fleet row (leap §3)", () => {
+  const pressEnter = async (el: HTMLElement): Promise<void> => {
+    await act(async () => {
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+  };
+
+  it("renders live activity on line 2, never the task brief", async () => {
+    fixture.state.agents.runs = {
+      r1: run({
+        runId: "r1",
+        sessionPath: CHILD,
+        subagentName: "explorer",
+        task: "Serve images as references in every surface",
+        activity: { turns: 12, tools: 4, currentTool: "vitest", lastAt: "2026-09-08T10:04:00.000Z" },
+        model: { provider: "anthropic", id: "claude-opus-4", name: "opus-4" },
+      }),
+    };
+    await render();
+    const row = rowFor("explorer");
+    const headline = row.querySelector('[data-slot="fleet-headline"]');
+    expect(headline?.textContent).toContain("Running");
+    expect(headline?.textContent).toContain("vitest");
+    expect(headline?.textContent).not.toContain("Serve images");
+    expect(row.textContent).not.toContain("Serve images as references");
+    expect(row.querySelector('[data-slot="fleet-strip"]')?.textContent).toContain("reviewer");
+    expect(row.querySelector('[data-slot="fleet-strip"]')?.textContent).toContain("opus-4");
+    expect(row.querySelector('[data-slot="fleet-strip"]')?.textContent).toContain("12t");
+    expect(row.querySelector('[data-slot="fleet-worktree-chip"]')?.getAttribute("data-mode")).toBe("shared");
+    expect(row.querySelector('[data-slot="fleet-elapsed"]')?.textContent).toMatch(/m|s/);
+  });
+
+  it("distinguishes an agent tile from a command tile without reading a word", async () => {
+    fixture.state.agents.runs = { r1: child };
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: ROOT }) };
+    await render();
+    const agent = rowFor("explorer").querySelector('[data-slot="fleet-kind-tile"]');
+    const command = rowFor("pnpm vite dev").querySelector('[data-slot="fleet-kind-tile"]');
+    expect(agent?.getAttribute("data-shape")).toBe("round");
+    expect(command?.getAttribute("data-shape")).toBe("square");
+    expect(agent?.className).toContain("rounded-lg");
+    expect(command?.className).toContain("rounded-none");
+    expect(command?.className).toContain("font-mono");
+    expect(rowFor("explorer").querySelector('[data-slot="fleet-name"]')?.className).not.toContain("typed");
+    expect(rowFor("pnpm vite dev").querySelector('[data-slot="fleet-name"]')?.className).toContain("typed");
+  });
+
+  it("nests a command one indent under its agent with a rail", async () => {
+    fixture.state.agents.runs = { r1: child };
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: CHILD }) };
+    await render();
+    const branch = rowFor("explorer").closest('[data-slot="fleet-branch"]');
+    const nested = branch?.querySelector(':scope > ul');
+    expect(nested?.getAttribute("aria-label")).toContain("Explorer");
+    expect(nested?.className).toContain("border-s");
+    expect(nested?.querySelector('[data-slot="fleet-row"][data-kind="task"]')).not.toBeNull();
+  });
+
+  it("filters Going, Asking and Ended, each with a count", async () => {
+    fixture.state.agents.runs = {
+      r1: child,
+      r2: {
+        ...child,
+        runId: "r2",
+        sessionPath: "/p/asking.jsonl",
+        subagentName: "reviewer",
+        status: "needs_input",
+        question: { id: "q", kind: "confirm", title: "Overwrite?", askedAt: "2026-09-08T10:04:00.000Z" },
+      },
+      r3: {
+        ...child,
+        runId: "r3",
+        sessionPath: "/p/done.jsonl",
+        subagentName: "writer",
+        status: "completed",
+        endedAt: "2026-09-08T10:01:00.000Z",
+      },
+    };
+    await render();
+    const going = container.querySelector<HTMLButtonElement>('[data-slot="fleet-filter-going"]')!;
+    const asking = container.querySelector<HTMLButtonElement>('[data-slot="fleet-filter-asking"]')!;
+    const ended = container.querySelector<HTMLButtonElement>('[data-slot="fleet-filter-ended"]')!;
+    expect(going.textContent).toMatch(/Going\s*1/);
+    expect(asking.textContent).toMatch(/Asking\s*1/);
+    expect(ended.textContent).toMatch(/Ended\s*1/);
+    expect(going.getAttribute("aria-pressed")).toBe("true");
+
+    await act(async () => going.click());
+    expect(going.getAttribute("aria-pressed")).toBe("false");
+    expect(rowFor("explorer")).toBeUndefined();
+    expect(rowFor("reviewer")).toBeDefined();
+
+    await act(async () => asking.click());
+    expect(container.textContent).toContain("Nothing matches these filters.");
+    expect(ended.getAttribute("aria-pressed")).toBe("true");
+    await openFinished();
+    expect(rowFor("writer")).toBeDefined();
+    await act(async () => ended.click());
+    expect(ended.getAttribute("aria-pressed")).toBe("false");
+    expect(container.querySelector('[data-slot="fleet-group"][data-section="finished"]')).toBeNull();
+  });
+
+  it("filters by kind and keeps the counts on the chips", async () => {
+    fixture.state.agents.runs = { r1: child };
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: ROOT }) };
+    await render();
+    const agents = container.querySelector<HTMLButtonElement>('[data-slot="fleet-filter-kind-agents"]')!;
+    const commands = container.querySelector<HTMLButtonElement>('[data-slot="fleet-filter-kind-commands"]')!;
+    expect(agents.textContent).toMatch(/Agents\s*1/);
+    expect(commands.textContent).toMatch(/Commands\s*1/);
+    await act(async () => agents.click());
+    expect(agents.getAttribute("aria-checked")).toBe("true");
+    expect(rowFor("explorer")).toBeDefined();
+    expect(rowFor("pnpm vite dev")).toBeUndefined();
+    await act(async () => commands.click());
+    expect(rowFor("explorer")).toBeUndefined();
+    expect(rowFor("pnpm vite dev")).toBeDefined();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="fleet-filter-kind-all"]')!.click());
+    expect(rowFor("explorer")).toBeDefined();
+    expect(rowFor("pnpm vite dev")).toBeDefined();
+  });
+
+  it("puts Answer and Open on an asking row, and Enter never answers", async () => {
+    fixture.state.agents.runs = {
+      r1: {
+        ...child,
+        status: "needs_input",
+        question: { id: "ui-1", kind: "select", title: "Which token store?", askedAt: "2026-09-08T10:04:00.000Z" },
+      },
+    };
+    await render();
+    const row = rowFor("explorer");
+    const expand = row.querySelector("button")!;
+    const answer = row.querySelector<HTMLButtonElement>('[data-slot="fleet-answer"]')!;
+    const open = row.querySelector<HTMLButtonElement>('[data-slot="fleet-open-chat"]')!;
+    expect(answer.textContent).toContain("Answer");
+    expect(open.textContent).toContain("Open");
+    expand.focus();
+    await pressEnter(expand);
+    expect(fixture.actions.openSession).not.toHaveBeenCalled();
+    answer.focus();
+    await pressEnter(answer);
+    expect(fixture.actions.openSession).not.toHaveBeenCalled();
+    await act(async () => open.click());
+    expect(fixture.actions.openSession).toHaveBeenCalledWith(CHILD);
+    fixture.actions.openSession.mockClear();
+    await act(async () => answer.click());
+    expect(fixture.actions.openSession).toHaveBeenCalledWith(CHILD);
+  });
+
+  it("middle-truncates a path, keeps a branch suffix, and puts the full text in the tooltip and accessible name", async () => {
+    const path = "packages/ui/src/components/fleet/FleetPanel.tsx";
+    const branch = "agents/explorer-long-suffix-6a5fb144";
+    fixture.state.agents.runs = {
+      r1: run({
+        runId: "r1",
+        sessionPath: CHILD,
+        subagentName: "explorer",
+        task: "Read the router",
+        activity: { turns: 1, tools: 1, currentTool: path, lastAt: "2026-09-08T10:04:00.000Z" },
+        worktree: { path: "/p/.worktrees/explorer-1", branch, baseCommit: "abc" },
+        cwd: "/p/.worktrees/explorer-1",
+      }),
+    };
+    await render();
+    const row = rowFor("explorer");
+    const headline = row.querySelector('[data-slot="fleet-headline"]')!;
+    expect(headline.querySelector(".shrink-0")?.textContent).toBe("Running");
+    expect(headline.textContent).toContain("Running");
+    expect(headline.textContent).not.toContain(path);
+    expect(headline.textContent).toContain("FleetPanel.tsx");
+    expect(headline.getAttribute("aria-label")).toBe(`Running ${path}`);
+    const chip = row.querySelector('[data-slot="fleet-worktree-chip"]')!;
+    expect(chip.textContent).toContain("6a5fb144");
+    expect(chip.textContent).not.toBe(branch);
+    expect(chip.querySelector("[aria-label]")?.getAttribute("aria-label")).toBe(branch);
+    const expand = row.querySelector("button")!;
+    expect(expand.getAttribute("aria-label")).toContain(path);
+    expect(expand.getAttribute("aria-label")).toContain(branch);
+  });
+
+  it("puts command, bytes and clock on a command's developer strip", async () => {
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: ROOT, outputBytes: 189_000 }) };
+    await render();
+    const strip = rowFor("pnpm vite dev").querySelector('[data-slot="fleet-strip"]');
+    expect(strip?.getAttribute("data-kind")).toBe("task");
+    expect(strip?.textContent).toContain("pnpm vite dev --host");
+    expect(strip?.textContent).toMatch(/KB|MB|B/);
+    expect(strip?.getAttribute("aria-label")).toContain("pnpm vite dev --host");
+  });
+
+  it("groups by session with the project as secondary text and counts on the header", async () => {
+    fixture.state.agents.runs = { r1: child };
+    await render();
+    const header = container.querySelector('[data-slot="fleet-group"] header');
+    expect(header?.querySelector("h4")?.textContent).toBe("Root session");
+    expect(header?.textContent).toMatch(/p/i);
+    expect(container.querySelector('[data-slot="fleet-group-counts"]')?.textContent).toContain("going");
   });
 });

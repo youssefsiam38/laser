@@ -13,6 +13,8 @@ import { oklch, pickOnColor, raiseContrast, toHex } from "./color.js";
 import { fontStack } from "./fonts.js";
 import {
   ANSI,
+  FLEET_AGENT_HUES,
+  FLEET_AGENT_SCALE,
   PROVENANCE_HUES,
   PROVENANCE_SCALE,
   CONTENT_MEASURE,
@@ -116,6 +118,15 @@ export function resolveTokens(theme: Theme): Required<ThemeTokens> {
     })),
     "shadow-float": t["shadow-float"] ?? shadows.float,
     "shadow-float-sm": t["shadow-float-sm"] ?? shadows.floatSm,
+    ...Object.fromEntries(FLEET_AGENT_HUES.map((hue, index) => {
+      const token = `fleet-agent-${index}` as `fleet-agent-${0 | 1 | 2 | 3 | 4 | 5 | 6 | 7}`;
+      return [token, t[token] ?? oklch(FLEET_AGENT_SCALE[base].lightness, FLEET_AGENT_SCALE[base].chroma, hue)];
+    })),
+    "on-fleet-agent": t["on-fleet-agent"] ?? pickOnColor(
+      t["fleet-agent-0"] ?? oklch(FLEET_AGENT_SCALE[base].lightness, FLEET_AGENT_SCALE[base].chroma, FLEET_AGENT_HUES[0]),
+      darkInk,
+      lightInk,
+    ),
   } as Required<ThemeTokens>;
 }
 

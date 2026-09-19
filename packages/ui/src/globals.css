@@ -181,6 +181,15 @@
   --provenance-unrecorded: #7a7a7a;
   --shadow-float: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 32px -8px rgb(0 0 0 / 0.6);
   --shadow-float-sm: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 14px -4px rgb(0 0 0 / 0.5);
+  --fleet-agent-0: #15466a;
+  --fleet-agent-1: #3e3b6b;
+  --fleet-agent-2: #244d26;
+  --fleet-agent-3: #662f2c;
+  --fleet-agent-4: #004d4d;
+  --fleet-agent-5: #623512;
+  --fleet-agent-6: #602f4c;
+  --fleet-agent-7: #4c4300;
+  --on-fleet-agent: #e9e8e6;
   --on-accent: #000000;
   --font-sans: "Host Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Martian Mono", ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
@@ -561,6 +570,15 @@
   --color-terminal-ink: var(--terminal-ink);
   --color-terminal-ink-2: var(--terminal-ink-2);
   --color-terminal-line: var(--terminal-line);
+  --color-fleet-agent-0: var(--fleet-agent-0);
+  --color-fleet-agent-1: var(--fleet-agent-1);
+  --color-fleet-agent-2: var(--fleet-agent-2);
+  --color-fleet-agent-3: var(--fleet-agent-3);
+  --color-fleet-agent-4: var(--fleet-agent-4);
+  --color-fleet-agent-5: var(--fleet-agent-5);
+  --color-fleet-agent-6: var(--fleet-agent-6);
+  --color-fleet-agent-7: var(--fleet-agent-7);
+  --color-on-fleet-agent: var(--on-fleet-agent);
 
   /* A shell command that ran and came back non-zero is a result, not a fault:
    * a `grep` that found nothing, a test run that failed, `git diff --quiet`.
