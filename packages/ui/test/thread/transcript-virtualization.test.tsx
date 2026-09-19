@@ -1,0 +1,433 @@
+// @vitest-environment happy-dom
+/**
+ * The transcript's windowing and anchoring, on the engine that owns them
+ * (M16-T87, D-303, `docs/transcript-virtualization.md`).
+ *
+ * Every test here mounts the real transcript over the rig's browser
+ * (`virtual-rig.tsx`) and measures the pixels a person would see: where the
+ * row they are reading sits on screen, which rows are mounted, and what
+ * `scrollTop` did. Nothing asks the controller where it thinks anything is.
+ *
+ * This suite replaces `upward-reading-anchor.test.ts` and the geometric half
+ * of `transcript-viewport.test.ts`, which drove Laser's own window/anchor
+ * arithmetic directly. What moved, and what did not:
+ *
+ * - the reader's row holding through twenty-four mixed-height pages, a page
+ *   measuring taller than its estimate, a page arriving while the reader is
+ *   inside the placeholder, the estimate growing back under a settled reader,
+ *   the live edge through streaming and a page above, a row growing above the
+ *   reader, the beginning of the conversation arriving: all here, measured
+ *   from the DOM instead of from the controller's model;
+ * - the mounted window, the merged-head anchor, the "layout stale" window
+ *   choice and the reserve exchange: the engine owns the range and the
+ *   position now, so what is tested is the outcome (no hole on screen, no row
+ *   in front of the reader) rather than Laser's arithmetic for it;
+ * - clamp debt, the earlier-page transaction fence, the absolute-restore ban
+ *   and the disclosure hold: deleted with the second authority they existed to
+ *   fence (D-303). Their outcomes are covered by the tests above;
+ * - the block-level reading anchor is gone with `reading-anchor.ts`. The row
+ *   is the unit of identity the engine can express, so content growing inside
+ *   the row the reader is on, above their line, moves their text by that much
+ *   — as it would on any page. `docs/transcript-reading.md` records this.
+ */
+import { act } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mountRig, TURN, type Rig } from "./virtual-rig.js";
+import type { LocateResult, TranscriptTarget } from "../../src/components/thread/transcript-viewport.js";
+
+// The subject is geometry, not the message body: a row is a labelled box.
+vi.mock("../../src/components/thread/messages.js", async () => {
+  const { useAuiState } = await import("@assistant-ui/react");
+  return { ThreadMessage: function Message() { const id = useAuiState(s => s.message.id); return <div data-message-id={id}><button>{id}</button></div>; } };
+});
+
+let rig: Rig | undefined;
+beforeEach(() => { globalThis.IS_REACT_ACT_ENVIRONMENT = true; });
+afterEach(async () => { await rig?.dispose(); rig = undefined; });
+
+/** Tool-heavy turns: a short prompt, a long reply, a very long tool body. */
+const HEIGHTS = [96, 240, 168, 612, 132, 384, 204, 900];
+const ordinalOf = (id: string) => Number.parseInt(id.slice(1), 10);
+const realHeight = (id: string) => HEIGHTS[ordinalOf(id) % HEIGHTS.length]!;
+const rows = (from: number, count: number) => Array.from({ length: count }, (_, i) => `r${from + i}`);
+
+describe("the mounted window", () => {
+  it("opens a conversation at its newest turn with a bounded window", async () => {
+    const ids = rows(0, 400);
+    rig = await mountRig({ ids, height: realHeight, clientHeight: 900 });
+    expect(rig.mounted().at(-1)).toBe("r399");
+    expect(rig.mounted().length).toBeLessThan(40);
+    expect(rig.mounted().length).toBeGreaterThan(1);
+    // The newest turn is on screen, at the bottom of the viewport.
+    expect(rig.scrollTop()).toBeCloseTo(rig.scrollHeight() - 900, 0);
+  });
+
+  it("never leaves a hole on screen while the reader travels upwards", async () => {
+    rig = await mountRig({ ids: rows(0, 300), height: realHeight, clientHeight: 900 });
+    for (let step = 0; step < 40; step++) {
+      await rig.scrollBy(-320);
+      expect(uncovered(rig), `step ${step} at scrollTop ${rig.scrollTop()}`).toBe("");
+    }
+  });
+
+  it("never leaves a hole on screen while the reader travels downwards", async () => {
+    rig = await mountRig({ ids: rows(0, 300), height: realHeight, clientHeight: 900 });
+    await rig.scrollTo(0);
+    for (let step = 0; step < 40; step++) {
+      await rig.scrollBy(280);
+      expect(uncovered(rig), `step ${step} at scrollTop ${rig.scrollTop()}`).toBe("");
+    }
+  });
+});
+
+/**
+ * The band of the viewport that no mounted row covers, described. The rows are
+ * read from the DOM in their laid-out positions, so a window chosen from a
+ * model the browser has already contradicted shows up here as a gap on screen.
+ */
+function uncovered(rig: Rig, height = 900): string {
+  const boxes = rig.mounted()
+    .map(id => ({ id, rect: rig.node(id)!.getBoundingClientRect() }))
+    .filter(row => row.rect.bottom > 0 && row.rect.top < height)
+    .sort((a, b) => a.rect.top - b.rect.top);
+  if (boxes.length === 0) return "";
+  let covered = Math.min(0, boxes[0]!.rect.top);
+  for (const box of boxes) {
+    if (box.rect.top > covered + 1) return `gap of ${Math.round(box.rect.top - covered)}px above ${box.id}`;
+    covered = Math.max(covered, box.rect.bottom);
+  }
+  return "";
+}
+
+describe("reading upwards", () => {
+  /**
+   * A long conversation with a hundred loaded rows and a producer that still
+   * has a hundred and twenty prompts before them. Pages of five turns arrive
+   * as the person reads, exactly as the history loader delivers them.
+   */
+  async function paging() {
+    const loaded = rows(200, 100);
+    return {
+      rig: await mountRig({
+        ids: loaded,
+        height: realHeight,
+        clientHeight: 900,
+        headHeight: 40,
+        history: { before: "cursor", userOffset: 120 },
+      }),
+      ids: loaded,
+    };
+  }
+
+  it("holds the reader's row through twenty-four pages, mid-transcript", async () => {
+    const started = await paging();
+    rig = started.rig;
+    let ids = started.ids;
+    // Somewhere in the middle of the loaded rows, reading upwards.
+    await rig.scrollTo(Math.round(rig.scrollHeight() / 2));
+    for (let page = 0; page < 24; page++) {
+      await rig.scrollBy(-240);
+      const reader = rig.topVisible()!;
+      const before = rig.screenTop(reader)!;
+      ids = [...rows(200 - (page + 1) * 5, 5), ...ids];
+      await rig.setIds(ids);
+      await rig.setHistory({ before: "cursor", userOffset: Math.max(0, 120 - (page + 1) * 5) });
+      const after = rig.screenTop(reader);
+      expect(after, `page ${page}: the row the reader was on left the window`).toBeDefined();
+      expect(Math.abs(after! - before), `page ${page}: the reader's row moved on screen`).toBeLessThanOrEqual(1);
+      expect(uncovered(rig), `page ${page}`).toBe("");
+    }
+  });
+
+  it("puts no row in front of a reader inside the placeholder, and never pushes them forward", async () => {
+    const started = await paging();
+    rig = started.rig;
+    let ids = started.ids;
+    await rig.scrollTo(0);
+    expect(rig.controller.isReadingHistoryReserve()).toBe(true);
+    let highest = rig.scrollTop();
+    for (let page = 0; page < 24; page++) {
+      const onScreen = rig.mounted().filter(id => {
+        const rect = rig!.node(id)!.getBoundingClientRect();
+        return rect.bottom > 0 && rect.top < 900;
+      });
+      const tops = new Map(onScreen.map(id => [id, rig!.screenTop(id)!]));
+      const top = rig.scrollTop();
+      ids = [...rows(200 - (page + 1) * 5, 5), ...ids];
+      await rig.setIds(ids);
+      await rig.setHistory({ before: "cursor", userOffset: Math.max(0, 120 - (page + 1) * 5) });
+      expect(rig.scrollTop(), `page ${page}: the view was pushed forward`).toBeLessThanOrEqual(top);
+      for (const [id, before] of tops) {
+        const after = rig.screenTop(id);
+        expect(after, `page ${page}: ${id} left the window while on screen`).toBeDefined();
+        expect(Math.abs(after! - before), `page ${page}: ${id} moved under the reader`).toBeLessThanOrEqual(1);
+      }
+      // Nothing new appeared above the fold either: the page took the
+      // placeholder's pixels below it.
+      const arrived = rig.mounted().filter(id => !tops.has(id) && rig!.screenTop(id)! < 900 && rig!.screenTop(id)! + realHeight(id) > 0);
+      expect(arrived, `page ${page}: a row arrived in front of the reader`).toEqual([]);
+      highest = Math.max(highest, rig.scrollTop());
+    }
+    expect(highest).toBe(0);
+  });
+});
+
+describe("the live edge", () => {
+  it("stays at the newest turn while a page arrives above it", async () => {
+    const ids = rows(100, 60);
+    rig = await mountRig({
+      ids,
+      height: realHeight,
+      clientHeight: 900,
+      headHeight: 40,
+      history: { before: "cursor", userOffset: 40 },
+    });
+    expect(rig.scrollTop()).toBeCloseTo(rig.scrollHeight() - 900, 0);
+    await rig.setIds([...rows(95, 5), ...ids]);
+    await rig.setHistory({ before: "cursor", userOffset: 35 });
+    expect(rig.mounted().at(-1)).toBe("r159");
+    expect(rig.scrollTop()).toBeCloseTo(rig.scrollHeight() - 900, 0);
+    // And it keeps following while the newest row streams.
+    await rig.grow("r159", 1400);
+    expect(rig.scrollTop()).toBeCloseTo(rig.scrollHeight() - 900, 0);
+  });
+
+  it("opens the next conversation at its own newest turn", async () => {
+    rig = await mountRig({ ids: rows(0, 80), height: realHeight, clientHeight: 900 });
+    await rig.scrollTo(200);
+    expect(rig.controller.capture().following).toBe(false);
+    // The surface is pointed at another conversation, then back at this one.
+    await act(async () => { rig!.controller.configure("/other"); });
+    await act(async () => { rig!.controller.configure("/project/session.jsonl"); });
+    await rig.setIds(rows(0, 80));
+    expect(rig.mounted().at(-1)).toBe("r79");
+    expect(rig.controller.capture().following).toBe(true);
+  });
+
+  it("leaves an away reader where they are when the recent tail is read again", async () => {
+    const ids = rows(0, 80);
+    rig = await mountRig({ ids, height: realHeight, clientHeight: 900 });
+    await rig.scrollTo(Math.round(rig.scrollHeight() / 2));
+    const reader = rig.topVisible()!;
+    const before = rig.screenTop(reader)!;
+    const top = rig.scrollTop();
+    // The same conversation, read again: same rows, one more at the end.
+    await rig.setIds([...ids, "r80"]);
+    expect(rig.scrollTop()).toBe(top);
+    expect(Math.abs(rig.screenTop(reader)! - before)).toBeLessThanOrEqual(1);
+  });
+
+  it("follows an appended turn only when the reader is at the end", async () => {
+    const ids = rows(0, 60);
+    rig = await mountRig({ ids, height: realHeight, clientHeight: 900 });
+    await rig.setIds([...ids, "r60"]);
+    expect(rig.mounted()).toContain("r60");
+    expect(rig.scrollTop()).toBeCloseTo(rig.scrollHeight() - 900, 0);
+    // Away from the end, an appended turn changes nothing on screen.
+    await rig.scrollTo(400);
+    const reader = rig.topVisible()!;
+    const before = rig.screenTop(reader)!;
+    const top = rig.scrollTop();
+    await rig.setIds([...ids, "r60", "r61"]);
+    expect(rig.scrollTop()).toBe(top);
+    expect(rig.screenTop(reader)! - before).toBeLessThanOrEqual(1);
+  });
+});
+
+/** Take the transcript somewhere, the way Find, the map and a deep link do. */
+async function locate(target: Rig, message: TranscriptTarget): Promise<LocateResult> {
+  let result!: LocateResult;
+  await act(async () => { result = await target.controller.ensureVisible(message, { reason: "find" }); });
+  await target.settle(1);
+  return result;
+}
+
+describe("destinations", () => {
+  it("lands a deep link on its row, a third of the way down", async () => {
+    rig = await mountRig({ ids: rows(0, 300), height: realHeight, clientHeight: 900 });
+    expect(await locate(rig, { messageId: "r42" })).toBe("visible");
+    const top = rig.screenTop("r42");
+    expect(top).toBeDefined();
+    expect(Math.abs(top! - 300)).toBeLessThanOrEqual(2);
+    expect(uncovered(rig)).toBe("");
+  });
+
+  it("keeps the destination row mounted while it is the target, and says when there is none", async () => {
+    rig = await mountRig({ ids: rows(0, 300), height: realHeight, clientHeight: 900 });
+    expect(await locate(rig, { messageId: "nowhere" })).toBe("missing");
+    expect(await locate(rig, { messageId: "r7" })).toBe("visible");
+    expect(rig.mounted()).toContain("r7");
+  });
+
+  it("holds a located row through a page arriving above it", async () => {
+    rig = await mountRig({
+      ids: rows(100, 100),
+      height: realHeight,
+      clientHeight: 900,
+      history: { before: "cursor", userOffset: 40 },
+    });
+    expect(await locate(rig, { messageId: "r120" })).toBe("visible");
+    const before = rig.screenTop("r120")!;
+    await rig.setIds([...rows(95, 5), ...rows(100, 100)]);
+    await rig.setHistory({ before: "cursor", userOffset: 35 });
+    expect(Math.abs(rig.screenTop("r120")! - before)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("rows a surface is holding open", () => {
+  it("keeps a pinned row mounted far outside the reading window, across a prepend", async () => {
+    rig = await mountRig({ ids: rows(0, 300), height: realHeight, clientHeight: 900 });
+    const release = rig.controller.pin("r3");
+    await rig.settle(1);
+    expect(rig.mounted()).toContain("r3");
+    await rig.setIds([...["o1", "o2", "o3", "o4", "o5"], ...rows(0, 300)]);
+    expect(rig.mounted()).toContain("r3");
+    await act(async () => { release(); });
+    await rig.settle(1);
+    expect(rig.mounted()).not.toContain("r3");
+  });
+
+  it("keeps every row of a native selection mounted", async () => {
+    rig = await mountRig({ ids: rows(0, 200), height: realHeight, clientHeight: 900 });
+    await rig.scrollTo(Math.round(rig.scrollHeight() / 2));
+    const visible = rig.mounted();
+    const anchor = rig.node(visible[0]!)!, focus = rig.node(visible.at(-1)!)!;
+    await act(async () => {
+      const selection = document.getSelection()!;
+      const range = document.createRange();
+      range.setStart(anchor, 0);
+      range.setEnd(focus, 0);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    await rig.settle(1);
+    // Reading away from the selection must not release the rows inside it:
+    // the browser owns the selection and a released row would truncate it.
+    await rig.scrollBy(-2000);
+    for (const id of visible) expect(rig.mounted(), `${id} left the selection`).toContain(id);
+  });
+});
+
+describe("the conversation changing underneath", () => {
+  it("holds the reader when the older part of the window is released", async () => {
+    const ids = rows(0, 200);
+    rig = await mountRig({ ids, height: realHeight, clientHeight: 900 });
+    await rig.scrollTo(Math.round(rig.scrollHeight() * 0.7));
+    const reader = rig.topVisible()!;
+    const before = rig.screenTop(reader)!;
+    // A trim: the oldest forty rows are released while somebody is reading.
+    await rig.setIds(ids.slice(40));
+    expect(rig.screenTop(reader)).toBeDefined();
+    expect(Math.abs(rig.screenTop(reader)! - before)).toBeLessThanOrEqual(1);
+    expect(uncovered(rig)).toBe("");
+  });
+
+  it("takes Tab into a row the window had released", async () => {
+    rig = await mountRig({ ids: rows(0, 200), height: realHeight, clientHeight: 900 });
+    await rig.scrollTo(Math.round(rig.scrollHeight() / 2));
+    const mounted = rig.mounted();
+    const last = mounted.at(-1)!;
+    const next = `r${ordinalOf(last) + 1}`;
+    expect(mounted).not.toContain(next);
+    const control = rig.node(last)!.querySelector("button")!;
+    await act(async () => {
+      control.focus();
+      control.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+      await new Promise<void>(resolve => setTimeout(resolve, 1200));
+    });
+    await rig.settle(2);
+    expect(rig.mounted(), "the next row never mounted").toContain(next);
+    expect((document.activeElement as HTMLElement | null)?.textContent).toBe(next);
+  });
+});
+
+describe("rows that grow", () => {
+  it("holds the reading position when a row above it grows", async () => {
+    rig = await mountRig({ ids: rows(0, 80), height: realHeight, clientHeight: 900 });
+    await rig.scrollTo(Math.round(rig.scrollHeight() / 2));
+    await rig.scrollBy(-40);
+    const reader = rig.topVisible()!;
+    const before = rig.screenTop(reader)!;
+    const above = rig.mounted()[0]!;
+    expect(above).not.toBe(reader);
+    // An image decoding, a disclosure opening, highlighting reflowing.
+    await rig.grow(above, realHeight(above) + 360);
+    expect(Math.abs(rig.screenTop(reader)! - before)).toBeLessThanOrEqual(1);
+  });
+
+  it("does not drag the reader when the row they are reading grows below their line", async () => {
+    rig = await mountRig({ ids: rows(0, 80), height: realHeight, clientHeight: 900 });
+    await rig.scrollTo(Math.round(rig.scrollHeight() / 2));
+    await rig.scrollBy(-40);
+    const reader = rig.topVisible()!;
+    const before = rig.screenTop(reader)!;
+    const top = rig.scrollTop();
+    await rig.grow(reader, realHeight(reader) + 500);
+    expect(rig.scrollTop()).toBe(top);
+    expect(Math.abs(rig.screenTop(reader)! - before)).toBeLessThanOrEqual(1);
+  });
+
+  it("stays at the newest turn while it streams", async () => {
+    const ids = rows(0, 60);
+    rig = await mountRig({ ids, height: realHeight, clientHeight: 900 });
+    const last = ids.at(-1)!;
+    for (const height of [400, 800, 1200]) {
+      await rig.grow(last, height);
+      expect(rig.scrollTop(), `at ${height}px`).toBeCloseTo(rig.scrollHeight() - 900, 0);
+    }
+  });
+});
+
+describe("the unloaded-history placeholder", () => {
+  it("draws bounded placeholder turns while a cursor remains", async () => {
+    rig = await mountRig({
+      ids: rows(100, 40),
+      height: realHeight,
+      clientHeight: 900,
+      history: { before: "cursor", userOffset: 60 },
+    });
+    const turns = rig.placeholderTurns();
+    expect(turns).toBeGreaterThan(0);
+    expect(turns * TURN).toBeLessThanOrEqual(900 * 3);
+  });
+
+  it("draws nothing at all once the producer has no cursor", async () => {
+    rig = await mountRig({
+      ids: rows(100, 40),
+      height: realHeight,
+      clientHeight: 900,
+      history: { before: "cursor", userOffset: 60 },
+    });
+    await rig.scrollTo(0);
+    expect(rig.placeholderTurns()).toBeGreaterThan(0);
+    // The page that reached the beginning: the rows arrive and the cursor goes.
+    await rig.setIds([...rows(95, 5), ...rows(100, 40)]);
+    await rig.setHistory({ before: undefined, userOffset: 0 });
+    expect(rig.placeholderTurns()).toBe(0);
+    expect(rig.controller.isReadingHistoryReserve()).toBe(false);
+    // The beginning of the conversation, not the end of it.
+    expect(rig.scrollTop()).toBe(0);
+    expect(rig.mounted()[0]).toBe("r95");
+  });
+
+  it("grows back under a settled reader on loaded rows, and never under one inside it", async () => {
+    rig = await mountRig({
+      ids: rows(100, 40),
+      height: realHeight,
+      clientHeight: 900,
+      history: { before: "cursor", userOffset: 60 },
+    });
+    const ceiling = rig.placeholderTurns();
+    await rig.scrollTo(Math.round(rig.scrollHeight() / 2));
+    // A page arrives and takes its turns.
+    await rig.setIds([...rows(95, 5), ...rows(100, 40)]);
+    await rig.setHistory({ before: "cursor", userOffset: 55 });
+    const reader = rig.topVisible()!;
+    const held = rig.screenTop(reader)!;
+    await rig.idle();
+    expect(rig.placeholderTurns()).toBe(ceiling);
+    // Growth above a settled reader moves the scrollbar, never the reader.
+    expect(Math.abs(rig.screenTop(reader)! - held)).toBeLessThanOrEqual(1);
+  });
+});

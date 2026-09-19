@@ -9,15 +9,12 @@
  * the thread column re-rendered on every streamed batch.
  */
 import { act, memo } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { AssistantRuntimeProvider, useAuiState, useExternalStoreRuntime, type ThreadMessageLike } from "@assistant-ui/react";
+import { type ThreadMessageLike, useAuiState } from "@assistant-ui/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { TranscriptViewportProvider, WindowedMessages } from "../../src/components/thread/transcript-viewport.js";
 import { useConversationFind } from "../../src/components/thread/use-conversation-find.js";
 import { useThreadToolTimeline } from "../../src/components/assistant-ui/elements/tool-timeline.js";
 import { useSessionFileChanges } from "../../src/components/assistant-ui/elements/file-tree.js";
-import { createStateStore, LaserStoreProvider } from "../../src/runtime/LaserProvider.js";
-import { initialState } from "../../src/store.js";
+import { mountRig, type Rig } from "./virtual-rig.js";
 
 const renders = new Map<string, number>();
 vi.mock("../../src/components/thread/messages.js", async () => {
@@ -32,20 +29,13 @@ vi.mock("../../src/components/thread/messages.js", async () => {
   };
 });
 
-let root: Root, host: HTMLDivElement;
+let rig: Rig | undefined;
+let host: HTMLElement;
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   renders.clear();
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    return new DOMRect(0, 0, 600, this.hasAttribute("data-window-message") ? 100 : 700);
-  });
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); });
-
-const convert = (message: ThreadMessageLike) => message;
+afterEach(async () => { await rig?.dispose(); rig = undefined; vi.restoreAllMocks(); });
 const settled = (count: number): ThreadMessageLike[] =>
   Array.from({ length: count }, (_, index) => ({ id: `row-${index}`, role: index % 2 ? "assistant" : "user", content: `Row ${index} of the transcript` }));
 
@@ -74,14 +64,25 @@ const MonitorProbe = memo(function MonitorProbe() {
   return null;
 });
 
-function Fixture({ count, live, withFind = false, withMonitor = false, tool }: { count: number; live: string; withFind?: boolean; withMonitor?: boolean; tool?: ThreadMessageLike | undefined }) {
-  const messages: ThreadMessageLike[] = [...settled(count), ...(tool ? [tool] : []), { id: "live", role: "assistant", content: live, status: { type: "running" } }];
-  const runtime = useExternalStoreRuntime({ messages, convertMessage: convert, isRunning: true, onNew: async () => {} });
-  return <AssistantRuntimeProvider runtime={runtime}><TranscriptViewportProvider>
-    {withFind ? <FindProbe /> : null}
-    {withMonitor ? <MonitorProbe /> : null}
-    <WindowedMessages />
-  </TranscriptViewportProvider></AssistantRuntimeProvider>;
+/**
+ * The transcript over the rig's browser (M16-T87): the row the turn streams
+ * into is the newest one, so it is only mounted at all when the surface is a
+ * real scroller holding the live edge.
+ */
+let live = "Reviewing";
+let tool: ThreadMessageLike | undefined;
+async function mount(count: number, extras?: React.ReactNode) {
+  const ids = [...settled(count).map(message => message.id as string), "live"];
+  const started = await mountRig({
+    ids,
+    height: () => 100,
+    clientHeight: 700,
+    ...(extras !== undefined ? { extras } : {}),
+    running: true,
+    messages: () => [...settled(count), ...(tool ? [tool] : []), { id: "live", role: "assistant", content: live, status: { type: "running" } }],
+  });
+  host = started.container;
+  return started;
 }
 
 const frames = async (count = 3) => {
@@ -89,19 +90,19 @@ const frames = async (count = 3) => {
 };
 
 it("re-renders the streaming row and no settled row for each delta", async () => {
-  const store = createStateStore({ ...initialState, current: "/streaming" });
-  const render = (live: string) => act(async () => root.render(<LaserStoreProvider store={store}><Fixture count={12} live={live} /></LaserStoreProvider>));
-  await render("Reviewing");
+  live = "Reviewing"; tool = undefined;
+  rig = await mount(12);
+  const render = async (next: string) => { live = next; await rig!.render([...settled(12).map(message => message.id as string), "live"]); };
   await frames();
   const mounted = [...host.querySelectorAll("[data-window-message]")].map(row => row.getAttribute("data-window-message")!);
   expect(mounted).toContain("live");
   expect(mounted.length).toBeGreaterThan(1);
   const before = new Map(renders);
 
-  let live = "Reviewing";
+  let text = "Reviewing";
   for (let delta = 0; delta < 8; delta++) {
-    live += ` step ${delta},`;
-    await render(live);
+    text += ` step ${delta},`;
+    await render(text);
   }
   await frames();
 
@@ -114,21 +115,24 @@ it("re-renders the streaming row and no settled row for each delta", async () =>
 });
 
 it("leaves the monitor's tool and file sections still through a reply, and moves them for a tool call", async () => {
-  const store = createStateStore({ ...initialState, current: "/streaming" });
-  const render = (live: string, tool?: ThreadMessageLike) => act(async () =>
-    root.render(<LaserStoreProvider store={store}><Fixture count={4} live={live} withMonitor tool={tool} /></LaserStoreProvider>));
+  live = "Reviewing"; tool = undefined;
+  rig = await mount(4, <MonitorProbe />);
+  const render = async (next: string, call?: ThreadMessageLike) => {
+    live = next; tool = call;
+    await rig!.render([...settled(4).map(message => message.id as string), ...(call ? ["tool"] : []), "live"]);
+  };
   await render("Reviewing");
   await frames();
   const before = monitorRenders;
 
-  let live = "Reviewing";
-  for (let delta = 0; delta < 8; delta++) { live += ` step ${delta},`; await render(live); }
+  let text = "Reviewing";
+  for (let delta = 0; delta < 8; delta++) { text += ` step ${delta},`; await render(text); }
   await frames();
   expect(monitorRenders).toBe(before);
   expect(monitorSteps).toBe(0);
 
   const call: ThreadMessageLike = { id: "tool", role: "assistant", content: [{ type: "tool-call", toolCallId: "call-1", toolName: "write", args: { path: "src/app.ts" }, argsText: '{"path":"src/app.ts"}', status: { type: "running" } }] };
-  await render(live, call);
+  await render(text, call);
   await frames();
   expect(monitorRenders).toBeGreaterThan(before);
   expect(monitorSteps).toBe(1);
@@ -136,17 +140,17 @@ it("leaves the monitor's tool and file sections still through a reply, and moves
 });
 
 it("holds no transcript subscription while find is closed, and reads the live transcript once it is open", async () => {
-  const store = createStateStore({ ...initialState, current: "/streaming" });
-  const render = (live: string) => act(async () => root.render(<LaserStoreProvider store={store}><Fixture count={4} live={live} withFind /></LaserStoreProvider>));
-  // Only the transcript changes below; the owner is re-rendered by this test on
-  // purpose, so the count that matters is taken from a settled render.
+  live = "Reviewing"; tool = undefined;
+  rig = await mount(4, <FindProbe />);
+  // The find bar only opens for a thread that is actually on screen; the
+  // probe's own root is not a transcript row, so it needs a box of its own.
   vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([new DOMRect(0, 0, 600, 40)] as unknown as DOMRectList);
-  await render("Reviewing");
+  const render = async (next: string) => { live = next; await rig!.render([...settled(4).map(message => message.id as string), "live"]); };
   await frames();
 
   const closedRenders = findRenders;
-  let live = "Reviewing";
-  for (let delta = 0; delta < 6; delta++) { live += ` step ${delta},`; await render(live); }
+  let text = "Reviewing";
+  for (let delta = 0; delta < 6; delta++) { text += ` step ${delta},`; await render(text); }
   await frames();
   // Six deltas through the real runtime, and the closed bar did not wake once.
   expect(findRenders).toBe(closedRenders);
