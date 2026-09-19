@@ -42,6 +42,14 @@ import { HISTORY_PAGE_BYTE_LIMIT, HISTORY_PAGE_TURN_MAX } from "./history-window
 import { TELEMETRY_SECTIONS } from "./telemetry.js";
 import { AGENT_ISOLATION_DEFAULTS } from "./workspace.js";
 
+const gitActionExpect = z
+  .object({
+    branch: z.string().min(1).max(255).optional(),
+    files: z.array(z.string().min(1).max(4096)).max(500).optional(),
+    head: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+
 /** Opt-in browse replies must not silently reinterpret legacy folders as files. */
 export const explorerListingSchema = z.object({
   path: z.string(), home: z.string(), parent: z.string().optional(),
@@ -891,6 +899,7 @@ export const clientParamsSchemas = {
     paths: z.array(z.string().min(1).max(4096)).min(1).max(500),
     message: z.string().min(1).max(64 * 1024),
     confirm: z.boolean().optional(),
+    expect: gitActionExpect.optional(),
   }).strict(),
   "pi/project/git/push": z.object({
     cwd: z.string().min(1),
@@ -898,6 +907,7 @@ export const clientParamsSchemas = {
     remote: z.string().min(1).max(255),
     branch: z.string().min(1).max(255),
     confirm: z.boolean().optional(),
+    expect: gitActionExpect.optional(),
   }).strict(),
   "pi/project/git/branch": z.object({
     cwd: z.string().min(1),
@@ -906,6 +916,7 @@ export const clientParamsSchemas = {
     base: z.string().min(1).max(255),
     checkout: z.boolean().optional(),
     confirm: z.boolean().optional(),
+    expect: gitActionExpect.optional(),
   }).strict(),
   "pi/project/git/prose": z.object({
     cwd: z.string().min(1),
@@ -923,6 +934,7 @@ export const clientParamsSchemas = {
     base: z.string().min(1).max(255),
     head: z.string().min(1).max(255),
     confirm: z.boolean().optional(),
+    expect: gitActionExpect.optional(),
   }).strict(),
   "pi/project/pr/read": z.object({
     cwd: z.string().min(1),
@@ -934,6 +946,7 @@ export const clientParamsSchemas = {
     repo: z.string().min(1).max(4096).optional(),
     number: z.number().int().positive().max(1_000_000_000),
     confirm: z.boolean().optional(),
+    expect: gitActionExpect.optional(),
   }).strict(),
   "pi/project/pr/merge": z.object({
     cwd: z.string().min(1),
@@ -941,6 +954,7 @@ export const clientParamsSchemas = {
     number: z.number().int().positive().max(1_000_000_000),
     method: z.enum(GIT_PR_MERGE_METHODS),
     confirm: z.boolean().optional(),
+    expect: gitActionExpect.optional(),
   }).strict(),
   "pi/project/pr/viewed": z.object({
     cwd: z.string().min(1),

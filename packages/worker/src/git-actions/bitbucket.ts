@@ -6,23 +6,37 @@
  */
 import type {
   GitActionConfirmation,
+  GitActionExpect,
   GitActionResult,
   GitPrMergeMethod,
   GitPullRequest,
   GitPullRequestCheck,
   GitPullRequestComment,
+  GitPullRequestFile,
 } from "@lasercode/protocol";
-import { copyable, previewResult } from "./git-ops.js";
-import { GitActionError } from "./paths.js";
+import { copyable, previewResult, verifyExpect } from "./git-ops.js";
+import { GitActionError, assertRefName, pushRefspec } from "./paths.js";
 import type { ParsedRemote } from "./remotes.js";
 import { bitbucketRepo } from "./remotes.js";
-import { looksUncertain, redactSecrets, type GitActionsFetcher, type HttpResponse, type ProcessRunner } from "./runner.js";
+import {
+  looksUncertain,
+  personFacingMessage,
+  type GitActionsFetcher,
+  type HttpResponse,
+  type ProcessRunner,
+} from "./runner.js";
 
 const API = "https://api.bitbucket.org/2.0";
 const TOKEN_URL = "https://id.atlassian.com/manage-profile/security/api-tokens";
 
 export interface BitbucketAuth {
   token: string;
+}
+
+export interface BitbucketActionContext {
+  repo: string;
+  remote: ParsedRemote;
+  remoteName: string;
 }
 
 export function bitbucketAuthFrom(env: NodeJS.ProcessEnv): BitbucketAuth | undefined {
@@ -39,36 +53,44 @@ export function bitbucketHeaders(auth: BitbucketAuth): Record<string, string> {
   };
 }
 
-function missingToken(): GitActionError {
-  return new GitActionError(`Set BITBUCKET_API_TOKEN to an Atlassian API token with Bitbucket scopes (${TOKEN_URL}).`, "needs_copy");
+export function missingTokenResult(repo: string): GitActionResult {
+  const message = `Set BITBUCKET_API_TOKEN to an Atlassian API token with Bitbucket scopes (${TOKEN_URL}).`;
+  return {
+    outcome: "needs_copy",
+    message,
+    confirmation: { repo, branch: "", summary: message },
+    copyable: { argv: ["open", TOKEN_URL], cwd: repo, url: TOKEN_URL },
+  };
 }
 
 export async function createBitbucketPr(
   fetchImpl: GitActionsFetcher,
   auth: BitbucketAuth | undefined,
-  repo: string,
-  remote: ParsedRemote,
+  ctx: BitbucketActionContext,
   title: string,
   body: string,
   base: string,
   head: string,
   confirm: boolean | undefined,
+  expect?: GitActionExpect,
 ): Promise<GitActionResult & { pullRequest?: Pick<GitPullRequest, "number" | "url" | "title" | "host"> }> {
-  if (!auth) throw missingToken();
-  const { workspace, repo: slug } = bitbucketRepo(remote);
+  if (!auth) return missingTokenResult(ctx.repo);
+  const { workspace, repo: slug } = bitbucketRepo(ctx.remote);
   const confirmation: GitActionConfirmation = {
-    repo,
+    repo: ctx.repo,
     branch: head,
-    remote: "origin",
+    remote: ctx.remoteName,
     summary: `Open a pull request from ${head} into ${base} on ${workspace}/${slug}.`,
   };
   const url = `${API}/repositories/${workspace}/${slug}/pullrequests`;
   const copy = copyable(
-    ["git", "push", "-u", "origin", head],
-    repo,
+    ["git", "push", "-u", ctx.remoteName, pushRefspec(head)],
+    ctx.repo,
     `https://bitbucket.org/${workspace}/${slug}/pull-requests/new?source=${encodeURIComponent(head)}&dest=${encodeURIComponent(base)}`,
   );
-  if (confirm !== true) return previewResult(confirmation, copy);
+  const mismatch = confirm === true ? verifyExpect(expect, { branch: head }, confirmation, copy) : undefined;
+  if (mismatch) return mismatch;
+  if (confirm !== true) return previewResult(confirmation, copy, { expect: { branch: head } });
   let response: HttpResponse;
   try {
     response = await fetchImpl({
@@ -96,14 +118,13 @@ export async function createBitbucketPr(
 export async function readBitbucketPr(
   fetchImpl: GitActionsFetcher,
   auth: BitbucketAuth | undefined,
-  repo: string,
-  remote: ParsedRemote,
+  ctx: BitbucketActionContext,
   number: number,
 ): Promise<GitActionResult & { pullRequest?: GitPullRequest }> {
-  if (!auth) throw missingToken();
-  const { workspace, repo: slug } = bitbucketRepo(remote);
-  const confirmation: GitActionConfirmation = { repo, branch: "", summary: `Read pull request ${number} on ${workspace}/${slug}.` };
-  const copy = copyable(["git", "fetch", "origin"], repo, `https://bitbucket.org/${workspace}/${slug}/pull-requests/${number}`);
+  if (!auth) return missingTokenResult(ctx.repo);
+  const { workspace, repo: slug } = bitbucketRepo(ctx.remote);
+  const confirmation: GitActionConfirmation = { repo: ctx.repo, branch: "", summary: `Read pull request ${number} on ${workspace}/${slug}.` };
+  const copy = copyable(["git", "fetch", ctx.remoteName], ctx.repo, `https://bitbucket.org/${workspace}/${slug}/pull-requests/${number}`);
   const base = `${API}/repositories/${workspace}/${slug}/pullrequests/${number}`;
   let pr: HttpResponse;
   try {
@@ -111,7 +132,7 @@ export async function readBitbucketPr(
   } catch {
     return { outcome: "refused", message: "Bitbucket could not be reached.", confirmation, copyable: copy };
   }
-  if (pr.status === 401 || pr.status === 403) {
+  if (pr.status === 401 || pr.status === 403 || pr.status === 429) {
     return { outcome: "refused", message: bitbucketMessage(pr, "Bitbucket refused this request."), confirmation, copyable: copy };
   }
   if (pr.status !== 200) {
@@ -121,40 +142,45 @@ export async function readBitbucketPr(
   if (!parsed) return { outcome: "refused", message: "Bitbucket returned a response that could not be read.", confirmation, copyable: copy };
   const comments = await collectComments(fetchImpl, auth, `${base}/comments`);
   const checks = await collectStatuses(fetchImpl, auth, `${base}/statuses`);
-  const pullRequest = mapPr(parsed, number, comments, checks);
-  return { outcome: "done", confirmation: { ...confirmation, branch: pullRequest.head }, copyable: copy, pullRequest };
+  const files = await collectDiffstat(fetchImpl, auth, `${base}/diffstat`);
+  const pullRequest = mapPr(parsed, number, comments, checks, files);
+  return { outcome: "done", confirmation: { ...confirmation, branch: pullRequest.head, remote: ctx.remoteName }, copyable: copy, pullRequest };
 }
 
 export async function checkoutBitbucketPr(
   run: ProcessRunner,
   fetchImpl: GitActionsFetcher,
   auth: BitbucketAuth | undefined,
-  repo: string,
-  remote: ParsedRemote,
+  ctx: BitbucketActionContext,
   number: number,
   confirm: boolean | undefined,
+  expect?: GitActionExpect,
 ): Promise<GitActionResult & { checkedOut?: { branch: string } }> {
-  const read = await readBitbucketPr(fetchImpl, auth, repo, remote, number);
+  const read = await readBitbucketPr(fetchImpl, auth, ctx, number);
   if (!read.pullRequest) return { ...read, outcome: read.outcome === "done" ? "refused" : read.outcome };
-  const branch = read.pullRequest.head;
+  const branch = await assertRefName(run, ctx.repo, read.pullRequest.head);
   const confirmation: GitActionConfirmation = {
-    repo,
+    repo: ctx.repo,
     branch,
+    remote: ctx.remoteName,
     summary: `Check out ${branch} from pull request ${number}.`,
   };
-  const argv = ["git", "switch", branch];
-  const copy = copyable(argv, repo);
-  if (confirm !== true) return previewResult(confirmation, copy);
-  const fetch = await run("git", ["fetch", "origin", branch], { cwd: repo, timeoutMs: 60_000 });
+  const spec = pushRefspec(branch);
+  const argv = ["git", "switch", "--", branch];
+  const copy = copyable(argv, ctx.repo);
+  const mismatch = confirm === true ? verifyExpect(expect, { branch }, confirmation, copy) : undefined;
+  if (mismatch) return mismatch;
+  if (confirm !== true) return previewResult(confirmation, copy, { expect: { branch } });
+  const fetch = await run("git", ["fetch", ctx.remoteName, spec], { cwd: ctx.repo, timeoutMs: 60_000 });
   if (looksUncertain(fetch)) {
     return { outcome: "uncertain", message: "The fetch may or may not have completed. Check git status before trying again.", confirmation, copyable: copy };
   }
   if (fetch.code !== 0) {
     return { outcome: "refused", message: "The pull request branch could not be fetched.", confirmation, copyable: copy };
   }
-  const switched = await run("git", ["switch", branch], { cwd: repo, timeoutMs: 15_000 });
+  const switched = await run("git", ["switch", "--", branch], { cwd: ctx.repo, timeoutMs: 15_000 });
   if (switched.code !== 0) {
-    const track = await run("git", ["switch", "-c", branch, "--track", `origin/${branch}`], { cwd: repo, timeoutMs: 15_000 });
+    const track = await run("git", ["switch", "-c", branch, "--track", `${ctx.remoteName}/${branch}`], { cwd: ctx.repo, timeoutMs: 15_000 });
     if (track.code !== 0) {
       return { outcome: "refused", message: "The pull request branch could not be checked out.", confirmation, copyable: copy };
     }
@@ -165,23 +191,26 @@ export async function checkoutBitbucketPr(
 export async function mergeBitbucketPr(
   fetchImpl: GitActionsFetcher,
   auth: BitbucketAuth | undefined,
-  repo: string,
-  remote: ParsedRemote,
+  ctx: BitbucketActionContext,
   number: number,
   method: GitPrMergeMethod,
   confirm: boolean | undefined,
+  expect?: GitActionExpect,
 ): Promise<GitActionResult & { merged?: { number: number; method: GitPrMergeMethod } }> {
-  if (!auth) throw missingToken();
-  const { workspace, repo: slug } = bitbucketRepo(remote);
+  if (!auth) return missingTokenResult(ctx.repo);
+  const { workspace, repo: slug } = bitbucketRepo(ctx.remote);
   const confirmation: GitActionConfirmation = {
-    repo,
+    repo: ctx.repo,
     branch: "",
+    remote: ctx.remoteName,
     summary: `Merge pull request ${number} on ${workspace}/${slug} with ${method}.`,
   };
-  const copy = copyable(["git", "fetch", "origin"], repo, `https://bitbucket.org/${workspace}/${slug}/pull-requests/${number}`);
+  const copy = copyable(["git", "fetch", ctx.remoteName], ctx.repo, `https://bitbucket.org/${workspace}/${slug}/pull-requests/${number}`);
   if (method === "rebase") {
     throw new GitActionError("Bitbucket cannot rebase-merge. Choose merge or squash.");
   }
+  const mismatch = confirm === true ? verifyExpect(expect, {}, confirmation, copy) : undefined;
+  if (mismatch) return mismatch;
   if (confirm !== true) return previewResult(confirmation, copy);
   const strategy = method === "squash" ? "squash" : "merge_commit";
   let response: HttpResponse;
@@ -194,6 +223,14 @@ export async function mergeBitbucketPr(
     });
   } catch {
     return { outcome: "uncertain", message: "The merge may or may not have completed. Check Bitbucket before trying again.", confirmation, copyable: copy };
+  }
+  if (response.status === 202) {
+    return {
+      outcome: "uncertain",
+      message: "Bitbucket accepted the merge and is still running it. Check the pull request before trying again.",
+      confirmation,
+      copyable: copy,
+    };
   }
   if (response.status >= 500) {
     return { outcome: "uncertain", message: "The merge may or may not have completed. Check Bitbucket before trying again.", confirmation, copyable: copy };
@@ -262,6 +299,35 @@ async function collectStatuses(
   return checks;
 }
 
+async function collectDiffstat(
+  fetchImpl: GitActionsFetcher,
+  auth: BitbucketAuth,
+  url: string,
+): Promise<GitPullRequestFile[]> {
+  const files: GitPullRequestFile[] = [];
+  const seen = new Set<string>();
+  let next: string | undefined = `${url}?pagelen=100&fields=values.new.path,values.old.path,next`;
+  let pages = 0;
+  while (next && pages < 20) {
+    pages += 1;
+    const response = await fetchImpl({ url: next, method: "GET", headers: bitbucketHeaders(auth) }).catch(() => undefined);
+    if (!response || response.status !== 200) break;
+    const parsed = parseJson(response.text);
+    for (const item of arrayOf(parsed?.values)) {
+      const row = asRecord(item);
+      if (!row) continue;
+      const newer = asRecord(row.new);
+      const older = asRecord(row.old);
+      const path = typeof newer?.path === "string" ? newer.path : typeof older?.path === "string" ? older.path : "";
+      if (!path || seen.has(path)) continue;
+      seen.add(path);
+      files.push({ path });
+    }
+    next = typeof parsed?.next === "string" ? parsed.next : undefined;
+  }
+  return files;
+}
+
 function mapCreated(
   response: HttpResponse,
   workspace: string,
@@ -287,6 +353,7 @@ function mapPr(
   number: number,
   comments: GitPullRequestComment[],
   checks: GitPullRequestCheck[],
+  files: GitPullRequestFile[],
 ): GitPullRequest {
   const source = asRecord(parsed.source);
   const dest = asRecord(parsed.destination);
@@ -306,16 +373,44 @@ function mapPr(
     head: typeof sourceBranch?.name === "string" ? sourceBranch.name : "",
     comments,
     checks,
+    files,
   };
 }
 
-function bitbucketMessage(response: HttpResponse, fallback: string): string {
+export function bitbucketMessage(response: HttpResponse, fallback: string): string {
   if (response.status === 401) return `Set BITBUCKET_API_TOKEN to an Atlassian API token with Bitbucket scopes (${TOKEN_URL}).`;
-  if (response.status === 403) return "This Bitbucket token is missing a required scope. Create a replacement token.";
+  if (response.status === 429) return "Bitbucket is throttling this account. Wait, then try again.";
+  if (response.status === 403) return classifyForbidden(response, fallback);
   const parsed = parseJson(response.text);
   const error = asRecord(parsed?.error);
   const message = typeof error?.message === "string" ? error.message : undefined;
-  if (message && message.length <= 240) return redactSecrets(message);
+  if (message && message.length <= 240) return personFacingMessage(message, fallback);
+  return fallback;
+}
+
+function classifyForbidden(response: HttpResponse, fallback: string): string {
+  const parsed = parseJson(response.text);
+  if (!parsed) {
+    return "Bitbucket returned a security challenge, not an API response. Open Bitbucket in a browser, then try again.";
+  }
+  const error = asRecord(parsed.error);
+  const detail = error?.detail;
+  if (detail !== null && typeof detail === "object" && !Array.isArray(detail)) {
+    const required = (detail as { required?: unknown }).required;
+    const granted = (detail as { granted?: unknown }).granted;
+    if (Array.isArray(required) || Array.isArray(granted)) {
+      return "This Bitbucket token is missing a required scope. Create a replacement token.";
+    }
+  }
+  const data = asRecord(error?.data) ?? asRecord(parsed.data);
+  if (data?.key === "INSUFFICIENT_RIGHTS") {
+    return "This Bitbucket account does not have permission to write this repository. A repository admin must grant access; a new token will not help.";
+  }
+  const message = typeof error?.message === "string" ? error.message : "";
+  if (/do not have access to view this workspace/i.test(message)) {
+    return "This Bitbucket account cannot see that workspace. A workspace admin must grant access; a new token will not help.";
+  }
+  if (message && message.length <= 240) return personFacingMessage(message, fallback);
   return fallback;
 }
 

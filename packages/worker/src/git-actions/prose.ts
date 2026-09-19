@@ -7,31 +7,13 @@
  * to edit; nothing here commits.
  */
 import type { GitProseKind, GitProseResult } from "@lasercode/protocol";
+import type { NamerContext, NamerModelRuntime } from "../agents/namer.js";
 import { GitActionError } from "./paths.js";
 import type { ProcessRunner } from "./runner.js";
 
-export interface GitProseModel {
-  provider: string;
-  id: string;
-}
-
-export interface GitProseContext {
-  systemPrompt?: string;
-  messages: Array<{ role: "user"; content: string; timestamp: number }>;
-}
-
-export interface GitProseCompletion {
-  content: ReadonlyArray<{ type: string; text?: string }>;
-}
-
-export interface GitProseRuntime {
-  getModel(provider: string, id: string): GitProseModel | undefined;
-  completeSimple(
-    model: GitProseModel,
-    context: GitProseContext,
-    options?: { maxTokens?: number; signal?: AbortSignal },
-  ): Promise<GitProseCompletion>;
-}
+/** Same engine seam the Namer uses; one type so the server assignment needs no cast. */
+export type GitProseRuntime = NamerModelRuntime;
+export type GitProseContext = NamerContext;
 
 export interface GenerateProseInput {
   run: ProcessRunner;

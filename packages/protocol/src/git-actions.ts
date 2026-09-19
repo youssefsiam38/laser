@@ -25,6 +25,28 @@ export type GitPrState = (typeof GIT_PR_STATES)[number];
 export const GIT_CHECK_STATUSES = ["pending", "success", "failure", "neutral"] as const;
 export type GitCheckStatus = (typeof GIT_CHECK_STATUSES)[number];
 
+/** Why a host row is not usable. Callers switch on this; they do not sniff `fix`. */
+export const GIT_HOST_UNUSABLE_REASONS = [
+  "missing_cli",
+  "signed_out",
+  "missing_token",
+  "unsupported_host",
+  "not_git",
+  "no_remote",
+] as const;
+export type GitHostUnusableReason = (typeof GIT_HOST_UNUSABLE_REASONS)[number];
+
+/**
+ * Snapshot a mutating call must still match. The overlay round-trips this from
+ * the preview so a blind `confirm: true` cannot write a different tree.
+ */
+export interface GitActionExpect {
+  branch?: string;
+  files?: string[];
+  /** `git rev-parse HEAD` at preview time. */
+  head?: string;
+}
+
 /**
  * A command the person can copy when this machine cannot run the action
  * (CLI missing, signed out, or the credential lives on another machine).
@@ -57,6 +79,8 @@ export interface GitActionResult {
   message?: string;
   confirmation: GitActionConfirmation;
   copyable?: GitActionCopyable;
+  /** Present on a preview so the next call can send it back as `expect`. */
+  expect?: GitActionExpect;
 }
 
 /** One repository's discovered host, from its remotes and the login on this machine. */
@@ -74,6 +98,8 @@ export interface GitHostStatus {
   usable: boolean;
   /** Sentence with the one command (or URL) that fixes it, when `usable` is false. */
   fix?: string;
+  /** Present when `usable` is false. Switch on this; do not sniff `fix`. */
+  reason?: GitHostUnusableReason;
 }
 
 export interface GitPullRequestComment {
@@ -111,7 +137,10 @@ export interface GitPullRequest {
 
 export interface GitHostsParams {
   cwd: string;
-  /** Repository roots inside this project. Omitted: just `cwd` itself. */
+  /**
+   * Optional filter of the workspace's repositories. Omitted: every repository
+   * the workspace resolver found. Paths still have to sit inside the project.
+   */
   repos?: string[];
 }
 export interface GitHostsResult {
@@ -125,6 +154,7 @@ export interface GitCommitParams {
   message: string;
   /** Must be set `true` to write the commit. Omitted is a preview. */
   confirm?: boolean;
+  expect?: GitActionExpect;
 }
 export interface GitCommitResult extends GitActionResult {
   commit?: { hash: string; subject: string };
@@ -136,6 +166,7 @@ export interface GitPushParams {
   remote: string;
   branch: string;
   confirm?: boolean;
+  expect?: GitActionExpect;
 }
 export interface GitPushResult extends GitActionResult {
   pushed?: { remote: string; branch: string };
@@ -149,6 +180,7 @@ export interface GitBranchParams {
   /** Switch to the new branch after creating it. Still requires `confirm`. */
   checkout?: boolean;
   confirm?: boolean;
+  expect?: GitActionExpect;
 }
 export interface GitBranchResult extends GitActionResult {
   created?: { name: string; base: string; checkedOut: boolean };
@@ -179,6 +211,7 @@ export interface GitPrCreateParams {
   base: string;
   head: string;
   confirm?: boolean;
+  expect?: GitActionExpect;
 }
 export interface GitPrCreateResult extends GitActionResult {
   pullRequest?: Pick<GitPullRequest, "number" | "url" | "title" | "host">;
@@ -198,6 +231,7 @@ export interface GitPrCheckoutParams {
   repo?: string;
   number: number;
   confirm?: boolean;
+  expect?: GitActionExpect;
 }
 export interface GitPrCheckoutResult extends GitActionResult {
   checkedOut?: { branch: string };
@@ -209,6 +243,7 @@ export interface GitPrMergeParams {
   number: number;
   method: GitPrMergeMethod;
   confirm?: boolean;
+  expect?: GitActionExpect;
 }
 export interface GitPrMergeResult extends GitActionResult {
   merged?: { number: number; method: GitPrMergeMethod };
