@@ -1084,3 +1084,27 @@ it("routes explorer opt-in without opening workers and keeps legacy browse shape
     expect(h.workerRequests).toHaveLength(0);
   } finally { h.cleanup(); rmSync(root, { recursive: true, force: true }); }
 });
+
+describe("Router · git actions", () => {
+  it("routes every git action method to the project's worker by cwd", async () => {
+    const h = harness();
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ["pi/project/git/hosts", { cwd: CWD_A, repos: [CWD_A] }],
+      ["pi/project/git/commit", { cwd: CWD_A, paths: ["src/a.ts"], message: "Fix", confirm: true }],
+      ["pi/project/git/push", { cwd: CWD_A, remote: "origin", branch: "main", confirm: true }],
+      ["pi/project/git/branch", { cwd: CWD_A, name: "feature/x", base: "main", confirm: true }],
+      ["pi/project/git/prose", { cwd: CWD_A, path: PATH_A, kind: "commit", files: ["src/a.ts"] }],
+      ["pi/project/pr/create", { cwd: CWD_A, title: "Fix", body: "x", base: "main", head: "feature/x", confirm: true }],
+      ["pi/project/pr/read", { cwd: CWD_A, number: 12 }],
+      ["pi/project/pr/checkout", { cwd: CWD_A, number: 12, confirm: true }],
+      ["pi/project/pr/merge", { cwd: CWD_A, number: 12, method: "squash", confirm: true }],
+      ["pi/project/pr/viewed", { cwd: CWD_A, number: 12, path: "src/a.ts", viewed: true }],
+    ];
+    try {
+      for (const [method, params] of calls) await rpc(h.router, method, params);
+      expect(h.workerRequests.map((request) => [request.cwd, request.method])).toEqual(calls.map(([method]) => [CWD_A, method]));
+    } finally {
+      h.cleanup();
+    }
+  });
+});

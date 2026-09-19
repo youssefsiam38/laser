@@ -32,6 +32,7 @@ import { resourceParamsSchemas } from "./resources.js";
 import { sessionLifetimeParamsSchemas } from "./session-lifetime.js";
 import { memoryPressureParamsSchemas } from "./memory-pressure.js";
 import { environmentParamsSchemas } from "./environment-policy.js";
+import { GIT_PR_MERGE_METHODS, GIT_PROSE_KINDS } from "./git-actions.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX, TASK_LOG_SEGMENTS_MAX } from "./tasks.js";
 import { ENVIRONMENT_KEY_PATTERN, SESSION_REVISION_PATTERN } from "./session-revision.js";
@@ -817,6 +818,74 @@ export const clientParamsSchemas = {
     .object({ cwd: z.string().min(1), trusted: z.boolean(), remember: z.boolean().optional() })
     .strict(),
   "pi/project/git": z.object({ cwd: z.string().min(1), path: sessionPath.optional() }).strict(),
+  "pi/project/git/hosts": z.object({
+    cwd: z.string().min(1),
+    repos: z.array(z.string().min(1).max(4096)).max(256).optional(),
+  }).strict(),
+  "pi/project/git/commit": z.object({
+    cwd: z.string().min(1),
+    repo: z.string().min(1).max(4096).optional(),
+    paths: z.array(z.string().min(1).max(4096)).min(1).max(500),
+    message: z.string().min(1).max(64 * 1024),
+    confirm: z.boolean().optional(),
+  }).strict(),
+  "pi/project/git/push": z.object({
+    cwd: z.string().min(1),
+    repo: z.string().min(1).max(4096).optional(),
+    remote: z.string().min(1).max(255),
+    branch: z.string().min(1).max(255),
+    confirm: z.boolean().optional(),
+  }).strict(),
+  "pi/project/git/branch": z.object({
+    cwd: z.string().min(1),
+    repo: z.string().min(1).max(4096).optional(),
+    name: z.string().min(1).max(255),
+    base: z.string().min(1).max(255),
+    checkout: z.boolean().optional(),
+    confirm: z.boolean().optional(),
+  }).strict(),
+  "pi/project/git/prose": z.object({
+    cwd: z.string().min(1),
+    path: sessionPath,
+    repo: z.string().min(1).max(4096).optional(),
+    kind: z.enum(GIT_PROSE_KINDS),
+    files: z.array(z.string().min(1).max(4096)).min(1).max(500),
+    summary: z.string().max(16 * 1024).optional(),
+  }).strict(),
+  "pi/project/pr/create": z.object({
+    cwd: z.string().min(1),
+    repo: z.string().min(1).max(4096).optional(),
+    title: z.string().min(1).max(256),
+    body: z.string().max(64 * 1024),
+    base: z.string().min(1).max(255),
+    head: z.string().min(1).max(255),
+    confirm: z.boolean().optional(),
+  }).strict(),
+  "pi/project/pr/read": z.object({
+    cwd: z.string().min(1),
+    repo: z.string().min(1).max(4096).optional(),
+    number: z.number().int().positive().max(1_000_000_000),
+  }).strict(),
+  "pi/project/pr/checkout": z.object({
+    cwd: z.string().min(1),
+    repo: z.string().min(1).max(4096).optional(),
+    number: z.number().int().positive().max(1_000_000_000),
+    confirm: z.boolean().optional(),
+  }).strict(),
+  "pi/project/pr/merge": z.object({
+    cwd: z.string().min(1),
+    repo: z.string().min(1).max(4096).optional(),
+    number: z.number().int().positive().max(1_000_000_000),
+    method: z.enum(GIT_PR_MERGE_METHODS),
+    confirm: z.boolean().optional(),
+  }).strict(),
+  "pi/project/pr/viewed": z.object({
+    cwd: z.string().min(1),
+    repo: z.string().min(1).max(4096).optional(),
+    number: z.number().int().positive().max(1_000_000_000),
+    path: z.string().min(1).max(4096),
+    viewed: z.boolean(),
+  }).strict(),
   "pi/project/browse": z.object({
     path: z.string().min(1).max(4096).optional(),
     explorer: z.object({

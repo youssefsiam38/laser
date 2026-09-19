@@ -99,6 +99,8 @@ describe("execution is not settings", () => {
         ["pi/project/env/set", { cwd: "/p", config: { command: "direnv" } }],
         ["pi/project/env/test", { cwd: "/p" }],
         ["pi/project/env/refresh", { cwd: "/p" }],
+        ["pi/project/git/commit", { cwd: "/p", paths: ["a.ts"], message: "Fix", confirm: true }],
+        ["pi/project/git/push", { cwd: "/p", remote: "origin", branch: "main", confirm: true }],
       ] as Array<[string, unknown]>) {
         const response = await call(h.router, method, deviceActor(), params);
         expect(errorOf(response).code, method).toBe(ErrorCodes.Unsupported);

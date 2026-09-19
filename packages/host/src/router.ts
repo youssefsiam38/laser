@@ -188,6 +188,16 @@ const CWD_ROUTED = new Set([
   // The git status of a project. The UI always sends a `path` as well, but the
   // CLI and any cwd-only caller must still reach the right worker.
   "pi/project/git",
+  "pi/project/git/hosts",
+  "pi/project/git/commit",
+  "pi/project/git/push",
+  "pi/project/git/branch",
+  "pi/project/git/prose",
+  "pi/project/pr/create",
+  "pi/project/pr/read",
+  "pi/project/pr/checkout",
+  "pi/project/pr/merge",
+  "pi/project/pr/viewed",
   // The worker discovers user skills and supplies Laser's default instructions;
   // the Namer benchmark needs a provider. All three name the answering cwd.
   "agents/skills",
