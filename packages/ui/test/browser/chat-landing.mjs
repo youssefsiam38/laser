@@ -20,7 +20,9 @@ export default async function chatLanding(check) {
   });
 
   let panel = await sessionsPanel(page);
-  await panel.getByRole('tab', { name: 'Chat', exact: true }).click();
+  // The sessions tabs carry their count in the accessible name ("Chat, 2
+  // chats"), so a tab is matched by its word, not by an exact string.
+  await panel.getByRole('tab', { name: /^Chat\b/ }).click();
   const composer = page.getByRole('textbox', { name: 'Message', exact: true });
   await composer.waitFor({ state: 'visible' });
   assert.equal(await composer.isDisabled(), false, 'the Chat landing composer is live');
@@ -55,21 +57,21 @@ export default async function chatLanding(check) {
   }
 
   panel = await sessionsPanel(page);
-  await panel.getByRole('tab', { name: 'Code', exact: true }).click();
+  await panel.getByRole('tab', { name: /^Code\b/ }).click();
   if (check.state.width <= 600) await panel.waitFor({ state: 'hidden' });
   panel = await sessionsPanel(page);
   await panel.evaluate(async element => {
     await Promise.all(element.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {})));
   });
-  const chatTabBefore = panel.getByRole('tab', { name: 'Chat', exact: true });
+  const chatTabBefore = panel.getByRole('tab', { name: /^Chat\b/ });
   const chatButtonBefore = await chatTabBefore.boundingBox();
-  const chatLabelBefore = await chatTabBefore.locator('[data-slot="sessions-tab-label"]').boundingBox();
+  const chatLabelBefore = await chatTabBefore.locator('[data-slot="tab-label"]').boundingBox();
   const asking = check.rpc('session/prompt', {
     path: chatPath,
     content: [{ type: 'text', text: 'fixture-asking: leave a question while Chat is hidden' }],
   }).catch(() => {});
   panel = await sessionsPanel(page);
-  const chatTab = panel.getByRole('tab', { name: /^Chat, (Waiting for you|Finished, unread)$/ });
+  const chatTab = panel.getByRole('tab', { name: /^Chat\b.*, (Waiting for you|Finished, unread)$/ });
   const attentionDeadline = Date.now() + 30_000;
   while (!await chatTab.isVisible()) {
     if (Date.now() >= attentionDeadline) {
@@ -84,7 +86,7 @@ export default async function chatLanding(check) {
   assert.equal(await dot.count(), 1);
   assert.equal(await dot.getAttribute('aria-hidden'), null, 'the status image stays available to assistive technology');
   const chatButtonAfter = await chatTab.boundingBox();
-  const chatLabelAfter = await chatTab.locator('[data-slot="sessions-tab-label"]').boundingBox();
+  const chatLabelAfter = await chatTab.locator('[data-slot="tab-label"]').boundingBox();
   assert.ok(chatButtonBefore && chatLabelBefore && chatButtonAfter && chatLabelAfter
     && Math.abs((chatLabelBefore.x - chatButtonBefore.x) - (chatLabelAfter.x - chatButtonAfter.x)) < 0.5,
   `the activity dot must not shift the tab label: ${JSON.stringify({ chatButtonBefore, chatLabelBefore, chatButtonAfter, chatLabelAfter })}`);

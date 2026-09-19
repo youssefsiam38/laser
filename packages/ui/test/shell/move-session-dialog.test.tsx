@@ -134,7 +134,7 @@ afterEach(async () => {
 });
 
 const mount = async (node: ReactNode = <Fixture store={store} />) => act(async () => root.render(node));
-const tab = (kind: "chat" | "code") => container.querySelector<HTMLButtonElement>(`[role="tab"][data-tab="${kind}"]`)!;
+const tab = (kind: "chat" | "code") => container.querySelector<HTMLButtonElement>(`[role="tab"][data-option="${kind}"]`)!;
 const tick = async () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 const openMenu = async (label: string) => {
   const trigger = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
