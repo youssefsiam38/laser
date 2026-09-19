@@ -501,10 +501,16 @@ and the single close control.
 
 ### 8.6 Cost
 
-| Chunk | Before (§5) | Now | Delta |
+Both built from this worktree: the base commit `96e5dac7`, then this branch.
+
+| Chunk | Base `96e5dac7` | This branch | Delta |
 | --- | --- | --- | --- |
-| renderer `diff-body-*.js` | 316.84 kB / 82.65 kB gzip | 317.12 kB / 82.79 kB gzip | +0.28 kB / +0.14 kB |
-| startup `index-*.js` | 2,432.09 kB / 734.73 kB gzip | 2,446.71 kB / 739.97 kB gzip | +14.62 kB / +5.24 kB, almost all of it work merged into `main` between the two measurements |
+| renderer `diff-body-*.js` | 316.84 kB / 82.65 kB gzip | 317.12 kB / 82.79 kB gzip | **+0.28 kB / +0.14 kB** |
+| startup `index-*.js` | 2,442.69 kB / 738.48 kB gzip | 2,446.71 kB / 739.97 kB gzip | **+4.02 kB / +1.49 kB** (the verifier, the boundary and the scope mapping) |
+
+§5 measured the startup chunk at 2,432.09 kB / 734.73 kB; the other 10.60 kB
+of the difference against that number is work merged into `main` between the
+two measurements, not this change.
 
 The split is unchanged: the startup chunk has **zero** `diffs-container`
 occurrences and its only `pierre` matches are our own `pierreType`
