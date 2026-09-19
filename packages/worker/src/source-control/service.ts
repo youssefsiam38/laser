@@ -16,7 +16,7 @@ import {
   type RestoreResult,
 } from "@lasercode/protocol";
 import { resolve } from "node:path";
-import { captureCheckpoint, publishFailedCheckpoint } from "./capture.js";
+import { captureCheckpoint, publishFailedCheckpoint, type CheckpointGitRun } from "./capture.js";
 import {
   branchExists,
   filterTouched,
@@ -33,12 +33,19 @@ import { pruneSessionCheckpoints } from "./retention.js";
 import { checkpointForRepo, restoreFiles, restorePreview, verifyRestoreSource } from "./restore.js";
 import { readCheckpointRetention, writeCheckpointRetention } from "./settings.js";
 
+/** First prompt waits at most this long for the open-time baseline. */
+export const BASELINE_WAIT_MS = 60_000;
+
+export type SourceControlGitRun = CheckpointGitRun;
+
 export interface SourceControlDeps {
   projectCwd: string;
   sessionWorkdir(path: string): string | undefined;
   sessionStreaming(path: string): boolean;
   agentRun(runId: string): AgentRun | undefined;
   navigate?(path: string, entryId: string): Promise<{ cancelled: boolean }>;
+  /** Injected git runner. Production uses the shared `runGit`. */
+  runGit?: SourceControlGitRun;
 }
 
 export class SourceControlService {
@@ -47,6 +54,9 @@ export class SourceControlService {
   private readonly pendingTurn = new Map<string, () => Promise<void>>();
   private readonly nextTurn = new Map<string, number>();
   private readonly lastError = new Map<string, string>();
+  private readonly baselineWait = new Map<string, Promise<void>>();
+  private readonly baselineAbort = new Map<string, { aborted: boolean }>();
+  private readonly baselineSettled = new Set<string>();
 
   constructor(private readonly deps: SourceControlDeps) {}
 
@@ -64,14 +74,89 @@ export class SourceControlService {
   }
 
   async captureBaseline(sessionPath: string, workdir: string, entryId?: string): Promise<void> {
+    const existing = this.baselineWait.get(sessionPath);
+    if (existing) {
+      await existing;
+      return;
+    }
+    const abort = { aborted: false };
+    this.baselineAbort.set(sessionPath, abort);
+    let settle!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    this.baselineWait.set(sessionPath, wait);
     this.pendingBaseline.set(sessionPath, async () => {
-      const repos = await sessionRepositories(workdir);
-      if (repos.length === 0) return;
-      const existing = await loadCheckpoints(repos, sessionPath);
-      if (existing.length > 0) return;
-      await this.captureTurn(sessionPath, 0, entryId, repos);
+      try {
+        await this.runBaseline(sessionPath, workdir, entryId, abort);
+      } finally {
+        this.baselineSettled.add(sessionPath);
+        settle();
+      }
     });
     await this.kick(sessionPath);
+  }
+
+  /**
+   * First turn waits here so it cannot write files before the open-time
+   * snapshot finishes, fails, or hits this bound. A timeout aborts publishing
+   * rather than letting a late snapshot become turn 0.
+   */
+  async awaitBaseline(sessionPath: string, timeoutMs = BASELINE_WAIT_MS): Promise<void> {
+    if (this.baselineSettled.has(sessionPath)) return;
+    const wait = this.baselineWait.get(sessionPath);
+    if (!wait) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    });
+    try {
+      const winner = await Promise.race([
+        wait.then(() => "done" as const),
+        timedOut.then(() => "timeout" as const),
+      ]);
+      if (winner === "timeout") {
+        const abort = this.baselineAbort.get(sessionPath);
+        if (abort) abort.aborted = true;
+        if (!this.lastError.has(sessionPath)) {
+          this.lastError.set(sessionPath, "Capturing the open-time baseline took too long.");
+        }
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async runBaseline(
+    sessionPath: string,
+    workdir: string,
+    entryId: string | undefined,
+    abort: { aborted: boolean },
+  ): Promise<void> {
+    const repos = await sessionRepositories(workdir);
+    if (repos.length === 0) return;
+    const existing = await loadCheckpoints(repos, sessionPath);
+    if (existing.length > 0) return;
+    if (abort.aborted) {
+      this.lastError.set(sessionPath, "Capturing the open-time baseline took too long.");
+      await this.markFailedBaseline(sessionPath, repos, entryId);
+      return;
+    }
+    await this.captureTurn(sessionPath, 0, entryId, repos, () => abort.aborted);
+  }
+
+  private async markFailedBaseline(sessionPath: string, repos: RepoRef[], entryId?: string): Promise<void> {
+    await Promise.all(
+      repos.map((repo) =>
+        publishFailedCheckpoint({
+          repo,
+          sessionPath,
+          turn: 0,
+          ...(entryId ? { entryId } : {}),
+          ...(this.deps.runGit ? { run: this.deps.runGit } : {}),
+        }),
+      ),
+    );
   }
 
   async captureAfterTurn(sessionPath: string, workdir: string, entryId?: string): Promise<void> {
@@ -227,11 +312,29 @@ export class SourceControlService {
     return turn;
   }
 
+  private captureInput(
+    repo: RepoRef,
+    sessionPath: string,
+    turn: number,
+    entryId: string | undefined,
+    aborted?: () => boolean,
+  ) {
+    return {
+      repo,
+      sessionPath,
+      turn,
+      ...(entryId ? { entryId } : {}),
+      ...(this.deps.runGit ? { run: this.deps.runGit } : {}),
+      ...(aborted ? { aborted } : {}),
+    };
+  }
+
   private async captureTurn(
     sessionPath: string,
     turn: number,
     entryId: string | undefined,
     repos: RepoRef[],
+    aborted?: () => boolean,
   ): Promise<void> {
     this.nextTurn.set(sessionPath, Math.max(this.nextTurn.get(sessionPath) ?? 0, turn + 1));
     const retention = readCheckpointRetention(this.deps.projectCwd);
@@ -243,18 +346,10 @@ export class SourceControlService {
     await Promise.all(
       repos.map(async (repo) => {
         const previous = (await listSessionCheckpoints(repo, sessionPath)).filter((row) => !row.failed).at(-1);
-        const result = await captureCheckpoint({
-          repo,
-          sessionPath,
-          turn,
-          ...(entryId ? { entryId } : {}),
-        });
+        const result = await captureCheckpoint(this.captureInput(repo, sessionPath, turn, entryId, aborted));
         if (!result.ok) {
           errors.push(result.error);
-          await publishFailedCheckpoint(
-            { repo, sessionPath, turn, ...(entryId ? { entryId } : {}) },
-            previous?.commit,
-          );
+          await publishFailedCheckpoint(this.captureInput(repo, sessionPath, turn, entryId), previous?.commit);
           return;
         }
         await pruneSessionCheckpoints(repo, sessionPath, retention);
