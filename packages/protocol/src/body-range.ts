@@ -456,6 +456,30 @@ const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 
 /**
+ * The images one message carries, in its own content order — **whatever its
+ * role**. A picture a tool answered with is as addressable as one a person
+ * attached: it is the same kind of body, in the same component space, and a
+ * page that cannot carry its bytes names it here so the client can read it
+ * back through `session/entry_range` (M16-T88).
+ *
+ * A part of some other type carrying bytes (a file, audio, something this
+ * version has never seen) has no component of its own; it stays inside the
+ * structured component that holds it — `tool_result` or `custom_details` —
+ * which is addressable in exactly the same way. Nothing is ever unreachable
+ * because of the part type it arrived as.
+ */
+function imageParts(content: unknown): Array<{ component: BodyComponent; value: string }> {
+  if (!Array.isArray(content)) return [];
+  const rows: Array<{ component: BodyComponent; value: string }> = [];
+  let index = 0;
+  for (const part of content) {
+    const row = record(part);
+    if (row.type === "image" && typeof row.data === "string") rows.push({ component: { kind: "image", index: index++ }, value: row.data });
+  }
+  return rows;
+}
+
+/**
  * What a tool result is stored and shown as. Mirrors the transcript's own rule:
  * a text-only result is its text; anything carrying structure keeps it.
  */
@@ -493,6 +517,7 @@ export function entryBodySources(entry: unknown): Array<{ component: BodyCompone
     const text = textPartsOf(value.content, "text", "text");
     if (text) rows.push({ component: { kind: "custom_details" }, value: text });
     if (value.details !== undefined) rows.push({ component: { kind: "custom_details", index: 1 }, value: value.details });
+    rows.push(...imageParts(value.content));
     return rows;
   }
   if (type !== "message") return rows;
@@ -501,11 +526,7 @@ export function entryBodySources(entry: unknown): Array<{ component: BodyCompone
   const content = Array.isArray(message.content) ? message.content : [];
   if (role === "user") {
     rows.push({ component: { kind: "user_text" }, value: textPartsOf(message.content, "text", "text") });
-    let image = 0;
-    for (const part of content) {
-      const row = record(part);
-      if (row.type === "image" && typeof row.data === "string") rows.push({ component: { kind: "image", index: image++ }, value: row.data });
-    }
+    rows.push(...imageParts(message.content));
     return rows;
   }
   if (role === "assistant") {
@@ -517,16 +538,19 @@ export function entryBodySources(entry: unknown): Array<{ component: BodyCompone
       const row = record(part);
       if (row.type === "toolCall") rows.push({ component: { kind: "tool_args", index: call++ }, value: row.arguments });
     }
+    rows.push(...imageParts(message.content));
     return rows;
   }
   if (role === "toolResult") {
     rows.push({ component: { kind: "tool_result" }, value: toolResultValue(message) });
     rows.push({ component: { kind: "tool_output" }, value: toolOutputBody(message) });
+    rows.push(...imageParts(message.content));
     return rows;
   }
   if (role === "custom") {
     rows.push({ component: { kind: "custom_details" }, value: textPartsOf(message.content, "text", "text") });
     if (message.details !== undefined) rows.push({ component: { kind: "custom_details", index: 1 }, value: message.details });
+    rows.push(...imageParts(message.content));
   }
   return rows;
 }
@@ -538,52 +562,11 @@ export function entryBodySources(entry: unknown): Array<{ component: BodyCompone
  * memory) and the host (from the stored conversation) answer identically.
  */
 export function entryBodies(entry: unknown): EntryBody[] {
-  const value = record(entry);
-  const type = typeof value.type === "string" ? value.type : "";
-  const bodies: EntryBody[] = [];
-  if (type === "custom_message") {
-    const text = textPartsOf(value.content, "text", "text");
-    if (text) bodies.push({ component: { kind: "custom_details" }, text });
-    if (value.details !== undefined) bodies.push({ component: { kind: "custom_details", index: 1 }, text: displayBodyText(value.details) });
-    return bodies;
-  }
-  if (type !== "message") return bodies;
-  const message = record(value.message);
-  const role = typeof message.role === "string" ? message.role : "";
-  if (role === "user") {
-    bodies.push({ component: { kind: "user_text" }, text: textPartsOf(message.content, "text", "text") });
-    const content = Array.isArray(message.content) ? message.content : [];
-    let image = 0;
-    for (const part of content) {
-      const row = record(part);
-      if (row.type === "image" && typeof row.data === "string") {
-        bodies.push({ component: { kind: "image", index: image++ }, text: row.data });
-      }
-    }
-    return bodies;
-  }
-  if (role === "assistant") {
-    bodies.push({ component: { kind: "assistant_text" }, text: textPartsOf(message.content, "text", "text") });
-    const thinking = textPartsOf(message.content, "thinking", "thinking");
-    if (thinking) bodies.push({ component: { kind: "reasoning" }, text: thinking });
-    const content = Array.isArray(message.content) ? message.content : [];
-    let call = 0;
-    for (const part of content) {
-      const row = record(part);
-      if (row.type === "toolCall") bodies.push({ component: { kind: "tool_args", index: call++ }, text: displayBodyText(row.arguments) });
-    }
-    return bodies;
-  }
-  if (role === "toolResult") {
-    bodies.push({ component: { kind: "tool_result" }, text: displayBodyText(toolResultValue(message)) });
-    bodies.push({ component: { kind: "tool_output" }, text: toolOutputBody(message) });
-    return bodies;
-  }
-  if (role === "custom") {
-    bodies.push({ component: { kind: "custom_details" }, text: textPartsOf(message.content, "text", "text") });
-    if (message.details !== undefined) bodies.push({ component: { kind: "custom_details", index: 1 }, text: displayBodyText(message.details) });
-  }
-  return bodies;
+  // One walk owns what an entry's bodies **are** ({@link entryBodySources});
+  // this is the same list as the text each of them is. Deriving it rather than
+  // repeating it is what keeps the sizes a client mints, the digests a page
+  // publishes and the bytes an authority serves describing one conversation.
+  return entryBodySources(entry).map((source) => ({ component: source.component, text: displayBodyText(source.value) }));
 }
 
 /**
@@ -627,10 +610,14 @@ export function entryBodyMetadata(entry: unknown, options: EntryBodyMetadataOpti
       ? { component, totalBytes: Number.MAX_SAFE_INTEGER, unknown: true }
       : { component, totalBytes: bounded.totalBytes });
   };
+  const images = (content: unknown): void => {
+    for (const image of imageParts(content)) rows.push({ component: image.component, totalBytes: utf8ByteLength(image.value) });
+  };
   if (type === "custom_message") {
     const text = partsSize(value.content, "text", "text");
     if (text > 0) rows.push({ component: { kind: "custom_details" }, totalBytes: text });
     if (value.details !== undefined) structured({ kind: "custom_details", index: 1 }, value.details);
+    images(value.content);
     return rows;
   }
   if (type !== "message") return rows;
@@ -641,12 +628,7 @@ export function entryBodyMetadata(entry: unknown, options: EntryBodyMetadataOpti
     const totalBytes = partsSize(message.content, "text", "text");
     const text = completeUserTextIfFits(component, totalBytes, retainUserTextUpTo, () => textPartsOf(message.content, "text", "text"));
     rows.push({ component, totalBytes, ...(text !== undefined ? { text } : {}) });
-    const content = Array.isArray(message.content) ? message.content : [];
-    let image = 0;
-    for (const part of content) {
-      const row = record(part);
-      if (row.type === "image" && typeof row.data === "string") rows.push({ component: { kind: "image", index: image++ }, totalBytes: utf8ByteLength(row.data) });
-    }
+    images(message.content);
     return rows;
   }
   if (role === "assistant") {
@@ -659,6 +641,7 @@ export function entryBodyMetadata(entry: unknown, options: EntryBodyMetadataOpti
       const row = record(part);
       if (row.type === "toolCall") structured({ kind: "tool_args", index: call++ }, row.arguments);
     }
+    images(message.content);
     return rows;
   }
   if (role === "toolResult") {
@@ -671,11 +654,13 @@ export function entryBodyMetadata(entry: unknown, options: EntryBodyMetadataOpti
     if (!hasDetails && !hasNonText) rows.push({ component: { kind: "tool_result" }, totalBytes: partsSize(content, "text", "text") });
     else structured({ kind: "tool_result" }, toolResultValue(message));
     rows.push({ component: { kind: "tool_output" }, totalBytes: partsSize(content, "text", "text") });
+    images(content);
     return rows;
   }
   if (role === "custom") {
     rows.push({ component: { kind: "custom_details" }, totalBytes: partsSize(message.content, "text", "text") });
     if (message.details !== undefined) structured({ kind: "custom_details", index: 1 }, message.details);
+    images(message.content);
   }
   return rows;
 }
@@ -1039,26 +1024,75 @@ export function entryToolCalls(entry: unknown): Array<{ id: string; name: string
 }
 
 /**
- * Split a planned page into the records that fit the caller's per-body limit
- * and the ones that do not. Pure; the digest function is supplied by the
- * producer (the protocol package links no crypto).
+ * How large one record may be and still travel inside a page.
+ *
+ * A body limit alone cannot bound a page: a record can be enormous without any
+ * **body** of it being enormous — an unknown part type, a signature, a
+ * compaction summary, a hundred small pictures. Before this, such a record was
+ * never elided, no page containing it could meet the wire ceiling, and the
+ * producer refused that page and every older one for ever (M16-T88). A record
+ * past this size therefore travels as identity and body metadata, exactly as
+ * an oversized body does, whatever kind of record it is.
+ *
+ * The page ceiling less a reserve for the goal context and the metadata around
+ * it: a record at or under this still travels whole exactly as it always has —
+ * a 600 KB reply is not a problem, it is a long reply — while one above it
+ * cannot fit any page and so travels as identity. A single-record page
+ * therefore always fits.
+ *
+ * `HISTORY_PAGE_BYTE_LIMIT` is 1 MiB; it is spelled out here rather than
+ * imported because `history-window.ts` imports this module, not the reverse.
+ */
+export const ELIDED_RECORD_MAX_BYTES = 1024 * 1024 - 64 * 1024;
+
+/**
+ * The canonical size of a whole record, counted rather than built (RP-5b
+ * §3.2). A value this projection cannot predict is measured exactly, once,
+ * because the producer would otherwise have to serialize it anyway.
+ */
+export function entryRecordBytes(entry: unknown): number {
+  const counted = boundedBodyText(entry, 0).totalBytes;
+  if (counted !== undefined) return counted;
+  try {
+    return utf8ByteLength(JSON.stringify(entry) ?? "");
+  } catch {
+    return Number.MAX_SAFE_INTEGER;
+  }
+}
+
+/**
+ * Split a planned page into the records that fit the caller's limits and the
+ * ones that do not. Pure; the digest function is supplied by the producer (the
+ * protocol package links no crypto).
+ *
+ * `bodyLimit` is the caller's per-body bound; `undefined` means it asked for
+ * none, and then only a record too large for any page is elided — a page is
+ * never refused because one record is too large, whatever the caller asked
+ * for.
  */
 export function elideOversizedEntries(
   entries: readonly unknown[],
-  bodyLimit: number,
+  bodyLimit: number | undefined,
   digest: (text: string) => string,
+  recordLimit = ELIDED_RECORD_MAX_BYTES,
 ): { entries: unknown[]; elided: ElidedEntry[] } {
   const kept: unknown[] = [];
   const elided: ElidedEntry[] = [];
   for (const entry of entries) {
-    const bodies = entryBodies(entry);
     const value = record(entry);
     const id = typeof value.id === "string" ? value.id : undefined;
-    const oversized = bodies.some((body) => utf8ByteLength(body.text) > bodyLimit);
+    // Sizes before texts: a record that travels whole is never projected, so
+    // an ordinary page costs counting and not one copy of a body (RP-5b §3.2).
+    const oversized = entryRecordBytes(entry) > recordLimit
+      || (bodyLimit !== undefined && entryBodyMetadata(entry).some((body) => body.totalBytes > bodyLimit));
     if (!oversized || id === undefined) {
       kept.push(entry);
       continue;
     }
+    const bodies = entryBodies(entry);
+    // With no per-body limit, only whole-record size decides; a body then has
+    // no bound of its own and complete prompt text is not retained beside it.
+    const retainUpTo = bodyLimit ?? 0;
     elided.push({
       id,
       parentId: typeof value.parentId === "string" ? value.parentId : null,
@@ -1068,7 +1102,7 @@ export function elideOversizedEntries(
       ...(entryToolCalls(entry).length > 0 ? { toolCalls: entryToolCalls(entry) } : {}),
       bodies: bodies.map((body) => {
         const totalBytes = utf8ByteLength(body.text);
-        const text = completeUserTextIfFits(body.component, totalBytes, bodyLimit, () => body.text);
+        const text = completeUserTextIfFits(body.component, totalBytes, retainUpTo, () => body.text);
         // A prompt's attachments are named only when its complete text is not
         // present. Publishing both costs wire bytes and gives the client two
         // representations of the same files, one of which it must discard.

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes, HISTORY_PAGE_BYTE_LIMIT, PRODUCT_NAME, boundedHistoryWindow, historyContentSerializedBytes, historyWindow, type HistoryWindowRequest } from "@lasercode/protocol";
+import { sha256Hex } from "../src/session-body-range.js";
 import { SessionIndexCache } from "../src/session-index.js";
 import { SessionProjection } from "../src/session-projection.js";
 import { SessionRevisions } from "../src/session-revision.js";
@@ -366,7 +367,7 @@ describe("worker-free session projection", () => {
     }
   });
 
-  it("refuses oversized context rather than returning authority-dependent bodies", async () => {
+  it("elides an oversized context record rather than refusing the page (M16-T88)", async () => {
     const entries = [
       { type: "custom", id: "goal", parentId: null, customType: "goal-state", data: { body: "x".repeat(HISTORY_PAGE_BYTE_LIMIT) } },
       message("old", "goal", 0),
@@ -375,17 +376,21 @@ describe("worker-free session projection", () => {
     const f = fixture(entries);
     try {
       const service = services();
+      // The record is bigger than any page can carry, so it travels as identity
+      // and body metadata; both authorities answer the same way, and neither
+      // leaves the conversation unreadable behind it (M16-T88).
       const answer = await service.projection.read(f.path, { tail: 1 });
-      expect(answer.kind).toBe("refuse");
-      if (answer.kind !== "refuse") throw new Error("expected refusal");
-      expect(answer.error.code).toBe(ErrorCodes.RevisionUnavailable);
+      expect(answer.kind).toBe("answer");
+      if (answer.kind !== "answer") throw new Error("expected an answer");
+      expect(answer.result.window.elided?.map(row => row.id)).toContain("goal");
       const revision = await service.revisions.read(f.path);
       if (revision.kind !== "answer") throw new Error("missing revision");
-      expect(boundedHistoryWindow({ entries, leafId: "latest" }, { tail: 1 }, {
+      const live = boundedHistoryWindow({ entries, leafId: "latest" }, { tail: 1 }, {
         sessionId: "session-1", epoch: "live", seq: 1,
         revision: revision.result.revision, environmentKey: revision.result.environmentKey,
         authority: "live", selection: { kind: "replace" },
-      })).toBeUndefined();
+      }, { digest: sha256Hex });
+      expect(live?.window.elided?.map(row => row.id)).toContain("goal");
     } finally {
       f.cleanup();
     }

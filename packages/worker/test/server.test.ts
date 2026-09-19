@@ -422,8 +422,15 @@ describe("WorkerServer", () => {
         { type: "message", id: "old", parentId: "goal", message: { role: "user", content: "old" } },
         { type: "message", id: "latest", parentId: "old", message: { role: "assistant", content: "latest" } },
       ], leafId: "latest" };
+      // A goal-state record too large for any page used to refuse the page and
+      // every older one for ever. It now travels as identity in `elided`, so
+      // the conversation stays readable (M16-T88).
       const context = await h.call(3, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 1 } });
-      expect(context.error?.code).toBe(ErrorCodes.RevisionUnavailable);
+      expect(context.error).toBeUndefined();
+      const answered = context.result as { entries: Array<{ id: string }>; window: { context: unknown[]; elided?: Array<{ id: string }> } };
+      expect(answered.entries.map(entry => entry.id)).toEqual(["old", "latest"]);
+      expect(answered.window.elided?.map(row => row.id)).toContain("goal");
+      expect(Buffer.byteLength(JSON.stringify(answered))).toBeLessThanOrEqual(1024 * 1024);
 
       driver.history = { entries: [
         { type: "message", id: "u", parentId: null, message: { role: "user", content: "x".repeat(600_000) } },
