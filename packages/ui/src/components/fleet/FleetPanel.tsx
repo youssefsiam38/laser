@@ -36,6 +36,7 @@ import { requestEndAgent } from "@/components/agents/end-agent";
 import { Button } from "@/components/ui/button";
 import { ControlHint } from "@/components/ui/hint";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
+import { FLEET_HEADER_HEIGHT } from "@/fleet/chrome";
 import { filterRevealing, sameFleetFilter } from "@/fleet/filter";
 import { clearFinishedFleet, clearFleetReveal, setFleetFilter, useFleetClearedBefore, useFleetFilter, useFleetReveal } from "@/fleet/fleet-state";
 import { useFleet, type FleetView } from "@/fleet/hooks";
@@ -171,7 +172,17 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
       data-slot="fleet-panel"
       className={cn("flex h-full min-h-0 flex-col bg-surface", variant === "panel" && "w-80 shrink-0 hairline-s")}
     >
-      <header className={cn("flex h-12 shrink-0 items-center gap-2 px-4 hairline-b", variant === "sheet" && "pe-12")}>
+      {/*
+        The column's one band of chrome, and the 48px of the 72px budget that
+        is spent before anything is drawn (`fleet/chrome.ts`). It keeps the
+        height of the sessions and telemetry headers so the three columns
+        start on one line across the window, and it carries the counts — which
+        is why no section band below it repeats them.
+      */}
+      <header
+        data-fleet-chrome="header"
+        className={cn(FLEET_HEADER_HEIGHT, "flex shrink-0 items-center gap-2 px-3 hairline-b", variant === "sheet" && "pe-12")}
+      >
         <span className="relative flex size-7 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-live">
           <Radio className="size-4" aria-hidden="true" />
           {going ? (

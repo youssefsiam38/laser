@@ -115,11 +115,27 @@ describe("stripText", () => {
     );
     expect(blank.worktree).toEqual({ kind: "shared" });
   });
-  it("joins a command strip without inventing a pid", () => {
+  // The command belongs to line 1, which has the width for it. Repeating it
+  // here, shorter, was the strip saying nothing twice.
+  it("says how a command stands, what it wrote and when it began — never the command again", () => {
     const strip = taskStrip(task({ id: "t1", sessionPath: ROOT, outputBytes: 2048 }));
-    expect(stripText(strip)).toContain("pnpm -r test");
+    expect(strip).toMatchObject({ kind: "task", status: "running", failed: false, bytes: 2048 });
+    expect(stripText(strip)).toContain("running");
     expect(stripText(strip)).toContain("KB");
+    expect(stripText(strip)).not.toContain("pnpm -r test");
     expect(stripText(strip)).not.toMatch(/pid/i);
+  });
+
+  it("carries the exit code of a command that ended, and marks a non-zero one", () => {
+    const ok = taskStrip(task({ id: "t1", sessionPath: ROOT, status: "completed", exitCode: 0, outputBytes: 10 }));
+    expect(ok).toMatchObject({ status: "exit 0", failed: false });
+    const bad = taskStrip(task({ id: "t2", sessionPath: ROOT, status: "failed", exitCode: 2, outputBytes: 10 }));
+    expect(bad).toMatchObject({ status: "exit 2", failed: true });
+    // Killed or unable to run: there is no code to show, so it does not invent one.
+    const broken = taskStrip(task({ id: "t3", sessionPath: ROOT, status: "failed", outputBytes: 0 }));
+    expect(broken).toMatchObject({ status: "failed", failed: true });
+    const stopped = taskStrip(task({ id: "t4", sessionPath: ROOT, status: "stopped", outputBytes: 0 }));
+    expect(stopped).toMatchObject({ status: "stopped", failed: false });
   });
 });
 
@@ -163,7 +179,8 @@ describe("buildFleet row projection", () => {
         now: NOW,
       })[0]!.items,
     )[0]!;
-    expect(item.strip).toMatchObject({ kind: "task", command: "pnpm -r test", bytes: 189_000 });
+    expect(item.strip).toMatchObject({ kind: "task", status: "running", bytes: 189_000 });
+    expect(item.strip).not.toHaveProperty("command");
     expect(item.headline).toBeUndefined();
   });
 });

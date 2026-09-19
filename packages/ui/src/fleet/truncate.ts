@@ -12,6 +12,15 @@
 export const PATH_BUDGET = 24;
 /** A branch/worktree name in the developer strip. */
 export const BRANCH_BUDGET = 14;
+/**
+ * A command on line 1, at 12px mono, after the tile, the elapsed time and the
+ * chevron have taken their width. It middle-truncates, because the tail is
+ * what identifies the command: `--port 5173` survives, `pnpm vi…` does not
+ * identify anything.
+ */
+export const COMMAND_BUDGET = 24;
+/** A session title on the group header, at 13px sans across the column. */
+export const GROUP_TITLE_BUDGET = 40;
 
 export function isPathShaped(value: string): boolean {
   return /[\\/]/.test(value) || /^(?:\.{1,2}|~)[\\/]/.test(value) || /^[A-Za-z]:[\\/]/.test(value);

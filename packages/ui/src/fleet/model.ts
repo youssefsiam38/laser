@@ -282,28 +282,78 @@ function settle(items: readonly FleetItem[], counts: { running: number; needsYou
 export function buildFleet(input: FleetInput): FleetGroup[] {
   const { sessions, runs, tasks, views, now } = input;
   const runList = Object.values(runs);
-  const taskList = Object.values(tasks).sort((a, b) => time(a.startedAt) - time(b.startedAt));
+  // A total order, never the map's. `Object.values` follows insertion, and
+  // `tasks/loaded` rewrites that insertion order for every session it lists,
+  // so two commands that started in the same millisecond would swap rows on a
+  // reconnect with nothing about either of them having changed (R1).
+  const taskList = Object.values(tasks).sort((a, b) => time(a.startedAt) - time(b.startedAt) || a.id.localeCompare(b.id));
   if (runList.length === 0 && taskList.length === 0) return [];
 
   const index = createAncestryIndex(runs, sessions);
-  const tasksByPath = new Map<string, BackgroundTask[]>();
-  for (const task of taskList) {
-    const list = tasksByPath.get(task.sessionPath);
-    if (list) list.push(task);
-    else tasksByPath.set(task.sessionPath, [task]);
-  }
-  const tasksOf = (path: string): BackgroundTask[] => tasksByPath.get(path) ?? [];
+  const summaries = new Map(sessions.map((summary) => [summary.path, summary]));
+
+  /**
+   * The top-level session a piece of work belongs to.
+   *
+   * A record that names its own root is believed before a chain that has to be
+   * walked, because the walk can be one row short of complete: a child whose
+   * parent's catalog row has not arrived (or whose run the snapshot does not
+   * hold yet) would otherwise become a root of its own for as long as the gap
+   * lasts — and its still-running command would leave the tree it belongs to
+   * and reappear under "work from a deleted session", in a list with the same
+   * markup. That is a row removed here and added there, and back again, while
+   * nothing about the work changed: the flicker this function exists to
+   * prevent. Membership is decided by what the work declares, not by how
+   * complete this snapshot happens to be.
+   */
+  const declaredRoot = (path: string): string | undefined => {
+    const summary = summaries.get(path);
+    const declared = summary?.agent?.rootPath ?? views[path]?.state.agent?.rootPath;
+    return declared || undefined;
+  };
+  const rootOfSession = (path: string): string => declaredRoot(path) ?? index.rootOf(path);
 
   // One group per top-level session that has work anywhere beneath it.
   const roots = new Set<string>();
-  for (const run of runList) roots.add(run.rootSessionPath || index.rootOf(run.sessionPath));
-  for (const task of taskList) roots.add(index.rootOf(task.sessionPath));
+  const rootOfTask = new Map<string, string>();
+  for (const run of runList) roots.add(run.rootSessionPath || rootOfSession(run.sessionPath));
+  for (const task of taskList) {
+    const root = rootOfSession(task.sessionPath);
+    rootOfTask.set(task.id, root);
+    roots.add(root);
+  }
 
-  const summaries = new Map(sessions.map((summary) => [summary.path, summary]));
   const groups: FleetGroup[] = [];
 
   for (const rootPath of roots) {
     const tree = buildAgentTree({ rootPath, sessions, runs, views });
+    /**
+     * Where a command hangs in *this* tree: its own session when the tree has
+     * a node for it, else the nearest ancestor it does have, else the root.
+     *
+     * Exactly one place, always a place. A command whose session is in this
+     * group can never be dropped for want of a node (R7), and a node that
+     * comes and goes moves the command one indent rather than into another
+     * list — the ancestor is still the truth, just less of it.
+     */
+    const hostOf = (path: string): string => {
+      if (tree.byPath.has(path)) return path;
+      const ancestry = index.ancestryOf(path);
+      for (let i = ancestry.length - 1; i >= 0; i -= 1) {
+        const ancestor = ancestry[i]!;
+        if (tree.byPath.has(ancestor)) return ancestor;
+      }
+      return rootPath;
+    };
+    const tasksHere = new Map<string, BackgroundTask[]>();
+    for (const task of taskList) {
+      if (rootOfTask.get(task.id) !== rootPath) continue;
+      const host = hostOf(task.sessionPath);
+      const list = tasksHere.get(host);
+      if (list) list.push(task);
+      else tasksHere.set(host, [task]);
+    }
+    const tasksOf = (path: string): BackgroundTask[] => tasksHere.get(path) ?? [];
     // The root node is the session itself; the group header says who it is, so
     // its own row would be a second copy of the same fact.
     const build = (node: AgentTreeNode, depth: number): FleetItem => {
@@ -332,7 +382,12 @@ export function buildFleet(input: FleetInput): FleetGroup[] {
       : summary === undefined && (input.sessionsLoaded ?? sessions.length > 0);
     groups.push({
       path: rootPath,
-      cwd: summary?.cwd ?? view?.state.cwd ?? runList.find((run) => run.rootSessionPath === rootPath)?.projectCwd ?? "",
+      // Sorted, not "the first run the map happens to yield": every run of a
+      // root names the same project, and where one disagrees the answer must
+      // still be the same answer on the next build.
+      cwd: summary?.cwd ?? view?.state.cwd
+        ?? runList.filter((run) => run.rootSessionPath === rootPath).map((run) => run.projectCwd).sort()[0]
+        ?? "",
       // A root the catalog cannot name is named the way the top bar names an
       // unscanned session — its name, else its first line — and a deleted one
       // with neither is "Unnamed session", not a file name: the header beside it
@@ -349,14 +404,102 @@ export function buildFleet(input: FleetInput): FleetGroup[] {
   }
 
   // The session you are in first — its work is the work you asked about — then
-  // the busiest, then alphabetically so the rest never shuffle under you.
+  // the busiest, then alphabetically so the rest never shuffle under you. The
+  // path breaks a tie between two sessions with the same title, so the order
+  // is total and never falls back to the order a map happened to be built in.
   return groups.sort(
     (a, b) =>
       Number(b.path === input.currentPath) - Number(a.path === input.currentPath) ||
       b.needsYou - a.needsYou ||
       b.running - a.running ||
-      a.title.localeCompare(b.title),
+      a.title.localeCompare(b.title) ||
+      a.path.localeCompare(b.path),
   );
+}
+
+/**
+ * Is this the same row, drawing the same things?
+ *
+ * Every visible value on a row is derived from the run or the task record,
+ * the rolled-up attention and the clock, so those are what is compared —
+ * `headline` and `strip` are functions of the same record and need no second
+ * comparison. Children are compared by identity, which holds because the
+ * reconciliation below is bottom-up.
+ */
+function sameFleetItem(a: FleetItem, b: FleetItem): boolean {
+  return (
+    a.key === b.key &&
+    a.kind === b.kind &&
+    a.title === b.title &&
+    a.subtitle === b.subtitle &&
+    a.state === b.state &&
+    a.own === b.own &&
+    a.attention === b.attention &&
+    a.terminal === b.terminal &&
+    a.terminalReason === b.terminalReason &&
+    a.startedAt === b.startedAt &&
+    a.endedAt === b.endedAt &&
+    a.elapsedMs === b.elapsedMs &&
+    a.sessionPath === b.sessionPath &&
+    a.model === b.model &&
+    a.outputBytes === b.outputBytes &&
+    a.initials === b.initials &&
+    a.depth === b.depth &&
+    a.run === b.run &&
+    a.task === b.task &&
+    a.children.length === b.children.length &&
+    a.children.every((child, index) => child === b.children[index])
+  );
+}
+
+function sameFleetGroup(a: FleetGroup, b: FleetGroup): boolean {
+  return (
+    a.path === b.path &&
+    a.cwd === b.cwd &&
+    a.title === b.title &&
+    a.orphaned === b.orphaned &&
+    a.deleted === b.deleted &&
+    a.running === b.running &&
+    a.needsYou === b.needsYou &&
+    a.ended === b.ended &&
+    a.attention === b.attention &&
+    a.items.length === b.items.length &&
+    a.items.every((item, index) => item === b.items[index])
+  );
+}
+
+/**
+ * Keep the objects the last build produced wherever this build says the same
+ * thing. A command writing output replaces one task record a second; without
+ * this, that one record replaces every `FleetItem` in the column — the agent
+ * that has not moved, its ancestors, the groups — and every row re-renders on
+ * every tick of every command. Bottom-up, so a parent is reused only when all
+ * of its children were.
+ */
+function reuseItems(previous: readonly FleetItem[] | undefined, next: FleetItem[]): FleetItem[] {
+  if (!previous || previous.length === 0) return next;
+  const byKey = new Map(previous.map((item) => [item.key, item]));
+  const out = next.map((item) => {
+    const old = byKey.get(item.key);
+    if (!old) return item;
+    // The item is this build's own, so settling its children in place is safe
+    // and keeps the array identity a parent's comparison depends on.
+    const children = reuseItems(old.children, item.children);
+    if (children !== item.children) item.children = children;
+    return sameFleetItem(old, item) ? old : item;
+  });
+  return out.length === previous.length && out.every((item, index) => item === previous[index]) ? (previous as FleetItem[]) : out;
+}
+
+function reuseGroups(previous: readonly FleetGroup[] | undefined, next: FleetGroup[]): FleetGroup[] {
+  if (!previous || previous.length === 0) return next;
+  const byPath = new Map(previous.map((group) => [group.path, group]));
+  return next.map((group) => {
+    const old = byPath.get(group.path);
+    const items = reuseItems(old?.items, group.items);
+    if (items !== group.items) group.items = items;
+    return old && sameFleetGroup(old, group) ? old : group;
+  });
 }
 
 /** Share structural derivation across the column and its ambient controls.
@@ -377,7 +520,9 @@ export function createFleetSelector(build: typeof buildFleet = buildFleet): type
     if (!old || old.sessions !== input.sessions || old.tasks !== input.tasks
       || old.currentPath !== input.currentPath || old.sessionsLoaded !== input.sessionsLoaded || old.sessionPresence !== input.sessionPresence
       || !samePresentationViews(old.views, input.views)) {
-      const groups = build(input);
+      // The rebuild is structural; the reconciliation is what keeps identity
+      // across it, so a row React could update is never a row it replaces.
+      const groups = reuseGroups(entry?.clocked, build(input));
       entry = { input, groups, now: input.now, clocked: groups };
       cache.set(input.runs, entry);
     }
