@@ -1,55 +1,28 @@
-import type * as React from "react";
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Activity,
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  Brain,
-  ChevronRight,
-  CircleDollarSign,
-  Clock3,
-  Cpu,
-  Database,
-  FileCode2,
-  Gauge,
-  History,
-  Layers3,
-  Landmark,
-  PanelRightClose,
-  RefreshCw,
-  Shrink,
-  Wrench,
-  type LucideIcon,
-} from "lucide-react";
+import { useEffect, useState } from "react";
+import { Activity, PanelRightClose } from "lucide-react";
+import type { ProjectChanges, SessionTelemetry, SessionUpdateParams } from "@lasercode/protocol";
 
-import { Chart } from "@/components/assistant-ui/elements/chart";
-import { ContextRingButton } from "@/components/assistant-ui/elements/context-display";
-import { CostMeter } from "@/components/assistant-ui/elements/cost-meter";
-import { FileTree, useSessionFileChanges } from "@/components/assistant-ui/elements/file-tree";
-import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
-import { NumberTicker } from "@/components/assistant-ui/elements/number-ticker";
-import { AccountUsage } from "./AccountUsage.js";
-import { useWorkbench } from "@/components/workbench/workbench-context";
-import { ToolTimeline, useThreadToolTimeline } from "@/components/assistant-ui/elements/tool-timeline";
 import { StatusRing } from "@/components/status";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import type { SessionTelemetry, SessionUpdateParams, TelemetryUsageTotals } from "@lasercode/protocol";
-import { money, tokens } from "@/format";
+import { useWorkbench } from "@/components/workbench/workbench-context";
 import { cn } from "@/lib/utils";
-import { useLaserStable, useLaserState, useSessionMeta, useWholeTranscriptRefusal } from "@/runtime";
+import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 
-import { CheckpointHistory } from "@/components/assistant-ui/elements/checkpoint-history";
-import { historyRows } from "./model.js";
+import { ContextSection } from "@/components/telemetry/context-section.js";
+import { FilesSection, type FilesStatus } from "@/components/telemetry/files-section.js";
+import { scopeBarText } from "@/components/telemetry/format.js";
+import { HistorySection } from "@/components/telemetry/history-section.js";
+import { ModelSection } from "@/components/telemetry/model-section.js";
+import { ScopeBar } from "@/components/telemetry/section.js";
+import { SpendSection } from "@/components/telemetry/spend-section.js";
+import { WorkSection } from "@/components/telemetry/work-section.js";
 import { useShell } from "./shell-context.js";
 
 export interface TelemetryPanelProps {
   variant: "panel" | "sheet";
 }
 
-const TelemetryQueryContext = createContext<SessionTelemetry | undefined>(undefined);
+export { HistorySection };
 
 function useSessionTelemetry(): SessionTelemetry | undefined {
   const { client } = useLaserStable();
@@ -63,8 +36,12 @@ function useSessionTelemetry(): SessionTelemetry | undefined {
     let cancelled = false;
     setTelemetry(undefined);
     void client.request("pi/session/telemetry", { path }).then(
-      (result) => { if (!cancelled) setTelemetry(result); },
-      () => { if (!cancelled) setTelemetry(undefined); },
+      (result) => {
+        if (!cancelled) setTelemetry(result);
+      },
+      () => {
+        if (!cancelled) setTelemetry(undefined);
+      },
     );
     const unsubscribe = client.subscribe((method, params) => {
       if (method !== "session/update") return;
@@ -80,14 +57,59 @@ function useSessionTelemetry(): SessionTelemetry | undefined {
   return telemetry;
 }
 
+function useSessionChanges(
+  path: string | undefined,
+  cwd: string | undefined,
+  revision: string | undefined,
+): { status: FilesStatus; changes?: ProjectChanges; message?: string } {
+  const { client } = useLaserStable();
+  const [state, setState] = useState<{ status: FilesStatus; changes?: ProjectChanges; message?: string }>({
+    status: "idle",
+  });
+  useEffect(() => {
+    if (!path || !cwd) {
+      setState({ status: "idle" });
+      return;
+    }
+    let cancelled = false;
+    setState({ status: "loading" });
+    void client.request("pi/project/changes", { cwd, path, scope: "session" }).then(
+      (result) => {
+        if (!cancelled) setState({ status: "ready", changes: result });
+      },
+      (error: unknown) => {
+        if (!cancelled) {
+          setState({
+            status: "error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [client, path, cwd, revision]);
+  return state;
+}
+
 /**
- * The session signals a supervisor watches: context, spend, model, file and
- * tool activity, and history. Read-only except compact / fork / jump.
+ * The session signals a supervisor watches: context, spend, model, work,
+ * files and history. Read-only except compact / fork / jump.
  */
 export function TelemetryPanel({ variant }: TelemetryPanelProps) {
   const meta = useSessionMeta();
   const shell = useShell();
   const telemetry = useSessionTelemetry();
+  const workbench = useWorkbench();
+  const { actions } = useLaserStable();
+  const files = useSessionChanges(meta.path, meta.session?.cwd, telemetry?.revision);
+
+  const [contextOpen, setContextOpen] = useState(true);
+  const [spendOpen, setSpendOpen] = useState(true);
+  const [modelOpen, setModelOpen] = useState(true);
+  const [workOpen, setWorkOpen] = useState(true);
+  const [filesOpen, setFilesOpen] = useState(true);
 
   return (
     <aside
@@ -121,59 +143,41 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
           </TooltipIconButton>
         )}
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         {meta.session ? (
-          <TelemetryQueryContext.Provider value={telemetry}>
-            <ContextSection />
-            <UsageSection />
-            <ModelSection />
-            <FilesSection />
-            <ToolsSection />
-            <HistorySection />
-          </TelemetryQueryContext.Provider>
+          <>
+            <ScopeBar text={scopeBarText(telemetry?.history)} />
+            <ContextSection
+              context={telemetry?.context}
+              busy={meta.running || meta.compacting}
+              compacting={meta.compacting}
+              open={contextOpen}
+              onOpenChange={setContextOpen}
+              onCompact={() => void actions.compact()}
+            />
+            <SpendSection
+              spend={telemetry?.spend}
+              open={spendOpen}
+              onOpenChange={setSpendOpen}
+              onOpenUsage={() => workbench.open("settings", "usage")}
+            />
+            <ModelSection model={telemetry?.model} open={modelOpen} onOpenChange={setModelOpen} />
+            <WorkSection work={telemetry?.work} open={workOpen} onOpenChange={setWorkOpen} />
+            <FilesSection
+              changes={files.changes}
+              status={files.status}
+              message={files.message}
+              sessionKey={meta.path}
+              open={filesOpen}
+              onOpenChange={setFilesOpen}
+            />
+            <HistorySection history={telemetry?.history} />
+          </>
         ) : (
           <NoSession />
         )}
       </div>
     </aside>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Building blocks
-// ---------------------------------------------------------------------------
-
-function Section({
-  title,
-  icon: Icon,
-  signal,
-  action,
-  children,
-}: {
-  title: string;
-  icon: LucideIcon;
-  signal?: React.ReactNode;
-  action?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="px-4 py-3 hairline-b">
-      <div className="mb-2.5 flex min-h-6 items-center gap-2">
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-surface-2 text-ink-2">
-          <Icon className="size-3.5" aria-hidden="true" />
-        </span>
-        <h3 className="eyebrow">{title}</h3>
-        {signal ? <span className="ms-auto">{signal}</span> : null}
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function InstrumentCard({ className, children }: { className?: string; children: React.ReactNode }) {
-  return (
-    <div className={cn("rounded-xl border border-line bg-surface-2/70 p-3", className)}>{children}</div>
   );
 }
 
@@ -188,428 +192,5 @@ function NoSession() {
         <p className="mt-1 text-xs leading-4 text-ink-2">Open a session and its context, spend and history land here.</p>
       </div>
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Sections
-// ---------------------------------------------------------------------------
-
-function ContextSection() {
-  const { actions } = useLaserStable();
-  const meta = useSessionMeta();
-  const telemetry = useContext(TelemetryQueryContext);
-  const usage = telemetry?.context ?? meta.contextUsage;
-  const autoCompact = telemetry?.context?.autoCompact.enabled ?? meta.session?.autoCompactionEnabled;
-  const busy = meta.running || meta.compacting;
-  return (
-    <Section
-      title="Context"
-      icon={Gauge}
-      action={
-        <Button size="xs" variant="outline" disabled={busy || !usage} onClick={() => void actions.compact()}>
-          <Shrink />
-          {meta.compacting ? "Compacting…" : "Compact"}
-        </Button>
-      }
-    >
-      <InstrumentCard className="flex items-center gap-4">
-        {/* The one context ring in the app, drawn large. Same component the
-            composer and the top bar mount (docs/ux-elements.md "Context
-            display"); the rail was the third hand-drawn copy. */}
-        {usage ? (
-          <ContextRingButton size={64} stroke={3} showLabel side="left" />
-        ) : (
-          <StatusRing status="idle" size={64} thickness={3} label="Context usage unknown" aria-hidden="true">
-            <span className="text-sm text-ink-3">—</span>
-          </StatusRing>
-        )}
-        <div className="min-w-0 flex-1">
-          {usage ? (
-            <>
-              <p className="text-xs leading-4 text-ink-3">Window load</p>
-              <p className="mt-0.5 font-mono text-sm font-semibold text-ink tnum">
-                {usage.tokens === null ? "—" : tokens(usage.tokens)} <span className="font-normal text-ink-3">/ {tokens(usage.contextWindow)}</span>
-              </p>
-              <div className="mt-2 flex items-center gap-1.5 text-xs text-ink-2">
-                <span
-                  aria-hidden="true"
-                  className={cn("size-1.5 rounded-full", autoCompact ? "bg-ok" : "bg-ink-3")}
-                />
-                Auto-compact {autoCompact ? "on" : "off"}
-              </div>
-            </>
-          ) : (
-            <p className="text-xs leading-4 text-ink-3">No usage reported yet. The first response fills this in.</p>
-          )}
-        </div>
-      </InstrumentCard>
-    </Section>
-  );
-}
-
-const TOKEN_TONES = ["bg-live", "bg-ok", "bg-attention", "bg-ink-3"] as const;
-
-function TokenComposition({ usage }: { usage: TelemetryUsageTotals }) {
-  const parts = [
-    { label: "Input", value: usage.input, icon: ArrowUpFromLine },
-    { label: "Output", value: usage.output, icon: ArrowDownToLine },
-    { label: "Cache read", value: usage.cacheRead, icon: Database },
-    { label: "Cache write", value: usage.cacheWrite, icon: Layers3 },
-  ] as const;
-  const measured = parts.reduce((sum, part) => sum + part.value, 0);
-
-  return (
-    <InstrumentCard>
-      <div className="flex items-end justify-between gap-3">
-        <div>
-          <p className="text-xs leading-4 text-ink-3">Token flow</p>
-          <NumberTicker value={tokens(usage.total)} label="Total tokens" className="mt-0.5 font-mono text-lg font-semibold text-ink" />
-        </div>
-        <span className="font-mono text-xs text-ink-3 tnum">{usage.turns} {usage.turns === 1 ? "turn" : "turns"}</span>
-      </div>
-      <div className="mt-3 flex h-2 w-full gap-px overflow-hidden rounded-full bg-surface">
-        {parts.map((part, index) => {
-          const percent = measured > 0 ? (part.value / measured) * 100 : 0;
-          if (percent === 0) return null;
-          return (
-            <span
-              key={part.label}
-              role="meter"
-              aria-label={`${part.label} token share`}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.round(percent)}
-              className={cn("h-full transition-[width] duration-(--motion-slow) ease-morph motion-reduce:transition-none", TOKEN_TONES[index])}
-              style={{ width: `${percent}%` }}
-            />
-          );
-        })}
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-1.5">
-        {parts.map((part, index) => {
-          const Icon = part.icon;
-          return (
-            <div key={part.label} className="flex min-w-0 items-center gap-2 rounded-lg bg-surface px-2 py-1.5">
-              <span className={cn("flex size-5 shrink-0 items-center justify-center rounded-md text-surface", TOKEN_TONES[index])}>
-                <Icon className="size-3" aria-hidden="true" />
-              </span>
-              <div className="min-w-0">
-                <p className="truncate text-xs leading-4 text-ink-3">{part.label}</p>
-                <p className="font-mono text-xs leading-4 text-ink tnum">{tokens(part.value)}</p>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </InstrumentCard>
-  );
-}
-
-type UsageView = "account" | "api";
-
-function UsageSection() {
-  const workbench = useWorkbench();
-  const telemetry = useContext(TelemetryQueryContext);
-  const spend = telemetry?.spend;
-  const mode = spend?.billing ?? "none";
-  const [preferred, setPreferred] = useState<UsageView>("account");
-  const active: UsageView = mode === "mixed" ? preferred : mode === "account" ? "account" : "api";
-  const apiUsage = spend?.api?.totals;
-
-  return (
-    <Section
-      title="Usage"
-      icon={active === "account" ? Landmark : CircleDollarSign}
-      signal={active === "api" && apiUsage ? <Badge variant="mono">{apiUsage.turns} turns</Badge> : undefined}
-    >
-      {mode === "mixed" ? <UsageTabs active={active} onChange={setPreferred} /> : null}
-      {mode === "none" ? (
-        <p className="text-xs leading-4 text-ink-3">No spend recorded. Totals appear after the first billed response.</p>
-      ) : active === "account" ? (
-        <>
-          <AccountUsage state={spend?.account} compact />
-          <Button variant="link" size="sm" className="justify-start text-xs" onClick={() => workbench.open("settings", "usage")}>All usage details <ChevronRight className="rtl:-scale-x-100 size-3" /></Button>
-        </>
-      ) : (
-        <ApiUsage spend={spend} />
-      )}
-    </Section>
-  );
-}
-
-function UsageTabs({ active, onChange }: { active: UsageView; onChange: (view: UsageView) => void }) {
-  return (
-    <div role="tablist" aria-label="Usage billing view" className="mb-3 grid grid-cols-2 gap-0.5 rounded-lg bg-surface-2 p-0.5">
-      {(["account", "api"] as const).map((view) => (
-        <Button
-          key={view}
-          role="tab"
-          aria-selected={active === view}
-          variant="ghost"
-          size="sm"
-          className={cn("w-full", active === view && "bg-surface text-ink shadow-float-sm")}
-          onClick={() => onChange(view)}
-        >
-          {view === "account" ? <Landmark /> : <CircleDollarSign />}
-          {view === "account" ? "Account" : "API"}
-        </Button>
-      ))}
-    </div>
-  );
-}
-
-function ApiUsage({ spend }: { spend: SessionTelemetry["spend"] }) {
-  const usage = spend?.api?.totals;
-  const lines = spend?.api?.byModel ?? [];
-  const series = spend?.api?.series ?? [];
-  const lastTurn = series.length > 1 ? series[series.length - 1]! - series[series.length - 2]! : series[0];
-  return (
-    usage ? (
-      <div className="flex flex-col gap-4">
-        <InstrumentCard>
-          <CostMeter
-            sessionCostUsd={usage.cost}
-            runCostUsd={lastTurn}
-            turns={usage.turns}
-            lines={lines.map((line) => ({ model: line.model, inputTokens: line.input, outputTokens: line.output, costUsd: line.cost }))}
-          />
-        </InstrumentCard>
-        {series.length > 1 && (
-          <InstrumentCard>
-            <Chart
-              label="Spend over turns"
-              value={money(series[series.length - 1] ?? 0)}
-              delta={lastTurn !== undefined ? `+${money(lastTurn)} last` : undefined}
-              points={series}
-              pointLabel={(v, i) => `turn ${i + 1}: ${money(v)}`}
-            />
-          </InstrumentCard>
-        )}
-        <TokenComposition usage={usage} />
-      </div>
-    ) : (
-      <p className="text-xs leading-4 text-ink-3">No API spend recorded. Totals appear after an API-billed response.</p>
-    )
-  );
-}
-
-
-function ModelSection() {
-  const meta = useSessionMeta();
-  return (
-    <Section title="Model" icon={Cpu}>
-      <InstrumentCard>
-        {meta.model ? (
-          <div className="flex min-w-0 items-center gap-3">
-            <span className="flex size-12 shrink-0 items-center justify-center rounded-xl bg-surface text-live shadow-float-sm">
-              <ProviderLogo provider={meta.model.provider} className="size-6" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-xs leading-4 text-ink-3">{meta.model.provider}</p>
-              <p className="truncate font-mono text-sm font-medium text-ink" title={`${meta.model.provider}/${meta.model.id}`}>
-                {meta.model.id}
-              </p>
-              <div className="mt-1.5 flex items-center gap-1.5">
-                <Brain className="size-3.5 text-ink-3" aria-hidden="true" />
-                <span className="text-xs text-ink-2">Thinking</span>
-                <Badge variant="mono">{meta.thinkingLevel ?? "—"}</Badge>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-center gap-3 text-sm text-ink-3">
-            <span className="flex size-10 items-center justify-center rounded-xl bg-surface"><Cpu className="size-5" aria-hidden="true" /></span>
-            No model selected
-          </div>
-        )}
-      </InstrumentCard>
-    </Section>
-  );
-}
-
-/**
- * What this session touched on disk, as a tree. Both this and the tool
- * timeline below read the thread's own parts (`useSessionFileChanges`,
- * `useThreadToolTimeline`) rather than new protocol: the tool calls are
- * already in the transcript, so this is a second reading of data the panel
- * can see, not a second source of truth.
- */
-function FilesSection() {
-  const partial = useLaserState(s => Boolean(s.current && s.open[s.current]?.history && !s.open[s.current]?.history?.complete));
-  const changes = useSessionFileChanges();
-  const added = changes.reduce((sum, change) => sum + change.additions, 0);
-  const removed = changes.reduce((sum, change) => sum + change.deletions, 0);
-  const churn = added + removed;
-  return (
-    <Section title="Files changed" icon={FileCode2} signal={changes.length > 0 ? <Badge variant="mono">{changes.length}</Badge> : undefined}>
-      {changes.length > 0 ? (
-        <InstrumentCard className="mb-3">
-          <div className="flex items-center gap-3">
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-surface text-live">
-              <FileCode2 className="size-5" aria-hidden="true" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-xs leading-4 text-ink-3">{partial ? "Loaded history footprint" : "Session footprint"}</p>
-              <NumberTicker
-                value={`${changes.length} ${changes.length === 1 ? "file" : "files"}`}
-                label="Files changed"
-                className="font-mono text-sm font-semibold text-ink"
-              />
-            </div>
-            <div className="text-end font-mono text-xs leading-4 tnum">
-              <p className="text-ok">+{added}</p>
-              <p className="text-danger">−{removed}</p>
-            </div>
-          </div>
-          {churn > 0 ? (
-            <div className="mt-3 flex h-1.5 overflow-hidden rounded-full bg-surface" role="img" aria-label={`${added} additions and ${removed} deletions`}>
-              {added > 0 ? <span className="h-full bg-ok" style={{ width: `${(added / churn) * 100}%` }} /> : null}
-              {removed > 0 ? <span className="h-full bg-danger" style={{ width: `${(removed / churn) * 100}%` }} /> : null}
-            </div>
-          ) : null}
-        </InstrumentCard>
-      ) : null}
-      {partial && changes.length === 0 ? <p className="text-xs leading-5 text-ink-2">No file changes in the loaded history.</p> : <FileTree changes={changes} />}
-    </Section>
-  );
-}
-
-/** Every tool call this session made, in order, with the running one live. */
-export function ToolsSection() {
-  const timeline = useThreadToolTimeline();
-  const shell = useShell();
-  const partial = useLaserState(s => Boolean(s.current && s.open[s.current]?.history && !s.open[s.current]?.history?.complete));
-  const visibleSteps = timeline.steps.slice(-14);
-  return (
-    <Section
-      title="Tools"
-      icon={Wrench}
-      signal={timeline.steps.length > 0 ? <Badge variant={timeline.streaming ? "live" : "mono"}>{timeline.steps.length} {partial ? "loaded" : "calls"}</Badge> : undefined}
-    >
-      {timeline.steps.length > 0 ? (
-        <InstrumentCard className="mb-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Activity className={cn("size-4", timeline.streaming ? "text-live" : "text-ink-3")} aria-hidden="true" />
-              <span className="text-xs font-medium text-ink">{partial ? "Loaded activity" : "Run activity"}</span>
-            </div>
-            <span className="font-mono text-xs text-ink-3 tnum">
-              {timeline.streaming ? "live" : "settled"}
-            </span>
-          </div>
-          <div
-            className="mt-3 flex h-2 items-center gap-1"
-            role="img"
-            aria-label={`${timeline.steps.length} ${partial ? "loaded " : ""}tool calls; ${timeline.streaming ? "one running" : "all settled"}`}
-          >
-            {visibleSteps.map((step) => (
-              <span
-                key={step.id}
-                title={`${step.verb}: ${step.chip}`}
-                className={cn(
-                  "h-full min-w-1 flex-1 rounded-full transition-colors duration-(--motion-slow) ease-morph motion-reduce:transition-none",
-                  step.running ? "bg-live motion-safe:animate-attention" : "bg-ink-3",
-                )}
-              />
-            ))}
-          </div>
-        </InstrumentCard>
-      ) : null}
-      {partial && timeline.steps.length === 0 ? <p className="text-xs leading-5 text-ink-2">No tools in the loaded history.</p> : <ToolTimeline timeline={timeline} open={shell.toolsOpen} onOpenChange={shell.setToolsOpen} />}
-    </Section>
-  );
-}
-
-// Extension output is not a section here. What an extension has to *show*
-// arrives in the tool call that produced it; what it has to *ask* is answered
-// inline in the transcript (docs/ux-fleet.md, "Questions").
-
-export function HistorySection() {
-  const partial = useLaserState(s => {
-    const history = s.current ? s.open[s.current]?.history : undefined;
-    return Boolean(history && (!history.complete || history.branchesUnloaded));
-  });
-  const telemetry = useContext(TelemetryQueryContext);
-  const { actions } = useLaserStable();
-  const wholeTranscript = useWholeTranscriptRefusal();
-  const meta = useSessionMeta();
-  const shell = useShell();
-  const entries = useLaserState((s) => s.current ? s.open[s.current]?.entries : undefined);
-  // Store entries are immutable snapshots. Revisit a destination without
-  // projecting it again, but never retain closed histories through strong keys.
-  const snapshots = useRef(new WeakMap<readonly unknown[], ReturnType<typeof historyRows>>());
-  const rows = useMemo(() => {
-    if (!entries) return [];
-    let cached = snapshots.current.get(entries);
-    if (!cached) { cached = historyRows(entries); snapshots.current.set(entries, cached); }
-    return cached;
-  }, [entries]);
-
-  // Refresh when opened and when the session settles; never on callback churn.
-  const refresh = useRef(actions.refreshEntries);
-  refresh.current = actions.refreshEntries;
-  const path = meta.path;
-  const running = meta.running;
-  useEffect(() => {
-    if (shell.historyOpen && path) void refresh.current({ tail: true });
-  }, [shell.historyOpen, path, running]);
-
-  return (
-    <section className="hairline-b">
-      <Collapsible open={shell.historyOpen} onOpenChange={shell.setHistoryOpen}>
-        <div className="flex h-11 items-center gap-1 pe-3 ps-4">
-          <CollapsibleTrigger asChild>
-            <button
-              type="button"
-              className="group -ms-1 flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-md ps-1 text-start outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live"
-            >
-              <ChevronRight
-                className="rtl:-scale-x-100 size-3.5 shrink-0 text-ink-3 transition-transform duration-(--motion-instant) group-aria-expanded:rotate-90 group-aria-expanded:rtl:-rotate-90"
-                aria-hidden="true"
-              />
-              <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-surface-2 text-ink-2">
-                <History className="size-3.5" aria-hidden="true" />
-              </span>
-              <span className="eyebrow">History</span>
-              {(telemetry?.history || rows.length > 0) && (
-                <span className="ms-auto flex items-center gap-1 font-mono text-xs text-ink-3 tnum">
-                  <Clock3 className="size-3" aria-hidden="true" />
-                  {telemetry?.history
-                    ? rows.length < telemetry.history.records
-                      ? `${rows.length} of ${telemetry.history.records}`
-                      : String(telemetry.history.records)
-                    : `${rows.length}${partial ? " loaded" : ""}`}
-                </span>
-              )}
-            </button>
-          </CollapsibleTrigger>
-          {shell.historyOpen && (
-            <TooltipIconButton
-              tooltip={wholeTranscript.paused ? "Refresh paused while this window is low on memory" : "Refresh history"}
-              size="icon-xs"
-              className="text-ink-3"
-              disabled={wholeTranscript.paused}
-              onClick={() => void actions.refreshEntries()}
-            >
-              <RefreshCw />
-            </TooltipIconButton>
-          )}
-        </div>
-        <CollapsibleContent>
-          {wholeTranscript.paused && (
-            <p data-slot="history-refresh-paused" className="px-4 pb-3 text-sm text-ink-2">
-              {wholeTranscript.explanation}
-            </p>
-          )}
-          <CheckpointHistory
-            rows={rows}
-            busy={meta.running || meta.compacting}
-            onFork={(id) => void actions.fork(id)}
-            onJump={(id) => void actions.jump(id)}
-          />
-        </CollapsibleContent>
-      </Collapsible>
-    </section>
   );
 }
