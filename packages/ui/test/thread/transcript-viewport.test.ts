@@ -763,14 +763,14 @@ describe("scoped transcript destinations", () => {
       const reserveBefore = controller.reserveHeight, totalBefore = controller.heights.total;
       ids = [...Array.from({ length: 40 }, (_, index) => `new-${index}`), ...ids];
       controller.setIds(ids); controller.committed();
-      // The estimate ahead of a reader is bounded (D-302), so a page larger
-      // than it inserts the difference above them and the view moves by exactly
-      // that: what they were reading stays where it was. Nothing here is an
-      // absolute placement, and nothing goes to the newest turn.
+      // The reader is inside the estimate: what is under them is placeholder,
+      // and the arriving rows belong exactly there. Nothing writes scrollTop —
+      // compensating here would push back against their own movement (D-302) —
+      // and nothing is placed absolutely or sent to the newest turn.
       const inserted = controller.heights.total - totalBefore;
-      const absorbed = reserveBefore - controller.reserveHeight;
-      expect(viewport.scrollTop).toBeCloseTo(Math.max(0, inserted - absorbed), 0);
-      expect(viewport.scrollTop).toBeLessThan(inserted);
+      expect(inserted).toBeGreaterThan(0);
+      expect(reserveBefore).toBeGreaterThan(0);
+      expect(viewport.scrollTop).toBeLessThanOrEqual(1);
       expect(controller.capture().following).toBe(false);
     } finally { detach(); viewport.remove(); }
   });

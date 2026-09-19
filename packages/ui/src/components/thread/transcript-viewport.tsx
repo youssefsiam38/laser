@@ -215,6 +215,14 @@ export class TranscriptViewport {
     const anchor = !this.place.following ? this.place.anchor : undefined;
     const anchorIndex = anchor ? this.positions.get(anchor.messageId) : undefined;
     const anchorBefore = anchorIndex !== undefined ? this.globalOffset(anchorIndex) : undefined;
+    // Where the person is looking decides what "nothing moved" means. On
+    // loaded rows it means the anchored row keeps its place, so the arriving
+    // page is compensated exactly. Inside the estimate there is no row on
+    // screen to keep: what is under them is placeholder, and the page's rows
+    // belong exactly there. Compensating then writes scrollTop against their
+    // own movement — the conversation pushes back and the same row returns
+    // however long they scroll (D-302).
+    const insideReserve = this.readingInsideReserve();
     this.ids = ids;
     this.positions = new Map(ids.map((id, i) => [id, i]));
     this.rebuild();
@@ -242,10 +250,10 @@ export class TranscriptViewport {
       const reserveBefore = this.reserve.height;
       this.reserve.arrived(insertedHeight);
       const globalShift = insertedHeight + this.reserve.height - reserveBefore;
-      if (Math.abs(globalShift) >= 0.5) this.structuralShift = (this.structuralShift ?? 0) + globalShift;
+      if (!insideReserve && Math.abs(globalShift) >= 0.5) this.structuralShift = (this.structuralShift ?? 0) + globalShift;
       this.arrivedPage = { ids: ids.slice(0, boundary.nextStart), removedHeight, exchangedHeight: insertedHeight, refine: true };
     }
-    if (!pageAttributed && anchor && anchorBefore !== undefined) {
+    if (!pageAttributed && !insideReserve && anchor && anchorBefore !== undefined) {
       const index = this.positions.get(anchor.messageId);
       const shift = index === undefined ? 0 : this.globalOffset(index) - anchorBefore;
       if (Math.abs(shift) >= 0.5) this.structuralShift = (this.structuralShift ?? 0) + shift;
@@ -516,8 +524,9 @@ export class TranscriptViewport {
     const anchorIndex = !this.place.following && this.place.anchor ? this.positions.get(this.place.anchor.messageId) : undefined;
     const anchorBefore = anchorIndex !== undefined ? this.globalOffset(anchorIndex) : undefined;
     const reserveBefore = this.reserve.height;
+    const insideReserve = this.readingInsideReserve();
     change();
-    if (this.place.following) return;
+    if (this.place.following || insideReserve) return;
     const shift = anchorIndex !== undefined && anchorBefore !== undefined
       ? this.globalOffset(anchorIndex) - anchorBefore
       : this.reserve.height - reserveBefore;
@@ -609,6 +618,10 @@ export class TranscriptViewport {
   }
   cancelEarlierPage() { this.releaseEarlierPage("cancel"); }
   /** True only after the person has crossed above loaded rows into the estimate. */
+  /** The reading position is in the estimate: no loaded row is on screen. */
+  private readingInsideReserve() {
+    return Boolean(this.viewport && this.reserve.height > 0 && this.loadedTop() < 0);
+  }
   isReadingHistoryReserve() {
     return Boolean(this.viewport && this.reserve.height > 0 && this.loadedTop() < 0);
   }
