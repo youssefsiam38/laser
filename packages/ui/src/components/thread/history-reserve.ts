@@ -85,11 +85,17 @@ export class HistoryReserveModel {
     this.height = Math.max(this.floor(), this.height - pageHeight);
   }
 
-  /** Refine the same arrived page; unrelated row growth never calls this. */
-  refineArrived(delta: number) {
-    if (!this.hasBefore || !this.ready || !Number.isFinite(delta) || Math.abs(delta) < 0.5) return;
+  /**
+   * Refine the same arrived page; unrelated row growth never calls this.
+   * Answers whether the range actually moved, so the caller can tell a render
+   * that changes geometry from one that does not.
+   */
+  refineArrived(delta: number): boolean {
+    if (!this.hasBefore || !this.ready || !Number.isFinite(delta) || Math.abs(delta) < 0.5) return false;
+    const before = this.height;
     this.lastPageHeight = Math.max(MINIMUM_RESERVE, this.lastPageHeight + delta);
     this.height = Math.max(this.floor(), this.height - delta);
+    return Math.abs(this.height - before) >= 0.5;
   }
 
   // Once reading starts, one geometric unit is enough to say "not the root".
