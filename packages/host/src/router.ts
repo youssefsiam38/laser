@@ -803,12 +803,19 @@ export class Router {
         if (!(AGENT_ISOLATION_DEFAULTS as readonly string[]).includes(isolation)) {
           throw new ProtocolError(ErrorCodes.InvalidParams, "isolation must be decide, isolate, or share.");
         }
-        const project = this.deps.projects.setAgentIsolation(cwd, isolation as AgentIsolationDefault);
         const live = this.pool.liveClients().find((entry) => entry.cwd === cwd);
         if (live) {
-          await live.client.request("pi/project/isolation/set", { cwd, isolation }).catch(() => undefined);
+          try {
+            await live.client.request("pi/project/isolation/set", { cwd, isolation });
+          } catch {
+            throw new ProtocolError(
+              ErrorCodes.Internal,
+              "The live worker could not take the new isolation default. Try again.",
+            );
+          }
         }
-        return { project };
+        this.deps.projects.setAgentIsolation(cwd, isolation as AgentIsolationDefault);
+        return { ok: true as const };
       }
 
       case "pi/project/checkpoint/retention/set": {

@@ -10,20 +10,21 @@ import { afterEach, describe, expect, it } from "vitest";
 import { PRODUCT_NAME } from "../src/identity.js";
 import {
   AGENT_ISOLATION_DEFAULT,
+  WORKSPACE_SCAN_MAX_DEPTH,
+  WORKSPACE_SCAN_MAX_REPOS,
   WorkspaceResolver,
-  decideIsolation,
-  describeIsolation,
-  isolationDemandsWorktree,
+  listCheckpointRepositories,
+  resolveIsolation,
   resolveWorkspaceShape,
-  sharedCheckoutReason,
-  strictIsolationRefusal,
   workspaceCanIsolate,
+  worktreesHome,
   type WorkspaceIO,
+  type WorkspaceShape,
 } from "../src/workspace.js";
 
 const haveGit = (() => {
   try {
-    execFile("git", ["--version"], { stdio: "ignore" });
+    execFileSync("git", ["--version"], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -90,6 +91,18 @@ function initRepo(dir: string): void {
   git(dir, "commit", "-q", "-m", "init");
 }
 
+function repoFields(root: string, cwd: string, extras?: { projectRoot?: boolean }): {
+  root: string;
+  name: string;
+  projectRoot: boolean;
+} {
+  return {
+    root: resolve(root),
+    name: basename(root),
+    projectRoot: extras?.projectRoot ?? resolve(root) === resolve(cwd),
+  };
+}
+
 describe.skipIf(!haveGit)("resolveWorkspaceShape", () => {
   let base: string;
   afterEach(() => {
@@ -109,11 +122,18 @@ describe.skipIf(!haveGit)("resolveWorkspaceShape", () => {
     const io = nodeIo();
     const shape = await resolveWorkspaceShape(repo, io);
     expect(shape.kind).toBe("repo");
-    expect(shape.repositories).toEqual([{ root: resolve(repo), name: "app", projectRoot: true }]);
+    expect(shape.hasCommit).toBe(true);
+    expect(shape.truncated).toBe(false);
+    expect(shape.repositories).toHaveLength(1);
+    expect(shape.repositories[0]).toMatchObject(repoFields(repo, repo, { projectRoot: true }));
+    expect(shape.repositories[0]?.insideWorkTree).toBe(true);
+    expect(shape.repositories[0]?.gitDir).toBe(resolve(repo, ".git"));
     const nestedDir = await resolveWorkspaceShape(join(repo, "packages", "ui"), io);
     expect(nestedDir.kind).toBe("repo");
     expect(nestedDir.repositories[0]?.root).toBe(resolve(repo));
     expect(nestedDir.repositories[0]?.projectRoot).toBe(false);
+    expect(nestedDir.repositories[0]?.insideWorkTree).toBe(true);
+    expect(listCheckpointRepositories(shape)).toEqual([{ path: resolve(repo), gitDir: resolve(repo, ".git") }]);
   });
 
   it("resolves a workspace of many repositories with no git at the root", async () => {
@@ -126,9 +146,13 @@ describe.skipIf(!haveGit)("resolveWorkspaceShape", () => {
     writeFileSync(join(workspace, "notes.txt"), "not a repo\n");
     const shape = await resolveWorkspaceShape(workspace, nodeIo());
     expect(shape.kind).toBe("workspace-of-repos");
+    expect(shape.hasCommit).toBe(false);
+    expect(shape.truncated).toBe(false);
     expect(shape.repositories.map((row) => row.name).sort()).toEqual(["alpha", "beta", "gamma"]);
     expect(shape.repositories.every((row) => row.projectRoot === false)).toBe(true);
+    expect(shape.repositories.every((row) => row.insideWorkTree)).toBe(true);
     expect(workspaceCanIsolate(shape)).toBe(false);
+    expect(listCheckpointRepositories(shape).map((row) => basename(row.path)).sort()).toEqual(["alpha", "beta", "gamma"]);
   });
 
   it("resolves a directory with no git at all", async () => {
@@ -137,11 +161,18 @@ describe.skipIf(!haveGit)("resolveWorkspaceShape", () => {
     mkdirSync(plain);
     writeFileSync(join(plain, "file.txt"), "x\n");
     const shape = await resolveWorkspaceShape(plain, nodeIo());
-    expect(shape).toEqual({ cwd: resolve(plain), kind: "no-git", repositories: [] });
+    expect(shape).toEqual({
+      cwd: resolve(plain),
+      kind: "no-git",
+      repositories: [],
+      hasCommit: false,
+      truncated: false,
+    });
     expect(workspaceCanIsolate(shape)).toBe(false);
+    expect(listCheckpointRepositories(shape)).toEqual([]);
   });
 
-  it("resolves a repository nested inside another repository", async () => {
+  it("resolves a repository nested inside another repository from the outer cwd", async () => {
     const root = scratch();
     const outer = join(root, "outer");
     initRepo(outer);
@@ -152,31 +183,155 @@ describe.skipIf(!haveGit)("resolveWorkspaceShape", () => {
     expect(fromOuter.kind).toBe("nested-repo");
     expect(fromOuter.repositories.map((row) => row.name).sort()).toEqual(["outer", "temp"]);
     const fromInner = await resolveWorkspaceShape(inner, io);
-    expect(fromInner.kind).toBe("nested-repo");
+    // Parent directories are not walked: an inner project is its own repo.
+    expect(fromInner.kind).toBe("repo");
     expect(fromInner.repositories[0]?.root).toBe(resolve(inner));
     expect(fromInner.repositories[0]?.projectRoot).toBe(true);
     expect(workspaceCanIsolate(fromInner)).toBe(true);
   });
 
-  it("resolves a repository with .gitmodules as bare-or-submodule", async () => {
+  it("does not relabel a project because an ancestor directory is a repository", async () => {
+    const root = scratch();
+    const home = join(root, "home");
+    initRepo(home);
+    const project = join(home, "projects", "app");
+    initRepo(project);
+    const shape = await resolveWorkspaceShape(project, nodeIo());
+    expect(shape.kind).toBe("repo");
+    expect(shape.repositories[0]?.root).toBe(resolve(project));
+    expect(workspaceCanIsolate(shape)).toBe(true);
+  });
+
+  it("resolves a repository that lists submodules as an ordinary repo", async () => {
     const root = scratch();
     const repo = join(root, "with-modules");
     initRepo(repo);
     writeFileSync(join(repo, ".gitmodules"), "[submodule \"vendor\"]\n\tpath = vendor\n\turl = ./vendor\n");
     const shape = await resolveWorkspaceShape(repo, nodeIo());
-    expect(shape.kind).toBe("bare-or-submodule");
+    expect(shape.kind).toBe("repo");
     expect(shape.repositories[0]?.projectRoot).toBe(true);
     expect(workspaceCanIsolate(shape)).toBe(true);
   });
 
-  it("resolves a bare repository as bare-or-submodule", async () => {
+  it("resolves a bare repository as bare-or-submodule and never checkpoints it", async () => {
     const root = scratch();
     const bare = join(root, "bare.git");
     mkdirSync(bare);
     git(bare, "init", "-q", "--bare");
     const shape = await resolveWorkspaceShape(bare, nodeIo());
     expect(shape.kind).toBe("bare-or-submodule");
+    expect(shape.repositories[0]?.insideWorkTree).toBe(false);
     expect(workspaceCanIsolate(shape)).toBe(false);
+    expect(listCheckpointRepositories(shape)).toEqual([]);
+  });
+
+  it("degrades an empty repository to shared and refuses only under strict", async () => {
+    const root = scratch();
+    const empty = join(root, "empty");
+    mkdirSync(empty);
+    git(empty, "init", "-q", "-b", "main");
+    const shape = await resolveWorkspaceShape(empty, nodeIo());
+    expect(shape.kind).toBe("repo");
+    expect(shape.hasCommit).toBe(false);
+    expect(workspaceCanIsolate(shape)).toBe(false);
+    expect(resolveIsolation({ worktree: true, projectDefault: "decide", shape })).toEqual({
+      kind: "shared",
+      isolation: {
+        mode: "shared",
+        shape: "repo",
+        reason: "This repository has no commits yet, so this agent shares your checkout.",
+      },
+    });
+    const refused = resolveIsolation({ worktree: "strict", projectDefault: "decide", shape });
+    expect(refused.kind).toBe("refused");
+    if (refused.kind === "refused") {
+      expect(refused.message).toMatch(/no commits yet/);
+      expect(refused.message).toMatch(/worktree false/);
+    }
+  });
+
+  it("resolves a linked worktree as repo against the common dir", async () => {
+    const root = scratch();
+    const main = join(root, "main");
+    initRepo(main);
+    const linked = join(root, "linked");
+    git(main, "worktree", "add", "-q", linked);
+    const shape = await resolveWorkspaceShape(linked, nodeIo());
+    expect(shape.kind).toBe("repo");
+    expect(shape.hasCommit).toBe(true);
+    expect(shape.repositories[0]?.projectRoot).toBe(true);
+    expect(shape.repositories[0]?.root).toBe(resolve(linked));
+    expect(shape.repositories[0]?.insideWorkTree).toBe(true);
+    expect(shape.repositories[0]?.gitDir).toBe(resolve(main, ".git"));
+    expect(worktreesHome(shape.repositories[0]!.gitDir, resolve(linked), { basename, dirname })).toBe(resolve(main));
+    expect(workspaceCanIsolate(shape)).toBe(true);
+  });
+
+  it("does not find a repository past WORKSPACE_SCAN_MAX_DEPTH", async () => {
+    expect(WORKSPACE_SCAN_MAX_DEPTH).toBe(3);
+    const root = scratch();
+    const workspace = join(root, "ws");
+    mkdirSync(workspace);
+    const edge = join(workspace, "a", "b", "edge");
+    initRepo(edge);
+    const tooDeep = join(workspace, "a", "b", "c", "miss");
+    initRepo(tooDeep);
+    const shape = await resolveWorkspaceShape(workspace, nodeIo());
+    expect(shape.kind).toBe("workspace-of-repos");
+    expect(shape.repositories.map((row) => row.root).sort()).toEqual([resolve(edge)]);
+  });
+
+  it("stops at WORKSPACE_SCAN_MAX_REPOS and reports truncated", async () => {
+    expect(WORKSPACE_SCAN_MAX_REPOS).toBe(64);
+    const root = scratch();
+    const workspace = join(root, "ws");
+    mkdirSync(workspace);
+    for (let i = 0; i < WORKSPACE_SCAN_MAX_REPOS + 1; i++) {
+      initRepo(join(workspace, `r${String(i).padStart(2, "0")}`));
+    }
+    const shape = await resolveWorkspaceShape(workspace, nodeIo());
+    expect(shape.kind).toBe("workspace-of-repos");
+    expect(shape.repositories).toHaveLength(WORKSPACE_SCAN_MAX_REPOS);
+    expect(shape.truncated).toBe(true);
+    const shared = resolveIsolation({ worktree: true, projectDefault: "decide", shape });
+    expect(shared.kind).toBe("shared");
+    if (shared.kind === "shared") {
+      expect(shared.isolation.reason).toContain(`more than ${WORKSPACE_SCAN_MAX_REPOS}`);
+    }
+  });
+
+  it("does not descend into a found repository, so vendored copies do not inflate the count", async () => {
+    const root = scratch();
+    const workspace = join(root, "ws");
+    mkdirSync(workspace);
+    const keep = join(workspace, "keep");
+    initRepo(keep);
+    initRepo(join(keep, "vendor-copy"));
+    const shape = await resolveWorkspaceShape(workspace, nodeIo());
+    expect(shape.repositories.map((row) => row.name)).toEqual(["keep"]);
+    expect(shape.truncated).toBe(false);
+  });
+
+  it("caches the in-flight promise so concurrent resolves walk once", async () => {
+    const root = scratch();
+    const repo = join(root, "app");
+    initRepo(repo);
+    const inner = nodeIo();
+    let runs = 0;
+    const counting: WorkspaceIO = {
+      ...inner,
+      run(args, cwd) {
+        runs += 1;
+        return inner.run(args, cwd);
+      },
+    };
+    const resolver = new WorkspaceResolver(counting);
+    const [a, b] = await Promise.all([resolver.resolve(repo), resolver.resolve(repo)]);
+    expect(a).toBe(b);
+    const firstRuns = runs;
+    expect(firstRuns).toBeGreaterThan(0);
+    await resolver.resolve(repo);
+    expect(runs).toBe(firstRuns);
   });
 
   it("caches per cwd and refreshes only on rescan", async () => {
@@ -209,82 +364,94 @@ describe.skipIf(!haveGit)("resolveWorkspaceShape", () => {
   });
 });
 
-describe("isolation precedence", () => {
-  const noGit = { cwd: "/p", kind: "no-git" as const, repositories: [] };
-  const repo = {
+function fixture(partial: Pick<WorkspaceShape, "kind"> & Partial<WorkspaceShape>): WorkspaceShape {
+  return {
     cwd: "/p",
-    kind: "repo" as const,
-    repositories: [{ root: "/p", name: "p", projectRoot: true }],
+    repositories: [],
+    hasCommit: false,
+    truncated: false,
+    ...partial,
   };
-  const many = {
-    cwd: "/p",
-    kind: "workspace-of-repos" as const,
+}
+
+describe("isolation precedence", () => {
+  const noGit = fixture({ kind: "no-git" });
+  const repo = fixture({
+    kind: "repo",
+    hasCommit: true,
+    repositories: [{ root: "/p", name: "p", projectRoot: true, gitDir: "/p/.git", insideWorkTree: true }],
+  });
+  const many = fixture({
+    kind: "workspace-of-repos",
     repositories: Array.from({ length: 41 }, (_, i) => ({
       root: `/p/r${i}`,
       name: `r${i}`,
       projectRoot: false,
+      gitDir: `/p/r${i}/.git`,
+      insideWorkTree: true,
     })),
-  };
+  });
 
   it("defaults the project setting to decide", () => {
     expect(AGENT_ISOLATION_DEFAULT).toBe("decide");
   });
 
   it("false always shares, even when the project prefers isolation", () => {
-    expect(decideIsolation({ worktree: false, projectDefault: "isolate", shape: repo })).toEqual({
-      isolate: false,
-      demand: false,
+    expect(resolveIsolation({ worktree: false, projectDefault: "isolate", shape: repo })).toEqual({
+      kind: "shared",
+      isolation: {
+        mode: "shared",
+        shape: "repo",
+        reason: "This agent shares your checkout because it was started with worktree false.",
+      },
     });
   });
 
   it("strict always demands isolation", () => {
-    expect(isolationDemandsWorktree("strict", "share")).toBe(true);
-    expect(decideIsolation({ worktree: "strict", projectDefault: "share", shape: noGit })).toEqual({
-      isolate: true,
-      demand: true,
-    });
+    const refused = resolveIsolation({ worktree: "strict", projectDefault: "share", shape: noGit });
+    expect(refused.kind).toBe("refused");
+    if (refused.kind === "refused") {
+      expect(refused.message).toMatch(/initialise git/i);
+      expect(refused.message).toMatch(/worktree false/);
+    }
   });
 
   it("decide + true isolates a repo and shares a workspace of repos", () => {
-    expect(decideIsolation({ worktree: true, projectDefault: "decide", shape: repo })).toEqual({
-      isolate: true,
-      demand: false,
+    expect(resolveIsolation({ worktree: true, projectDefault: "decide", shape: repo })).toEqual({
+      kind: "worktree",
+      isolation: {
+        mode: "worktree",
+        shape: "repo",
+        reason: "This agent works in its own worktree, isolated from your checkout.",
+      },
     });
-    expect(decideIsolation({ worktree: true, projectDefault: "decide", shape: many })).toEqual({
-      isolate: false,
-      demand: false,
+    expect(resolveIsolation({ worktree: true, projectDefault: "decide", shape: many })).toMatchObject({
+      kind: "shared",
+      isolation: {
+        mode: "shared",
+        shape: "workspace-of-repos",
+        reason: "This workspace holds 41 repositories, so an agent cannot be isolated from all of them; sharing your checkout.",
+      },
     });
   });
 
   it("isolate makes true behave like strict", () => {
-    expect(decideIsolation({ worktree: true, projectDefault: "isolate", shape: many })).toEqual({
-      isolate: true,
-      demand: true,
-    });
+    const refused = resolveIsolation({ worktree: true, projectDefault: "isolate", shape: many });
+    expect(refused.kind).toBe("refused");
+    if (refused.kind === "refused") {
+      expect(refused.message).toMatch(/41 repositories/);
+      expect(refused.message).toMatch(/worktree false/);
+    }
   });
 
   it("share makes true share the checkout", () => {
-    expect(decideIsolation({ worktree: true, projectDefault: "share", shape: repo })).toEqual({
-      isolate: false,
-      demand: false,
-    });
-  });
-
-  it("writes the person-facing sentences the harness reports", () => {
-    expect(sharedCheckoutReason({ worktree: true, projectDefault: "decide", shape: noGit })).toBe(
-      "No repository here, so this agent shares your checkout.",
-    );
-    expect(sharedCheckoutReason({ worktree: true, projectDefault: "decide", shape: many })).toBe(
-      "This workspace holds 41 repositories, so an agent cannot be isolated from all of them; sharing your checkout.",
-    );
-    expect(strictIsolationRefusal(noGit)).toMatch(/initialise git/i);
-    expect(strictIsolationRefusal(noGit)).toMatch(/worktree false/);
-    expect(strictIsolationRefusal(many)).toMatch(/41 repositories/);
-    expect(strictIsolationRefusal(many)).toMatch(/worktree false/);
-    expect(describeIsolation({ isolate: true, worktree: true, projectDefault: "decide", shape: repo })).toEqual({
-      mode: "worktree",
-      shape: "repo",
-      reason: "This agent works in its own worktree, isolated from your checkout.",
+    expect(resolveIsolation({ worktree: true, projectDefault: "share", shape: repo })).toEqual({
+      kind: "shared",
+      isolation: {
+        mode: "shared",
+        shape: "repo",
+        reason: "This project is set to share your checkout, so this agent is not isolated.",
+      },
     });
   });
 });

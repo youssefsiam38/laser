@@ -33,6 +33,10 @@
     "./git-run": {
       "types": "./dist/git-run.d.ts",
       "import": "./dist/git-run.js"
+    },
+    "./workspace-node": {
+      "types": "./dist/workspace-node.d.ts",
+      "import": "./dist/workspace-node.js"
     }
   },
   "files": ["dist"],

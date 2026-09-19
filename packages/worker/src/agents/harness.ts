@@ -41,9 +41,7 @@ import {
   SESSION_AGENT_ENTRY_TYPE,
   type WorktreeSetup,
   AGENT_ISOLATION_DEFAULT,
-  decideIsolation,
-  describeIsolation,
-  strictIsolationRefusal,
+  resolveIsolation,
   workspaceCanIsolate,
   type AgentIsolation,
   type AgentIsolationDefault,
@@ -120,8 +118,8 @@ export interface WorktreeProvider {
   rootOf(projectCwd: string): Promise<string | undefined>;
   /** What the worktree still holds, measured against the parent's checkout. */
   facts(input: { path: string; branch: string; compareCwd: string }): Promise<WorktreeFacts>;
-  /** Workspace shape of a directory. Absent, the harness treats the project as a single repo. */
-  shape?(cwd: string, rescan?: boolean): Promise<WorkspaceShape>;
+  /** Workspace shape of a directory. */
+  shape(cwd: string, rescan?: boolean): Promise<WorkspaceShape>;
 }
 
 /** What a child is told when it stops without its final tool. */
@@ -405,6 +403,7 @@ export class AgentHarness {
 
   /** Build the bridge for a session about to open; attach it once the path is known. */
   prepareSession(input: PrepareSessionInput): SessionHandle {
+    const isolation = input.record.isolation ?? isolationFromRecord(input.record);
     const entry: Entry = {
       path: undefined,
       sessionId: undefined,
@@ -414,6 +413,7 @@ export class AgentHarness {
       definition: input.definition,
       record: input.record,
       projectCwd: input.projectCwd,
+      ...(isolation ? { isolation } : {}),
       bridge: undefined as unknown as AgentHarnessBridge,
       eventListeners: new Set(),
       roleListeners: new Set(),
@@ -1181,7 +1181,7 @@ export class AgentHarness {
     if (subagentName.length > SUBAGENT_NAME_MAX) throw new HarnessError(`subagent_name must be at most ${SUBAGENT_NAME_MAX} characters.`);
     if (task === "") throw new HarnessError("task is required: the complete task and all context the new agent needs.");
     if (task.length > AGENT_TASK_MAX) throw new HarnessError(`task must be at most ${AGENT_TASK_MAX} characters.`);
-    // Isolation precedence is pinned in protocol `decideIsolation` (L1):
+    // Isolation precedence is pinned in protocol `resolveIsolation` (L1):
     // false always shares; "strict" always demands a worktree; true / absent
     // follows the project default (isolate → strict, share → shared, decide →
     // isolate if this workspace can be isolated).
@@ -1208,20 +1208,15 @@ export class AgentHarness {
 
     const runId = newRunId();
     const baseCwd = parentDriver.state().cwd;
-    const shape = this.worktrees.shape
-      ? await this.worktrees.shape(parent.projectCwd)
-      : { cwd: parent.projectCwd, kind: "repo" as const, repositories: [{ root: parent.projectCwd, name: parent.projectCwd, projectRoot: true }] };
-    const decision = decideIsolation({ worktree: worktreeArg, projectDefault: this.isolationDefault, shape });
-    if (decision.demand && !workspaceCanIsolate(shape)) {
-      throw new HarnessError(strictIsolationRefusal(shape));
+    const wantsIsolation = worktreeArg !== false && this.isolationDefault !== "share";
+    let shape = await this.worktrees.shape(parent.projectCwd);
+    if (wantsIsolation && !workspaceCanIsolate(shape)) {
+      shape = await this.worktrees.shape(parent.projectCwd, true);
     }
-    const isolated = decision.isolate && workspaceCanIsolate(shape);
-    const isolation = describeIsolation({
-      isolate: isolated,
-      worktree: worktreeArg,
-      projectDefault: this.isolationDefault,
-      shape,
-    });
+    const resolved = resolveIsolation({ worktree: worktreeArg, projectDefault: this.isolationDefault, shape });
+    if (resolved.kind === "refused") throw new HarnessError(resolved.message);
+    const isolated = resolved.kind === "worktree";
+    const isolation = resolved.isolation;
     const worktree = isolated ? await this.worktrees.create({ projectCwd: parent.projectCwd, projectTrusted: this.projectTrusted, baseCwd, subagentName, runId }) : undefined;
     const childCwd = worktree ? worktree.cwd : baseCwd;
     const goal = await readGoal(parentDriver);
@@ -1234,6 +1229,7 @@ export class AgentHarness {
       parentSessionId: parent.sessionId,
       rootPath,
       runId,
+      isolation,
       ...(worktree ? { worktree: { path: worktree.path, branch: worktree.branch, baseCommit: worktree.baseCommit, ...(worktree.environment ? { environment: worktree.environment } : {}), ...(worktree.setup ? { setup: worktree.setup } : {}) } } : {}),
     };
     const role: HarnessSessionRole = {
@@ -2874,6 +2870,23 @@ export function worktreeChoice(value: unknown): WorktreeArg {
   if (value === undefined) return true;
   if (value === true || value === false || value === "strict") return value;
   throw new HarnessError('worktree must be true, false, or "strict": true (the default) isolates when this workspace can be isolated, false runs it in this session\'s checkout, and "strict" demands isolation and refuses without it.');
+}
+
+/** Reload path: persist isolation on the session record, or derive it from the worktree. */
+function isolationFromRecord(record: SessionAgentRecord): AgentIsolation | undefined {
+  if (record.isolation) return record.isolation;
+  if (record.kind !== "child") return undefined;
+  if (record.worktree && !record.worktree.removedAt) {
+    return {
+      mode: "worktree",
+      shape: "repo",
+      reason: "This agent works in its own worktree, isolated from your checkout.",
+    };
+  }
+  if (record.parentPath) {
+    return { mode: "shared", shape: "repo", reason: "This agent shares your checkout." };
+  }
+  return undefined;
 }
 
 /** True when removing this worktree would destroy something, or we cannot tell. */

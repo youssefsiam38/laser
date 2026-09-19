@@ -73,8 +73,8 @@ export function ProjectsTab() {
   }, [client]);
 
   const saveIsolation = useCallback(async (cwd: string, value: AgentIsolationDefault) => {
-    const answer = await client.request("pi/project/isolation/set", { cwd, isolation: value });
-    return answer.project.agentIsolation ?? AGENT_ISOLATION_DEFAULT;
+    await client.request("pi/project/isolation/set", { cwd, isolation: value });
+    return value;
   }, [client]);
 
   const saveRetention = useCallback(async (cwd: string, value: CheckpointRetention) => {
@@ -180,7 +180,7 @@ function ProjectSection({
         text: saved === "isolate"
           ? "Saved. New agents isolate when they can, and refuse when they cannot."
           : saved === "share"
-            ? "Saved. New agents share this checkout unless they ask for strict isolation."
+            ? "Saved. New agents share this checkout unless they specifically require isolation."
             : "Saved. Each agent chooses: isolate if this workspace can, or share it.",
       });
     } catch (error) {
@@ -266,18 +266,17 @@ function ProjectSection({
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="hairline-t flex flex-col gap-3 px-3 py-4 sm:ps-14">
-          <div className={cn(!isolationWritable && "pointer-events-none opacity-60")}>
-            <Segmented
-              label="Agents"
-              value={isolation}
-              onChange={value => { if (isolationWritable) void changeIsolation(value); }}
-              options={[
-                { value: "isolate", label: "Isolate agents", detail: "start_agent isolates a child when this workspace can, and refuses when it cannot." },
-                { value: "share", label: "Share my checkout", detail: "New agents work in this checkout unless they pass worktree strict." },
-                { value: "decide", label: "Decide per agent", detail: "The caller's worktree argument decides. True isolates when it can; false shares." },
-              ]}
-            />
-          </div>
+          <Segmented
+            label="Agents"
+            value={isolation}
+            disabled={!isolationWritable}
+            onChange={value => { void changeIsolation(value); }}
+            options={[
+              { value: "isolate", label: "Isolate agents", detail: "New agents get their own checkout when this project can isolate them, and will not start when it cannot." },
+              { value: "share", label: "Share my checkout", detail: "New agents work in this checkout unless they specifically require isolation." },
+              { value: "decide", label: "Decide per agent", detail: "Each new agent isolates when this project can, or shares this checkout when it cannot." },
+            ]}
+          />
           {isolationNote && <p className={cn("text-xs leading-5", isolationNote.error ? "text-danger" : "text-ink-2")} role={isolationNote.error ? "alert" : "status"}>{isolationNote.text}</p>}
           <div className={cn(!retentionWritable && "pointer-events-none opacity-60")}>
             <Segmented

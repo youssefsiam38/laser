@@ -245,6 +245,26 @@ describe("AgentRunRegistry", () => {
     second.close();
   });
 
+  it("round-trips isolation through agent-runs.json", () => {
+    const file = join(dir, "agent-runs.json");
+    const isolation = {
+      mode: "worktree" as const,
+      shape: "repo" as const,
+      reason: "This agent works in its own worktree, isolated from your checkout.",
+    };
+    const first = new AgentRunRegistry({ storePath: file, now: NOW });
+    first.upsert(run("iso", { status: "completed", endedAt: NOW().toISOString(), isolation }));
+    first.close();
+    const stored = JSON.parse(readFileSync(file, "utf8")) as { runs: AgentRun[] };
+    expect(stored.runs.find((row) => row.runId === "iso")?.isolation).toEqual(isolation);
+    const restored = new AgentRunRegistry({ storePath: file, now: NOW });
+    try {
+      expect(restored.get("iso")?.isolation).toEqual(isolation);
+    } finally {
+      restored.close();
+    }
+  });
+
   it("does not let a stale report resurrect an ended run", () => {
     const registry = new AgentRunRegistry({ now: NOW });
     registry.upsert(run("r", { status: "completed", updatedAt: "2026-06-01T00:00:09.000Z" }));

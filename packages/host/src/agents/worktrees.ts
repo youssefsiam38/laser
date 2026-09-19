@@ -15,8 +15,8 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { resolve, sep } from "node:path";
-import { WORKTREES_DIR_NAME, worktreeHoldsWork, type AgentRun, type AgentWorktreeStatus } from "@lasercode/protocol";
+import { basename, dirname, resolve, sep } from "node:path";
+import { WORKTREES_DIR_NAME, worktreeHoldsWork, worktreesHome, type AgentRun, type AgentWorktreeStatus } from "@lasercode/protocol";
 
 export interface WorktreeRemoval {
   removed: boolean;
@@ -45,12 +45,13 @@ function git(cwd: string, args: string[]): Promise<{ code: number; stdout: strin
 
 /**
  * Only a directory strictly under a `.worktrees/` the app itself creates is
- * ever removed. The worker roots them at the **git toplevel** (see
- * `packages/worker/src/agents/worktrees.ts`), which is the project directory
- * only when the project is opened at the root of its repository: a project in
- * a subdirectory of a monorepo has its children one or more levels up, and
- * calling those "not ours" left the directory and its branch behind forever.
- * So every root the worker could have used is accepted, and nothing else.
+ * ever removed. The worker roots them at the **common-dir parent** (see
+ * `worktreesHome` in `@lasercode/protocol`), which is the project directory
+ * only when the project is opened at the main checkout: a project in a
+ * subdirectory of a monorepo, or a linked worktree outside it, has its
+ * children under the main checkout, and calling those "not ours" left the
+ * directory and its branch behind forever. So every root the worker could
+ * have used is accepted, and nothing else.
  */
 export function isOwnedWorktreePath(projectCwd: string, path: string, gitRoot?: string): boolean {
   const target = resolve(path);
@@ -68,6 +69,15 @@ async function gitToplevel(projectCwd: string): Promise<string | undefined> {
   return root === "" ? undefined : root;
 }
 
+/** The checkout `.worktrees/` belongs in — same helper the worker uses. */
+async function gitWorktreesHome(projectCwd: string): Promise<string | undefined> {
+  const toplevel = await gitToplevel(projectCwd);
+  if (!toplevel) return undefined;
+  const common = await git(projectCwd, ["rev-parse", "--git-common-dir"]);
+  if (common.code !== 0 || !common.stdout.trim()) return toplevel;
+  return worktreesHome(resolve(projectCwd, common.stdout.trim()), toplevel, { basename, dirname });
+}
+
 /**
  * What the run's worktree holds right now. `undefined` when the run never had
  * one — a child started with `worktree: false` has nothing to read and nothing
@@ -83,7 +93,7 @@ export async function worktreeStatus(run: WorktreeOwner): Promise<AgentWorktreeS
     unmergedCommits: null,
     uncommittedFiles: null,
   };
-  if (!isOwnedWorktreePath(run.projectCwd, worktree.path, await gitToplevel(run.projectCwd))) return { ...base, detail: NOT_OURS };
+  if (!isOwnedWorktreePath(run.projectCwd, worktree.path, await gitWorktreesHome(run.projectCwd))) return { ...base, detail: NOT_OURS };
   if (!base.exists) return { ...base, unmergedCommits: 0, uncommittedFiles: 0 };
 
   // Commits on the branch the project's own checkout does not have. A branch

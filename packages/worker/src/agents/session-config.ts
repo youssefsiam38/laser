@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
-import { worktreeEnvironmentSchema, worktreeSetupSchema, SESSION_AGENT_ENTRY_TYPE, WORKTREES_DIR_NAME, type AgentDefinition, type SessionAgentKind, type SessionAgentRecord } from "@lasercode/protocol";
+import { worktreeEnvironmentSchema, worktreeSetupSchema, SESSION_AGENT_ENTRY_TYPE, WORKSPACE_SHAPE_KINDS, WORKTREES_DIR_NAME, type AgentDefinition, type AgentIsolation, type SessionAgentKind, type SessionAgentRecord, type WorkspaceShapeKind } from "@lasercode/protocol";
 import type { HarnessSessionRole } from "./bridge.js";
 
 /**
@@ -56,6 +56,18 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
+function parseIsolation(value: unknown): AgentIsolation | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const mode = raw["mode"];
+  const shape = raw["shape"];
+  const reason = raw["reason"];
+  if (mode !== "worktree" && mode !== "shared") return undefined;
+  if (typeof shape !== "string" || !(WORKSPACE_SHAPE_KINDS as readonly string[]).includes(shape)) return undefined;
+  if (typeof reason !== "string" || reason === "") return undefined;
+  return { mode, shape: shape as WorkspaceShapeKind, reason };
+}
+
 /** Validate a parsed `SESSION_AGENT_ENTRY_TYPE` payload; unknown shapes are ignored, never guessed. */
 export function parseSessionAgentRecord(data: unknown): SessionAgentRecord | undefined {
   if (!data || typeof data !== "object") return undefined;
@@ -74,6 +86,8 @@ export function parseSessionAgentRecord(data: unknown): SessionAgentRecord | und
   if (parentSessionId) record.parentSessionId = parentSessionId;
   if (rootPath) record.rootPath = rootPath;
   if (runId) record.runId = runId;
+  const isolation = parseIsolation(raw["isolation"]);
+  if (isolation) record.isolation = isolation;
   const worktree = raw["worktree"];
   if (worktree && typeof worktree === "object") {
     const w = worktree as Record<string, unknown>;
