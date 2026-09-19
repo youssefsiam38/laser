@@ -43,7 +43,7 @@
 import { identity as product } from "./identity/identity.mjs";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -489,11 +489,19 @@ setInterval(() => {
   }
 }, 1000).unref();
 
+/**
+ * A background command belongs to exactly one session, and its id is unique on
+ * the machine. Seeding the same id under two sessions — which this loop did
+ * while it walked every open session — makes one command appear to move between
+ * its agent's row and the session's own, which a client draws as a row that
+ * flickers. The suffix keeps every seeded session's copy distinct.
+ */
 function demoTasks(sessionPath) {
   const now = Date.now();
+  const suffix = createHash("sha256").update(sessionPath).digest("hex").slice(0, 8);
   return [
     {
-      id: "t-sandbox-dev",
+      id: `t-sandbox-dev-${suffix}`,
       sessionPath,
       command: "pnpm vite dev --host --port 5173",
       title: "pnpm vite dev --host --port 5173",
@@ -504,7 +512,7 @@ function demoTasks(sessionPath) {
       activity: "ready in 412 ms · http://localhost:5173",
     },
     {
-      id: "t-sandbox-test",
+      id: `t-sandbox-test-${suffix}`,
       sessionPath,
       command: "pnpm -r test",
       title: "pnpm -r test",
