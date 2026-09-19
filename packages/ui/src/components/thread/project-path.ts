@@ -121,13 +121,36 @@ function parseQuotedPath(raw: string): string | undefined {
  * is already finished is decided beside the composer's draft, by the record in
  * `finished-mentions.ts`, and the composer uses that matcher, not this one.
  */
+/**
+ * A query whose spaces are inside a quoted segment the person has opened and
+ * not yet closed: `@~/projects/"my pro`. Escapes count, so `\\"` is a literal
+ * quote and does not close anything.
+ */
+function hasOpenQuote(query: string): boolean {
+  let open = false;
+  let escaped = false;
+  for (const char of query) {
+    if (escaped) { escaped = false; continue; }
+    if (char === "\\") { escaped = true; continue; }
+    if (char === '"') open = !open;
+  }
+  return open;
+}
+
 export const matchProjectMention: Unstable_TriggerMatcher = (text, char, caret) => {
   const before = text.slice(0, caret);
   const offset = before.lastIndexOf(char);
   if (offset < 0 || !opensProjectMention(before, offset)) return null;
   const query = before.slice(offset + char.length);
-  // Quoting is a completed insertion form, never an in-flight picker query.
-  if (query.startsWith('"') || /\s$/u.test(query) || /[\n\r\t\0\u007f]/u.test(query)) return null;
+  if (/[\n\r\t\0\u007f]/u.test(query)) return null;
+  // A closed quoted form is a completed insertion, never a picker query; an
+  // open one is the person writing a name that has spaces in it.
+  if (query.startsWith('"') && !hasOpenQuote(query)) return null;
+  // A space ends the query unless the person opened a quote for a name that
+  // has one (`@~/projects/"my project` …). Without this rule an ordinary
+  // sentence — or a pasted log with `console.error @ 696-…js:1` in it — keeps
+  // the picker open over text that was never a path (D-304).
+  if (/\s/u.test(query) && !hasOpenQuote(query)) return null;
   return { query, offset, endOffset: caret };
 };
 

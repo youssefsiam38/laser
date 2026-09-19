@@ -46,16 +46,21 @@ it("finishes a chosen file: the picker never reopens for it, whatever follows", 
   expect(mentions.advance(after.text).map((tag) => [tag.start, tag.token, tag.type])).toEqual([[0, "@./server/index.ts", "file"]]);
 });
 
-it("keeps a query in flight open, including a folder name with inner spaces", () => {
+it("keeps a query in flight open, and a space ends it unless a quote is open (D-304)", () => {
   const mentions = createFinishedMentions();
+  // Every keystroke of the name is still a query — the anchored spelling alone
+  // is not a choice, which is why a parsed-segment matcher cannot be used here.
   const typed = typeOn(mentions, { text: "Read ", caret: 5 }, "@./my fo");
-  // Every keystroke of the name is still a query — the anchored spelling
-  // alone is not a choice, which is why a parsed-segment matcher cannot be
-  // used here. Only the trailing space itself closes the list, as it always
-  // has, and the next letter of the folder's name brings it back.
-  expect(typed.opened).toEqual(["Read @", "Read @.", "Read @./", "Read @./m", "Read @./my", "Read @./my f", "Read @./my fo"]);
-  expect(mentions.matcher(typed.text, "@", typed.caret)).toMatchObject({ query: "./my fo", offset: 5 });
+  // The space is how a person leaves the mention and writes prose, so the list
+  // closes there and the letters after it are not a query.
+  expect(typed.opened).toEqual(["Read @", "Read @.", "Read @./", "Read @./m", "Read @./my"]);
+  expect(mentions.matcher(typed.text, "@", typed.caret)).toBeNull();
   expect(mentions.advance(typed.text)).toEqual([]);
+
+  // A name with spaces is written inside quotes, and stays a query there.
+  const quoted = typeOn(mentions, { text: "Read ", caret: 5 }, '@./"my fo');
+  expect(quoted.opened.at(-1)).toBe('Read @./"my fo');
+  expect(mentions.matcher(quoted.text, "@", quoted.caret)).toMatchObject({ query: './"my fo', offset: 5 });
 });
 
 it("carries several mentions, and a fresh @ after a finished one opens the picker", () => {

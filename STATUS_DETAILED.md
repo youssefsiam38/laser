@@ -4033,6 +4033,11 @@ Consequences: no RP-2 requirement is dropped. T4–T8 may start only after T2's 
 **Why.** The bespoke controller renders the window and writes `scrollTop` from a height model that disagrees with the laid-out DOM for at least one commit after any change. Three rounds of repairs moved the error instead of removing it, and the person saw rows appear and disappear, a row arrive before they reached it, and the view push back. TanStack's `anchorTo: "end"` resolves the anchor and sets the scroll offset eagerly in the same update pass — its source names the one-frame jump as the failure we have.
 **Consequences.** One new exact-pinned dependency in `packages/ui`; `transcript-viewport.tsx`'s geometry is replaced, not patched; D-287's "one geometric authority" now means the virtualizer; D-302's placeholder policy is expressed as measured items. Contract and acceptance: `docs/transcript-virtualization.md`. Reference sources cloned for study at `/home/youssef/research-virtual` (not vendored).
 
+### D-304 · 2026-09-19 · A space ends a mention query; an open quote keeps it
+**Decision.** In the composer, the `@` picker stays open only while there is no whitespace between the `@` and the caret — unless the person has opened a double quote, which is how a name with spaces is written (`@~/projects/"my pro`). A closed quoted form (`@"./my folder/"`) is a completed insertion and never a query.
+**Why.** The old rule refused only a query *ending* in whitespace, so ordinary prose after a mention, and any pasted text containing `@` (a console log's `window.console.error @ 696-…js:1`), kept an empty picker open over the conversation. A space is how a person leaves a mention behind.
+**Consequences.** Typing a folder name with spaces now needs the quote (the picker's own insertions already quote awkward names, D-284); Tab/`/` navigation works inside an open quote. Tests in `project-path.test.ts` and `finished-mentions.test.ts` were rewritten to the new rule. Coordinator-owned small fix on top of M16-T86.
+
 ## Open questions
 
 | ID | Question | Blocks | Asked of |

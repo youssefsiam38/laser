@@ -25,12 +25,23 @@ it.each([
 it.each(["@C:relative", "@server/ "])("refuses malformed %s deliberately", (query) => {
   expect(resolveProjectPath(query)).toMatchObject({ ok: false, error: expect.any(String) });
 });
-it("keeps inner-space queries active and treats quoted insertions as finished", () => {
+it("ends a query at a space unless a quote is open, and treats quoted insertions as finished (D-304)", () => {
   const pathQuery = "Read @server/ind";
   expect(matchProjectMention(pathQuery, "@", pathQuery.length)).toMatchObject({ query: "server/ind" });
+  // A space is how a person leaves the mention behind and writes prose; a
+  // pasted log with `console.error @ 696-…js:1` in it must not open the list.
   const spacedQuery = "@my fo";
-  expect(matchProjectMention(spacedQuery, "@", spacedQuery.length)).toMatchObject({ query: "my fo" });
-  expect(replaceProjectQuery(spacedQuery, spacedQuery.length, "my folder/")).toEqual({ text: "@my folder/", caret: 11 });
+  expect(matchProjectMention(spacedQuery, "@", spacedQuery.length)).toBeNull();
+  const pastedLog = "window.console.error @ 696-a8b1cdf47b7f00af.js:1";
+  expect(matchProjectMention(pastedLog, "@", pastedLog.length)).toBeNull();
+  // An open quote is the person saying the name has spaces in it.
+  const quoted = '@~/projects/"my pro';
+  expect(matchProjectMention(quoted, "@", quoted.length)).toMatchObject({ query: '~/projects/"my pro' });
+  const quotedAndClosed = '@~/projects/"my project" and then';
+  expect(matchProjectMention(quotedAndClosed, "@", quotedAndClosed.length)).toBeNull();
+  const escapedQuote = '@~/a\\"b c';
+  expect(matchProjectMention(escapedQuote, "@", escapedQuote.length)).toBeNull();
+  expect(replaceProjectQuery(quoted, quoted.length, '~/projects/"my project"/')).toEqual({ text: '@~/projects/"my project"/', caret: 25 });
   for (const text of ['@"./my folder/"', '@"./my folder/"i']) {
     expect(matchProjectMention(text, "@", text.length)).toBeNull();
   }
@@ -56,12 +67,12 @@ it("projects canonical host paths and anchors in-session insertions", () => {
   expect(nav.key("/", items, items[0], "@ser", 4)).toEqual({ text: "@server/", caret: 8 });
   expect(nav.key("Backspace", items, items[0], "@server/", 8)).toBeNull();
 });
-it("keeps slash and Tab navigation working for inner-space queries", () => {
+it("keeps slash and Tab navigation working inside an open quote (D-304)", () => {
   const item = explorerItems([{ name: "my folder", path: "/project/my folder", project: false, kind: "directory" }], "/project")[0]!;
-  const nav = explorerNavigation({ cwd: "/project", query: "my fo", head: "", commonPrefix: "my folder", loading: false, next: undefined, previous: undefined });
-  expect(nav.key("Tab", [item], item, "@my fo", 6)).toEqual({ text: "@my folder", caret: 10 });
-  expect(nav.key("/", [item], item, "@my fo", 6)).toEqual({ text: "@my folder/", caret: 11 });
-  expect(nav.key("Backspace", [item], item, "@my folder/", 11)).toBeNull();
+  const nav = explorerNavigation({ cwd: "/project", query: '"my fo', head: "", commonPrefix: '"my folder', loading: false, next: undefined, previous: undefined });
+  expect(nav.key("Tab", [item], item, '@"my fo', 7)).toEqual({ text: '@"my folder', caret: 11 });
+  expect(nav.key("/", [item], item, '@"my fo', 7)).toEqual({ text: "@my folder/", caret: 11 });
+  expect(nav.key("Backspace", [item], item, '@"my folder/', 12)).toBeNull();
 });
 it("malformed folder metadata cannot be used for slash navigation", () => {
   const nav = explorerNavigation({ cwd: "/project", query: "folder", head: "", commonPrefix: "", loading: false, next: undefined, previous: undefined });
