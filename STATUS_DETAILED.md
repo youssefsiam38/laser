@@ -5855,7 +5855,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M21-T0 | Binding product contract and dependency plan | done | orchestrator-2026-09-20-project-leap | `PLAN.md` M21; D-329–D-333 | see notes |
+| M21-T0 | Binding product contract and dependency plan | done | orchestrator-2026-09-20-project-leap | `docs/project-lifecycle-leap.md`; `PLAN.md` M21 index; D-329–D-333 | see notes |
 | M21-T1 | Protocol domain, revisions and transition rules | todo | — | — | `PLAN.md` M21 |
 | M21-T2 | Stable project identity and canonical store | todo | — | — | `PLAN.md` M21 |
 | M21-T3 | Host authority, methods, policy and event stream | todo | — | — | `PLAN.md` M21 |
@@ -5886,6 +5886,8 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-20 claimed: define the complete project-owned lifecycle for Specs, Research, Designs, Plans and Tasks; keep every entity independent of sessions and referenceable from any session; specify the embedded Laser workspace, framework-neutral design contract, storage, protocol, approvals, execution and verification before implementation starts.
 - 2026-09-20 checkpoint: resolved the apparent React/framework conflict by separating Laser's React composition engine, the framework-neutral `DesignTree`, the project's real design system, native framework validation and project-native production code.
 - 2026-09-20 done: `PLAN.md` M21 is the binding contract and dependency-ordered implementation plan; D-329–D-333 record the choices future work must not silently reverse.
+- 2026-09-20 correction claimed: move the binding contract into its own document and reduce `PLAN.md` M21 to the repository's dependency index.
+- 2026-09-20 correction done: `docs/project-lifecycle-leap.md` is the binding contract; `PLAN.md` retains only the stable milestone summary and dependency-ordered task index.
 
 ### D-329 · 2026-09-20 · Project lifecycle artifacts belong to projects, not sessions
 
