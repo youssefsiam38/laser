@@ -17,6 +17,7 @@ import { useRef, useState } from "react";
 import { formatBytes } from "@/format";
 import { cn } from "@/lib/utils";
 import { isReadable, omittedBytes, type BodyRef } from "@/runtime/body-excerpt";
+import { useDialogPresence } from "./dialog-presence.js";
 import { LargeBodyViewer, type OutputContext } from "./LargeBodyViewer.js";
 import { useFindQuery } from "./search-state.js";
 
@@ -53,7 +54,9 @@ const ACTION: Record<FoldGround, string> = {
 };
 
 export function BodyOverflow({ body, path, label, ground = "surface", fade = true, finishes, tool, className }: BodyOverflowProps) {
-  const [open, setOpen] = useState(false);
+  // A closed Radix dialog only leaves the document when its exit animation
+  // ends, and with motion reduced there is none (`dialog-presence.ts`).
+  const viewer = useDialogPresence();
   const [query, setQuery] = useState<string>();
   const trigger = useRef<HTMLButtonElement>(null);
   const finding = useRef<HTMLButtonElement>(null);
@@ -82,7 +85,7 @@ export function BodyOverflow({ body, path, label, ground = "surface", fade = tru
             ref={trigger}
             type="button"
             data-slot="body-overflow-open"
-            onClick={() => { setQuery(undefined); setReturnTo(trigger.current); setOpen(true); }}
+            onClick={() => { setQuery(undefined); setReturnTo(trigger.current); viewer.show(); }}
             className={cn(
               "inline-flex min-h-8 min-w-0 items-center gap-1.5 rounded-md px-3 text-start text-sm font-medium outline-none pointer-coarse:min-h-11",
               "transition-colors duration-(--motion-instant) motion-reduce:transition-none",
@@ -101,7 +104,7 @@ export function BodyOverflow({ body, path, label, ground = "surface", fade = tru
               ref={finding}
               type="button"
               data-slot="body-overflow-find"
-              onClick={() => { setQuery(conversationQuery); setReturnTo(finding.current); setOpen(true); }}
+              onClick={() => { setQuery(conversationQuery); setReturnTo(finding.current); viewer.show(); }}
               className={cn(
                 "inline-flex min-h-8 min-w-0 items-center gap-1.5 rounded-md px-3 text-start text-sm outline-none pointer-coarse:min-h-11",
                 "transition-colors duration-(--motion-instant) motion-reduce:transition-none",
@@ -113,17 +116,17 @@ export function BodyOverflow({ body, path, label, ground = "surface", fade = tru
               <span className="min-w-0 truncate">Find “{conversationQuery}” in full {label}</span>
             </button>
           ) : null}
-          <LargeBodyViewer
+          {viewer.mounted ? <LargeBodyViewer
             ref_={body}
             path={path}
             label={label}
-            open={open}
-            onOpenChange={setOpen}
+            open={viewer.open}
+            onOpenChange={(next) => { if (!next) viewer.hide(); }}
             returnFocus={returnTo}
             initialQuery={query}
             tool={tool}
             tone={terminal ? "terminal" : "document"}
-          />
+          /> : null}
         </>
       ) : body.live ? (
         <p className={quiet}>Full {label} available when {finishes ?? "it finishes"}</p>
