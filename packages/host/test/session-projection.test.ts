@@ -597,6 +597,115 @@ describe("worker-free session projection", () => {
     }
   });
 
+  it("serves the heavy record that no body limit elides, exactly as the live authority does (M16-T90)", async () => {
+    // The shape a planner cannot guess about: a record far larger than the
+    // caller's body limit in aggregate, with **no single body** over it — a long
+    // reply, long reasoning and a few tool calls. It is never elided, so pricing
+    // it as if it were under-charged it fivefold and the durable authority
+    // refused pages it had served before. Both authorities must agree, on the
+    // newest page and on every page behind it.
+    const heavy = (index: number, parentId: string | null) => ({
+      type: "message", id: `a${index}`, parentId, timestamp: "2026-01-01T00:00:02.000Z",
+      message: { role: "assistant", content: [
+        { type: "thinking", thinking: "r".repeat(15 * 1024) },
+        { type: "text", text: "t".repeat(15 * 1024) },
+        ...Array.from({ length: 4 }, (_, call) => ({ type: "toolCall", id: `c${index}-${call}`, name: "bash", arguments: { command: "y".repeat(15 * 1024) } })),
+      ] },
+    });
+    const entries: unknown[] = [];
+    let parent: string | null = null;
+    for (let turn = 0; turn < 60; turn++) {
+      entries.push({ type: "message", id: `u${turn}`, parentId: parent, timestamp: "2026-01-01T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: `Prompt ${turn}` }] } });
+      entries.push(heavy(turn, `u${turn}`));
+      entries.push({ type: "message", id: `r${turn}`, parentId: `a${turn}`, timestamp: "2026-01-01T00:00:03.000Z", message: { role: "toolResult", toolCallId: `c${turn}-0`, content: [{ type: "text", text: "ok" }] } });
+      parent = `r${turn}`;
+    }
+    const f = fixture(entries);
+    try {
+      const service = services();
+      const revision = await service.revisions.read(f.path);
+      if (revision.kind !== "answer") throw new Error("missing revision");
+      const liveScope = {
+        sessionId: "session-1", epoch: "live", seq: 5,
+        revision: revision.result.revision, environmentKey: revision.result.environmentKey,
+        authority: "live" as const, selection: { kind: "replace" as const },
+      };
+      const live = (window: HistoryWindowRequest) => boundedHistoryWindow({ entries, leafId: parent }, window, liveScope, { limit: 16 * 1024, digest: sha256Hex });
+      const ids = (rows: unknown[]) => rows.map(row => (row as { id: string }).id);
+
+      for (const [name, first, earlier] of [
+        ["turns", { turns: 10 } as HistoryWindowRequest, (before: string): HistoryWindowRequest => ({ before, turns: 20 })],
+        ["entries", { tail: 40 } as HistoryWindowRequest, (before: string): HistoryWindowRequest => ({ before, limit: 40 })],
+      ] as const) {
+        let page = await project(service.projection, f.path, first, undefined, 16 * 1024);
+        const seen: string[] = [...ids(page.entries)];
+        let pages = 1;
+        // Nothing is elided — no body is over the limit — so the durable page and
+        // the live page must be the same rows, on every page, not only the first.
+        expect(page.window?.elided ?? [], name).toEqual([]);
+        expect(ids(page.entries), `${name} first`).toEqual(ids(live(first)!.entries));
+        while (page.window?.before) {
+          const cursor = page.window.before;
+          const liveEarlier = live(earlier(cursor));
+          page = await project(service.projection, f.path, earlier(cursor), page.window.revision, 16 * 1024);
+          expect(ids(page.entries), `${name} page ${pages + 1}`).toEqual(ids(liveEarlier!.entries));
+          expect(page.window?.elided ?? [], name).toEqual([]);
+          expect(historyContentSerializedBytes(page.entries, page.window?.context ?? []), name).toBeLessThanOrEqual(HISTORY_PAGE_BYTE_LIMIT);
+          seen.unshift(...ids(page.entries));
+          pages++;
+          expect(pages, name).toBeLessThan(60);
+        }
+        expect(seen, name).toEqual(ids(entries));
+        expect(pages, name).toBeGreaterThan(1);
+      }
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("re-plans a page smaller rather than refusing when its exact form does not fit (M16-T90)", async () => {
+    // A row the index prices as elided but that carries an unbounded amount of
+    // body metadata with it: a hundred small pictures in one record is M16-T88's
+    // own named shape, and its elided identity is larger than the planner's
+    // allowance for it. The page is re-planned against served bytes and served;
+    // it is never a refusal a person has to read.
+    const shots = (index: number, parentId: string | null) => ({
+      type: "message", id: `shots${index}`, parentId, timestamp: "2026-01-01T00:00:02.000Z",
+      message: { role: "toolResult", toolCallId: `c${index}`, content: [
+        { type: "text", text: "x".repeat(20 * 1024) },
+        ...Array.from({ length: 120 }, () => ({ type: "image", mimeType: "image/png", data: png(64, 64, 3 * 1024) })),
+      ] },
+    });
+    const entries: unknown[] = [];
+    let parent: string | null = null;
+    for (let turn = 0; turn < 24; turn++) {
+      entries.push({ type: "message", id: `u${turn}`, parentId: parent, timestamp: "2026-01-01T00:00:01.000Z", message: { role: "user", content: [{ type: "text", text: `Prompt ${turn}` }] } });
+      entries.push(shots(turn, `u${turn}`));
+      parent = `shots${turn}`;
+    }
+    const f = fixture(entries);
+    try {
+      const { projection } = services();
+      let page = await project(projection, f.path, { turns: 10 }, undefined, 16 * 1024);
+      const seen: string[] = page.entries.map(row => (row as { id: string }).id);
+      const elided: string[] = (page.window?.elided ?? []).map(row => row.id);
+      let pages = 1;
+      while (page.window?.before) {
+        page = await project(projection, f.path, { before: page.window.before, turns: 20 }, page.window.revision, 16 * 1024);
+        seen.unshift(...page.entries.map(row => (row as { id: string }).id));
+        elided.push(...(page.window?.elided ?? []).map(row => row.id));
+        expect(historyContentSerializedBytes(page.entries, page.window?.context ?? [])
+          + historyContentSerializedBytes(page.window?.elided ?? [], [])).toBeLessThanOrEqual(HISTORY_PAGE_BYTE_LIMIT);
+        pages++;
+        expect(pages).toBeLessThan(60);
+      }
+      // Every row of the conversation is reachable, whole or as identity.
+      expect([...seen, ...elided].sort()).toEqual(entries.map(row => (row as { id: string }).id).sort());
+    } finally {
+      f.cleanup();
+    }
+  });
+
   it("pages a conversation the size of the one that failed, in turns and in entries (M16-T90)", async () => {
     // About 27 MB of stored conversation: 200 turns whose tool results carry
     // 128 KB of output each, and the two screenshots that broke it.

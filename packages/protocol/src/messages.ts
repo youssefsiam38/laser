@@ -87,6 +87,11 @@ export interface HistoryWindow {
    * it is present exactly when older rows remain on the rendered branch. Absent
    * means this page reached the root — nothing about bytes, nothing about
    * budgets (M16-T90). Opaque: pass it back as `window.before`, never parse it.
+   *
+   * "Older **rows**", deliberately, not "an older turn": a page whose remaining
+   * history holds no further prompt — a long goal run, an assistant-only
+   * prologue — still offers the control, and the page it returns reaches the
+   * root. Counting turns here would leave that history unreachable.
    */
   before?: string;
   /** First loaded entry, retained when refreshing an expanded window. */

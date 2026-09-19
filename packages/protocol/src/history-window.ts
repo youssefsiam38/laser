@@ -195,7 +195,10 @@ export function historyWindowPlan(
   leafId: string | null,
   request: HistoryWindowRequest,
   scope: HistoryWindowScope,
-  /** Allow the page to start inside a turn, for a turn no page can hold whole. */
+  /**
+   * Allow the page to start inside a turn, for a turn no page can hold whole.
+   * Entry-unit only: a turn window already starts at a prompt (see the walk).
+   */
   splitTurns = false,
 ): HistoryWindowPlan {
   const byId = new Map<string, number>();
@@ -242,22 +245,22 @@ export function historyWindowPlan(
     start = branch.findIndex(index => nodes[index]!.id === request.from);
     if (start < 0) changed();
   } else if (!all) {
+    // One walk, two units. A turn window counts **user messages** — everything
+    // between two of them belongs to the later turn, and the prompt that
+    // anchors the oldest turn is part of the page it anchors, so a page always
+    // begins at a prompt and never halfway through an exchange (M16-T90). An
+    // entry window counts messages of any role and then aligns to the same
+    // boundary afterwards. A compaction, a goal record or a reply is never an
+    // anchor in either unit: only a user message on the rendered branch is.
     const turns = windowTurns(request);
-    if (turns !== undefined) {
-      // Count user messages backwards along the branch. Everything between two
-      // of them belongs to the later turn, and the user message that anchors
-      // the oldest turn is part of the page it anchors — so a page always
-      // begins at a prompt and never halfway through an exchange. A compaction,
-      // a goal record or an assistant reply is not an anchor: only a user
-      // message on the rendered branch is (M16-T90).
-      start = end;
-      let anchors = 0;
-      while (start > 0 && anchors < turns) if (nodes[branch[--start]!]!.isUser) anchors++;
-    } else {
-      const limit = "tail" in request ? request.tail : "limit" in request ? request.limit ?? 40 : 40;
-      let messages = 0;
-      start = end;
-      while (start > 0 && messages < limit) if (nodes[branch[--start]!]!.isMessage) messages++;
+    const counting = turns === undefined
+      ? (node: HistoryWindowNode) => node.isMessage
+      : (node: HistoryWindowNode) => node.isUser;
+    const budget = turns ?? windowEntries(request);
+    let counted = 0;
+    start = end;
+    while (start > 0 && counted < budget) if (counting(nodes[branch[--start]!]!)) counted++;
+    if (turns === undefined) {
       // A tool result cannot be separated from its call, or an assistant action
       // from its prompt. A single unusually long turn may exceed the row target.
       // A turn too large for any page (a long agent run) splits between an
@@ -265,6 +268,11 @@ export function historyWindowPlan(
       if (splitTurns) while (start > 0 && start < end && nodes[branch[start]!]!.isToolResult) start--;
       else while (start > 0 && !nodes[branch[start]!]!.isUser) start--;
     }
+    // `splitTurns` is an entry-unit instruction and is deliberately not applied
+    // above: a turn window's page already begins at a prompt, so there is no
+    // turn boundary left to split. A turn too large for any page is paged from
+    // inside itself in **rows** — `fitHistoryWindowPlan` asks for that fallback
+    // in the entry unit — so the flag reaches this walk only for those plans.
     // Attribution and other turn-local custom markers precede the prompt.
     while (start > 0 && !nodes[branch[start - 1]!]!.isMessage) start--;
   }
@@ -292,6 +300,15 @@ export function historyWindowPlan(
       seq: scope.seq,
       revision: scope.revision,
       environmentKey: scope.environmentKey,
+      // The cursor, and with it the answer to "is there more": present exactly
+      // when this page does not reach the root of the rendered branch. The
+      // reference design asks for one **turn** beyond the page; this walk knows
+      // something stricter and cheaper — whether any older **row** remains — and
+      // that difference is deliberate (M16-T90). When the rows before a page
+      // hold no further prompt (a goal run, an assistant-only prologue), the
+      // control still offers them, the next page returns them and reports the
+      // root, and paging always terminates. Do not "correct" this to count
+      // turns: a prologue with no prompt in it would become unreachable.
       ...(start > 0 && typeof anchor === "string"
         ? { before: encodeCursor({ v: CURSOR_VERSION, s: scope.sessionId, l: leafId, b: anchor } satisfies HistoryCursor) }
         : {}),
@@ -308,9 +325,21 @@ export function historyWindowPlan(
   };
 }
 
-/** The turns a request counts in, or undefined when it counts entries. */
+/**
+ * The turns a request counts in, or undefined when it counts entries.
+ *
+ * A count outside the contract is refused rather than reinterpreted. The wire
+ * schema owns that contract (`1..HISTORY_PAGE_TURN_MAX`), so anything else here
+ * came from inside this process: answering it as "forty entries" would hide a
+ * defect behind a different question.
+ */
 export function windowTurns(request: HistoryWindowRequest): number | undefined {
-  return "turns" in request && Number.isInteger(request.turns) && request.turns > 0 ? request.turns : undefined;
+  if (!("turns" in request)) return undefined;
+  const turns = request.turns;
+  if (!Number.isInteger(turns) || turns < 1 || turns > HISTORY_PAGE_TURN_MAX) {
+    throw new Error(`A history window asked for ${String(turns)} turns; the contract is 1 to ${HISTORY_PAGE_TURN_MAX}.`);
+  }
+  return turns;
 }
 
 /** The messages an entry-counted request asks for. */

@@ -13,6 +13,7 @@ import {
   historyWindowPlan,
   isLiveEdgeWindow,
   parseClientRequest,
+  windowTurns,
 } from "../src/index.js";
 
 const PATH = "/project/session.jsonl";
@@ -413,6 +414,20 @@ describe("a page is a number of turns", () => {
     const delta = historyWindow(snapshot, { turns: HISTORY_FIRST_PAGE_TURNS }, { ...scope, authority: "live", selection: { kind: "delta", after: "z2" } });
     expect(ids(delta)).toEqual(["u3", "a3", "r3", "z3"]);
     expect(delta.window).toMatchObject({ mode: "delta", authority: "live" });
+  });
+
+  it("refuses a turn count the wire contract already rejects, rather than answering a different question", () => {
+    const entries = turns(4);
+    const snapshot = { entries, leafId: "z3" };
+    // The schema owns `1..HISTORY_PAGE_TURN_MAX`. An internal caller outside it
+    // is a defect here; answering it as "forty entries" would hide one.
+    for (const count of [0, -1, 2.5, HISTORY_PAGE_TURN_MAX + 1]) {
+      expect(() => windowTurns({ turns: count })).toThrow(/turns/);
+      expect(() => historyWindow(snapshot, { turns: count }, replace)).toThrow(/turns/);
+    }
+    expect(windowTurns({ turns: 1 })).toBe(1);
+    expect(windowTurns({ tail: 40 })).toBeUndefined();
+    expect(windowTurns({ before: "cursor", limit: 40 })).toBeUndefined();
   });
 
   it("leaves entry-counted windows exactly as they were", () => {

@@ -8,6 +8,7 @@
 import { closeSync, fstatSync, openSync, readSync, statSync, type Stats } from "node:fs";
 import {
   RevisionFold,
+  entryBodyMetadata,
   historyWindowNode,
   servedEntryWireBytes,
   sessionRevisionOf,
@@ -74,6 +75,20 @@ export interface IndexedEntry {
    * then refuses, which is the failure this milestone deletes.
    */
   servedLength: number;
+  /**
+   * The largest body of this row that is not an image, in exact UTF-8 bytes —
+   * the one number that decides whether a page will **elide** it (M16-T90).
+   *
+   * Without it a planner has to guess, and the guess decides between two wildly
+   * different costs: a record that travels whole costs its own length, and one
+   * elided costs identity and body metadata. Guessing "elided" for a record that
+   * is large in aggregate but whose every body is small — a long reply, long
+   * reasoning and a few tool calls, the ordinary heavy shape — under-priced it
+   * five-fold, and the durable authority then refused pages it used to serve.
+   * Sizes only: `entryBodyMetadata` measures where the bodies already are and
+   * builds none of them.
+   */
+  largestBodyBytes: number;
 }
 
 export interface SessionIndex {
@@ -553,6 +568,22 @@ function parseHeader(line: string): SessionRevisionHeader | undefined {
 /** Node's own counter: this runs once per line of a cold scan. */
 const utf8Bytes = (text: string): number => Buffer.byteLength(text, "utf8");
 
+/**
+ * The largest non-image body of one parsed row (M16-T90).
+ *
+ * An image is never weighed against a body limit — it travels as a reference at
+ * any size (M16-T89) — so it cannot make a record elidable and is left out here,
+ * exactly as `elideOversizedEntries` leaves it out.
+ */
+function largestBodyOf(parsed: unknown): number {
+  let largest = 0;
+  for (const body of entryBodyMetadata(parsed)) {
+    if (body.component.kind === "image") continue;
+    largest = Math.max(largest, body.totalBytes);
+  }
+  return largest;
+}
+
 function parseEntry(line: string, offset: number, length: number): { value: unknown; identity: IndexedEntry } | undefined {
   if (!line.trim()) return undefined;
   let parsed: unknown;
@@ -566,7 +597,14 @@ function parseEntry(line: string, offset: number, length: number): { value: unkn
   return {
     value: parsed,
     // Priced by the one projection that will actually serve this row, so the
-    // two can never disagree about what it costs (M16-T89).
-    identity: { ...historyWindowNode(parsed), offset, length, servedLength: servedEntryWireBytes(parsed, utf8Bytes) },
+    // two can never disagree about what it costs (M16-T89), and measured for the
+    // one body that decides whether it will be elided (M16-T90).
+    identity: {
+      ...historyWindowNode(parsed),
+      offset,
+      length,
+      servedLength: servedEntryWireBytes(parsed, utf8Bytes),
+      largestBodyBytes: largestBodyOf(parsed),
+    },
   };
 }
