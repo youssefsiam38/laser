@@ -418,7 +418,7 @@ export function UserMessage() {
               }
             }}
           /> : null}
-          <UndoTurn turn={restoreTurnForPrompt(ordinal)} className={hoverReveal} />
+          <UndoTurn turn={restoreTurnForPrompt(ordinal)} at={requestAt} className={hoverReveal} />
           <MessageActions
             onLoadHistory={partialHistory && !wholeTranscript.paused ? () => void actions.loadAllEntries() : undefined}
             loadHistoryRefusal={partialHistory ? wholeTranscript.explanation : undefined}

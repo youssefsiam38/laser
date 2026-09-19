@@ -4,7 +4,8 @@
  *
  * Pointer and keyboard: the control is only on a prompt whose checkpoint is
  * kept; a no-op target is hidden; the dialog names repositories, files and
- * uncommitted work; Cancel never sends confirm; Confirm sends it once; a
+ * uncommitted work, each path with the numbers the change lists lend it and a
+ * way into its diff; Cancel never sends confirm; Confirm sends it once; a
  * running-turn refusal and a per-repository refusal each render as a sentence;
  * Enter from the row does not confirm (and does not open).
  */
@@ -12,7 +13,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime, type ThreadMessageLike } from "@assistant-ui/react";
-import type { RestorePreview, RestoreResult } from "@lasercode/protocol";
+import type { ProjectChanges, RestorePreview, RestoreResult } from "@lasercode/protocol";
 
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserStoreProvider, createStateStore, useLaserState, type StateStore } from "../../src/runtime/LaserProvider.js";
@@ -26,8 +27,13 @@ const restoreImpl = vi.hoisted(() => ({
   previewError: undefined as Error | undefined,
   result: undefined as RestoreResult | undefined,
   resultError: undefined as Error | undefined,
+  turnChanges: undefined as ProjectChanges | undefined,
+  uncommittedChanges: undefined as ProjectChanges | undefined,
+  changesError: false,
   calls: [] as Array<{ method: string; params: unknown }>,
 }));
+
+const overlay = vi.hoisted(() => ({ openChanges: vi.fn() }));
 
 const stable = vi.hoisted(() => ({
   client: {
@@ -45,6 +51,11 @@ const stable = vi.hoisted(() => ({
             ...(row.failed ? { failed: true as const } : {}),
           })),
         };
+      }
+      if (method === "pi/project/changes") {
+        if (restoreImpl.changesError) throw new Error("That turn's checkpoint is no longer kept.");
+        const body = params as { scope: string };
+        return (body.scope === "turn" ? restoreImpl.turnChanges : restoreImpl.uncommittedChanges) ?? { scope: body.scope, repos: [] };
       }
       if (method === "pi/project/restore") {
         const body = params as { confirm?: boolean };
@@ -86,6 +97,10 @@ vi.mock("@/dialogs", () => ({
   uiResponseFor: () => ({}),
 }));
 vi.mock("@/components/preview/MarkdownPreview", () => ({ MarkdownPreview: ({ text }: { text: string }) => <p data-slot="markdown">{text}</p> }));
+vi.mock("@/source-control/store.js", async (importActual) => ({
+  ...(await importActual<typeof import("../../src/source-control/store.js")>()),
+  openChanges: overlay.openChanges,
+}));
 
 const { ThreadMessage } = await import("../../src/components/thread/messages.js");
 
@@ -107,6 +122,11 @@ const preview = (over: Partial<RestorePreview> = {}): RestorePreview => ({
   staging: "not_restored",
   detail: "The working tree is restored. Staging is not: a checkpoint cannot record what was staged versus unstaged.",
   ...over,
+});
+
+const changes = (scope: "turn" | "uncommitted", files: ProjectChanges["repos"][number]["files"]): ProjectChanges => ({
+  scope,
+  repos: [{ repo: "/p/app", branch: "main", files }],
 });
 
 const msg = (id: string, parentId: string | null, role: string, text: string) => ({
@@ -188,7 +208,16 @@ beforeEach(() => {
   restoreImpl.previewError = undefined;
   restoreImpl.result = undefined;
   restoreImpl.resultError = undefined;
+  restoreImpl.turnChanges = changes("turn", [
+    { path: "src/foo.ts", status: "modified", added: 12, removed: 3 },
+    { path: "src/bar.ts", status: "added", added: 30, removed: 0 },
+  ]);
+  restoreImpl.uncommittedChanges = changes("uncommitted", [
+    { path: "scratch.txt", status: "modified", added: 4, removed: 1 },
+  ]);
+  restoreImpl.changesError = false;
   restoreImpl.calls = [];
+  overlay.openChanges.mockClear();
   stable.client.request.mockClear();
   stable.actions.toast.mockClear();
   stable.actions.rereadHistory.mockClear();
@@ -328,6 +357,127 @@ describe("Undo this turn", () => {
     expect(dialog()?.querySelector('[data-slot="undo-turn-refusals"]')?.textContent).toMatch(/not in this repository/);
     expect(stable.actions.toast).not.toHaveBeenCalled();
     expect(dialogButton("Close")).toBeDefined();
+  });
+
+  it("carries each path's numbers, groups them by repository, and totals the turn", async () => {
+    openStore([msg("u1", null, "user", "first"), msg("a1", "u1", "assistant", "ok")], "a1");
+    await mount();
+    await flush();
+    await act(async () => undoButtons()[0]!.click());
+    await flush();
+    const sheet = dialog()!;
+    // The turn scope for the work being taken back, and the worktree for what dies.
+    const scopes = restoreImpl.calls
+      .filter((call) => call.method === "pi/project/changes")
+      .map((call) => call.params as { scope: string; turn?: number });
+    expect(scopes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ scope: "turn", turn: 1, cwd: "/p", path: SESSION }),
+        expect.objectContaining({ scope: "uncommitted" }),
+      ]),
+    );
+    expect(sheet.querySelector('[data-slot="undo-turn-summary"]')?.textContent).toMatch(/^2 files · \+42 −3 · turn 1, /);
+    expect(sheet.querySelector('[data-slot="undo-turn-repo-total"]')?.textContent).toBe("2 files · +42 −3");
+    const rows = [...sheet.querySelectorAll<HTMLButtonElement>('[data-slot="undo-turn-file"]')];
+    expect(rows.map((row) => row.dataset.path)).toEqual(["src/foo.ts", "src/bar.ts", "scratch.txt"]);
+    expect(rows[0]!.getAttribute("aria-label")).toBe("src/foo.ts, modified, 12 lines added, 3 lines removed, opens the diff");
+    expect(rows[0]!.textContent).toContain("+12");
+    expect(rows[0]!.textContent).toContain("−3");
+    expect(sheet.querySelector('[data-slot="undo-turn-lost-summary"]')?.textContent).toBe(
+      "1 file with uncommitted changes is overwritten by the checkpoint's version.",
+    );
+    expect(sheet.querySelector('[data-slot="undo-turn-lost"] .eyebrow')?.className).toContain("text-danger");
+  });
+
+  it("shows a path the change lists do not know without inventing numbers, and says binary instead", async () => {
+    restoreImpl.preview = preview({
+      repos: [{ repo: "/p/app", branch: "main", files: ["src/foo.ts", "src/mystery.ts"], uncommittedLost: ["logo.png"] }],
+    });
+    restoreImpl.turnChanges = changes("turn", [{ path: "src/foo.ts", status: "modified", added: 12, removed: 3 }]);
+    restoreImpl.uncommittedChanges = changes("uncommitted", [{ path: "logo.png", status: "modified", added: null, removed: null }]);
+    openStore([msg("u1", null, "user", "first"), msg("a1", "u1", "assistant", "ok")], "a1");
+    await mount();
+    await flush();
+    await act(async () => undoButtons()[0]!.click());
+    await flush();
+    const row = (path: string) => dialog()!.querySelector<HTMLElement>(`[data-slot="undo-turn-file"][data-path="${path}"]`)!;
+    expect(row("src/mystery.ts").textContent).toBe("src/mystery.ts");
+    expect(row("src/mystery.ts").getAttribute("aria-label")).toBe("src/mystery.ts, opens the diff");
+    expect(row("logo.png").textContent).toContain("binary");
+    expect(row("logo.png").textContent).not.toMatch(/[+−]\d/);
+    // One repository still totals what it does know.
+    expect(dialog()!.querySelector('[data-slot="undo-turn-repo-total"]')?.textContent).toBe("2 files · +12 −3");
+  });
+
+  it("keeps the paths when the engine has no numbers for that range", async () => {
+    restoreImpl.changesError = true;
+    openStore([msg("u1", null, "user", "first"), msg("a1", "u1", "assistant", "ok")], "a1");
+    await mount();
+    await flush();
+    await act(async () => undoButtons()[0]!.click());
+    await flush();
+    const sheet = dialog()!;
+    expect(sheet.querySelector('[data-slot="undo-turn-error"]')).toBeNull();
+    expect(sheet.querySelector('[data-slot="undo-turn-repo-total"]')?.textContent).toBe("2 files");
+    expect([...sheet.querySelectorAll('[data-slot="undo-turn-file"]')].map((row) => row.textContent)).toEqual([
+      "src/foo.ts",
+      "src/bar.ts",
+      "scratch.txt",
+    ]);
+  });
+
+  it("shows the first rows of a long turn and expands the rest in place", async () => {
+    const many = Array.from({ length: 30 }, (_, i) => `src/f${i}.ts`);
+    restoreImpl.preview = preview({ repos: [{ repo: "/p/app", branch: "main", files: many, uncommittedLost: [] }] });
+    restoreImpl.turnChanges = changes(
+      "turn",
+      many.map((path) => ({ path, status: "modified" as const, added: 1, removed: 1 })),
+    );
+    openStore([msg("u1", null, "user", "first"), msg("a1", "u1", "assistant", "ok")], "a1");
+    await mount();
+    await flush();
+    await act(async () => undoButtons()[0]!.click());
+    await flush();
+    const shown = () => dialog()!.querySelectorAll('[data-slot="undo-turn-file"]').length;
+    expect(shown()).toBe(6);
+    expect(dialog()!.querySelector('[data-slot="undo-turn-repo-total"]')?.textContent).toBe("30 files · +30 −30");
+    const more = dialog()!.querySelector<HTMLButtonElement>('[data-slot="undo-turn-more"]')!;
+    expect(more.textContent).toBe("and 24 more");
+    await act(async () => more.click());
+    await flush();
+    expect(shown()).toBe(30);
+    expect(dialog()!.querySelector('[data-slot="undo-turn-more"]')).toBeNull();
+    expect(dialog()).not.toBeNull();
+  });
+
+  it("opens a file's diff for this turn from the pointer and from Enter, and never confirms from the row", async () => {
+    openStore([msg("u1", null, "user", "first"), msg("a1", "u1", "assistant", "ok")], "a1");
+    await mount();
+    await flush();
+    await act(async () => undoButtons()[0]!.click());
+    await flush();
+    const row = dialog()!.querySelector<HTMLButtonElement>('[data-slot="undo-turn-file"][data-path="src/bar.ts"]')!;
+    const enter = await pressKey(row, "Enter");
+    await flush();
+    expect(enter.defaultPrevented).toBe(false);
+    expect(overlay.openChanges).toHaveBeenCalledTimes(1);
+    expect(overlay.openChanges).toHaveBeenCalledWith({
+      scope: { kind: "turn", turnId: "1" },
+      repo: "/p/app",
+      path: "src/bar.ts",
+      sessionKey: SESSION,
+    });
+    // Enter on a row is never the confirmation, and the modal steps aside.
+    expect(restoreImpl.calls.some((call) => (call.params as { confirm?: boolean }).confirm === true)).toBe(false);
+    expect(dialog()).toBeNull();
+
+    await act(async () => undoButtons()[0]!.click());
+    await flush();
+    await act(async () => dialog()!.querySelector<HTMLButtonElement>('[data-slot="undo-turn-file"]')!.click());
+    await flush();
+    expect(overlay.openChanges).toHaveBeenCalledTimes(2);
+    expect(overlay.openChanges.mock.calls[1]![0]).toEqual(expect.objectContaining({ path: "src/foo.ts" }));
+    expect(restoreImpl.calls.some((call) => (call.params as { confirm?: boolean }).confirm === true)).toBe(false);
   });
 
   it("does not confirm from Enter on the row; Space opens, and Cancel owns the first Enter", async () => {

@@ -12,6 +12,8 @@ import { Hint } from "@/components/ui/hint";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useCapability, useLaserStable, useLaserState } from "@/runtime";
 
+import { useDialogPresence } from "./dialog-presence.js";
+
 /** Persistent session objective, directly below the run/panel row. */
 export function GoalBar() {
   // The goal, not the session: reading the whole view re-rendered this bar (and
@@ -19,8 +21,11 @@ export function GoalBar() {
   // goal does (M16-T32).
   const goal = useLaserState(s => (s.current ? s.open[s.current]?.goal : undefined));
   const { actions } = useLaserStable();
-  const [editing, setEditing] = useState(false);
-  const [clearing, setClearing] = useState(false);
+  // Presence, not just `open`: a closed Radix dialog only leaves the document
+  // when its exit animation ends, and with motion reduced there is no
+  // animation to end (`dialog-presence.ts`).
+  const editing = useDialogPresence();
+  const clearing = useDialogPresence();
   const [objective, setObjective] = useState("");
   const write = useCapability("session/goal/action");
 
@@ -55,17 +60,17 @@ export function GoalBar() {
             >
               {goal.status === "active" ? <Pause /> : <Play />}
             </TooltipIconButton>
-            <TooltipIconButton tooltip="Edit goal" onClick={() => { setObjective(goal.objective); setEditing(true); }}>
+            <TooltipIconButton tooltip="Edit goal" onClick={() => { setObjective(goal.objective); editing.show(); }}>
               <Pencil />
             </TooltipIconButton>
-            <TooltipIconButton tooltip="Clear goal" onClick={() => setClearing(true)}>
+            <TooltipIconButton tooltip="Clear goal" onClick={() => clearing.show()}>
               <Trash2 />
             </TooltipIconButton>
           </div> : null}
         </div>
       </section>
 
-      {write.state === "available" ? <Dialog open={editing} onOpenChange={setEditing}>
+      {write.state === "available" && editing.mounted ? <Dialog open={editing.open} onOpenChange={(next) => { if (!next) editing.hide(); }}>
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Edit session goal</DialogTitle>
@@ -73,21 +78,21 @@ export function GoalBar() {
           </DialogHeader>
           <Textarea value={objective} onChange={(event) => setObjective(event.target.value)} rows={6} maxLength={4000} autoFocus />
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
-            <Button disabled={!objective.trim()} onClick={() => { void actions.goal({ action: "edit", objective: objective.trim() }); setEditing(false); }}>Save goal</Button>
+            <Button variant="ghost" onClick={() => editing.hide()}>Cancel</Button>
+            <Button disabled={!objective.trim()} onClick={() => { void actions.goal({ action: "edit", objective: objective.trim() }); editing.hide(); }}>Save goal</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog> : null}
 
-      {write.state === "available" ? <Dialog open={clearing} onOpenChange={setClearing}>
+      {write.state === "available" && clearing.mounted ? <Dialog open={clearing.open} onOpenChange={(next) => { if (!next) clearing.hide(); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Clear this goal?</DialogTitle>
             <DialogDescription>{PRODUCT_DISPLAY_NAME} will stop carrying the objective into future turns in this session. The transcript remains unchanged.</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="ghost" autoFocus onClick={() => setClearing(false)}>Keep goal</Button>
-            <Button variant="destructive" onClick={() => { void actions.goal({ action: "clear" }); setClearing(false); }}>Clear goal</Button>
+            <Button variant="ghost" autoFocus onClick={() => clearing.hide()}>Keep goal</Button>
+            <Button variant="destructive" onClick={() => { void actions.goal({ action: "clear" }); clearing.hide(); }}>Clear goal</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog> : null}
