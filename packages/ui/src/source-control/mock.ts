@@ -20,7 +20,7 @@ const MODIFIED_PATCH = `diff --git a/src/body-range.ts b/src/body-range.ts
 index 1111111..2222222 100644
 --- a/src/body-range.ts
 +++ b/src/body-range.ts
-@@ -1,6 +1,9 @@
+@@ -1,3 +1,5 @@
  export function greet(name: string): string {
 -  return "hi " + name;
 +  const bytes = utf8ByteLength(name);
@@ -98,6 +98,12 @@ const PATCHES: Record<string, string> = {
   "lib/client.ts": CONNECTING_PATCH,
 };
 
+/**
+ * Both sides of the files the mock can hydrate. These are the two ends the
+ * patch above was computed from, byte for byte: the overlay now verifies that
+ * before handing anything to the renderer, so a mock whose sides drifted from
+ * its patch would (correctly) lose expansion.
+ */
 const SOURCES: Record<string, { old: string; next: string }> = {
   "src/body-range.ts": {
     old: `export function greet(name: string): string {\n  return "hi " + name;\n}\n`,

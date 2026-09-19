@@ -28,14 +28,45 @@ vi.mock("@pierre/diffs/react", () => ({
   Virtualizer: ({ children }: { children: React.ReactNode }) => <div data-slot="pierre-virtualizer">{children}</div>,
 }));
 
+/**
+ * The parsed patch is the real shape, not a stub: the overlay now verifies
+ * the fetched sides against these hunks before hydrating, so a partial with
+ * no content to check would prove nothing.
+ */
+function partialFor(name: string) {
+  return {
+    name,
+    type: "change",
+    isPartial: true,
+    // `@@ -1,1 +1,2 @@` over a two-line file: one context line, one addition.
+    hunks: [
+      {
+        collapsedBefore: 0,
+        additionStart: 1,
+        additionCount: 2,
+        additionLineIndex: 0,
+        deletionStart: 1,
+        deletionCount: 1,
+        deletionLineIndex: 0,
+        hunkContent: [
+          { type: "context", lines: 1, additionLineIndex: 0, deletionLineIndex: 0 },
+          { type: "change", additions: 1, deletions: 0, additionLineIndex: 1, deletionLineIndex: 1 },
+        ],
+      },
+    ],
+    deletionLines: ["a\n"],
+    additionLines: ["a\n", "b\n"],
+  };
+}
+
+/** The two ends that partial was computed from. */
+const OLD_TEXT = "a\n";
+const NEW_TEXT = "a\nb\n";
+
 vi.mock("@pierre/diffs", () => ({
   registerCustomTheme: () => {},
-  parsePatchFiles: () => [
-    {
-      files: [
-        { name: "src/body-range.ts", type: "change", isPartial: true, hunks: [{ collapsedBefore: 12 }] },
-      ],
-    },
+  parsePatchFiles: (patch: string) => [
+    { files: [partialFor(patch.includes("other.ts") ? "src/other.ts" : "src/body-range.ts")] },
   ],
   hydratePartialDiff: (_type: string, fileDiff: Record<string, unknown>, files: Record<string, unknown>) => {
     hydrations.push({ fileDiff, files });
@@ -58,8 +89,28 @@ const PAGE = {
   status: "modified" as const,
   added: 3,
   removed: 1,
-  patch: "diff --git a/src/body-range.ts b/src/body-range.ts\n@@ -1,1 +1,2 @@\n-a\n+b\n",
+  patch: "diff --git a/src/body-range.ts b/src/body-range.ts\n@@ -1,1 +1,2 @@\n a\n+b\n",
 };
+
+/** A second file, opened in the same overlay while the first is mounted. */
+const OTHER_PAGE = {
+  ...PAGE,
+  path: "src/other.ts",
+  patch: "diff --git a/src/other.ts b/src/other.ts\n@@ -1,1 +1,2 @@\n a\n+b\n",
+};
+
+/** An adapter whose sides really are the two ends of the patch above. */
+function sidesAdapter(overrides?: Partial<Record<"old" | "new", string>>): Adapter {
+  return {
+    ...createMockAdapter(),
+    getFileSource: async (_scope: unknown, repo: string, path: string, side: "old" | "new") => ({
+      repo,
+      path,
+      ref: side,
+      contents: overrides?.[side] ?? (side === "old" ? OLD_TEXT : NEW_TEXT),
+    }),
+  } as unknown as Adapter;
+}
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -76,9 +127,19 @@ afterEach(async () => {
   resetChangesAdapter();
 });
 
-async function mount(adapter: Adapter): Promise<void> {
+async function mount(adapter: Adapter, page: typeof PAGE = PAGE): Promise<void> {
   setChangesAdapter(adapter);
-  await act(async () => root.render(<DiffBody page={PAGE} scope={{ kind: "session" }} diffStyle="split" />));
+  await act(async () => root.render(<DiffBody page={page} scope={{ kind: "session" }} diffStyle="split" />));
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+/** Select another file without unmounting: the rail and the tab strip do this. */
+async function select(page: typeof PAGE): Promise<void> {
+  await act(async () => root.render(<DiffBody page={page} scope={{ kind: "session" }} diffStyle="split" />));
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
@@ -95,25 +156,106 @@ function notice(): string | null {
 }
 
 it("never hands the renderer a partial diff and a loader, which is the dead row's only cause", async () => {
-  await mount(createMockAdapter());
+  await mount(sidesAdapter());
   expect(captured.length).toBeGreaterThan(0);
   for (const call of captured) expect(call.options).not.toHaveProperty("loadDiffFiles");
 });
 
 it("hydrates from both sides, so every gap has a real size and a live expander", async () => {
-  await mount(createMockAdapter());
+  await mount(sidesAdapter());
   expect(hydrations).toHaveLength(1);
   expect(hydrations[0]!.files).toEqual({
-    oldFile: { name: "src/body-range.ts", contents: expect.any(String) },
-    newFile: { name: "src/body-range.ts", contents: expect.any(String) },
+    oldFile: { name: "src/body-range.ts", contents: OLD_TEXT },
+    newFile: { name: "src/body-range.ts", contents: NEW_TEXT },
   });
   expect(captured.at(-1)!.fileDiff).toMatchObject({ isPartial: false });
   expect(body().getAttribute("data-expansion")).toBe("ready");
   expect(notice()).toBeNull();
 });
 
+it("refuses sides that are not the two ends this patch spans, and says so", async () => {
+  // What the overlay used to fetch: the working tree on both sides. This is
+  // the pair that made the renderer throw mid-render and took the window down.
+  await mount(sidesAdapter({ old: NEW_TEXT }));
+  expect(hydrations).toHaveLength(0);
+  expect(captured.at(-1)!.fileDiff).toMatchObject({ isPartial: true });
+  expect(body().getAttribute("data-expansion")).toBe("mismatched");
+  expect(body().getAttribute("data-expansion-detail")).toMatch(/old side/);
+  expect(notice()).toMatch(/no longer matches this diff/);
+  expect(notice()).not.toMatch(/may be available/);
+});
+
+it("never hydrates one file's patch with another file's sides when the selection changes", async () => {
+  // Selecting a file re-renders this component with the new patch while the
+  // previous file's sides are still in state. Hydrating across that seam is a
+  // guaranteed mismatch, which is why switching files crashed the window as
+  // reliably as opening one did.
+  const seen: string[] = [];
+  const adapter = {
+    ...createMockAdapter(),
+    getFileSource: async (_scope: unknown, repo: string, path: string, side: "old" | "new") => {
+      seen.push(`${path}:${side}`);
+      return { repo, path, ref: side, contents: side === "old" ? OLD_TEXT : NEW_TEXT };
+    },
+  } as unknown as Adapter;
+  await mount(adapter);
+  expect(hydrations).toHaveLength(1);
+  await select(OTHER_PAGE);
+  // Two hydrations, each with its own file's name on both sides, and never
+  // one of them hydrated while the other's sides were still held.
+  expect(hydrations).toHaveLength(2);
+  expect(hydrations[1]!.files).toEqual({
+    oldFile: { name: "src/other.ts", contents: OLD_TEXT },
+    newFile: { name: "src/other.ts", contents: NEW_TEXT },
+  });
+  // Nothing was ever hydrated under the wrong file's name.
+  for (const call of hydrations) {
+    expect((call.files as { newFile: { name: string } }).newFile.name).toBe(
+      (call.fileDiff as { name: string }).name,
+    );
+  }
+  expect(seen).toEqual([
+    "src/body-range.ts:old",
+    "src/body-range.ts:new",
+    "src/other.ts:old",
+    "src/other.ts:new",
+  ]);
+});
+
+it("holds the previous file's sides back while the next file's are in flight", async () => {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let loads = 0;
+  const adapter = {
+    ...createMockAdapter(),
+    getFileSource: async (_scope: unknown, repo: string, path: string, side: "old" | "new") => {
+      loads += 1;
+      if (path === "src/other.ts") await gate;
+      return { repo, path, ref: side, contents: side === "old" ? OLD_TEXT : NEW_TEXT };
+    },
+  } as unknown as Adapter;
+  await mount(adapter);
+  expect(body().getAttribute("data-expansion")).toBe("ready");
+  await select(OTHER_PAGE);
+  // The second file is painted from its patch alone while its sides load —
+  // not from the first file's text.
+  expect(body().getAttribute("data-expansion")).toBe("loading");
+  expect(captured.at(-1)!.fileDiff).toMatchObject({ name: "src/other.ts", isPartial: true });
+  expect(notice()).toBeNull();
+  release?.();
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(body().getAttribute("data-expansion")).toBe("ready");
+  expect(loads).toBe(4);
+});
+
 it("bounds one press to a screenful, never a file", async () => {
-  await mount(createMockAdapter());
+  await mount(sidesAdapter());
   const options = captured.at(-1)!.options;
   expect(options.expansionLineCount).toBe(24);
   expect(options.expandUnchanged).toBe(false);
@@ -150,7 +292,7 @@ it("refuses a side the authority could only send in part, and says why", async (
 });
 
 it("carries our type into the light-DOM host, before any observer runs", async () => {
-  await mount(createMockAdapter());
+  await mount(sidesAdapter());
   const style = body().getAttribute("style") ?? "";
   expect(style).toContain("--diffs-font-family: var(--font-mono)");
   expect(style).toContain("--diffs-font-size: var(--text-code)");

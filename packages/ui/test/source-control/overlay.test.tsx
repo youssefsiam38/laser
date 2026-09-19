@@ -66,7 +66,47 @@ function overlay(): HTMLElement {
   return node!;
 }
 
-it("opens full-screen, keeps the conversation draft, and Escape returns", async () => {
+/**
+ * The overlay is a big modal, not a second application (superseding the
+ * "full-screen" wording in `docs/source-control-leap.md` §8.1). It is the
+ * shared dialog surface — scrim, radius, border, elevation and the
+ * exit-presence guard all come from `components/ui/dialog.tsx` — sized large.
+ * Below `md` it is still full-bleed, because a gutter on a phone is worse
+ * than none.
+ */
+it("is a large modal on top of the window, and full-bleed only on a phone width", async () => {
+  await mount();
+  await open({ scope: { kind: "session" }, repo: "app", path: "src/body-range.ts" });
+  const surface = overlay();
+  expect(surface.dataset.slot).toBe("changes-overlay");
+  // The app is still there behind it: a scrim, not a replacement.
+  expect(document.querySelector('[data-slot="dialog-overlay"]')).toBeTruthy();
+  const classes = surface.className;
+  // Inset and capped: it never touches the edge of a wide display.
+  expect(classes).toContain("h-[92dvh]");
+  expect(classes).toContain("w-[94vw]");
+  expect(classes).toContain("md:max-w-[calc(var(--measure-thread)+var(--space-unit)*96)]");
+  // The card is the shared dialog's: its radius, hairline and elevation
+  // survive on the element, and the overlay restates none of them — it only
+  // takes them off below `md`, where a gutter would cost more than it gives.
+  expect(classes).toContain("rounded-2xl");
+  expect(classes).toContain("border-line");
+  expect(classes).toContain("shadow-float");
+  expect(classes).not.toMatch(/(?<!max-)md:rounded-(?:md|lg|xl|2xl)/);
+  expect(classes).not.toMatch(/(?<!max-)md:shadow-(?!none)/);
+  expect(classes).not.toMatch(/(?<!max-)md:border(?!-0)/);
+  // The dialog's own max-width for a small dialog is gone, not fought with.
+  expect(classes).not.toContain("sm:max-w-sm");
+  expect(classes).toContain("max-md:h-dvh");
+  expect(classes).toContain("max-md:rounded-none");
+  expect(classes).toContain("max-md:shadow-none");
+  // One close affordance, the toolbar's; the dialog's own is off.
+  expect(surface.querySelectorAll('[data-slot="dialog-close"]')).toHaveLength(0);
+  const closes = [...surface.querySelectorAll("button")].filter((node) => node.getAttribute("aria-label") === "Close");
+  expect(closes).toHaveLength(1);
+});
+
+it("opens over the conversation, keeps its draft, and Escape returns", async () => {
   await mount();
   const draft = container.querySelector("textarea")!;
   expect(draft.value).toBe("keep this draft");

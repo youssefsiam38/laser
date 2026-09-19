@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { AgentRun, FileSlice, ProjectChanges } from "@lasercode/protocol";
 import {
+  checkpointCommitFor,
   createHostChangesAdapter,
   mapAgentRunContext,
   mapChangedFile,
@@ -8,7 +9,7 @@ import {
   mapProjectChanges,
   projectChangesParams,
   resolveChangesSession,
-  sourceRef,
+  scopeSourceEnds,
 } from "../../src/source-control/host-adapter.js";
 import { CHANGES_NEED_SESSION, CHANGES_UNAVAILABLE } from "../../src/source-control/errors.js";
 import { getChangesAdapter, resetChangesAdapter } from "../../src/source-control/data.js";
@@ -131,8 +132,60 @@ it("fills protocol params from a scope", () => {
     fromRef: "abc",
     toRef: "def",
   });
-  expect(sourceRef({ kind: "range", from: "abc", to: "def" }, "old")).toBe("abc");
-  expect(sourceRef({ kind: "session" }, "new")).toBe("worktree");
+});
+
+/**
+ * The mapping, per scope, against what the worker diffs. The old side used to
+ * be `undefined` for every scope but `range`, and `pi/project/file_source`
+ * reads a missing ref as the working tree — so both sides came back as the
+ * file on disk and the renderer threw mid-render on the mismatch.
+ */
+it("names both ends of every scope, the way the worker's range does", () => {
+  expect(scopeSourceEnds({ kind: "session" })).toEqual({
+    old: { kind: "checkpoint", turn: "first" },
+    new: { kind: "ref", ref: "worktree" },
+  });
+  expect(scopeSourceEnds({ kind: "turn", turnId: "4" })).toEqual({
+    old: { kind: "checkpoint", turn: 3 },
+    new: { kind: "checkpoint", turn: 4 },
+  });
+  // Turn 0 is the open-time baseline, which is not a range the worker serves.
+  expect(scopeSourceEnds({ kind: "turn", turnId: "0" })).toEqual({ old: undefined, new: undefined });
+  expect(scopeSourceEnds({ kind: "uncommitted" })).toEqual({
+    old: { kind: "ref", ref: "HEAD" },
+    new: { kind: "ref", ref: "worktree" },
+  });
+  expect(scopeSourceEnds({ kind: "range", from: "abc", to: "def" })).toEqual({
+    old: { kind: "ref", ref: "abc" },
+    new: { kind: "ref", ref: "def" },
+  });
+  expect(scopeSourceEnds({ kind: "agent", runId: "run_1" }, { isolated: true, baseCommit: "base1" })).toEqual({
+    old: { kind: "ref", ref: "base1" },
+    new: { kind: "ref", ref: "worktree" },
+  });
+  // A run with no worktree shares its parent's checkout, and the worker falls
+  // back to the session range for it — so the overlay must too.
+  expect(scopeSourceEnds({ kind: "agent", runId: "run_2" }, { isolated: false })).toEqual({
+    old: { kind: "checkpoint", turn: "first" },
+    new: { kind: "ref", ref: "worktree" },
+  });
+});
+
+it("takes a checkpoint's commit for the repository that is being read", () => {
+  const row = {
+    turn: 0,
+    ref: "refs/x/checkpoints/k/0",
+    commit: "aaa",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    repos: [
+      { repo: "/p", ref: "refs/x/checkpoints/k/0", commit: "aaa" },
+      { repo: "/p/nested", ref: "refs/x/checkpoints/k/0", commit: "bbb" },
+    ],
+  };
+  expect(checkpointCommitFor(row, "/p/nested")).toBe("bbb");
+  expect(checkpointCommitFor(row, "/elsewhere")).toBeUndefined();
+  const { repos: _repos, ...flat } = row;
+  expect(checkpointCommitFor(flat, "/p")).toBe("aaa");
 });
 
 it("resolves the overlay session from the open view", () => {
@@ -221,6 +274,94 @@ it("calls the protocol methods with the session context", async () => {
   const page = await adapter.getFileDiff({ kind: "session" }, "/p", "a.ts");
   expect(page.truncated).toBe(false);
   expect(calls.map((call) => call.method)).toEqual(["pi/project/changes", "pi/project/file_diff"]);
+});
+
+/** The requests the overlay actually makes for the two sides of a file. */
+function sourceHarness(checkpoints: unknown[], agentRun?: (runId: string) => AgentRun | undefined) {
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const adapter = createHostChangesAdapter({
+    request: (async (method: string, params: Record<string, unknown>) => {
+      calls.push({ method, params });
+      if (method === "pi/project/checkpoint/list") {
+        return { path: "/s.jsonl", retention: "200", checkpoints };
+      }
+      return { repo: "/p", path: "a.ts", totalBytes: 2, offset: 0, bytes: 2, truncated: false, text: "x\n" };
+    }) as never,
+    session: () => ({ cwd: "/p", path: "/s.jsonl" }),
+    ...(agentRun ? { agentRun } : {}),
+  });
+  const sources = () => calls.filter((call) => call.method === "pi/project/file_source").map((call) => call.params);
+  const listCount = () => calls.filter((call) => call.method === "pi/project/checkpoint/list").length;
+  return { adapter, calls, sources, listCount };
+}
+
+const CHECKPOINTS = [
+  { turn: 0, ref: "r/0", commit: "c0", createdAt: "2026-01-01T00:00:00.000Z", repos: [{ repo: "/p", ref: "r/0", commit: "c0" }] },
+  { turn: 1, ref: "r/1", commit: "c1", createdAt: "2026-01-01T00:01:00.000Z", repos: [{ repo: "/p", ref: "r/1", commit: "c1" }] },
+  { turn: 2, ref: "r/2", commit: "c2", createdAt: "2026-01-01T00:02:00.000Z", repos: [{ repo: "/p", ref: "r/2", commit: "c2" }] },
+];
+
+it("fetches the session scope's own two ends: the first checkpoint and the working tree", async () => {
+  const harness = sourceHarness(CHECKPOINTS);
+  const [old, next] = await Promise.all([
+    harness.adapter.getFileSource?.({ kind: "session" }, "/p", "a.ts", "old"),
+    harness.adapter.getFileSource?.({ kind: "session" }, "/p", "a.ts", "new"),
+  ]);
+  // The working-tree side needs no lookup, so it leaves first; what matters
+  // is that each side asked for its own end.
+  expect(harness.sources().map((params) => params.ref).sort()).toEqual(["c0", "worktree"]);
+  expect(old?.ref).toBe("c0");
+  expect(next?.ref).toBe("worktree");
+  // Both sides of one file share one checkpoint list.
+  expect(harness.listCount()).toBe(1);
+});
+
+it("walks turn N back to checkpoint N-1, and skips a checkpoint that failed", async () => {
+  const harness = sourceHarness([
+    ...CHECKPOINTS.slice(0, 1),
+    { ...CHECKPOINTS[1]!, failed: true },
+    CHECKPOINTS[2]!,
+  ]);
+  await harness.adapter.getFileSource?.({ kind: "turn", turnId: "2" }, "/p", "a.ts", "old");
+  await harness.adapter.getFileSource?.({ kind: "turn", turnId: "2" }, "/p", "a.ts", "new");
+  // Turn 1 failed, so it is not a side anything may be read from: the old end
+  // is refused rather than silently becoming the working tree.
+  expect(harness.sources().map((params) => params.ref)).toEqual(["c2"]);
+});
+
+it("reads the uncommitted scope from HEAD, not from the working tree twice", async () => {
+  const harness = sourceHarness([]);
+  await harness.adapter.getFileSource?.({ kind: "uncommitted" }, "/p", "a.ts", "old");
+  await harness.adapter.getFileSource?.({ kind: "uncommitted" }, "/p", "a.ts", "new");
+  expect(harness.sources().map((params) => params.ref)).toEqual(["HEAD", "worktree"]);
+  expect(harness.listCount()).toBe(0);
+});
+
+it("reads an isolated agent run from its base commit, and names the run", async () => {
+  const harness = sourceHarness([], (runId) =>
+    runId === "run_1"
+      ? ({ runId, cwd: "/p/.worktrees/a", worktree: { path: "/p/.worktrees/a", branch: "agents/a", baseCommit: "base1" } } as AgentRun)
+      : undefined,
+  );
+  await harness.adapter.getFileSource?.({ kind: "agent", runId: "run_1" }, "/p/.worktrees/a", "a.ts", "old");
+  await harness.adapter.getFileSource?.({ kind: "agent", runId: "run_1" }, "/p/.worktrees/a", "a.ts", "new");
+  expect(harness.sources()).toMatchObject([
+    { ref: "base1", runId: "run_1", workdir: "/p/.worktrees/a" },
+    { ref: "worktree", runId: "run_1", workdir: "/p/.worktrees/a" },
+  ]);
+});
+
+it("refuses a side it cannot name rather than letting the engine answer 'working tree'", async () => {
+  // No checkpoints kept: the session scope has no left-hand end to read, so
+  // the file opens at its hunks instead of being hydrated against itself.
+  const empty = sourceHarness([]);
+  expect(await empty.adapter.getFileSource?.({ kind: "session" }, "/p", "a.ts", "old")).toBeNull();
+  expect(empty.sources()).toEqual([]);
+  // A shared-checkout agent run has no base commit; it falls back to the
+  // session's first checkpoint, which is absent here too.
+  const shared = sourceHarness([], (runId) => ({ runId, worktree: null } as AgentRun));
+  expect(await shared.adapter.getFileSource?.({ kind: "agent", runId: "run_2" }, "/p", "a.ts", "old")).toBeNull();
+  expect(shared.sources()).toEqual([]);
 });
 
 it("sends runId on git actions when the overlay is an agent scope", async () => {

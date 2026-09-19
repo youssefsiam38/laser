@@ -346,3 +346,174 @@ context-provided. Option (1) is much the better path.
   and draws it only in the deletions gutter (its own CSS). That is its layout
   decision and I left it alone; it means the control sits on the left of a
   split diff.
+
+---
+
+## 8. Hydration: the sides have to be the patch's own two ends
+
+Branch `agents/overlay-hydration-crash-ea13acef`, from
+`96e5dac7eff81cefc1bbf7ce164d1c8705fc1469`.
+
+§2 made expansion real by fetching both sides of a file and handing the
+renderer a hydrated, non-partial diff. It fetched the wrong side. Measured in
+the running app, opening `src/index.ts` from the Files section:
+
+```
+Error: computeEstimatedDiffHeights: trailing context mismatch (additions=1, deletions=2) for src/index.ts
+```
+
+thrown **during render**, so React unmounted everything above it and the
+window went to `AppErrorBoundary` ("Something went wrong drawing this
+window"). It recurred on every file, and on switching files as reliably as on
+opening one.
+
+### 8.1 What the patch spans, and what we were fetching
+
+`pi/project/file_diff` diffs a range the worker resolves per scope
+(`packages/worker/src/source-control/changes.ts`, `resolveScopeRange`).
+`pi/project/file_source` has no scope: it takes a `ref` and, **when the ref is
+missing, reads the working tree** (`diff.ts`, `fileSource`: `if (!ref || ref
+=== "worktree") return pageWorktree(...)`). The old `sourceRef` returned a ref
+only for `range`, and `undefined` for the old side of every other scope — so
+both sides came back as the file on disk.
+
+| Scope | `from` (old), per the worker | `to` (new), per the worker | Was fetched | Is fetched now |
+| --- | --- | --- | --- | --- |
+| session | first kept, non-failed checkpoint commit | `writeIsolatedTree` snapshot of the working tree | *(no ref)* → working tree, **and** working tree | checkpoint commit (from `pi/project/checkpoint/list`, per repository) **and** `worktree` |
+| turn N | checkpoint N−1 commit | checkpoint N commit | working tree, working tree | checkpoint N−1 **and** checkpoint N |
+| uncommitted | `HEAD` | working tree (`git diff HEAD`, porcelain) | working tree, working tree | `HEAD` **and** `worktree` |
+| range | `fromRef` | `toRef` | `from`, `to` (already right) | unchanged |
+| agent, isolated | the run's `baseCommit` | the run's working tree, or `refs/heads/<branch>` once the worktree is gone | working tree, working tree | `baseCommit` **and** `worktree` + `runId` |
+| agent, shared checkout | first checkpoint — the worker falls back to the **session** range for a run with no worktree | working tree | working tree, working tree | first checkpoint **and** `worktree` |
+
+Mapped in `scopeSourceEnds` (`host-adapter.ts`) and pinned scope by scope in
+`test/source-control/host-adapter.test.ts`.
+
+Three things worth naming:
+
+- **A checkpoint commit is per repository.** `CheckpointInfo.repos[]` carries
+  one commit per repo under one ref name; `checkpointCommitFor` takes the row
+  for the repository being read, never `commit` alone (that is only right for
+  a list that has no per-repository rows). Failed checkpoints are filtered
+  exactly as the worker filters them.
+- **The working tree is not a ref, and we do not pretend it is.** For
+  `session`, `uncommitted` and `agent` the patch's right-hand end is the tree
+  on disk (the worker diffs a `write-tree` snapshot of it taken at request
+  time). `"worktree"` is the name the engine serves that under, so that is
+  what we ask for. The residual difference — a file written between the diff
+  request and the source request, or a `.gitattributes` clean filter that
+  makes the snapshot differ from the smudged file on disk — is caught by
+  §8.2 rather than rendered.
+- **`runId` now goes with an agent-scope source request.** With the run named,
+  the engine answers `"worktree"` from the run's branch head once the worktree
+  has been removed, which is the side its patch was computed against.
+
+**Nothing is missing from the engine.** Every end a scope needs is either a
+ref the engine resolves or the working tree it can page; the only lookup we
+had to add is `pi/project/checkpoint/list`, which already existed and which
+the overlay now calls once per file open (shared by both sides, not cached
+across opens, so a turn captured while the overlay is open is visible to the
+next file). What *is* wrong is the doc comment on `ProjectFileSourceParams.ref`
+— "Default is the scope's right-hand side". The default is the working tree,
+for every scope; the parameter has no scope to take a side from. I did not
+change the worker, so that comment is worth a one-line fix by its owner.
+
+### 8.2 The sides are checked before hydration, not by the renderer
+
+`hydratePartialDiff` asks nothing of the two files it is given: it splits them
+into the metadata's line arrays and keeps the hunk headers. The renderer finds
+out later, mid-render, and throws. So `hydrationMismatch` (`diff-files.ts`,
+pure, no `@pierre/diffs` import so the eager chunk stays clean) checks the
+pair first, in the order a mismatch shows up:
+
+- the unchanged gap before each hunk is the same length on both sides;
+- each hunk's declared range fits inside the file it names;
+- every context, deleted and added line of the patch **is that line of that
+  side, character for character**;
+- the hunk fills exactly the range its header claims;
+- the tail after the last hunk is the same length on both sides — the
+  renderer's own assertion, stated before it can be reached.
+
+A pair that fails is not hydrated: the file opens at its hunks, `data-expansion`
+reads `mismatched`, the reason is on `data-expansion-detail`, and the notice
+says *"The rest of this file no longer matches this diff, so it opens at its
+hunks only. Reopen it to read it against the file as it is now."* A file whose
+sides simply cannot be fetched keeps the existing `unavailable` sentence.
+
+`test/source-control/diff-hydration.test.ts` runs the person's own file
+against the real library: the working tree on both sides throws
+`trailing context mismatch (additions=1, deletions=2)` inside
+`preloadFileDiff`, the same pair is refused by `hydrationMismatch` before that
+can happen, and the true two ends hydrate and render.
+
+### 8.3 Switching files was the same bug, one frame earlier
+
+Selecting another file re-renders `DiffBody` with the new patch while the
+previous file's sides are still in state — the effect that clears them has not
+run yet. Hydrating file B's patch with file A's text is a guaranteed mismatch,
+which is why switching files took the window down as reliably as opening one.
+The fetched sides are now held **with the file they belong to**
+(`repo ∥ oldPath ∥ path ∥ scope`) and are ignored the moment that key changes,
+so the next file paints from its patch alone until its own sides arrive.
+
+### 8.4 The boundary under all of it
+
+`DiffBodyBoundary` (`diff-boundary.tsx`) wraps the lazy body in
+`overlay.tsx`. Whatever the renderer does — a library assertion, a malformed
+patch, a file we cannot read — it becomes `DiffDrawFailedState` **inside the
+overlay body**: "This diff could not be drawn.", what is still true, and the
+two things that work (pick another file, or close). The toolbar, the tab
+strip, the rail and the conversation behind the overlay keep drawing; the
+error goes to the console as one bounded line for the desktop log.
+
+It is keyed to the file being drawn, so a failure belongs to that file and not
+to the surface: selecting another file clears it, and coming back to the bad
+one contains it again. `test/source-control/diff-boundary.test.tsx` mounts the
+real overlay with a body that throws — on open, and on a later selection — and
+asserts the chrome survives, the message appears, the draft in the
+conversation is untouched, and Escape still returns.
+
+### 8.5 The overlay is a modal, not a second application
+
+Direct instruction from the person, superseding "full-screen" in
+`docs/source-control-leap.md` §8.1 (recorded there, not edited here). The
+surface is the shared `DialogContent` — scrim, radius, hairline, elevation and
+the exit-presence guard all come from `components/ui/dialog.tsx`, and none of
+them is restated in the overlay. Only the sizing is ours:
+
+| Width | Geometry |
+| --- | --- |
+| below `md` (48rem) | full-bleed: `max-md:` takes the card off (`rounded-none`, `border-0`, `shadow-none`), `h-dvh`, `w-full`, top-aligned. A modal that leaves a gutter on a 320px screen is worse than none. |
+| `md` and up | centred, `92dvh` tall, `94vw` wide, capped at `calc(var(--measure-thread) + var(--space-unit) * 96)` ≈ the conversation's measure plus the file column beside it. |
+
+`md` is deliberate: an inset modal at `sm` would be ~600px wide, under the
+overlay's own phone threshold (`OVERLAY_PHONE_MAX_REM`, 40rem), and the
+geometry and the chrome would disagree about which layout they are in. At
+`md`, `94vw` is 722px — comfortably desktop chrome, with the file tree beside
+the diff. The header is the modal's header already: the toolbar carries the
+title, the scope, the totals, the Git menu and the one close affordance
+(`showCloseButton={false}` on the dialog, so there is never a second X).
+Nothing about the renderer, the virtualization, expansion or the typography
+changed. `test/source-control/overlay.test.tsx` was updated deliberately: the
+old "opens full-screen" case is now "opens over the conversation" (same
+draft/Escape assertions), and a new case pins the modal geometry, the scrim
+and the single close control.
+
+### 8.6 Cost
+
+Both built from this worktree: the base commit `96e5dac7`, then this branch.
+
+| Chunk | Base `96e5dac7` | This branch | Delta |
+| --- | --- | --- | --- |
+| renderer `diff-body-*.js` | 316.84 kB / 82.65 kB gzip | 317.12 kB / 82.79 kB gzip | **+0.28 kB / +0.14 kB** |
+| startup `index-*.js` | 2,442.69 kB / 738.48 kB gzip | 2,446.71 kB / 739.97 kB gzip | **+4.02 kB / +1.49 kB** (the verifier, the boundary and the scope mapping) |
+
+§5 measured the startup chunk at 2,432.09 kB / 734.73 kB; the other 10.60 kB
+of the difference against that number is work merged into `main` between the
+two measurements, not this change.
+
+The split is unchanged: the startup chunk has **zero** `diffs-container`
+occurrences and its only `pierre` matches are our own `pierreType`
+identifier; the renderer chunk carries all three. `diff-boundary.tsx` and
+`diff-files.ts` import no `@pierre/diffs` value, only structural types, so
+the boundary and the verifier ride in the eager chunk for free.

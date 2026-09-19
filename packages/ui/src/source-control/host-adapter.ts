@@ -2,6 +2,7 @@ import type {
   AgentRun,
   ChangeScope,
   ChangedFile as ProtocolChangedFile,
+  CheckpointInfo,
   ClientMethod,
   ClientRequests,
   FileSlice,
@@ -127,10 +128,75 @@ export function projectChangesParams(scope: ChangesScope, session: ChangesSessio
   return params;
 }
 
-export function sourceRef(scope: ChangesScope, side: "old" | "new"): string | undefined {
-  if (scope.kind === "range") return side === "old" ? scope.from : scope.to;
-  if (side === "new") return "worktree";
-  return undefined;
+/**
+ * One end of the range a scope's patch actually spans.
+ *
+ * `ref` is something the engine can resolve on its own — a commit, a branch
+ * ref, or the literal `"worktree"`, which is how `pi/project/file_source`
+ * names the files on disk. `checkpoint` is a hidden session checkpoint whose
+ * commit only the checkpoint list knows, per repository.
+ */
+export type SourceEnd = { kind: "ref"; ref: string } | { kind: "checkpoint"; turn: number | "first" };
+
+/** What the overlay knows about an agent run when it asks for a side. */
+export type AgentEnds = { isolated: boolean; baseCommit?: string };
+
+/**
+ * The two ends of each scope, matched line for line against what the worker
+ * diffs (`packages/worker/src/source-control/changes.ts`, `resolveScopeRange`):
+ *
+ * | scope | old (`from`) | new (`to`) |
+ * | --- | --- | --- |
+ * | session | first checkpoint that was kept and did not fail | the working tree (the worker diffs a write-tree snapshot of it) |
+ * | turn N | checkpoint N−1 | checkpoint N |
+ * | uncommitted | `HEAD` | the working tree |
+ * | range | `from` | `to` |
+ * | agent, isolated | the run's base commit | the run's working tree (the engine substitutes the branch head when the worktree is gone) |
+ * | agent, shared checkout | first checkpoint — the worker falls back to the session range for a run with no worktree | the working tree |
+ *
+ * Before this, every scope but `range` asked for `undefined` on the old side,
+ * and the engine reads `undefined` as the working tree — so both sides came
+ * back as the file on disk. Hydrating a patch with two identical sides makes
+ * the renderer count one more trailing line on one side than on the other,
+ * and it throws mid-render (`trailing context mismatch`).
+ */
+export function scopeSourceEnds(
+  scope: ChangesScope,
+  agent?: AgentEnds,
+): { old: SourceEnd | undefined; new: SourceEnd | undefined } {
+  const worktree: SourceEnd = { kind: "ref", ref: "worktree" };
+  switch (scope.kind) {
+    case "session":
+      return { old: { kind: "checkpoint", turn: "first" }, new: worktree };
+    case "turn": {
+      const turn = Number.parseInt(scope.turnId, 10);
+      // Turn 0 is the open-time baseline, which the worker refuses as a range.
+      if (!Number.isInteger(turn) || turn < 1) return { old: undefined, new: undefined };
+      return { old: { kind: "checkpoint", turn: turn - 1 }, new: { kind: "checkpoint", turn } };
+    }
+    case "uncommitted":
+      return { old: { kind: "ref", ref: "HEAD" }, new: worktree };
+    case "range":
+      return { old: { kind: "ref", ref: scope.from }, new: { kind: "ref", ref: scope.to } };
+    case "agent": {
+      if (agent && !agent.isolated) return { old: { kind: "checkpoint", turn: "first" }, new: worktree };
+      return {
+        old: agent?.baseCommit ? { kind: "ref", ref: agent.baseCommit } : undefined,
+        new: worktree,
+      };
+    }
+  }
+}
+
+/**
+ * The checkpoint commit for one repository. A session spanning two
+ * repositories has one ref name and two different commits, so `commit` alone
+ * is only right when the list is from a source that never carried the
+ * per-repository rows.
+ */
+export function checkpointCommitFor(row: CheckpointInfo, repo: string): string | undefined {
+  if (!row.repos || row.repos.length === 0) return row.commit;
+  return row.repos.find((item) => item.repo === repo)?.commit;
 }
 
 function withAgentWorkdir(
@@ -155,6 +221,35 @@ export function createHostChangesAdapter(opts: {
     const session = opts.session();
     if (!session) throw new Error(CHANGES_NEED_SESSION);
     return session;
+  };
+  // One checkpoint list per burst of requests: the overlay asks for both
+  // sides of a file at once, and they need the same answer. Not cached beyond
+  // that — a turn captured while the overlay is open must be visible to the
+  // next file that is opened.
+  let inflightCheckpoints: Promise<readonly CheckpointInfo[]> | undefined;
+  const checkpoints = async (session: ChangesSessionContext): Promise<readonly CheckpointInfo[]> => {
+    if (!inflightCheckpoints) {
+      inflightCheckpoints = opts
+        .request("pi/project/checkpoint/list", { cwd: session.cwd, path: session.path })
+        .then((result) => result.checkpoints ?? [])
+        .catch(() => [] as readonly CheckpointInfo[])
+        .finally(() => {
+          inflightCheckpoints = undefined;
+        });
+    }
+    return inflightCheckpoints;
+  };
+  const resolveEnd = async (
+    end: SourceEnd | undefined,
+    session: ChangesSessionContext,
+    repo: string,
+  ): Promise<string | undefined> => {
+    if (!end) return undefined;
+    if (end.kind === "ref") return end.ref;
+    const kept = (await checkpoints(session)).filter((row) => row.failed !== true);
+    const row = end.turn === "first" ? kept[0] : kept.find((item) => item.turn === end.turn);
+    if (!row) return undefined;
+    return checkpointCommitFor(row, repo);
   };
   const gitTarget = (): { cwd: string; runId?: string } => {
     const session = needSession();
@@ -190,13 +285,29 @@ export function createHostChangesAdapter(opts: {
     },
     async getFileSource(scope, repo, path, side) {
       const session = withAgentWorkdir(needSession(), scope, opts.agentRun);
-      const ref = sourceRef(scope, side);
+      const run = scope.kind === "agent" ? opts.agentRun?.(scope.runId) : undefined;
+      const agent: AgentEnds | undefined =
+        scope.kind === "agent"
+          ? {
+              isolated: Boolean(run?.worktree),
+              ...(run?.worktree?.baseCommit ? { baseCommit: run.worktree.baseCommit } : {}),
+            }
+          : undefined;
+      const ref = await resolveEnd(scopeSourceEnds(scope, agent)[side], session, repo);
+      // No ref means we cannot name this end, and the engine reads a missing
+      // ref as the working tree — which would be the wrong side. Refuse
+      // instead: the file opens at its hunks and says why.
+      if (!ref) return null;
       const slice = await opts.request("pi/project/file_source", {
         cwd: session.cwd,
         path: session.path,
         repo,
         file: path,
-        ...(ref ? { ref } : {}),
+        ref,
+        // The agent scope's own end: with the run named, the engine answers
+        // `worktree` from the run's branch head once its worktree is gone,
+        // which is the side its patch was computed against.
+        ...(scope.kind === "agent" ? { runId: scope.runId } : {}),
         ...(session.workdir ? { workdir: session.workdir } : {}),
         offset: 0,
         limit: FILE_DIFF_MAX_BYTES,
@@ -205,7 +316,7 @@ export function createHostChangesAdapter(opts: {
       return {
         repo: slice.repo,
         path: slice.path,
-        ref: ref ?? side,
+        ref,
         contents: slice.text,
         ...(slice.truncated === true ? { truncated: true } : {}),
       };

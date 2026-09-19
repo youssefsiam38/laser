@@ -5,6 +5,7 @@ import { collectOpenShadowRoots } from "@/components/thread/find-ranges.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 import {
   classifyDiffPage,
@@ -21,6 +22,7 @@ import {
 import type { AgentChangesContext, ChangedFile, ChangesList, FileDiffPage } from "./contract.js";
 import { handleOverlayCopy } from "./copy.js";
 import { getChangesAdapter, getChangesAdapterSource } from "./data.js";
+import { DiffBodyBoundary } from "./diff-boundary.js";
 import { appendPatchPage } from "./diff-files.js";
 import { CHANGES_FILE_FAILED, CHANGES_LIST_FAILED, personFacingChangesError } from "./errors.js";
 import { useBindHostChangesAdapter } from "./host-bind.js";
@@ -434,10 +436,16 @@ function ChangesOverlay() {
       );
       break;
     case "diff":
+      // The boundary is the overlay's floor: a renderer throw becomes a state
+      // inside this body, with the toolbar, the tabs and the rail still
+      // drawing. Its key is the file being drawn, so the next file starts
+      // clean instead of inheriting the last one's failure.
       body = (
-        <Suspense fallback={<OverlayLoadingState />}>
-          <DiffBody page={bodyState.page} scope={ui.scope} diffStyle={effectiveStyle} />
-        </Suspense>
+        <DiffBodyBoundary resetKey={`${bodyState.page.repo}\u0000${bodyState.page.path}\u0000${effectiveStyle}`}>
+          <Suspense fallback={<OverlayLoadingState />}>
+            <DiffBody page={bodyState.page} scope={ui.scope} diffStyle={effectiveStyle} />
+          </Suspense>
+        </DiffBodyBoundary>
       );
       break;
   }
@@ -461,7 +469,29 @@ function ChangesOverlay() {
         showCloseButton={false}
         data-slot="changes-overlay"
         aria-labelledby="changes-overlay-title"
-        className="inset-0 top-0 flex h-dvh max-h-dvh w-full max-w-full translate-y-0 flex-col gap-0 rounded-none border-0 bg-bg p-0 shadow-none sm:max-w-full"
+        /*
+         * A big modal, not a second application. The shared dialog surface
+         * already carries the scrim, the radius, the border, the elevation
+         * and the exit-presence guard; all this does is size it.
+         *
+         * Below `md` (48rem) it goes full-bleed: a modal that leaves a
+         * gutter on a 320px screen is worse than none. That is also the width
+         * at which an inset modal would fall under the overlay's own phone
+         * threshold (`OVERLAY_PHONE_MAX_REM`, 40rem) and start hiding its own
+         * file tree, so the two never disagree about which layout they are in.
+         */
+        className={cn(
+          "flex flex-col gap-0 overflow-hidden bg-bg p-0",
+          // Big, but a modal: the window stays visible around it. The card
+          // itself — radius, hairline, elevation — is the dialog's own and is
+          // never restated here; the cap is the conversation's measure plus
+          // the file column beside it.
+          "top-1/2 h-[92dvh] max-h-[92dvh] w-[94vw] max-w-full -translate-y-1/2 sm:max-w-full",
+          "md:max-w-[calc(var(--measure-thread)+var(--space-unit)*96)]",
+          // Below `md` the card comes off and it fills the screen.
+          "max-md:top-0 max-md:h-dvh max-md:max-h-dvh max-md:w-full max-md:translate-y-0",
+          "max-md:rounded-none max-md:border-0 max-md:shadow-none",
+        )}
       >
         <DialogTitle id="changes-overlay-title" className="sr-only">
           Changes
