@@ -1,9 +1,8 @@
 import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
-import type { AgentRun, SessionState, SessionSummary } from "@lasercode/protocol";
+import type { SessionState, SessionSummary } from "@lasercode/protocol";
 
 import {
-  backgroundUsageSources,
   documentTitle,
   historyRows,
   inboxRows,
@@ -11,13 +10,11 @@ import {
   needYouCount,
   projectSummaries,
   recentCwds,
-  sessionBillingMode,
   sessionStateLabel,
   sessionStatus,
   sessionSubtitle,
   sessionsForProject,
   trustLabel,
-  usageFromEntries,
   workerChip,
 } from "../../src/components/shell/model.js";
 import type { SessionView } from "../../src/store.js";
@@ -233,62 +230,6 @@ describe("entries", () => {
     { type: "compaction", id: "cp", parentId: "u3", timestamp: "2026-09-05T10:00:06.000Z", summary: "so far", usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0.001 } } },
     { type: "session_info", id: "si", parentId: "cp", timestamp: "2026-09-05T10:00:07.000Z", name: "Named" },
   ];
-
-  it("sums usage across assistant messages and summaries", () => {
-    expect(usageFromEntries(entries)).toEqual({ input: 11, output: 6, cacheRead: 2, cacheWrite: 1, total: 20, cost: 0.011, turns: 1 });
-    expect(usageFromEntries([])).toBeUndefined();
-  });
-
-  it("keeps account allowance and API spend in separate billing views", () => {
-    const mixed = [
-      { type: "message", message: { role: "assistant", provider: "openai-codex", usage: { input: 100, output: 20, totalTokens: 120, cost: { total: 4 } } } },
-      { type: "message", message: { role: "assistant", provider: "anthropic", usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.1 } } } },
-    ];
-    expect(sessionBillingMode(mixed)).toBe("mixed");
-    expect(usageFromEntries(mixed, "api")).toMatchObject({ input: 10, output: 5, total: 15, cost: 0.1, turns: 1 });
-    expect(sessionBillingMode([mixed[0]])).toBe("account");
-    expect(sessionBillingMode([mixed[1]])).toBe("api");
-  });
-
-  it("puts a session in the mixed billing view when a child agent ran on another provider", () => {
-    // The harness records what a run *is*, never what it spent (D-140), so a
-    // child contributes its model and nothing else. That is enough to decide
-    // the billing view, and inventing numbers would be worse than having none.
-    const run = (runId: string, provider: string, id: string): AgentRun =>
-      ({
-        runId,
-        agentName: "researcher",
-        subagentName: "researcher",
-        sessionId: runId,
-        sessionPath: `/sessions/${runId}.jsonl`,
-        projectCwd: "/p",
-        rootSessionPath: "/sessions/root.jsonl",
-        depth: 1,
-        parent: null,
-        worktree: null,
-        origin: "agent",
-        status: "completed",
-        task: "look",
-        model: { provider, id },
-        startedAt: "2026-09-08T10:00:00.000Z",
-        updatedAt: "2026-09-08T10:01:00.000Z",
-      }) as AgentRun;
-
-    const accountParent = [
-      { type: "message", message: { role: "assistant", provider: "openai-codex", usage: { input: 20, output: 5, cost: { total: 1 } } } },
-    ];
-    const apiChild = backgroundUsageSources([run("r1", "anthropic", "claude-sonnet")]);
-    expect(apiChild).toEqual([{ model: "anthropic/claude-sonnet" }]);
-    expect(sessionBillingMode(accountParent, apiChild)).toBe("mixed");
-    // No usage means no numbers added, not zeroes: the parent's own totals stand.
-    expect(usageFromEntries(accountParent, "all", apiChild)).toMatchObject({ input: 20, output: 5, cost: 1 });
-
-    // A child on the same account provider keeps the session in one view.
-    const accountChild = backgroundUsageSources([run("r2", "openai-codex", "gpt-5.6")]);
-    expect(sessionBillingMode(accountParent, accountChild)).toBe("account");
-    // A run with no model recorded says nothing about billing.
-    expect(backgroundUsageSources([{ ...run("r3", "anthropic", "x"), model: null } as AgentRun])).toEqual([{}]);
-  });
 
   it("flattens the tree with branch depth, folded tool results, and labels on targets", () => {
     const rows = historyRows(entries);

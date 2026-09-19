@@ -225,6 +225,8 @@ function handle(world: World, method: string, params: Record<string, unknown>): 
     }
     case "pi/session/entries":
       return { entries: [] };
+    case "pi/session/telemetry":
+      return { revision: "r1.test", environmentKey: "e1.test", authority: "live", scope: "session", spend: { billing: "none" } };
     case "session/goal/get":
       return { goal: null };
     // Every session open asks for its pending tray; a test that cares about

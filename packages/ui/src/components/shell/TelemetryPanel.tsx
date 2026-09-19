@@ -1,5 +1,5 @@
 import type * as React from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -36,27 +36,48 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
+import type { SessionTelemetry, SessionUpdateParams, TelemetryUsageTotals } from "@lasercode/protocol";
 import { money, tokens } from "@/format";
 import { cn } from "@/lib/utils";
-import { useRunsForRoot } from "@/agents";
 import { useLaserStable, useLaserState, useSessionMeta, useWholeTranscriptRefusal } from "@/runtime";
 
 import { CheckpointHistory } from "@/components/assistant-ui/elements/checkpoint-history";
-import {
-  backgroundUsageSources,
-  historyRows,
-  isAccountProvider,
-  sessionBillingMode,
-  spendSeries,
-  usageByModel,
-  usageFromEntries,
-  type BackgroundUsageSource,
-  type UsageTotals,
-} from "./model.js";
+import { historyRows } from "./model.js";
 import { useShell } from "./shell-context.js";
 
 export interface TelemetryPanelProps {
   variant: "panel" | "sheet";
+}
+
+const TelemetryQueryContext = createContext<SessionTelemetry | undefined>(undefined);
+
+function useSessionTelemetry(): SessionTelemetry | undefined {
+  const { client } = useLaserStable();
+  const path = useLaserState((s) => s.current);
+  const [telemetry, setTelemetry] = useState<SessionTelemetry | undefined>();
+  useEffect(() => {
+    if (!path) {
+      setTelemetry(undefined);
+      return;
+    }
+    let cancelled = false;
+    setTelemetry(undefined);
+    void client.request("pi/session/telemetry", { path }).then(
+      (result) => { if (!cancelled) setTelemetry(result); },
+      () => { if (!cancelled) setTelemetry(undefined); },
+    );
+    const unsubscribe = client.subscribe((method, params) => {
+      if (method !== "session/update") return;
+      const update = params as SessionUpdateParams;
+      if (update.sessionPath !== path || !update.telemetry) return;
+      setTelemetry(update.telemetry);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [client, path]);
+  return telemetry;
 }
 
 /**
@@ -64,12 +85,9 @@ export interface TelemetryPanelProps {
  * tool activity, and history. Read-only except compact / fork / jump.
  */
 export function TelemetryPanel({ variant }: TelemetryPanelProps) {
-  const historyScope = useLaserState(s => {
-    const history = s.current ? s.open[s.current]?.history : undefined;
-    return !history ? undefined : !history.complete ? "messages" : history.branchesUnloaded ? "versions" : undefined;
-  });
   const meta = useSessionMeta();
   const shell = useShell();
+  const telemetry = useSessionTelemetry();
 
   return (
     <aside
@@ -105,15 +123,14 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {meta.session ? (
-          <>
-            {historyScope && <LoadedHistoryNotice versionsOnly={historyScope === "versions"} />}
+          <TelemetryQueryContext.Provider value={telemetry}>
             <ContextSection />
             <UsageSection />
             <ModelSection />
             <FilesSection />
             <ToolsSection />
             <HistorySection />
-          </>
+          </TelemetryQueryContext.Provider>
         ) : (
           <NoSession />
         )}
@@ -181,7 +198,9 @@ function NoSession() {
 function ContextSection() {
   const { actions } = useLaserStable();
   const meta = useSessionMeta();
-  const usage = meta.contextUsage;
+  const telemetry = useContext(TelemetryQueryContext);
+  const usage = telemetry?.context ?? meta.contextUsage;
+  const autoCompact = telemetry?.context?.autoCompact.enabled ?? meta.session?.autoCompactionEnabled;
   const busy = meta.running || meta.compacting;
   return (
     <Section
@@ -215,9 +234,9 @@ function ContextSection() {
               <div className="mt-2 flex items-center gap-1.5 text-xs text-ink-2">
                 <span
                   aria-hidden="true"
-                  className={cn("size-1.5 rounded-full", meta.session?.autoCompactionEnabled ? "bg-ok" : "bg-ink-3")}
+                  className={cn("size-1.5 rounded-full", autoCompact ? "bg-ok" : "bg-ink-3")}
                 />
-                Auto-compact {meta.session?.autoCompactionEnabled ? "on" : "off"}
+                Auto-compact {autoCompact ? "on" : "off"}
               </div>
             </>
           ) : (
@@ -229,18 +248,9 @@ function ContextSection() {
   );
 }
 
-function LoadedHistoryNotice({ versionsOnly }: { versionsOnly: boolean }) {
-  // No button here: the conversation loads more of itself as the person scrolls
-  // up through it, so a control that downloads everything at once would be a
-  // second way to do the same thing — and the slow one.
-  return <div className="flex flex-col items-start gap-2 border-b border-line px-4 py-3 text-xs leading-5 text-ink-2">
-    <p>{versionsOnly ? "Other versions are not loaded yet, so these totals cover the messages loaded so far." : "These totals cover the messages loaded so far. Scroll up in the conversation to load more of it."}</p>
-  </div>;
-}
-
 const TOKEN_TONES = ["bg-live", "bg-ok", "bg-attention", "bg-ink-3"] as const;
 
-function TokenComposition({ usage }: { usage: UsageTotals }) {
+function TokenComposition({ usage }: { usage: TelemetryUsageTotals }) {
   const parts = [
     { label: "Input", value: usage.input, icon: ArrowUpFromLine },
     { label: "Output", value: usage.output, icon: ArrowDownToLine },
@@ -300,30 +310,12 @@ type UsageView = "account" | "api";
 
 function UsageSection() {
   const workbench = useWorkbench();
-  const history = useLaserState((s) => s.current ? s.open[s.current]?.history : undefined);
-  const session = useLaserState((s) => s.current ? s.open[s.current]?.state : undefined);
-  const entries = useLaserState((s) => s.current ? s.open[s.current]?.entries : undefined);
-  const childRuns = useRunsForRoot(session?.path);
-  const background = useMemo(
-    () => backgroundUsageSources(childRuns),
-    [childRuns],
-  );
-  const transcriptMode = useMemo(
-    () => (entries ? sessionBillingMode(entries, background) : "none"),
-    [background, entries],
-  );
-  const mode = transcriptMode === "none" && isAccountProvider(session?.model?.provider) ? "account" : transcriptMode;
+  const telemetry = useContext(TelemetryQueryContext);
+  const spend = telemetry?.spend;
+  const mode = spend?.billing ?? "none";
   const [preferred, setPreferred] = useState<UsageView>("account");
   const active: UsageView = mode === "mixed" ? preferred : mode === "account" ? "account" : "api";
-  const apiUsage = useMemo<UsageTotals | undefined>(
-    () => (entries ? usageFromEntries(entries, "api", background) : undefined),
-    [background, entries],
-  );
-  const accountUsage = session?.accountUsage;
-  const partial = Boolean(history && (!history.complete || history.branchesUnloaded));
-  if (partial) return <Section title="Usage" icon={isAccountProvider(session?.model?.provider) ? Landmark : CircleDollarSign}>
-    {isAccountProvider(session?.model?.provider) ? <AccountUsage state={accountUsage} compact /> : <p className="text-xs leading-5 text-ink-2">Totals cover the messages loaded so far.</p>}
-  </Section>;
+  const apiUsage = spend?.api?.totals;
 
   return (
     <Section
@@ -332,13 +324,15 @@ function UsageSection() {
       signal={active === "api" && apiUsage ? <Badge variant="mono">{apiUsage.turns} turns</Badge> : undefined}
     >
       {mode === "mixed" ? <UsageTabs active={active} onChange={setPreferred} /> : null}
-      {active === "account" ? (
+      {mode === "none" ? (
+        <p className="text-xs leading-4 text-ink-3">No spend recorded. Totals appear after the first billed response.</p>
+      ) : active === "account" ? (
         <>
-          <AccountUsage state={accountUsage} compact />
+          <AccountUsage state={spend?.account} compact />
           <Button variant="link" size="sm" className="justify-start text-xs" onClick={() => workbench.open("settings", "usage")}>All usage details <ChevronRight className="rtl:-scale-x-100 size-3" /></Button>
         </>
       ) : (
-        <ApiUsage entries={entries} background={background} usage={apiUsage} />
+        <ApiUsage spend={spend} />
       )}
     </Section>
   );
@@ -365,24 +359,14 @@ function UsageTabs({ active, onChange }: { active: UsageView; onChange: (view: U
   );
 }
 
-function ApiUsage({
-  entries,
-  background,
-  usage,
-}: {
-  entries: readonly unknown[] | undefined;
-  background: readonly BackgroundUsageSource[];
-  usage: UsageTotals | undefined;
-}) {
-  const lines = useMemo(() => (entries ? usageByModel(entries, "api", background) : []), [background, entries]);
-  const series = useMemo(() => (entries ? spendSeries(entries, "api", background) : []), [background, entries]);
+function ApiUsage({ spend }: { spend: SessionTelemetry["spend"] }) {
+  const usage = spend?.api?.totals;
+  const lines = spend?.api?.byModel ?? [];
+  const series = spend?.api?.series ?? [];
   const lastTurn = series.length > 1 ? series[series.length - 1]! - series[series.length - 2]! : series[0];
   return (
     usage ? (
       <div className="flex flex-col gap-4">
-        {/* The cost meter and the spend chart (docs/ux-elements.md
-            "Observability" and "Structured output"), from API-billed usage
-            blocks Pi persists on the session file. */}
         <InstrumentCard>
           <CostMeter
             sessionCostUsd={usage.cost}
@@ -546,6 +530,7 @@ export function HistorySection() {
     const history = s.current ? s.open[s.current]?.history : undefined;
     return Boolean(history && (!history.complete || history.branchesUnloaded));
   });
+  const telemetry = useContext(TelemetryQueryContext);
   const { actions } = useLaserStable();
   const wholeTranscript = useWholeTranscriptRefusal();
   const meta = useSessionMeta();
@@ -587,10 +572,14 @@ export function HistorySection() {
                 <History className="size-3.5" aria-hidden="true" />
               </span>
               <span className="eyebrow">History</span>
-              {rows.length > 0 && (
+              {(telemetry?.history || rows.length > 0) && (
                 <span className="ms-auto flex items-center gap-1 font-mono text-xs text-ink-3 tnum">
                   <Clock3 className="size-3" aria-hidden="true" />
-                  {rows.length}{partial ? " loaded" : ""}
+                  {telemetry?.history
+                    ? rows.length < telemetry.history.records
+                      ? `${rows.length} of ${telemetry.history.records}`
+                      : String(telemetry.history.records)
+                    : `${rows.length}${partial ? " loaded" : ""}`}
                 </span>
               )}
             </button>
