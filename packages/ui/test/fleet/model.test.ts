@@ -124,12 +124,12 @@ describe("buildFleet", () => {
     for (const candidates of [[unwinding, waiting], [waiting, unwinding]]) {
       const groups = build({ sessions: [summary({ path: ROOT })], runs: byId(candidates, "runId"), currentPath: ROOT });
       const item = groups[0]!.items[0]!;
-      expect(item).toMatchObject({ kind: "agent", state: "running", tone: "live", terminal: false, activity: "Running bash", stop: { kind: "agent", runId: "run_old" }, run: unwinding });
+      expect(item).toMatchObject({ kind: "agent", state: "running", tone: "live", terminal: false, headline: { kind: "activity", verb: "Running", text: "bash" }, stop: { kind: "agent", runId: "run_old" }, run: unwinding });
       expect(groups[0]!.items).toHaveLength(1);
       expect(groups[0]).toMatchObject({ running: 1, needsYou: 0 });
     }
     const asking = { ...unwinding, status: "needs_input" as const, question: { id: "q", kind: "confirm" as const, title: "Overwrite?", askedAt: "2026-09-08T10:03:30.000Z" } };
-    expect(build({ sessions: [summary({ path: ROOT })], runs: byId([waiting, asking], "runId"), currentPath: ROOT })[0]!.items[0]).toMatchObject({ state: "needs_input", activity: "Overwrite?", run: asking });
+    expect(build({ sessions: [summary({ path: ROOT })], runs: byId([waiting, asking], "runId"), currentPath: ROOT })[0]!.items[0]).toMatchObject({ state: "needs_input", headline: { kind: "question", text: "Overwrite?" }, run: asking });
     // Once the old run has truly ended, the successor — queued or running — is the row.
     const ended = { ...unwinding, status: "completed" as const, endedAt: "2026-09-08T10:04:00.000Z", updatedAt: "2026-09-08T10:04:00.000Z", result: { status: "completed" as const, message: "First done." } };
     expect(build({ sessions: [summary({ path: ROOT })], runs: byId([ended, waiting], "runId"), currentPath: ROOT })[0]!.items[0]).toMatchObject({ state: "queued", terminal: false, run: waiting });
@@ -147,7 +147,7 @@ describe("buildFleet", () => {
     });
     const groups = build({ sessions: [summary({ path: ROOT }), summary({ path: "/p/child.jsonl" })], runs: byId([asking], "runId") });
     const item = groups[0]!.items[0]!;
-    expect(item).toMatchObject({ state: "needs_input", tone: "attention", own: "waiting_for_input", attention: "waiting_for_input", terminal: false, activity: "Drop the old table?" });
+    expect(item).toMatchObject({ state: "needs_input", tone: "attention", own: "waiting_for_input", attention: "waiting_for_input", terminal: false, headline: { kind: "question", text: "Drop the old table?" } });
     // Live: it can still be stopped, and its clock still runs.
     expect(item.stop).toEqual({ kind: "agent", runId: "r1" });
     expect(item.elapsedMs).toBe(5 * 60_000);
@@ -194,9 +194,9 @@ describe("buildFleet", () => {
     const items = flattenFleet(
       build({ sessions: [summary({ path: ROOT })], runs: byId([done, live], "runId"), tasks: byId([stopped], "id") })[0]!.items,
     );
-    expect(items.find((item) => item.key === "agent:/p/a.jsonl")?.activity).toBeUndefined();
-    expect(items.find((item) => item.key === "agent:/p/b.jsonl")?.activity).toBe("Reading the router");
-    expect(items.find((item) => item.kind === "task")?.activity).toBeUndefined();
+    expect(items.find((item) => item.key === "agent:/p/a.jsonl")?.headline).toBeUndefined();
+    expect(items.find((item) => item.key === "agent:/p/b.jsonl")?.headline).toMatchObject({ kind: "activity", text: "Reading the router" });
+    expect(items.find((item) => item.kind === "task")?.headline).toBeUndefined();
   });
 
   it("carries the reason a run ended, and a task's exit, rather than losing it", () => {

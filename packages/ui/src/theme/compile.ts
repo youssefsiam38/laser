@@ -87,6 +87,13 @@ export function resolveTokens(theme: Theme): Required<ThemeTokens> {
   const syntax = SYNTAX[base];
   const shadows = SHADOWS[base];
   const ansi = Object.fromEntries(ANSI.map((v, i) => [`ansi-${i}`, t[`ansi-${i as 0}`] ?? v])) as Record<`ansi-${0}`, string>;
+  const fleetScale = FLEET_AGENT_SCALE[base];
+  const fleetAgents = Object.fromEntries(
+    FLEET_AGENT_HUES.map((hue, index) => {
+      const token = `fleet-agent-${index}` as `fleet-agent-${0 | 1 | 2 | 3 | 4 | 5 | 6 | 7}`;
+      return [token, t[token] ?? oklch(fleetScale.lightness, fleetScale.chroma, hue)];
+    }),
+  ) as Record<`fleet-agent-${0 | 1 | 2 | 3 | 4 | 5 | 6 | 7}`, string>;
 
   return {
     bg: toHex(t.bg),
@@ -118,15 +125,8 @@ export function resolveTokens(theme: Theme): Required<ThemeTokens> {
     })),
     "shadow-float": t["shadow-float"] ?? shadows.float,
     "shadow-float-sm": t["shadow-float-sm"] ?? shadows.floatSm,
-    ...Object.fromEntries(FLEET_AGENT_HUES.map((hue, index) => {
-      const token = `fleet-agent-${index}` as `fleet-agent-${0 | 1 | 2 | 3 | 4 | 5 | 6 | 7}`;
-      return [token, t[token] ?? oklch(FLEET_AGENT_SCALE[base].lightness, FLEET_AGENT_SCALE[base].chroma, hue)];
-    })),
-    "on-fleet-agent": t["on-fleet-agent"] ?? pickOnColor(
-      t["fleet-agent-0"] ?? oklch(FLEET_AGENT_SCALE[base].lightness, FLEET_AGENT_SCALE[base].chroma, FLEET_AGENT_HUES[0]),
-      darkInk,
-      lightInk,
-    ),
+    ...fleetAgents,
+    "on-fleet-agent": on(fleetAgents["fleet-agent-0"], t["on-fleet-agent"]),
   } as Required<ThemeTokens>;
 }
 

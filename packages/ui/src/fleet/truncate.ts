@@ -55,7 +55,7 @@ export function shortModelName(id: string, name?: string): string {
   return last;
 }
 
-/** Two letters from an agent name: `worker` → `WK`, `code-reviewer` → `CR`. */
+/** Two letters from an agent name: `worker` → `WO`, `code-reviewer` → `CR`. */
 export function agentInitials(name: string): string {
   const words = name.replace(/[-_.]/g, " ").split(/\s+/).filter(Boolean);
   if (words.length >= 2) {

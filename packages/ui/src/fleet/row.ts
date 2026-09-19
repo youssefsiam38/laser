@@ -3,9 +3,9 @@
  * Line 2 is the work's own words — never the task brief. Line 3 is the
  * developer strip. Pure: no React.
  */
-import type { AgentRun, BackgroundTask, ModelRef } from "@lasercode/protocol";
+import type { AgentRun, BackgroundTask } from "@lasercode/protocol";
 
-import { clockTime, hue } from "../format.js";
+import { clockTime, formatBytes, hue } from "../format.js";
 import { agentInitials, firstSentence, isPathShaped, shortModelName } from "./truncate.js";
 
 export const FLEET_AGENT_TINT_COUNT = 8;
@@ -44,6 +44,22 @@ export type FleetStrip = FleetAgentStrip | FleetTaskStrip;
 
 export function headlineText(headline: FleetHeadline): string {
   return headline.verb ? `${headline.verb} ${headline.text}` : headline.text;
+}
+
+export function worktreeLabel(chip: FleetWorktreeChip): string {
+  return chip.kind === "branch" ? chip.branch : "shared checkout";
+}
+
+export function stripText(strip: FleetStrip): string {
+  if (strip.kind === "agent") {
+    const parts: string[] = [strip.agentName];
+    if (strip.model) parts.push(strip.model);
+    if (strip.turns !== undefined) parts.push(`${strip.turns}t`);
+    parts.push(worktreeLabel(strip.worktree));
+    return parts.join(" · ");
+  }
+  const byteLabel = strip.bytes === undefined ? undefined : formatBytes(strip.bytes);
+  return [strip.command, byteLabel, strip.clock].filter((part): part is string => Boolean(part)).join(" · ");
 }
 
 export function agentTintIndex(agentName: string): number {
@@ -88,14 +104,13 @@ export function taskHeadline(task: BackgroundTask, terminalReason: string | unde
   return undefined;
 }
 
-export function agentStrip(run: AgentRun | undefined, agentName: string, model: ModelRef | string | undefined | null): FleetAgentStrip {
-  const ref = typeof model === "string" ? undefined : (model ?? undefined);
-  const modelName = ref ? shortModelName(ref.id, ref.name) : typeof model === "string" ? shortModelName(model) : undefined;
+export function agentStrip(run: AgentRun | undefined, agentName: string): FleetAgentStrip {
+  const model = run?.model;
   const worktree: FleetWorktreeChip = run?.worktree ? { kind: "branch", branch: run.worktree.branch } : { kind: "shared" };
   return {
     kind: "agent",
     agentName,
-    model: modelName,
+    model: model ? shortModelName(model.id, model.name) : undefined,
     turns: run?.activity?.turns,
     worktree,
   };

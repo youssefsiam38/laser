@@ -28,7 +28,6 @@ import { sessionTitle } from "../runtime/threadList.js";
 import { viewFirstUserText } from "../view-summary.js";
 import type { SessionView } from "../store.js";
 import { samePresentationViews } from "../runtime/presentation-state.js";
-import { shortCwd } from "../format.js";
 import { agentHeadline, agentInitials, agentStrip, taskHeadline, taskStrip, type FleetHeadline, type FleetStrip } from "./row.js";
 
 export type FleetItemKind = "agent" | "task";
@@ -81,13 +80,6 @@ export interface FleetItem {
   /** This item's dot including everything beneath it. */
   attention: Attention;
   /**
-   * One line, the work's own words — the agent's activity, the task's last
-   * line. Only while the work is going: "Running complete_agent_run" on a run
-   * that finished a minute ago is the last true thing it said, and reading it
-   * as the present tense is worse than reading nothing.
-   */
-  activity: string | undefined;
-  /**
    * Line 2 of the collapsed row (leap §3 A.1). Never the task brief. Priority:
    * the question, live activity, a command's last line, the terminal reason,
    * the result's first sentence.
@@ -127,8 +119,6 @@ export interface FleetGroup {
   /** The top-level session. Its own row is the group header, not an item. */
   path: string;
   cwd: string;
-  /** Folder name of `cwd` — the project as secondary text on the header. */
-  project: string;
   title: string;
   /** Not open in this client: its work kept going without it. */
   orphaned: boolean;
@@ -199,7 +189,6 @@ function taskItem(task: BackgroundTask, depth: number, now: number): FleetItem {
     tone: state === "running" ? "live" : state === "failed" ? "danger" : "muted",
     own,
     attention: own,
-    activity: task.status === "running" ? task.activity : undefined,
     headline: taskHeadline(task, terminalReason),
     strip: taskStrip(task),
     initials: undefined,
@@ -242,10 +231,8 @@ function agentItem(node: AgentTreeNode, tasksOf: (path: string) => BackgroundTas
     tone: node.status === "idle" ? "muted" : node.status === "working" ? "live" : runStatusTone(node.status),
     own,
     attention: own,
-    // A question is what a paused run is "doing", and what the person can act on.
-    activity: node.ended ? undefined : run?.status === "needs_input" && run.question ? run.question.title : (run?.activity?.label ?? (run?.activity?.currentTool ? `Running ${run.activity.currentTool}` : undefined)),
     headline: agentHeadline(run, node.ended, terminalReason),
-    strip: agentStrip(run, agentName, run?.model),
+    strip: agentStrip(run, agentName),
     initials: agentInitials(agentName),
     terminalReason,
     startedAt: run?.startedAt,
@@ -346,7 +333,6 @@ export function buildFleet(input: FleetInput): FleetGroup[] {
     groups.push({
       path: rootPath,
       cwd: summary?.cwd ?? view?.state.cwd ?? runList.find((run) => run.rootSessionPath === rootPath)?.projectCwd ?? "",
-      project: shortCwd(summary?.cwd ?? view?.state.cwd ?? runList.find((run) => run.rootSessionPath === rootPath)?.projectCwd ?? ""),
       // A root the catalog cannot name is named the way the top bar names an
       // unscanned session — its name, else its first line — and a deleted one
       // with neither is "Unnamed session", not a file name: the header beside it

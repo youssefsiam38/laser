@@ -5,7 +5,7 @@
  */
 import { contrastRatio, hueDistance, hueOf, parseColor } from "./color.js";
 import { CONTRAST_TARGET, GROUND_TOKENS, TEXT_TOKENS, resolveTokens, scaledType } from "./compile.js";
-import { TEXT_FLOOR_PX, TEXT_SCALE, TYPE_SCALE, type TypeStep } from "./primitives.js";
+import { FLEET_AGENT_HUES, TEXT_FLOOR_PX, TEXT_SCALE, TYPE_SCALE, type TypeStep } from "./primitives.js";
 import type { Theme } from "./types.js";
 
 export const MIN_CONTRAST = CONTRAST_TARGET.normal;
@@ -93,6 +93,19 @@ export function checkTheme(theme: Theme): ThemeIssue[] {
     const h = hueOf(t[name]);
     if (h !== null && liveHue !== null && hueDistance(h, liveHue) < MIN_HUE_SEPARATION) {
       issues.push({ level: "warning", token: name, measured: round(hueDistance(h, liveHue)), message: `${name} sits within ${MIN_HUE_SEPARATION}° of live; the two states will look alike.` });
+    }
+  }
+
+  for (let i = 0; i < FLEET_AGENT_HUES.length; i++) {
+    const ground = `fleet-agent-${i}` as `fleet-agent-${0}`;
+    const ratio = contrastRatio(t["on-fleet-agent"], t[ground]);
+    if (ratio < MIN_CONTRAST) {
+      issues.push({
+        level: "error",
+        token: "on-fleet-agent",
+        measured: round(ratio),
+        message: `on-fleet-agent on ${ground} is ${round(ratio)}:1; initials need ${MIN_CONTRAST}:1.`,
+      });
     }
   }
 

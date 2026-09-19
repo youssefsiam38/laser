@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { BackgroundTask } from "@lasercode/protocol";
 
-import { DEFAULT_FLEET_FILTER, filterFleetSections, fleetFilterCounts } from "../../src/fleet/filter.js";
+import { DEFAULT_FLEET_FILTER, filterFleetSections, filterRevealing, fleetFilterCounts, fleetFilterIsRestricting } from "../../src/fleet/filter.js";
 import { buildFleet, flattenFleet, projectFleetSections } from "../../src/fleet/model.js";
 import { run, summary } from "../agents/fixtures.js";
 
@@ -99,4 +99,32 @@ describe("filterFleetSections", () => {
     expect(root.item.title).toBe("Explorer");
     expect(root.children[0]).toMatchObject({ contextOnly: false, item: { title: "vite" } });
   });
+});
+
+describe("filterRevealing", () => {
+  it("turns on the lifecycle flag that was hiding the target",
+    () => {
+      const going = flattenFleet(
+        filterFleetSections(sectionsOf(), DEFAULT_FLEET_FILTER).active.groups.flatMap((group) => group.items.map((item) => item.item)),
+      ).find((item) => item.title === "Explorer")!;
+      const next = filterRevealing({ lifecycle: { going: false, asking: true, ended: true }, kind: "all" }, going);
+      expect(next.lifecycle.going).toBe(true);
+      expect(next.kind).toBe("all");
+    },
+  );
+  it("clears a kind cut that would hide a command",
+    () => {
+      const command = flattenFleet(
+        filterFleetSections(sectionsOf(), DEFAULT_FLEET_FILTER).active.groups.flatMap((group) => group.items.map((item) => item.item)),
+      ).find((item) => item.kind === "task")!;
+      const next = filterRevealing({ lifecycle: { going: true, asking: true, ended: true }, kind: "agent" }, command);
+      expect(next.kind).toBe("all");
+    },
+  );
+  it("treats a kind-only cut as restricting",
+    () => {
+      expect(fleetFilterIsRestricting({ lifecycle: { going: true, asking: true, ended: true }, kind: "task" })).toBe(true);
+      expect(fleetFilterIsRestricting(DEFAULT_FLEET_FILTER)).toBe(false);
+    },
+  );
 });

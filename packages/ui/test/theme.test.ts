@@ -6,7 +6,7 @@ import { contrastRatio, hueDistance, hueOf, oklch, parseColor, raiseContrast } f
 import { CONTRAST_TARGET, GROUND_TOKENS, TEXT_TOKENS, compileTheme, compileVars, resolveTokens, scaledType } from "../src/theme/compile.js";
 import { checkTheme, isApplicable, separateAttention, MIN_HUE_SEPARATION } from "../src/theme/guard.js";
 import { DEFAULT_FONTS, fontEntry, fontStack } from "../src/theme/fonts.js";
-import { TEXT_FLOOR_PX, TEXT_SCALE, TYPE_SCALE, type TypeStep } from "../src/theme/primitives.js";
+import { FLEET_AGENT_HUES, TEXT_FLOOR_PX, TEXT_SCALE, TYPE_SCALE, type TypeStep } from "../src/theme/primitives.js";
 import { DEFAULT_LIGHT_PRESET_ID, DEFAULT_PRESET, LASER_BRAND, PRESETS, getPreset } from "../src/theme/presets.js";
 import type { Theme } from "../src/theme/types.js";
 
@@ -68,6 +68,10 @@ describe("every preset (T5: the default must be good, and so must the rest)", ()
           ["ok", "on-ok"],
         ] as const) {
           expect(contrastRatio(t[on], t[fill]), `${on} on ${fill}`).toBeGreaterThanOrEqual(4.5);
+        }
+        for (let i = 0; i < FLEET_AGENT_HUES.length; i++) {
+          const fill = `fleet-agent-${i}` as `fleet-agent-${0}`;
+          expect(contrastRatio(t["on-fleet-agent"], t[fill]), `on-fleet-agent on ${fill}`).toBeGreaterThanOrEqual(4.5);
         }
       });
       it("keeps attention away from the accent hue (T3)", () => {
@@ -145,6 +149,10 @@ describe("guard rails", () => {
   it("flags text that fails 4.5:1 on any ground", () => {
     const issues = checkTheme(broken({ "ink-3": "#555555" }));
     expect(issues.some((i) => i.level === "error" && i.token === "ink-3")).toBe(true);
+  });
+  it("flags on-fleet-agent that fails on a fleet-agent ground", () => {
+    const issues = checkTheme(broken({ "on-fleet-agent": "#777777", "fleet-agent-0": "#808080" }));
+    expect(issues.some((i) => i.level === "error" && i.token === "on-fleet-agent")).toBe(true);
   });
   it("refuses attention on the accent hue", () => {
     const issues = checkTheme(broken({ attention: DEFAULT_PRESET.tokens.live }));

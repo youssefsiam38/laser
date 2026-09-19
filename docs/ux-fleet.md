@@ -83,20 +83,36 @@ the toggle never reads as this session's when it is not.
 
 ## What a row says
 
-One row is one piece of work. Collapsed:
+Three lines in a 320px column (`docs/source-control-leap.md` §3 A.1). Collapsed:
 
 ```
-● explorer                 Working              4m 12s
-  Reading packages/ui/src/runtime/adapter.ts
+┌──┬─────────────────────────────────────────────┐
+│wk│ Serve images as references          18m 08s │  line 1: who, and how long
+│  │ ● Running vitest                             │  line 2: what is happening now
+│  │ worker · opus-5 · 251t · ⑂…6a5fb144         │  line 3: the developer strip
+└──┴─────────────────────────────────────────────┘
 ```
 
-- **the dot** — the five-word vocabulary from `DESIGN.md`, unchanged
-- **the name** — the subagent's name, or the command's first line
-- **the word** — its state; a task says `command` instead, because "running a
-  command" is what it is
-- **the line** — what it is doing in its own words, else why it ended, else
-  what it was asked to do. Never all three: this is a row, not a record.
+- **line 1** — the name (`subagentName`, or a command's shortened title) and
+  elapsed time, tabular, right-aligned. Kind is a shape: an agent is a rounded
+  tinted tile with initials; a command is a square terminal tile with a mono
+  title. Nothing else competes for this width.
+- **the dot** — the five-word vocabulary from `DESIGN.md`, unchanged. Attention
+  rolls up from children; the accessible name leads with this word so state is
+  not colour alone.
+- **line 2 — the work's own words, never the brief.** In priority order: the
+  question when `needs_input`; live `Running <tool>` / the activity label; a
+  command's last output line; the terminal reason; the result's first sentence.
+  A truncated copy of the task brief is forbidden.
+- **line 3 — the developer strip.** Agent: agent name · model short name ·
+  turns · worktree/branch chip (branch keeps its suffix; `worktree: null` says
+  shared checkout). Command: command · bytes · clock time. Token counts, an
+  output sparkline, and a pid wait on protocol fields the host does not expose.
 - **elapsed** — live while the work is, frozen once it ends
+
+`needs_input` rows carry **Open** then **Answer**. Enter never answers (the
+approval rule); clicking Answer opens the child's chat. Answer is omitted when
+this is already the chat being read, and when the session is gone.
 
 Expanded, in place: the task excerpt, the model, the worktree branch — or, for a child its parent did not isolate, the checkout it shares — the
 reason it ended, the result message, and, while a child is paused on a

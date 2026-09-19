@@ -69,3 +69,33 @@ No browser / Playwright / `scripts/browser-check` run.
 4. Filters and their counts at 320px, both themes.
 5. Worktree chip: long branch keeps the suffix; `worktree: null` says shared checkout.
 6. Group header: session title, project folder, counts.
+
+## Corrections
+
+Review findings against `9052cd45`, applied on this branch. Not a re-implementation.
+
+| ID | Fix |
+| --- | --- |
+| **F1** | Asking-row test now synthesises click only when `keydown` is not `defaultPrevented`. Asserts Enter on Answer is prevented and does not navigate or change `data-expanded`; click and Space do navigate; Enter/Space/click on the expand control toggle and never navigate. |
+| **F2** | Answer is gated like Open: omitted when `here`, omitted when the session is unreachable. |
+| **F3** | Group counts compact to `2 · 1 · 14` with the sentence in `aria-label`; header wraps and clips `overflow-x`. |
+| **F4** | Model and turns `min-w-0 truncate`; worktree chip `shrink-0` so the suffix survives. |
+| **F5** | Accessible name leads with the status-dot label. |
+| **F6** | `Hint` (tab-stop span) is no longer inside the row button. Truncated full text is a `ControlHint` on the button; the chip stays in the strip. |
+| **F7** | Kind chips are a real radiogroup (roving tabindex, arrows/Home/End), matching `reasoning-effort.tsx`. |
+| **F8** | Deleted unused `FleetItem.activity` and its inlined priority chain. |
+| **F9** | `stripText()` and `worktreeLabel()` in `fleet/row.ts`; JSX no longer re-joins the strip or spells `shared checkout`. |
+| **F10** | Filter state lifted to `fleet-state`, persisted as `DEVICE_KEYS.fleetFilter`, shared by panel and sheet. A reveal turns on the flags that would hide its target. |
+| **F11** | Restored labelled, counted **In progress** header (`FleetSectionHeader`), including on strays. |
+| **F12** | `docs/ux-fleet.md` “What a row says” is the three-line anatomy, citing leap §3 A.1. |
+| **Pressed** | Row button has `active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]`. Filter chips have `active:bg-surface-2`. |
+| **Nits** | `on()` compiles `--on-fleet-agent`; `checkTheme` pairs it with `--fleet-agent-*`. `agentStrip` takes `run?.model` only. Initials comment matches `WO`. Kind-only empty copy says the filter missed. `FleetGroup.project` collapsed to `shortCwd(cwd)` at the header. |
+
+Left as noted: `PATH_BUDGET` / `BRANCH_BUDGET` are still width-blind character cuts. No pid on command rows. No token counts or output sparkline.
+
+### F1 mutation evidence
+
+Command: `pnpm -F @lasercode/ui exec vitest run test/fleet/panel.test.tsx -t "Enter never answers"`
+
+1. **Guard deleted** (both `preventDefault` handlers on Answer): **fail** — `expected false to be true` at `answerEnter.defaultPrevented === true` (`panel.test.tsx` ~1079).
+2. **Guard restored**: **pass** (1 passed, 60 skipped).

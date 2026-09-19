@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { agentHeadline, headlineText, taskHeadline } from "../../src/fleet/row.js";
+import { agentHeadline, agentStrip, headlineText, stripText, taskHeadline, taskStrip, worktreeLabel } from "../../src/fleet/row.js";
 import { buildFleet, flattenFleet } from "../../src/fleet/model.js";
 import { run, summary } from "../agents/fixtures.js";
 import type { BackgroundTask } from "@lasercode/protocol";
@@ -64,6 +64,23 @@ describe("taskHeadline", () => {
       kind: "output",
       text: "ready in 412 ms",
     });
+  });
+});
+
+describe("stripText", () => {
+  it("joins the agent strip and spells shared checkout once", () => {
+    const strip = agentStrip(
+      run({ runId: "r1", sessionPath: "/p/a.jsonl", worktree: null, activity: { turns: 12, tools: 1, lastAt: "2026-09-08T10:04:00.000Z" } }),
+      "worker",
+    );
+    expect(worktreeLabel(strip.worktree)).toBe("shared checkout");
+    expect(stripText(strip)).toBe("worker · 12t · shared checkout");
+  });
+  it("joins a command strip without inventing a pid", () => {
+    const strip = taskStrip(task({ id: "t1", sessionPath: ROOT, outputBytes: 2048 }));
+    expect(stripText(strip)).toContain("pnpm -r test");
+    expect(stripText(strip)).toContain("KB");
+    expect(stripText(strip)).not.toMatch(/pid/i);
   });
 });
 

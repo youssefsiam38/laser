@@ -121,6 +121,30 @@ function walkActual(items: readonly FleetProjectedItem[], visit: (item: FleetIte
   }
 }
 
+export function sameFleetFilter(left: FleetFilter, right: FleetFilter): boolean {
+  return (
+    left.kind === right.kind &&
+    left.lifecycle.going === right.lifecycle.going &&
+    left.lifecycle.asking === right.lifecycle.asking &&
+    left.lifecycle.ended === right.lifecycle.ended
+  );
+}
+
+export function fleetFilterIsRestricting(filter: FleetFilter): boolean {
+  return !sameFleetFilter(filter, DEFAULT_FLEET_FILTER);
+}
+
+/** Turn on the flags a reveal needs so its target is not filtered out. */
+export function filterRevealing(filter: FleetFilter, item: FleetItem): FleetFilter {
+  if (itemMatchesFilter(item, filter)) return filter;
+  const lifecycle = { ...filter.lifecycle };
+  if (item.state === "needs_input") lifecycle.asking = true;
+  else if (item.terminal) lifecycle.ended = true;
+  else lifecycle.going = true;
+  const kind: FleetKindFilter = filter.kind === "all" || filter.kind === item.kind ? filter.kind : "all";
+  return { lifecycle, kind };
+}
+
 /** Counts for the chips: always the unfiltered tree, so a chip does not zero itself. */
 export function fleetFilterCounts(sections: FleetSections): FleetFilterCounts {
   const counts: FleetFilterCounts = { going: 0, asking: 0, ended: 0, agents: 0, commands: 0 };
