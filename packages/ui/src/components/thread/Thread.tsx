@@ -120,36 +120,40 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
           <FileOpenerProvider scope={path}>
           <ThreadPrimitive.Root ref={find.root} data-slot="thread" className="relative flex h-full min-h-0 flex-col bg-bg">
             {find.bar}
-            {/* One system adjusts this scroller: the transcript's virtualizer.
-                The browser's own scroll anchoring would fight it for the same
-                pixels on every prepend (D-303). */}
-            <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnRunStart={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} data-slot="thread-viewport" className="flex flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain [overflow-anchor:none]">
+            {/* The transcript is the thread's viewport: the list owns the
+                scroller, so there is no scrolling box around it to compete for
+                the same pixels (D-306). This column only stacks the map, the
+                list and the floating composer over each other. */}
+            <div data-slot="thread-column" className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
               <TranscriptViewportBinding />
               {/* A long transcript gets a rail of ticks at the viewport's edge, on a wide screen only. */}
               <ConversationMapAui side="right" className="hidden lg:block" />
-              <div className="mx-auto flex w-full max-w-(--measure-thread) flex-1 flex-col px-4 md:px-6">
+                {/* The list is full width so its scrollbar rides the window's
+                    edge; the conversation column lives inside each row. The
+                    loading skeleton that stands in for the list while it is
+                    empty takes that column here instead. */}
+                <div className="flex min-h-0 flex-1 flex-col [&>[data-slot=conversation-skeleton]]:mx-auto [&>[data-slot=conversation-skeleton]]:w-full [&>[data-slot=conversation-skeleton]]:max-w-(--measure-thread) [&>[data-slot=conversation-skeleton]]:px-4 md:[&>[data-slot=conversation-skeleton]]:px-6">
                 {/* A crashed worker is content: it is the answer to “why is
-                    nothing arriving”, and it now lives in the transcript's head
-                    item, so the loader must not stand in front of it. */}
+                    nothing arriving”, and it now lives in the transcript's
+                    header, so the loader must not stand in front of it. */}
                 <ConversationLoadingGate key={open.path} active={loading} hasContent={open.hasTranscript || loadError || !open.expectsTranscript || worker?.status === "crashed"}>
-                  {/* The welcome is for a conversation that has nothing in it —
-                      decided from the session (its view is hydrated and holds
-                      no history, or no session is open at all), never from the
-                      runtime's message list: for one frame after a switch the
-                      new runtime has no messages yet while the store already
-                      has the transcript, and that frame must not read as
-                      "new session". */}
-                  <AuiIf condition={(s) => s.thread.isEmpty}>
-                    {(open.phase === "idle" || (open.phase === "ready" && !open.expectsTranscript)) && (emptyState ?? <EmptyState />)}
-                  </AuiIf>
-                  {/* Everything above the conversation scrolls with it and is
-                      measured with it: the notices and the history controls are
-                      the transcript's head item, not chrome above the list, so
-                      one of them appearing or going is a size change the engine
-                      anchors through rather than a push nobody accounted for
-                      (M16-T87, D-303). Nothing above the transcript inside this
-                      scroller may change height. */}
-                  <WindowedMessages head={<>
+                  {/* Everything above the conversation is the list's header, so
+                      a notice appearing or going is a size change the list
+                      restores the reading position through, rather than a push
+                      nobody accounted for (M16-T91, D-306). Nothing that can
+                      change height renders above the list. */}
+                  <WindowedMessages
+                    /* The welcome is for a conversation that has nothing in it
+                       — decided from the session (its view is hydrated and
+                       holds no history, or no session is open at all), never
+                       from the runtime's message list: for one frame after a
+                       switch the new runtime has no messages yet while the
+                       store already has the transcript, and that frame must
+                       not read as "new session". */
+                    empty={<AuiIf condition={(s) => s.thread.isEmpty}>
+                      {(open.phase === "idle" || (open.phase === "ready" && !open.expectsTranscript)) && (emptyState ?? <EmptyState />)}
+                    </AuiIf>}
+                    head={<>
                     {cwd && (
                       <WorkerRecoveryNotice
                         className="mt-6"
@@ -170,9 +174,10 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
                     <HistoryControls key={path} />
                   </>} />
                 </ConversationLoadingGate>
+                </div>
                 <ThreadPrimitive.ViewportFooter
                   data-slot="thread-footer"
-                  className="sticky bottom-0 z-10 mt-auto flex flex-col gap-3 bg-bg pt-2 pb-[calc(var(--spacing)*4+max(env(safe-area-inset-bottom),var(--kb)))]"
+                  className="absolute inset-x-0 bottom-0 z-10 mx-auto flex w-full max-w-(--measure-thread) flex-col gap-3 bg-bg px-4 pt-2 pb-[calc(var(--spacing)*4+max(env(safe-area-inset-bottom),var(--kb)))] md:px-6"
                 >
                   <ScrollAnchor />
                   {/* Above the composer, in the order the eye reads them:
@@ -186,8 +191,7 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
                   <ThreadFollowupSuggestions />
                   <Composer />
                 </ThreadPrimitive.ViewportFooter>
-              </div>
-            </ThreadPrimitive.Viewport>
+            </div>
             {/* Native selection stays untouched. Quoting is the deliberate
                 Ctrl/Cmd+Shift+Q action scoped to this thread. */}
             <TranscriptQuoteShortcut thread={find.root} />

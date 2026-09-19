@@ -292,6 +292,30 @@ describe("a direct MCP tool row", () => {
     expect(container.querySelector('[aria-label="Copy image"]')).not.toBeNull();
   });
 
+  it("draws a served image as a reference tile rather than dropping it", async () => {
+    // A page serves every picture as a reference with no bytes (M16-T89), so
+    // the text projection every other block comes from has nothing to hand
+    // back for it. The row still has a picture, and it draws it the way the
+    // transcript draws every referenced picture: a tile that reads its own
+    // bytes back through `session/entry_range` (M16-T92).
+    const served = {
+      content: [
+        { type: "text", text: "### Result\n- Screenshot of viewport" },
+        {
+          type: "image", data: "", mimeType: "image/png",
+          ref: { entryId: "e9", component: { kind: "image", index: 0 }, mimeType: "image/png", totalBytes: 2_400_000, contentDigest: "sha256-1", width: 1280, height: 800 },
+        },
+      ],
+      details: { mode: "call", server: "playwright", tool: "browser_take_screenshot" },
+    };
+    const trigger = await render(toolProps("c9", "playwright_browser_take_screenshot", { fullPage: false }, served));
+    await expand(trigger);
+    expect(container.querySelector('[data-slot="mcp-served-images"]')).not.toBeNull();
+    expect(container.querySelectorAll('[data-slot="message-image-tile"]')).toHaveLength(1);
+    // The one thing a dropped picture looks like: nothing at all.
+    expect(container.querySelector('[data-slot="mcp-result"]')).not.toBeNull();
+  });
+
   it("keeps its live status while output is still arriving", async () => {
     // Partial output rides the UI-only artifact channel; `result` stays absent
     // until the call ends (AGENTS.md, live activity regression guards).

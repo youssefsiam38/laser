@@ -64,6 +64,13 @@ let restoreGeometry: (() => void) | undefined;
  * transcript. Everything above this — anchors, publication, the trim itself —
  * is the real thing.
  */
+/** The list's own container track: the box every row is positioned inside. */
+function track(): HTMLElement {
+  const content = container.querySelector<HTMLElement>(".legend-list-content-container");
+  return [...(content?.children ?? [])].find(node => (node as HTMLElement).style.height) as HTMLElement
+    ?? content as HTMLElement;
+}
+
 function stubGeometry(): () => void {
   const original = Element.prototype.getBoundingClientRect;
   Element.prototype.getBoundingClientRect = function rect(this: Element): DOMRect {
@@ -72,20 +79,22 @@ function stubGeometry(): () => void {
       return { x: 0, y: 0, top: 0, left: 0, right: 600, bottom: 900, width: 600, height: 900, toJSON: () => ({}) } as DOMRect;
     }
     const top = (node: number) => node - scrolled;
-    const messages = container.querySelector<HTMLElement>('[data-slot="thread-messages"]');
+    const messages = track();
     if (this === messages) {
       const height = Number.parseFloat(messages.style.height) || 0;
       return { x: 0, y: top(0), top: top(0), left: 0, right: 600, bottom: top(height), width: 600, height, toJSON: () => ({}) } as DOMRect;
     }
-    // The transcript positions its rows itself, so a row is where the
-    // transcript put it — its own inline `top` — and a row's height is the
-    // fixture's, whatever the model guessed. A trim must show up as a scroll
+    // The list positions its rows itself, so a row is where the list put it —
+    // the inline `top` of the container holding it — and a row's height is the
+    // fixture's, whatever the list guessed. A trim must show up as a scroll
     // compensation, never be hidden by renumbering.
-    const item = this.closest?.("[data-index]") as HTMLElement | null;
+    // Either the row itself, or the container the list positions it in:
+    // the list measures the container, the transcript reads the row.
+    const row = (this.closest?.("[data-window-message]") ?? this.querySelector?.("[data-window-message]")) as HTMLElement | null;
+    const item = row?.parentElement;
     if (!item) return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) } as DOMRect;
-    const height = item.dataset.windowMessage ? ROW : 0;
     const start = top(Number.parseFloat(item.style.top) || 0);
-    return { x: 0, y: start, top: start, left: 0, right: 600, bottom: start + height, width: 600, height, toJSON: () => ({}) } as DOMRect;
+    return { x: 0, y: start, top: start, left: 0, right: 600, bottom: start + ROW, width: 600, height: ROW, toJSON: () => ({}) } as DOMRect;
   };
   return () => { Element.prototype.getBoundingClientRect = original; };
 }
@@ -141,7 +150,13 @@ function hydrateThrough(store: ReturnType<typeof createStateStore>, cache: Retur
   }
 }
 
-const rowIds = (): string[] => [...container.querySelectorAll("[data-message-id]")].map(node => (node as HTMLElement).dataset.messageId!);
+// In the order the person sees them: the list sorts its own containers back
+// into index order on a debounce, so the DOM's order is not the reading order
+// between one change and the next.
+const rowIds = (): string[] => [...container.querySelectorAll("[data-message-id]")]
+  .map(node => ({ id: (node as HTMLElement).dataset.messageId!, top: node.getBoundingClientRect().top }))
+  .sort((a, b) => a.top - b.top)
+  .map(row => row.id);
 const rowOf = (id: string): HTMLElement | null => container.querySelector(`[data-message-id="${id}"]`);
 
 /** The mounted surface: the real store, viewport, presentation and transcript. */
@@ -160,11 +175,11 @@ async function mount(store: ReturnType<typeof createStateStore>, presentation: T
       <AssistantRuntimeProvider runtime={runtime}>
         <FileOpenerProvider>
           <ThreadPrimitive.Root>
-            <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnRunStart={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} data-slot="thread-viewport">
+            <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnRunStart={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false}>
               <TranscriptViewportBinding />
-              {/* The controls are the head item's content, exactly as the app
-                  mounts them: chrome above the list would be a scroll margin
-                  the engine cannot anchor through (M16-T87). */}
+              {/* The controls are the list's header, exactly as the app
+                  mounts them: chrome above the list is the one thing that
+                  pushes a reader by its own height (M16-T91). */}
               <WindowedMessages head={<HistoryControls />} />
             </ThreadPrimitive.Viewport>
           </ThreadPrimitive.Root>
@@ -187,7 +202,7 @@ async function mount(store: ReturnType<typeof createStateStore>, presentation: T
   // pixels, the range is whatever the transcript rendered, and a write to
   // `scrollTop` is clamped and reported like a browser's.
   const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]')!;
-  const content = () => Number.parseFloat(container.querySelector<HTMLElement>('[data-slot="thread-messages"]')?.style.height ?? "0") || 0;
+  const content = () => Number.parseFloat(track()?.style.height ?? "0") || 0;
   Object.defineProperties(viewport, {
     clientHeight: { value: 900, configurable: true },
     scrollHeight: { get: content, configurable: true },
@@ -252,13 +267,13 @@ describe("a trim while somebody is reading", () => {
       expect(exposed).toHaveLength(1);
       expect(exposed[0]!.textContent).toBe("Loading earlier messages");
       expect(exposed[0]!.classList.contains("sr-only")).toBe(true);
-      expect(container.querySelector('[data-slot="thread-messages"]')!.getAttribute("aria-busy")).toBe("true");
+      expect(container.querySelector('[data-slot="thread-viewport"]')!.getAttribute("aria-busy")).toBe("true");
       // Nothing visible says so: no card, no copy in the transcript region.
       // The explicit control is the one exception and always was — it is the
       // button the person pressed, and it lives in the head item with the
       // rest of what stands above the conversation.
       expect(container.querySelector('[data-slot="history-reserve-loading"]')).toBeNull();
-      const visibleCopy = [...container.querySelectorAll('[data-slot="thread-messages"] *')]
+      const visibleCopy = [...container.querySelectorAll('[data-slot="thread-viewport"] *')]
         .filter(node => node.childElementCount === 0 && /loading/i.test(node.textContent ?? "") && !node.closest(".sr-only") && !node.closest("button"));
       expect(visibleCopy).toHaveLength(0);
       // The overdue mark appears only past one slow motion step, only while
@@ -272,7 +287,7 @@ describe("a trim while somebody is reading", () => {
       expect(indicator!.textContent?.trim()).toBe("");
       await act(async () => { settle(false); await Promise.resolve(); await Promise.resolve(); });
       expect(container.querySelector('[data-slot="history-reserve-indicator"]')).toBeNull();
-      expect(container.querySelector('[data-slot="thread-messages"]')!.getAttribute("aria-busy")).toBeNull();
+      expect(container.querySelector('[data-slot="thread-viewport"]')!.getAttribute("aria-busy")).toBeNull();
     } finally { vi.useRealTimers(); }
   });
 

@@ -40,6 +40,36 @@ export interface EntryStub {
 const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 
+/**
+ * The image components of this record whose bytes are already somewhere else.
+ *
+ * A page serves every `image` part as a reference and no bytes at all (M16-T89,
+ * `docs/transcript-parity.md` §1), so the size such a part reports is the size
+ * of a picture this view was never asked to hold. Letting it decide retention
+ * would be the rule the wire deleted, living on one layer up: it would stub
+ * every real screenshot, and a stub carries neither the media type nor the
+ * intrinsic size, which is the one path by which a box can be reserved before
+ * a byte arrives.
+ *
+ * The test is the reference itself, not where the record came from: a record
+ * that arrived whole — a live `session/update`, the legacy whole-transcript
+ * read — carries its bytes inline and is still bounded by them.
+ */
+function referencedImages(entry: unknown): Set<number> {
+  const content = record(record(entry).message).content;
+  const referenced = new Set<number>();
+  if (!Array.isArray(content)) return referenced;
+  let index = 0;
+  for (const part of content) {
+    const row = record(part);
+    if (row.type !== "image") continue;
+    const reference = record(row.ref);
+    if (typeof reference.entryId === "string" && typeof reference.totalBytes === "number") referenced.add(index);
+    index += 1;
+  }
+  return referenced;
+}
+
 const timestampOf = (value: Record<string, unknown>): string | undefined => {
   const at = value.timestamp ?? record(value.message).timestamp;
   return typeof at === "string" ? at : undefined;
@@ -105,8 +135,14 @@ export function retainEntries(entries: readonly unknown[], maxBytes = BODY_EXCER
     // Sizes, not bodies: classifying a twelve-megabyte structured result must
     // not build the twelve-megabyte projection of it first (RP-5b §3.2).
     const bodies = entryBodyMetadata(entry, { retainUserTextUpTo: maxBytes });
+    const referenced = referencedImages(entry);
     let oversized = false;
     for (const body of bodies) {
+      // A picture the page already turned into a reference weighs nothing
+      // here, whatever it weighs on disk: the record is genuinely small, and
+      // keeping it is what lets the reference — its media type, its digest and
+      // its intrinsic size — reach the row that draws it.
+      if (body.component.kind === "image" && referenced.has(body.component.index ?? 0)) continue;
       if (body.totalBytes > maxBytes) { oversized = true; break; }
     }
     if (!oversized) { kept.push(entry); continue; }

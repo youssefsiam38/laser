@@ -1,13 +1,13 @@
-import { ThreadPrimitive, useThreadViewport, unstable_useThreadMessageIds } from "@assistant-ui/react";
-import { defaultRangeExtractor, elementScroll, observeElementRect, useVirtualizer, type Range, type Rect, type Virtualizer } from "@tanstack/react-virtual";
-import { createContext, memo, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { ThreadPrimitive, useAuiState, useThreadViewport, useThreadViewportStore, unstable_useThreadMessageIds } from "@assistant-ui/react";
+import { LegendList, type LegendListRef, type MaintainScrollAtEndOptions } from "@legendapp/list/react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
 import { useLaserState, visibleSessionPath } from "@/runtime";
 import { activityDetailLevel } from "@/runtime/sessionPreferences";
-import { motionMs } from "@/motion";
+import { motionMs, prefersReducedMotion } from "@/motion";
 import { clearAnchoredMessages, setAnchoredMessages, setAtLiveEdge, setStandingRows } from "@/runtime/anchored-messages";
 import { ThreadMessage } from "./messages.js";
 import { HistoryReserve } from "./history-reserve-view.js";
-import { HistoryPlaceholder, PLACEHOLDER_TURN_HEIGHT } from "./history-reserve.js";
+import { HistoryPlaceholder } from "./history-reserve.js";
 
 export interface TranscriptTarget { messageId: string; toolCallId?: string; leafId?: string | null }
 export interface LocateOptions {
@@ -21,100 +21,62 @@ export type LocateResult = "visible" | "cancelled" | "missing";
 type Anchor = { messageId: string; offset: number };
 type Place = { anchor?: Anchor; following: boolean };
 
-/**
- * The transcript's item list is the head item followed by one item per
- * message, so index 0 is always the head and message `i` is always item
- * `i + 1`.
- *
- * The head carries the history controls and the unloaded-history placeholder.
- * It is an item rather than content above the list for two reasons: the
- * virtualizer measures it and anchors through it like any other row, so the
- * controls appearing or the placeholder shrinking moves nobody; and a list
- * whose first key never changes lets the engine detect every prepend, trim and
- * replacement from the item count alone.
- */
-const HEAD_INDEX = 0;
-const ITEM_OFFSET = 1;
-const HEAD_KEY = "\u0000head";
-/** Rows kept mounted on each side of the reading window. */
-const OVERSCAN = 4;
 /** How close to the newest message still counts as being at the live edge. */
 const LIVE_EDGE = 4;
 /** A row nobody has measured yet, before the type scale is known. */
 const DEFAULT_ROW_ESTIMATE = 150;
-/** What the head is worth before it is measured: the controls and its turns. */
-const HEAD_CONTROLS_ESTIMATE = 48;
 /** A destination gives up rather than chasing a layout that will not settle. */
 const LOCATE_FRAME_BUDGET = 180;
+/** Commits an opening conversation may take to land on its newest turn. */
+const LATEST_ATTEMPTS = 60;
+/** How far from the end the list still keeps following, in screens. */
+const FOLLOW_THRESHOLD = 1;
+/** Frames a fold may take to change a row's height before the hold lapses. */
+const DISCLOSURE_FRAME_BUDGET = 12;
 const COMPONENTS = { Message: ThreadMessage };
 
 /**
- * Measure a row the way the browser sees it. The engine's own default reads
- * `offsetHeight`, which is rounded to whole pixels only on the asynchronous
- * path and skips a synchronous read entirely; a transcript needs the size in
- * the commit that mounted the row — that is the commit whose scroll position
- * depends on it — so this reads the box directly and rounds both paths the
- * same way, leaving no sub-pixel difference between a first measurement and
- * the one the `ResizeObserver` delivers for the identical layout.
+ * Live follow, as the list performs it.
+ *
+ * `footerLayout: false` is the load-bearing one: the composer's inset is a
+ * spacer at the end of the list, and a composer that grows a line must not
+ * move a message the person is looking at. Everything else that can add
+ * content at the end — a turn arriving, a row growing, the window resizing —
+ * still keeps the newest turn pinned.
  */
-function measureRow(element: Element, entry: ResizeObserverEntry | undefined): number {
-  const box = entry?.borderBoxSize?.[0];
-  if (box) return Math.round(box.blockSize);
-  return Math.round(element.getBoundingClientRect().height);
-}
-
+const FOLLOW_INSTANT = {
+  animated: false,
+  on: { dataChange: true, footerLayout: false, itemLayout: true, layout: true },
+} as const satisfies MaintainScrollAtEndOptions;
 /**
- * The scroller's size, with one substitution: a scroller that reports no
- * height at all is not a window onto nothing. It is a surface the browser has
- * not laid out yet, or one in a hidden tab, and a transcript that mounted no
- * rows there would have nothing for Find, a deep link or a screen reader to
- * reach when it comes back. The window's own height stands in until the
- * element has one.
+ * Streamed text lands a paragraph at a time, and a smooth follow turns each
+ * landing into a short glide instead of a jump. Session switches and layout
+ * settles keep the instant variant, so nothing visibly travels; reduced
+ * motion keeps it too, and loses only the movement.
  */
-function observeReadingWindow(instance: Virtualizer<HTMLElement, HTMLElement>, cb: (rect: Rect) => void) {
-  return observeElementRect(instance, rect => cb({ width: rect.width, height: rect.height || (typeof window === "undefined" ? 0 : window.innerHeight) }));
-}
-
-/**
- * Every scroll position this transcript ever writes passes through here — the
- * engine's anchoring and Laser's own explicit destinations alike — so the
- * browser acceptance harness can attribute each one to the code that asked
- * for it. Read-only: the harness sets the array, nothing here reads it back.
- */
-function writeScroll(offset: number, options: { adjustments?: number; behavior?: ScrollBehavior }, instance: Virtualizer<HTMLElement, HTMLElement>) {
-  const trace = (globalThis as { __laserScrollTrace?: unknown[] }).__laserScrollTrace;
-  if (Array.isArray(trace)) {
-    trace.push({
-      at: performance.now(),
-      from: instance.scrollElement?.scrollTop ?? 0,
-      to: offset + (options.adjustments ?? 0),
-      adjustment: options.adjustments ?? 0,
-      stack: new Error().stack,
-    });
-  }
-  elementScroll(offset, options, instance);
-}
+const FOLLOW_ANIMATED = { ...FOLLOW_INSTANT, animated: true } as const satisfies MaintainScrollAtEndOptions;
 
 /**
  * One instance per rendered thread scope.
  *
  * It owns what is Laser's: which conversation is on screen, which rows are
  * pinned open, where a destination is going, how much unloaded history stands
- * above the loaded rows, and what this surface is standing on. It owns no
- * geometry. The mounted range and every scroll adjustment that follows a data
- * or measurement change belong to one engine (`@tanstack/react-virtual`,
- * D-303), and the only `scrollTop` writes are that engine's own — either its
- * anchoring, or an explicit person/destination intent routed through
- * `scrollToIndex`/`scrollToOffset`.
+ * above the loaded rows, and whether the person is reading history or riding
+ * the live edge. It owns no geometry. Which rows are mounted, where each one
+ * sits, and every scroll adjustment that follows a prepend, a trim or a row
+ * changing size belong to `@legendapp/list` (D-306), whose
+ * `maintainVisibleContentPosition` refuses to move content above the reader
+ * rather than correcting it afterwards. The only scroll positions written
+ * from here are explicit person/destination intents, through the list's own
+ * `scrollToIndex`/`scrollToOffset`/`scrollToEnd`.
  */
 export class TranscriptViewport {
   path = "";
   ids: readonly string[] = [];
   positions = new Map<string, number>();
+  /** The scroller: the list's own element, which this surface never styles by hand. */
   viewport: HTMLElement | undefined;
-  content: HTMLElement | undefined;
-  /** The engine, for as long as a transcript is mounted on this surface. */
-  private engine: Virtualizer<HTMLElement, HTMLElement> | undefined;
+  private list: LegendListRef | undefined;
   private listeners = new Set<() => void>();
   private revision = 0;
   private nodes = new Map<string, HTMLElement>();
@@ -124,7 +86,9 @@ export class TranscriptViewport {
   private focused: string | undefined;
   private target: TranscriptTarget | undefined;
   private place: Place = { following: true };
-  /** Unloaded earlier history, as placeholder turns the engine measures. */
+  /** The person moved the view themselves since the last reading sample. */
+  private gestured = false;
+  /** Unloaded earlier history, as placeholder turns inside the list's header. */
   private placeholder = new HistoryPlaceholder();
   private historyUserOffset = 0;
   private historyBefore: string | undefined;
@@ -132,10 +96,12 @@ export class TranscriptViewport {
   private prepended = false;
   private estimate = DEFAULT_ROW_ESTIMATE;
   private typeSignature = "";
-  /** Where the transcript starts inside the scroller. */
-  private margin = 0;
+  /** The row a disclosure toggle named, while that toggle settles. */
+  private disclosure: string | undefined;
+  private disclosureFrames: number[] = [];
   /** This surface owes the live edge one placement: a session just opened. */
   private pendingLatest = false;
+  private attempts = 0;
   private leafId: string | null | undefined;
   private intent = 0;
   private controlIntent = 0;
@@ -146,6 +112,8 @@ export class TranscriptViewport {
   private frame = 0;
   private publishing = 0;
   private disposed = false;
+  /** What a row of each kind has measured, so an unmeasured one guesses better. */
+  private types = new Map<string, string>();
 
   getSnapshot = () => this.revision;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -180,87 +148,103 @@ export class TranscriptViewport {
     setAtLiveEdge(this.path, this.place.following === true);
   }
 
-  // ── What the engine asks this controller ──────────────────────────────
-  // Every one of these is a stable bound method: the engine memoises its
-  // measurements on the identity of `getItemKey`, so a new closure per render
-  // would rebuild the whole list on every commit.
+  // ── What the list asks this controller ────────────────────────────────
+  // Stable bound methods: the list memoises on their identity, so a new
+  // closure per render would rebuild the whole list on every commit.
 
-  get itemCount() { return this.ids.length + ITEM_OFFSET; }
-  getScrollElement = () => this.viewport ?? null;
-  itemKey = (index: number) => (index === HEAD_INDEX ? `${this.path}${HEAD_KEY}` : `${this.path}\u0000${this.ids[index - ITEM_OFFSET] ?? index}`);
+  key = (id: string) => id;
   /**
-   * What a row nobody has mounted is worth. The engine's measurement memo is
-   * keyed on count, padding, margin, `getItemKey`, lanes and gap — not on this
-   * function's answer — so a change to the estimate (a type scale, a width, a
-   * detail level) reaches never-measured rows when something else invalidates
-   * the layout, not at the moment it changes. It self-heals: a font change
-   * resizes every mounted row, and each of those measurements rebuilds the
-   * layout. The head is always mounted, so its estimate only ever matters for
-   * the first paint.
+   * A row's kind, for the list's per-kind size averages. A row that has never
+   * been mounted has no kind yet and takes the list's overall average, which
+   * is the honest answer: nothing here knows a message's role before the
+   * message renders itself.
    */
-  estimateSize = (index: number) => (index === HEAD_INDEX ? HEAD_CONTROLS_ESTIMATE + this.placeholder.turns * PLACEHOLDER_TURN_HEIGHT : this.estimate);
-  measureItem = (element: Element, entry: ResizeObserverEntry | undefined) => measureRow(element, entry);
+  itemType = (id: string) => this.types.get(id) ?? "message";
+  noteType(id: string, type: string) { if (this.types.get(id) !== type) this.types.set(id, type); }
+  get estimatedItemSize() { return this.estimate; }
   /**
-   * The mounted window: what the engine's own range says, plus the head and
-   * every row a surface is holding open — an edit, an expanded request, the
-   * focused row, a destination on its way, and a native selection, which stays
-   * whole because the browser owns it and a released row would truncate it.
+   * Rows pinned open by a surface that is not the reading window: an edit, an
+   * expanded request, a question. Nothing about them is a scroll, so the list
+   * has no reason of its own to look at the data again — this is the set whose
+   * change asks it to.
    */
-  get rangeExtractor() { return this.extractor; }
-  /**
-   * Rebuilt whenever the held rows change. The engine memoises the mounted
-   * window on this function's identity, so a new pin on the same scroll
-   * position would otherwise never reach it.
-   */
-  private held() { this.extractor = (range: Range) => this.extractRange(range); }
-  private extractor = (range: Range) => this.extractRange(range);
-  private extractRange = (range: Range) => {
-    const indexes = new Set<number>(defaultRangeExtractor(range));
-    indexes.add(HEAD_INDEX);
-    const add = (id: string | undefined) => {
-      const index = id === undefined ? undefined : this.positions.get(id);
-      if (index !== undefined) indexes.add(index + ITEM_OFFSET);
-    };
-    for (const id of this.pins.keys()) add(id);
-    add(this.focused);
-    add(this.target?.messageId);
+  get pinnedKeys(): string[] {
+    return [...this.pins.keys()].filter(id => this.positions.has(id));
+  }
+  /** Rows a surface is holding open, which the list keeps mounted wherever they are. */
+  get heldKeys(): string[] {
+    const keys = new Set<string>();
+    for (const id of this.pins.keys()) keys.add(id);
+    if (this.focused) keys.add(this.focused);
+    if (this.target) keys.add(this.target.messageId);
     if (this.selected) {
       const a = this.positions.get(this.selected[0]), b = this.positions.get(this.selected[1]);
-      if (a !== undefined && b !== undefined) for (let i = Math.min(a, b); i <= Math.max(a, b); i++) indexes.add(i + ITEM_OFFSET);
+      if (a !== undefined && b !== undefined) for (let i = Math.min(a, b); i <= Math.max(a, b); i++) { const id = this.ids[i]; if (id) keys.add(id); }
     }
-    return [...indexes].filter(index => index >= 0 && index < range.count).sort((a, b) => a - b);
-  };
-  /** The engine, while a transcript is mounted. Set from its own render. */
-  bind(engine: Virtualizer<HTMLElement, HTMLElement> | undefined) {
-    this.engine = engine;
-    if (engine) engine.shouldAdjustScrollPositionOnItemSizeChange = this.holdsReadingPosition;
+    return [...keys].filter(id => this.positions.has(id));
   }
-
   /**
-   * Whether a measurement that changed an item's height moves the reading
-   * position with it. One rule, and it is Laser's from M16-T85: content that
-   * ends at or above where the person is reading moves them by exactly what it
-   * changed; content they can see does not.
+   * Whether a row that changed size restores the reading position.
    *
-   * The engine's own default adds a direction guard — it declines to
-   * compensate a re-measurement while the reader is travelling upwards, so
-   * that a row growing at its bottom cannot drag the viewport. That guard is
-   * unnecessary here because a row spanning the reading line is already
-   * excluded, and it is harmful here because the placeholder for unloaded
-   * history shrinks precisely while somebody reads upwards.
+   * Always, except while a disclosure toggle is settling: there the person
+   * clicked one row, and that row — not whichever row happens to be under the
+   * reading position — is the one that must not move.
    */
-  private holdsReadingPosition = (item: { key: string | number | bigint; start: number; end: number }, _delta: number, engine: Virtualizer<HTMLElement, HTMLElement>) => {
-    const offset = (engine.scrollOffset ?? 0) + engine.scrollAdjustments;
-    // Nothing has ever measured this item: the whole estimated block was
-    // above the reading position, so the correction belongs to it as a whole.
-    if (!engine.itemSizeCache.has(item.key)) return item.start < offset;
-    // `item.end` is the measurement this pass was built from. The engine
-    // computes the same quantity as `start + (itemSizeCache.get(key) ?? size)`;
-    // the two differ only for an item that resized twice before a measurement
-    // rebuild, and the pass's own geometry is the one the person is looking at.
-    return item.end <= offset + 0.5;
+  shouldRestorePosition = (id: string) => this.disclosure === undefined || id === this.disclosure;
+  /**
+   * The position policy, built once: the list memoises on this object's
+   * identity, and a new one per render would reset what it is holding.
+   */
+  readonly maintainPosition = { data: true, size: true, shouldRestorePosition: (id: string) => this.shouldRestorePosition(id) };
+  /**
+   * The same policy while a fold the person clicked is settling. Size
+   * anchoring is what restores "the first row whose top is on screen", and
+   * that is the wrong row here: the right one is the row they clicked, which
+   * keeps its own top by nobody moving anything. Prepends still anchor, so a
+   * page arriving in the same two frames is still held.
+   */
+  readonly maintainPositionThroughDisclosure = { data: true, size: false, shouldRestorePosition: (id: string) => this.shouldRestorePosition(id) };
+  get positionPolicy() { return this.disclosure === undefined ? this.maintainPosition : this.maintainPositionThroughDisclosure; }
+  /**
+   * The list scrolled, or a row changed size. Neither is intent — the list's
+   * own position keeping arrives here too — so all this does is re-read where
+   * the reader now is, once per frame.
+   */
+  onListScroll = () => { this.scheduleSample(); };
+  onItemSizeChanged = (info: { itemKey: string }) => {
+    // The fold the person clicked has measured. One more frame covers the
+    // browser's own deferred shrink, and then the row is an ordinary row
+    // again.
+    if (info.itemKey === this.disclosure) this.releaseDisclosure();
+    this.scheduleSample();
   };
-  get scrollMargin() { return this.margin; }
+  private scheduleSample() {
+    if (this.frame || this.disposed) return;
+    this.frame = requestAnimationFrame(() => {
+      this.frame = 0;
+      if (this.disposed) return;
+      const before = this.place;
+      this.capture();
+      if (before.following !== this.place.following || before.anchor?.messageId !== this.place.anchor?.messageId) this.publishAnchors();
+      else this.publishSoon();
+    });
+  }
+  /** How the list follows the newest turn, or that it must not right now. */
+  followMode(streaming: boolean): MaintainScrollAtEndOptions | false {
+    if (!this.place.following || this.target || this.disclosure !== undefined) return false;
+    return streaming && !prefersReducedMotion() ? FOLLOW_ANIMATED : FOLLOW_INSTANT;
+  }
+  bindList(list: LegendListRef | undefined) { this.list = list; }
+  setViewport(node: HTMLElement | undefined) {
+    if (this.viewport === node) return;
+    this.viewport = node;
+    this.publishSoon();
+  }
+  /** The list's content container: what a native selection spans. */
+  get content(): HTMLElement | undefined {
+    return this.viewport?.firstElementChild instanceof HTMLElement ? this.viewport.firstElementChild : undefined;
+  }
+  get atLiveEdge() { return this.place.following; }
   get placeholderTurns() { return this.placeholder.turns; }
 
   // ── The conversation on screen ────────────────────────────────────────
@@ -270,9 +254,9 @@ export class TranscriptViewport {
     // The same conversation, whatever else changed about it. A re-read of the
     // session's recent tail is not a reason to take the person back to the
     // latest turn: an authoritative page replacing what this device painted is
-    // the same conversation, and the engine keeps them on the row they are
+    // the same conversation, and the list keeps them on the row they are
     // reading (RP-11). Somebody who *was* at the live edge stays there,
-    // because the replacement is an append at the end and the engine follows it.
+    // because the replacement is an append at the end and the list follows it.
     if (this.path === path) return;
     this.cancel();
     if (this.path) clearAnchoredMessages(this.path);
@@ -282,6 +266,7 @@ export class TranscriptViewport {
     this.nodes.clear();
     this.rowRefs.clear();
     this.pins.clear();
+    this.types.clear();
     this.selected = undefined;
     this.focused = undefined;
     this.placeholder.reset();
@@ -289,10 +274,12 @@ export class TranscriptViewport {
     this.historyBefore = undefined;
     this.prepended = false;
     this.pages = 0;
-    // A conversation opens at its newest turn. The engine cannot know that:
-    // to it this is a list that grew from nothing, so the placement is an
+    // A conversation opens at its newest turn. The list cannot know that: to
+    // it this is a list that grew from nothing, so the placement is an
     // explicit intent, made once, in the commit that has the rows.
     this.place = { following: true };
+    this.gestured = false;
+    this.attempts = 0;
     this.pendingLatest = Boolean(path);
     this.publishAnchors();
   }
@@ -307,6 +294,7 @@ export class TranscriptViewport {
     // says its remaining count is.
     if (previous.length && (this.positions.get(previous[0]!) ?? 0) > 0) this.prepended = true;
     for (const id of this.rowRefs.keys()) if (!this.positions.has(id)) this.rowRefs.delete(id);
+    for (const id of this.types.keys()) if (!this.positions.has(id)) this.types.delete(id);
     // A branch replacement cancels a pending destination; appends and
     // prepends do not.
     if (previous.length && previous.some(id => !this.positions.has(id))) this.cancel("structure");
@@ -347,6 +335,13 @@ export class TranscriptViewport {
     });
   }
 
+  /** The placeholder region's box on screen, while it has one. */
+  private reserveRect(): DOMRect | undefined {
+    if (this.placeholder.turns <= 0) return undefined;
+    const region = this.content?.querySelector('[data-slot="history-reserve"]');
+    return region ? region.getBoundingClientRect() : undefined;
+  }
+
   /**
    * How many placeholder turns the region may not give up, because they are
    * the ones the person is looking at.
@@ -356,9 +351,7 @@ export class TranscriptViewport {
    * when they are on screen: a row would appear in front of somebody who has
    * not reached it yet. So while the reading position is inside the region,
    * only the turns below the fold are given back, and the rest follow as the
-   * person reads past them. Outside the region there is nothing to protect:
-   * the whole of it is above the reading position and the engine moves them
-   * with it.
+   * person reads past them.
    *
    * This reads the layout from inside a render, which looks like a mistake and
    * is not: the model has already moved on to the page that arrived, so the
@@ -367,15 +360,12 @@ export class TranscriptViewport {
    * one per frame.
    */
   private turnsInFrontOfTheReader(): number {
-    const viewport = this.viewport;
-    const region = this.content?.querySelector('[data-slot="history-reserve"]');
-    if (!viewport || !region || this.placeholder.turns <= 0) return 0;
-    // Measured from the layout on screen, not from the model: the model can
-    // already have moved on, and what must not change is what the person is
-    // looking at.
-    const rect = region.getBoundingClientRect(), view = viewport.getBoundingClientRect();
+    const viewport = this.viewport, rect = this.reserveRect();
+    if (!viewport || !rect) return 0;
+    const view = viewport.getBoundingClientRect();
     if (rect.bottom <= view.top + 0.5) return 0;
-    return Math.max(0, Math.min(this.placeholder.turns, Math.ceil((view.bottom - rect.top) / PLACEHOLDER_TURN_HEIGHT)));
+    const turn = rect.height / Math.max(1, this.placeholder.turns);
+    return Math.max(0, Math.min(this.placeholder.turns, Math.ceil((view.bottom - rect.top) / Math.max(1, turn))));
   }
 
   /**
@@ -386,127 +376,132 @@ export class TranscriptViewport {
    * conversation they are nowhere near the root of (D-302).
    *
    * Growth is content added above the reader, so there are exactly two places
-   * it cannot be felt: at the live edge, where the engine holds the newest
-   * turn against everything above it; and with the reader on loaded rows,
-   * where the whole region is above their reading position and the engine
-   * moves them with it, to the pixel. Never in the middle of a gesture, never
-   * while a destination is landing, and never while the person is inside the
-   * region — there it would push the conversation further away from them, one
-   * page at a time, which is the treadmill this rule exists to prevent.
+   * it cannot be felt: at the live edge, where the list holds the newest turn
+   * against everything above it; and with the reader on loaded rows, where the
+   * whole region is above their reading position and the list moves them with
+   * it, to the pixel. Never while a destination is landing, and never while
+   * the person is inside the region — there it would push the conversation
+   * further away from them, one page at a time.
    */
   private mayGrowPlaceholder(): boolean {
-    const engine = this.engine;
-    if (!engine || this.target || engine.isScrolling) return false;
+    const viewport = this.viewport;
+    if (!viewport || this.target) return false;
     if (this.place.following) return true;
-    // A reader on loaded rows has the whole region above their reading
-    // position, so the engine moves them with it and they feel nothing. A
-    // reader inside the region would instead watch the conversation being
-    // pushed further away from them, one page at a time.
-    return !this.isReadingHistoryReserve();
+    // A whole screen clear of the region, not one pixel: a page arriving
+    // resizes the region and moves the scroll in the same commit, and for
+    // part of that commit the region's own box is somewhere neither it nor
+    // the person will be when the commit ends. Growth is permanent; a
+    // transient must not be allowed to ask for it.
+    const rect = this.reserveRect();
+    if (!rect) return true;
+    return rect.bottom < viewport.getBoundingClientRect().top - viewport.clientHeight;
   }
 
   /**
-   * Where the scroller is. The engine's own record while it has one, and the
-   * element itself before its first scroll event, so an answer is never a
-   * guess about a viewport that is right there to read.
-   */
-  private offset(): number {
-    return this.engine?.scrollOffset ?? this.viewport?.scrollTop ?? 0;
-  }
-
-  /**
-   * The reading position — the viewport's top edge — is inside the head item:
-   * the person has crossed above the oldest loaded row, into the placeholder
-   * for history that has not arrived. Rows lower down the screen may still be
-   * loaded ones.
+   * The reading position — the viewport's top edge — has not reached the
+   * oldest loaded row: the person is inside the placeholder for history that
+   * has not arrived, or above it among the history controls. Rows lower down
+   * the screen may still be loaded ones.
    */
   isReadingHistoryReserve(): boolean {
-    const engine = this.engine;
-    if (!engine || this.placeholder.turns <= 0) return false;
-    return engine.getVirtualItemForOffset(this.offset())?.index === HEAD_INDEX;
+    const viewport = this.viewport, rect = this.reserveRect();
+    if (!viewport || !rect) return false;
+    return rect.bottom > viewport.getBoundingClientRect().top + 0.5;
   }
 
   // ── Rows ──────────────────────────────────────────────────────────────
 
   /**
    * A row's ref, stable for as long as the row exists, so React never detaches
-   * and re-attaches it for a re-render: it records the node for this
-   * controller and hands the same node to the engine to measure.
+   * and re-attaches it for a re-render.
    */
   rowRef(id: string) {
     let ref = this.rowRefs.get(id);
     if (!ref) {
-      ref = (node: HTMLElement | null) => {
-        this.register(id, node);
-        this.engine?.measureElement(node);
-      };
+      ref = (node: HTMLElement | null) => { this.register(id, node); };
       this.rowRefs.set(id, ref);
     }
     return ref;
   }
-  /**
-   * The head's ref. The head is an item the engine measures, but it is not a
-   * row: nothing looks it up by message id, and the maps that answer "which
-   * rows are mounted" must not contain it.
-   */
-  headRef = (node: HTMLElement | null) => { this.engine?.measureElement(node); };
   register(id: string, node: HTMLElement | null) {
     if (node) this.nodes.set(id, node);
     else this.nodes.delete(id);
   }
-  setContent = (node: HTMLElement | null) => { this.content = node ?? undefined; };
   pin(id: string) {
-    this.pins.set(id, (this.pins.get(id) ?? 0) + 1); this.held(); this.publish();
-    return () => { const n = (this.pins.get(id) ?? 1) - 1; if (n) this.pins.set(id, n); else this.pins.delete(id); this.held(); this.publish(); };
+    this.pins.set(id, (this.pins.get(id) ?? 0) + 1); this.publish();
+    return () => { const n = (this.pins.get(id) ?? 1) - 1; if (n) this.pins.set(id, n); else this.pins.delete(id); this.publish(); };
   }
 
   // ── Where the reader is ───────────────────────────────────────────────
 
   /**
-   * Read the reading position from the engine: the newest turn, or the row
-   * under the viewport's top edge and how far into it. Nothing is written
-   * here; this is what the rest of the app is told about.
+   * Read the reading position from the layout: the row under the viewport's
+   * top edge, how far into it the person is, and whether they are riding the
+   * newest turn. Nothing is written here; this is what the rest of the app is
+   * told about.
+   *
+   * The live edge is a mode, not a measurement. Reaching the end enters it and
+   * a gesture away from the end leaves it, so content arriving underneath a
+   * follower — the exact moment the distance to the end is briefly non-zero —
+   * never reads as the person having walked away.
    */
   capture = (): Place => {
-    const engine = this.engine;
-    if (!engine) return this.place;
-    const offset = this.offset();
-    const item = engine.getVirtualItemForOffset(offset);
-    // Inside the head — the placeholder for history that has not arrived — the
-    // row the person is on is the oldest one they have: it is the row they
-    // will be back on, and the one a trim must not release under them.
-    const index = item ? Math.max(item.index, ITEM_OFFSET) : undefined;
-    const messageId = index === undefined ? undefined : this.ids[index - ITEM_OFFSET];
-    const following = this.pendingLatest || engine.isAtEnd(LIVE_EDGE);
-    this.place = { following, ...(messageId && item ? { anchor: { messageId, offset: offset - item.start } } : {}) };
+    const viewport = this.viewport;
+    if (!viewport) return this.place;
+    const atEnd = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= LIVE_EDGE;
+    const following = this.pendingLatest || atEnd ? true : this.gestured ? false : this.place.following;
+    this.gestured = false;
+    const view = viewport.getBoundingClientRect();
+    let anchor: Anchor | undefined;
+    // The row under the reading position, read from the boxes on screen. Above
+    // the oldest loaded row — inside the placeholder for history that has not
+    // arrived — the row the person is on is the oldest one they have: the row
+    // they will be back on, and the one a trim must not release under them.
+    for (const id of this.ids) {
+      const node = this.nodes.get(id);
+      if (!node) continue;
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom <= view.top + 0.5) continue;
+      anchor = { messageId: id, offset: view.top - rect.top };
+      break;
+    }
+    this.place = { following, ...(anchor ? { anchor } : {}) };
     return this.place;
   };
 
   /**
    * The newest turn, now. An explicit intent — the person asked for it, or
-   * they sent something — so it goes through the engine's own scroll and
+   * they sent something — so it goes through the list's own scroll and
    * supersedes whatever else was happening.
    */
   latest = () => {
     this.cancel();
+    this.attempts = 0;
     this.pendingLatest = true;
     this.place = { following: true };
     this.placeToLatest();
     this.publish();
   };
+  /**
+   * Place this surface at the newest turn, and keep owing that placement
+   * until the layout actually lands there. A conversation opens with its
+   * header still growing — the placeholder for unloaded history is sized from
+   * a viewport that did not exist in the first commit — so one scroll to the
+   * end can be the right scroll to a list that is about to be taller.
+   * A person's gesture or a destination cancels the debt.
+   */
   private placeToLatest() {
-    const engine = this.engine;
-    if (!engine || this.ids.length === 0 || !this.viewport) return;
-    this.pendingLatest = false;
-    engine.scrollToIndex(this.itemCount - 1, { align: "end" });
+    if (!this.list || this.ids.length === 0 || !this.viewport) return;
+    if (this.attempts++ > LATEST_ATTEMPTS) { this.pendingLatest = false; return; }
+    void this.list.scrollToEnd({ animated: false });
   }
 
   /**
-   * The layout React just committed. The engine has already synchronised its
-   * own scroll position in its layout effect; this is where Laser's own
-   * state catches up with it — where the transcript starts inside the
-   * scroller, how much unloaded history the head should draw, and what this
-   * surface is standing on.
+   * The layout React just committed. The list has already restored the
+   * reading position in its own layout effect; this is where Laser's own
+   * state catches up with it — what an unmeasured row is worth, how much
+   * unloaded history the header should draw, and what this surface is
+   * standing on.
    */
   committed() {
     if (this.disposed) return;
@@ -520,42 +515,70 @@ export class TranscriptViewport {
   }
 
   /**
-   * Where the transcript starts inside the scroller, and what an unmeasured
-   * row is worth. Both are read from the browser, never predicted: the first
-   * is whatever the app renders above the transcript inside the same
-   * scroller, and the second follows the active type and spacing scales.
-   *
-   * The margin is a constant of the layout, and it has to stay one: the engine
-   * treats `scrollMargin` as the ground everything stands on, so a *change* in
-   * it moves every item without moving the scroll position — the reader would
-   * be pushed by exactly the height that appeared. Anything above the
-   * transcript that can appear, go or resize while somebody is reading belongs
-   * in the head item, where it is measured and anchored through like a row
-   * (`Thread.tsx`, M16-T87).
+   * What an unmeasured row is worth, read from the browser rather than
+   * predicted: it follows the active type and spacing scales, so a person who
+   * changes either gets an estimate that matches what they will see.
    */
   private readLayout(): boolean {
-    const viewport = this.viewport, content = this.content;
-    if (!viewport || !content) return false;
-    const margin = content.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop;
-    let changed = false;
-    if (Number.isFinite(margin) && Math.abs(margin - this.margin) >= 0.5) { this.margin = margin; changed = true; }
+    const content = this.content;
+    if (!content) return false;
     const css = getComputedStyle(content);
     const line = Number.parseFloat(css.lineHeight) || Number.parseFloat(css.fontSize) * 1.5;
     const spacing = Number.parseFloat(css.paddingTop) / 5 || line / 4;
     const signature = [content.clientWidth, css.fontFamily, css.fontSize, css.lineHeight, spacing, activityDetailLevel(this.path)].join("|");
-    if (signature !== this.typeSignature) {
-      this.typeSignature = signature;
-      const estimate = line * 6 + spacing * 5;
-      if (Number.isFinite(estimate) && estimate > 0 && Math.abs(estimate - this.estimate) >= 0.5) { this.estimate = estimate; changed = true; }
-    }
-    return changed;
+    if (signature === this.typeSignature) return false;
+    this.typeSignature = signature;
+    const estimate = line * 6 + spacing * 5;
+    if (!Number.isFinite(estimate) || estimate <= 0 || Math.abs(estimate - this.estimate) < 0.5) return false;
+    this.estimate = estimate;
+    return true;
+  }
+
+  // ── Disclosure ────────────────────────────────────────────────────────
+
+  /**
+   * A fold is opening or closing in this row. For as long as it takes to
+   * settle, the list restores *that* row rather than whichever row is under
+   * the reading position, and it stops maintaining the live edge: the person
+   * clicked one control, and the thing that must not move is the thing they
+   * clicked.
+   */
+  holdDisclosure(id: string) {
+    this.disclosure = id;
+    this.clearDisclosureFrames();
+    // The hold ends when the row has measured (`onItemSizeChanged`), and this
+    // is the bound for a control whose fold changed no height at all.
+    let frames = DISCLOSURE_FRAME_BUDGET;
+    const tick = () => {
+      if (this.disposed) return;
+      if (frames-- > 0) { this.disclosureFrames = [requestAnimationFrame(tick)]; return; }
+      this.disclosureFrames = [];
+      this.disclosure = undefined;
+      this.publish();
+    };
+    this.disclosureFrames = [requestAnimationFrame(tick)];
+    this.publish();
+  }
+  /** The fold has settled: one frame for the browser's deferred shrink, then go. */
+  private releaseDisclosure() {
+    this.clearDisclosureFrames();
+    this.disclosureFrames = [requestAnimationFrame(() => {
+      this.disclosureFrames = [];
+      if (this.disposed) return;
+      this.disclosure = undefined;
+      this.publish();
+    })];
+  }
+  private clearDisclosureFrames() {
+    for (const frame of this.disclosureFrames) cancelAnimationFrame(frame);
+    this.disclosureFrames = [];
   }
 
   // ── Destinations ──────────────────────────────────────────────────────
 
   cancel = (reason?: unknown) => {
     this.intent++;
-    if (this.target) { this.target = undefined; this.held(); this.publishSoon(); }
+    if (this.target) { this.target = undefined; this.publishSoon(); }
     if (reason !== "structure") this.controlIntent++;
     for (const [frame, resolve] of this.pendingFrames) { cancelAnimationFrame(frame); resolve(); }
     this.pendingFrames.clear();
@@ -564,14 +587,14 @@ export class TranscriptViewport {
   };
   startAction() { this.capture(); this.cancel(); return { path: this.path, intent: this.controlIntent }; }
   async afterAction(ticket: { path: string; intent: number }, target?: TranscriptTarget): Promise<void> {
-    // Engine moves publish before React commits. Begin the new location only
+    // List moves publish before React commits. Begin the new location only
     // after that commit, and never after a later person/destination intent.
     do {
       await this.nextFrame();
       if (this.disposed || ticket.path !== this.path || ticket.intent !== this.controlIntent) return;
-      // A successful engine move can settle before React commits its history.
-      // Wait for that exact branch, not an arbitrary number of frames. Only
-      // the accepted action calls here; later person/destination intents cancel.
+      // A successful move can settle before React commits its history. Wait
+      // for that exact branch, not an arbitrary number of frames. Only the
+      // accepted action calls here; later person/destination intents cancel.
     } while (target && ((target.leafId !== undefined && target.leafId !== this.leafId) || !this.positions.has(target.messageId)));
     if (target) { await this.ensureVisible(target, { reason: "action" }); return; }
     this.latest();
@@ -584,7 +607,7 @@ export class TranscriptViewport {
   }
 
   /**
-   * Take a row — and a block inside it — to the reading position. The engine
+   * Take a row — and a block inside it — to the reading position. The list
    * owns every scroll: a coarse landing by index, which keeps reconciling as
    * the rows on the way measure, and then the exact offset once the row is
    * mounted and its own rectangle can be read.
@@ -613,7 +636,6 @@ export class TranscriptViewport {
       this.pendingLatest = false;
       this.place = { ...this.place, following: false };
       this.target = target;
-      this.held();
       this.publish();
       let stable = 0;
       let settledAfter: number | undefined;
@@ -621,29 +643,35 @@ export class TranscriptViewport {
         await this.nextFrame();
         if (cancelled()) return "cancelled";
         const index = this.positions.get(target.messageId);
-        const engine = this.engine, viewport = this.viewport;
-        if (index === undefined || !engine || !viewport) { this.cancel(); return "missing"; }
+        const list = this.list, viewport = this.viewport;
+        if (index === undefined || !list || !viewport) { this.cancel(); return "missing"; }
         const row = this.nodes.get(target.messageId);
-        if (!row) { engine.scrollToIndex(index + ITEM_OFFSET, { align: "center" }); this.publish(); continue; }
+        if (!row) { void list.scrollToIndex({ index, animated: false, viewPosition: 0.5 }); this.publish(); continue; }
         settledAfter ??= performance.now() + motionMs("--motion-fast");
         const message = row.querySelector<HTMLElement>("[data-message-id]") ?? row;
         const tool = target.toolCallId ? message.querySelector<HTMLElement>(`[data-tool-call="${CSS.escape(target.toolCallId)}"]`) : undefined;
         const rect = options.rect?.(message) ?? (tool ?? message).getBoundingClientRect();
-        const footer = viewport.querySelector<HTMLElement>('[data-slot="thread-footer"]')?.getBoundingClientRect().height ?? 0;
+        const footer = this.footerInset();
         const delta = rect.top - viewport.getBoundingClientRect().top - Math.max(0, viewport.clientHeight - footer) / 3;
         if (Math.abs(delta) < 0.5) stable++;
-        else { stable = 0; engine.scrollToOffset(this.offset() + delta); }
+        else { stable = 0; void list.scrollToOffset({ offset: viewport.scrollTop + delta, animated: false }); }
         if (stable >= 2 && performance.now() >= settledAfter) {
-          this.target = undefined; this.held(); this.capture(); this.publish();
+          this.target = undefined; this.capture(); this.publish();
           return target.toolCallId && !tool ? "missing" : "visible";
         }
       }
       // The layout never settled. Say what is true: the row is mounted where
-      // the engine put it, or it is not there at all.
+      // the list put it, or it is not there at all.
       const landed = this.nodes.has(target.messageId);
-      this.target = undefined; this.held(); this.capture(); this.publish();
+      this.target = undefined; this.capture(); this.publish();
       return landed ? "visible" : "missing";
     } finally { options.signal?.removeEventListener("abort", abort); }
+  }
+
+  /** How much of the viewport's bottom the composer covers. */
+  private footerInset(): number {
+    const footer = this.viewport?.parentElement?.querySelector<HTMLElement>('[data-slot="thread-footer"]');
+    return footer ? footer.getBoundingClientRect().height : 0;
   }
 
   // ── Earlier history ───────────────────────────────────────────────────
@@ -662,22 +690,11 @@ export class TranscriptViewport {
   attach(viewport: HTMLElement) {
     this.disposed = false;
     this.viewport = viewport;
-    // The engine reads its scroll element from this controller; the render
-    // that follows this publication is where it picks it up.
     this.publish();
-    const schedule = () => {
-      if (this.frame || this.disposed) return;
-      this.frame = requestAnimationFrame(() => {
-        this.frame = 0;
-        if (this.disposed) return;
-        const before = this.place;
-        this.capture();
-        if (before.following !== this.place.following || before.anchor?.messageId !== this.place.anchor?.messageId) this.publishAnchors();
-      });
-    };
+    const schedule = () => { this.scheduleSample(); };
     // A scroll event is not intent. It is the outcome of one — the person's,
-    // or the engine's own anchoring — and the engine's own writes arrive here
-    // too, so nothing this surface owes may be spent on it.
+    // or the list's own position keeping — and the list's own writes arrive
+    // here too, so nothing this surface owes may be spent on it.
     const scrolled = () => { schedule(); };
     /**
      * Whether a gesture in this direction can move anything. At the bottom of
@@ -692,27 +709,30 @@ export class TranscriptViewport {
     };
     /**
      * Deliberate movement by the person. It ends a destination — the row they
-     * were being taken to is no longer where they are going — and it ends this
-     * surface's claim on the live edge. It never writes a scroll position:
-     * the browser is already doing that, and the engine follows it.
+     * were being taken to is no longer where they are going — and it is the
+     * only thing that takes this surface off the live edge. It never writes a
+     * scroll position: the browser is already doing that, and the list
+     * follows it.
      */
     const user = (direction: "up" | "down" | "either") => {
       if (!canMove(direction)) return;
       this.cancel();
       this.pendingLatest = false;
+      this.gestured = true;
       schedule();
     };
     const selection = () => {
+      const content = this.content;
       const selected = document.getSelection();
-      if (selected && !selected.isCollapsed && selected.anchorNode === this.content && selected.focusNode === this.content && this.ids.length) {
-        this.selected = [this.ids[0]!, this.ids.at(-1)!]; this.held(); this.publish(); return;
+      if (selected && !selected.isCollapsed && selected.anchorNode === content && selected.focusNode === content && this.ids.length) {
+        this.selected = [this.ids[0]!, this.ids.at(-1)!]; this.publish(); return;
       }
       const id = (node: Node | null) => (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>("[data-window-message]")?.dataset.windowMessage;
       const start = id(selected?.anchorNode ?? null), end = id(selected?.focusNode ?? null);
       const a = start ? this.positions.get(start) : undefined, b = end ? this.positions.get(end) : undefined;
       if (!selected || selected.isCollapsed) this.selected = undefined;
       else if (a !== undefined && b !== undefined) this.selected = [start!, end!];
-      else if (selected.rangeCount && this.content && selected.getRangeAt(0).intersectsNode(this.content)) {
+      else if (selected.rangeCount && content && selected.getRangeAt(0).intersectsNode(content)) {
         // A drag can end on a container boundary before the next window
         // commits. Preserve the already selected interval through that gap.
         const range = selected.getRangeAt(0);
@@ -720,7 +740,6 @@ export class TranscriptViewport {
         if (this.selected) for (const id of this.selected) { const index = this.positions.get(id); if (index !== undefined) intersecting.push(index); }
         if (intersecting.length) this.selected = [this.ids[Math.min(...intersecting)]!, this.ids[Math.max(...intersecting)]!];
       } else this.selected = undefined;
-      this.held();
       this.publish();
     };
     const focus = (event: FocusEvent) => {
@@ -728,8 +747,22 @@ export class TranscriptViewport {
       // Portalled menus retain their originating row until focus returns to the thread.
       if (!(target instanceof Element) || !viewport.contains(target)) return;
       this.focused = target.closest<HTMLElement>("[data-window-message]")?.dataset.windowMessage;
-      this.held();
       this.publish();
+    };
+    /**
+     * A fold opening or closing. The control that owns a fold is the one that
+     * says whether it is open, so this is the one thing a transcript can read
+     * from any disclosure — its own rows', a tool's, a reasoning block's —
+     * without every one of them having to tell it. A keyboard activation of a
+     * button raises the same click, so both pointers and keys arrive here.
+     */
+    const disclosed = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const control = target.closest("[aria-expanded]");
+      if (!control) return;
+      const id = control.closest<HTMLElement>("[data-window-message]")?.dataset.windowMessage;
+      if (id) this.holdDisclosure(id);
     };
     const key = (event: KeyboardEvent) => {
       const target = event.target;
@@ -775,9 +808,9 @@ export class TranscriptViewport {
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) {
         // Explicit native Select All is the documented temporary all-loaded DOM exception.
-        event.preventDefault(); this.selected = this.ids.length ? [this.ids[0]!, this.ids.at(-1)!] : undefined; this.held(); this.publish();
+        event.preventDefault(); this.selected = this.ids.length ? [this.ids[0]!, this.ids.at(-1)!] : undefined; this.publish();
         const intent = this.intent;
-        requestAnimationFrame(() => { if (intent !== this.intent || !this.content) return; const range = document.createRange(); range.selectNodeContents(this.content); const selection = document.getSelection(); selection?.removeAllRanges(); selection?.addRange(range); });
+        requestAnimationFrame(() => { if (intent !== this.intent) return; const content = this.content; if (!content) return; const range = document.createRange(); range.selectNodeContents(content); const selection = document.getSelection(); selection?.removeAllRanges(); selection?.addRange(range); });
       }
     };
     const pointer = (event: PointerEvent) => {
@@ -811,6 +844,7 @@ export class TranscriptViewport {
     viewport.addEventListener("touchend", touchend, { passive: true });
     viewport.addEventListener("touchcancel", touchend, { passive: true });
     viewport.addEventListener("pointerdown", pointer, { passive: true });
+    viewport.addEventListener("click", disclosed, { capture: true });
     viewport.addEventListener("focusin", focus); viewport.addEventListener("focusout", focus); viewport.addEventListener("keydown", key);
     document.addEventListener("selectionchange", selection);
     return () => {
@@ -821,6 +855,8 @@ export class TranscriptViewport {
       this.frame = 0;
       if (this.publishing) cancelAnimationFrame(this.publishing);
       this.publishing = 0;
+      for (const frame of this.disclosureFrames) cancelAnimationFrame(frame);
+      this.disclosureFrames = [];
       viewport.removeEventListener("scroll", scrolled);
       viewport.removeEventListener("wheel", wheel);
       viewport.removeEventListener("touchstart", touchstart);
@@ -828,6 +864,7 @@ export class TranscriptViewport {
       viewport.removeEventListener("touchend", touchend);
       viewport.removeEventListener("touchcancel", touchend);
       viewport.removeEventListener("pointerdown", pointer);
+      viewport.removeEventListener("click", disclosed, { capture: true });
       viewport.removeEventListener("focusin", focus); viewport.removeEventListener("focusout", focus); viewport.removeEventListener("keydown", key);
       document.removeEventListener("selectionchange", selection);
       this.viewport = undefined;
@@ -866,57 +903,68 @@ export function TranscriptViewportProvider({ children }: { children: ReactNode }
   controller.configure(path, leafId);
   return <Context value={controller}>{children}</Context>;
 }
+
+/**
+ * The transcript is the thread's viewport now: the list owns the scroller, so
+ * the element every other surface asks the thread for — the conversation map's
+ * rail, the question notice, Find — has to be that one and not a box around
+ * it. This publishes it, its height, and whether the newest turn is on screen,
+ * which is the one thing `ThreadPrimitive.ScrollToBottom` reads to decide
+ * whether "Jump to latest" exists.
+ */
 export function TranscriptViewportBinding() {
   const controller = useTranscriptViewport();
-  const viewport = useThreadViewport(s => s.element.viewport);
-  useLayoutEffect(() => viewport && controller ? controller.attach(viewport) : undefined, [controller, viewport]);
+  useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const store = useThreadViewportStore();
+  const viewport = controller.viewport;
+  const following = controller.atLiveEdge;
+  useLayoutEffect(() => {
+    if (!viewport) return;
+    const releaseElement = store.getState().registerViewportElement(viewport);
+    const size = store.getState().registerViewport();
+    const measure = () => size.setHeight(viewport.clientHeight);
+    measure();
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : undefined;
+    observer?.observe(viewport);
+    return () => { observer?.disconnect(); size.unregister(); releaseElement(); };
+  }, [store, viewport]);
+  useEffect(() => {
+    // The viewport store's own writer is the scrolling `ThreadPrimitive.Viewport`,
+    // which this thread does not have: the list is the scroller. This surface
+    // is therefore the only thing that knows, and `setState` on the store is
+    // how the primitive itself would say it.
+    (store as unknown as { setState(partial: { isAtBottom: boolean }): void }).setState({ isAtBottom: following });
+  }, [store, following]);
   return null;
 }
 
 /**
- * The transcript itself: the head — history controls and the placeholder for
- * unloaded history — followed by the rows the engine has chosen, each in
- * normal chronological order and positioned by the engine's own measurements.
+ * The transcript: the header — the notices, the history controls and the
+ * placeholder for unloaded history — then one row per message, then a spacer
+ * the height of the composer that floats over them.
  *
- * `head` is content, not chrome: it scrolls with the conversation and it is
- * measured with it, so the controls appearing or the placeholder being
- * replaced by real rows is a size change the engine anchors through, not a
- * push nobody accounted for.
+ * Everything that can change height is inside the list, because anything
+ * above it pushes the reader by exactly the height that appeared. The list
+ * measures the header like a row and restores the reading position through
+ * it; a spacer at the end is explicitly excluded from live follow, so a
+ * composer growing a line moves nothing.
  */
-export function WindowedMessages({ head }: { head?: ReactNode } = {}) {
+export function WindowedMessages({ head, empty }: { head?: ReactNode; empty?: ReactElement | null } = {}) {
   const controller = useTranscriptViewport();
   const ids = unstable_useThreadMessageIds();
   const userOffset = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.history?.userOffset ?? 0 : 0; });
   const before = useLaserState(s => { const path = visibleSessionPath(s); return path ? s.open[path]?.history?.before : undefined; });
+  const streaming = useAuiState(s => s.thread.isRunning);
+  // The composer floats over the transcript; the list carries its height as
+  // trailing space so the newest turn can be read above it.
+  const inset = useThreadViewport(s => s.height.inset);
   useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   controller.setIds(ids);
   controller.setHistoryWindow(userOffset, before);
-  const engine = useVirtualizer<HTMLElement, HTMLElement>({
-    count: controller.itemCount,
-    getScrollElement: controller.getScrollElement,
-    estimateSize: controller.estimateSize,
-    getItemKey: controller.itemKey,
-    rangeExtractor: controller.rangeExtractor,
-    measureElement: controller.measureItem,
-    scrollMargin: controller.scrollMargin,
-    overscan: OVERSCAN,
-    // The transcript is a chat: the newest turn is the end, a page of older
-    // messages is a prepend, and the reader's row keeps its position through
-    // both because the engine resolves its anchor in the same pass that
-    // renders the new range.
-    anchorTo: "end",
-    followOnAppend: "auto",
-    // One number for "at the live edge": what this surface publishes to the
-    // rest of the app and what the engine follows an append within are the
-    // same distance, so there is no band where the app says the person is at
-    // the newest turn and the engine declines to keep them there.
-    scrollEndThreshold: LIVE_EDGE,
-    scrollToFn: writeScroll,
-    observeElementRect: observeReadingWindow,
-  });
-  controller.bind(engine);
+  const listRef = useRef<LegendListRef>(null);
+  useLayoutEffect(() => { controller.bindList(listRef.current ?? undefined); });
+  useEffect(() => () => controller.bindList(undefined), [controller]);
   useLayoutEffect(() => { controller.committed(); });
-  useEffect(() => () => controller.bind(undefined), [controller]);
   // Arriving history is not something the person should have to watch. The
   // one visible sign is a page that is late — longer than a slow motion step
   // — while they are inside the placeholder, and it goes on arrival.
@@ -927,55 +975,86 @@ export function WindowedMessages({ head }: { head?: ReactNode } = {}) {
     const timer = setTimeout(() => { if (controller.isReadingHistoryReserve()) setOverdue(true); }, motionMs("--motion-slow"));
     return () => clearTimeout(timer);
   }, [controller, loading]);
-  const items = engine.getVirtualItems();
-  const margin = controller.scrollMargin;
-  return <div
-    ref={controller.setContent}
-    data-slot="thread-messages"
+  const attached = useRef<HTMLElement | undefined>(undefined);
+  const detach = useRef<(() => void) | undefined>(undefined);
+  const scroller = useCallback((node: { getScrollableNode?: () => HTMLElement } | HTMLElement | null) => {
+    const element = node instanceof HTMLElement ? node : node?.getScrollableNode?.();
+    if (attached.current === element) return;
+    detach.current?.();
+    detach.current = undefined;
+    attached.current = element ?? undefined;
+    if (element) detach.current = controller.attach(element);
+    else controller.setViewport(undefined);
+  }, [controller]);
+  useEffect(() => () => { detach.current?.(); detach.current = undefined; attached.current = undefined; }, []);
+  const renderItem = useCallback(({ item }: { item: string }) => <WindowRow id={item} controller={controller} />, [controller]);
+  const heldSignature = controller.heldKeys.join("\u0000");
+  const pinnedSignature = controller.pinnedKeys.join("\u0000");
+  const alwaysRender = useMemo(() => ({ keys: heldSignature ? heldSignature.split("\u0000") : [] }), [heldSignature]);
+  const footer = useMemo(() => <TranscriptInset height={inset} />, [inset]);
+  const header = <TranscriptHead turns={controller.placeholderTurns} overdue={overdue}>{head}</TranscriptHead>;
+  return <LegendList<string>
+    ref={listRef}
+    refScrollView={scroller}
+    data={ids}
+    extraData={`${controller.path}\u0000${ids.length}`}
+    // A row a surface is holding open only reaches the list's mounted set on
+    // its next pass over the data, and a pin is not a scroll: this is the
+    // token that asks for that pass.
+    dataVersion={`${controller.path}\u0000${pinnedSignature}`}
+    keyExtractor={controller.key}
+    getItemType={controller.itemType}
+    renderItem={renderItem}
+    estimatedItemSize={controller.estimatedItemSize}
+    recycleItems={false}
+    alwaysRender={alwaysRender}
+    initialScrollAtEnd
+    // Content above the reader does not move: not when older pages are
+    // prepended (`data`), and not when a row grows (`size`). A disclosure
+    // toggle names the row it belongs to, and then only that row is restored.
+    maintainVisibleContentPosition={controller.positionPolicy}
+    maintainScrollAtEnd={controller.followMode(streaming)}
+    maintainScrollAtEndThreshold={FOLLOW_THRESHOLD}
+    onScroll={controller.onListScroll}
+    onItemSizeChanged={controller.onItemSizeChanged}
+    showsHorizontalScrollIndicator={false}
+    data-slot="thread-viewport"
     aria-busy={loading || undefined}
-    // `shrink-0`: the transcript's height is the engine's measurement, and the
-    // column around it is a flex container that would otherwise compress it.
-    className="relative w-full shrink-0"
-    style={{ height: engine.getTotalSize(), overflowAnchor: "none" }}
-  >
-    {items.map(item => (item.index === HEAD_INDEX
-      ? <TranscriptHead key="head" top={item.start - margin} index={item.index} controller={controller} turns={controller.placeholderTurns} overdue={overdue}>{head}</TranscriptHead>
-      : <WindowRow key={controller.itemKey(item.index)} id={ids[item.index - ITEM_OFFSET]!} index={item.index} top={item.start - margin} controller={controller} />))}
-    {/* Nothing else: the head and the rows are the transcript, and their
-        positions come from the one engine that measured them. */}
-  </div>;
+    className="h-full min-h-0 flex-1 overflow-x-hidden overscroll-y-contain px-4 [overflow-anchor:none] md:px-6"
+    ListHeaderComponent={header}
+    ListEmptyComponent={empty}
+    ListFooterComponent={footer}
+  />;
 }
 
 /** Everything that belongs above the first message, measured with it. */
-function TranscriptHead({ top, index, controller, turns, overdue, children }: { top: number; index: number; controller: TranscriptViewport; turns: number; overdue: boolean; children?: ReactNode }) {
-  return <div
-    ref={controller.headRef}
-    data-index={index}
-    data-slot="transcript-head"
-    className="absolute inset-x-0 flex flex-col pt-5"
-    style={{ top }}
-  >
+function TranscriptHead({ turns, overdue, children }: { turns: number; overdue: boolean; children?: ReactNode }) {
+  return <div data-slot="transcript-head" className="mx-auto flex w-full max-w-(--measure-thread) flex-col pt-5">
     {children}
     <HistoryReserve turns={turns} overdue={overdue} />
   </div>;
 }
 
 /**
- * Memoised on purpose. The transcript re-renders whenever a row is measured, a
- * pin changes or the conversation grows — several times per streamed batch —
- * and a row whose position has not changed must not re-render with it: its own
- * message subscription is what tells it that its content moved.
+ * The space the composer occupies. It is the list's own trailing content, so
+ * the newest turn can be read above the composer, and it is excluded from
+ * live follow so that a composer growing a line never moves a message.
  */
-const WindowRow = memo(function WindowRow({ id, index, top, controller }: { id: string; index: number; top: number; controller: TranscriptViewport }) {
-  // Positioned with `top`, never a transform: a transform would make this row
-  // the containing block for anything sticky or fixed inside it, and rows
-  // carry both.
+function TranscriptInset({ height }: { height: number }) {
+  return <div aria-hidden="true" data-slot="transcript-inset" style={{ height: Math.max(0, height) }} />;
+}
+
+/**
+ * Memoised on purpose. The transcript re-renders whenever a pin changes or the
+ * conversation grows — several times per streamed batch — and a row whose
+ * content has not changed must not re-render with it: its own message
+ * subscription is what tells it that its content moved.
+ */
+const WindowRow = memo(function WindowRow({ id, controller }: { id: string; controller: TranscriptViewport }) {
   return <div
     ref={controller.rowRef(id)}
-    data-index={index}
     data-window-message={id}
-    className="absolute inset-x-0 pb-5 [&_[data-message-id]]:[content-visibility:visible]"
-    style={{ top }}
+    className="mx-auto w-full max-w-(--measure-thread) pb-5 [&_[data-message-id]]:[content-visibility:visible]"
   >
     <ThreadPrimitive.Unstable_MessageById messageId={id} components={COMPONENTS} />
   </div>;

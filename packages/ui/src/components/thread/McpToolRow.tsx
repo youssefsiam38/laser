@@ -22,11 +22,17 @@
  * without `rehype-raw` (invariant 9) and every other value is text.
  */
 import { TextMessagePartProvider } from "@assistant-ui/react";
-import { mcpContentBlocks, mcpResultContent, type McpContentBlock } from "@lasercode/protocol";
+import { mcpContentBlocks, mcpResultContent, type ImageContent, type McpContentBlock } from "@lasercode/protocol";
 import { Braces, FileText, Plug, Waypoints } from "lucide-react";
 import { memo, useMemo, type ReactNode } from "react";
 
 import { ImageActions, ImagePreview, ImageRoot, ImageZoom } from "@/components/assistant-ui/elements/image";
+import { MessageImages } from "@/components/assistant-ui/elements/message-attachment";
+import { useFileOpener } from "@/lib/file-opener";
+import { useLaserState } from "@/runtime";
+import type { BodyRef } from "@/runtime/body-excerpt";
+import { UNKNOWN_IMAGE_DECODED_BYTES } from "@/runtime/view-measure";
+import { useImageBodies } from "./use-image-bodies.js";
 import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text";
 import { mono } from "@/components/assistant-ui/elements/surfaces";
 import { ToolCall } from "@/components/assistant-ui/elements/tool-call";
@@ -153,7 +159,7 @@ function McpBody({
             <McpMarkdown text={`\`\`\`js\n${code}\n\`\`\``} />
           </ToolFallbackSection>
         ) : null}
-        <McpResult blocks={mcpContentBlocks(result)} text={text} failed={failed} running={running} label={info.kind} />
+        <McpResult blocks={mcpContentBlocks(result)} result={result} text={text} failed={failed} running={running} label={info.kind} />
         {calls.length > 0 ? (
           <ToolFallbackSection label="calls">
             <ul data-search-exclude className="flex flex-col gap-1">
@@ -233,25 +239,91 @@ function McpBody({
           </ul>
         </ToolFallbackSection>
       ) : null}
-      <McpResult blocks={mcpContentBlocks(content)} text={text} failed={failed} running={running} label={info.kind} />
+      <McpResult blocks={mcpContentBlocks(content)} result={content} text={text} failed={failed} running={running} label={info.kind} />
     </>
+  );
+}
+
+/**
+ * The pictures in an MCP result that the page served as references (M16-T89).
+ *
+ * A served `image` part carries no bytes and says where its bytes are, so the
+ * text projection every other block comes from drops it — correctly, because
+ * there is nothing in it to search. The row still has a picture to draw, and
+ * it draws it the way every other referenced image in the transcript is drawn:
+ * a tile that reserves its box from the reference and reads its bytes back
+ * through `session/entry_range` when it is on screen.
+ */
+function servedImages(result: unknown): { images: ImageContent[]; refs: Array<BodyRef | undefined> } {
+  const content = (result as { content?: unknown } | null | undefined)?.content;
+  const images: ImageContent[] = [];
+  const refs: Array<BodyRef | undefined> = [];
+  if (!Array.isArray(content)) return { images, refs };
+  for (const part of content) {
+    const row = (part ?? {}) as { type?: unknown; mimeType?: unknown; data?: unknown; ref?: unknown };
+    if (row.type !== "image") continue;
+    const reference = (row.ref ?? {}) as { entryId?: unknown; component?: unknown; totalBytes?: unknown; contentDigest?: unknown; mimeType?: unknown; width?: unknown; height?: unknown };
+    if (typeof reference.entryId !== "string" || typeof reference.totalBytes !== "number" || typeof reference.contentDigest !== "string") continue;
+    const component = reference.component as BodyRef["component"] | undefined;
+    if (!component || component.kind !== "image") continue;
+    const width = typeof reference.width === "number" ? reference.width : undefined;
+    const height = typeof reference.height === "number" ? reference.height : undefined;
+    const mimeType = typeof reference.mimeType === "string" ? reference.mimeType : typeof row.mimeType === "string" ? row.mimeType : "image/png";
+    images.push({ type: "image", mimeType, data: "" });
+    refs.push({
+      entryId: reference.entryId,
+      component,
+      totalBytes: reference.totalBytes,
+      contentDigest: reference.contentDigest,
+      excerpt: { offset: 0, bytes: 0 },
+      image: {
+        ...(width !== undefined && height !== undefined ? { width, height } : {}),
+        decodedBytes: width !== undefined && height !== undefined ? width * height * 4 : UNKNOWN_IMAGE_DECODED_BYTES,
+      },
+    });
+  }
+  return { images, refs };
+}
+
+/** Referenced pictures from one result, as tiles that read their own bytes. */
+function McpServedImages({ served }: { served: { images: ImageContent[]; refs: Array<BodyRef | undefined> } }) {
+  const path = useLaserState(s => s.current);
+  const opener = useFileOpener();
+  const bodies = useMemo(() => ({ images: served.refs }), [served.refs]);
+  const source = useImageBodies(path, served.images, bodies);
+  if (served.images.length === 0) return null;
+  return (
+    <div data-slot="mcp-served-images">
+      <MessageImages
+        images={served.images}
+        sourceFor={source.sourceFor}
+        observe={source.observe}
+        onOpen={opener ? (index, trigger) => {
+          void source.openFor(index, `Image ${index + 1}`).then(picture => { if (picture) opener.openFile(picture, trigger); });
+        } : undefined}
+      />
+      {source.problem ? <p role="alert" data-slot="image-problem" className="mt-1 text-xs text-ink-2">{source.problem}</p> : null}
+    </div>
   );
 }
 
 /** The result blocks, in the order the server sent them. */
 function McpResult({
   blocks,
+  result,
   text,
   failed,
   running,
   label,
 }: {
   blocks: McpContentBlock[];
+  result?: unknown;
   text: string;
   failed: boolean;
   running: boolean;
   label: string;
 }) {
+  const served = useMemo(() => servedImages(result), [result]);
   if (failed) {
     return text ? (
       <ToolFallbackSection label="error">
@@ -259,13 +331,14 @@ function McpResult({
       </ToolFallbackSection>
     ) : null;
   }
-  if (blocks.length === 0) return null;
+  if (blocks.length === 0 && served.images.length === 0) return null;
   return (
     <ToolFallbackSection label={running ? "output" : "result"}>
       <div data-slot="mcp-result" data-mcp-kind={label} className="flex min-w-0 flex-col gap-2">
         {blocks.map((block, index) => (
           <McpBlock key={index} block={block} />
         ))}
+        <McpServedImages served={served} />
       </div>
     </ToolFallbackSection>
   );
