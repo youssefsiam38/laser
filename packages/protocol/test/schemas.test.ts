@@ -159,6 +159,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/file_diff": { cwd: "/p", path: "/s.jsonl", scope: "turn", repo: "/p", file: "src/a.ts", turn: 3, context: 5, offset: 0, limit: 65536 },
   "pi/project/file_source": { cwd: "/p", path: "/s.jsonl", repo: "/p", file: "src/a.ts", ref: "HEAD", offset: 0, limit: 65536 },
   "pi/project/checkpoint/list": { cwd: "/p", path: "/s.jsonl" },
+  "pi/project/checkpoint/retention/set": { cwd: "/p", retention: "50" },
   "pi/project/restore": { cwd: "/p", path: "/s.jsonl", turn: 3, restore: "both", confirm: true },
   "pi/project/workspace": { cwd: "/p", rescan: true },
   "pi/project/isolation/set": { cwd: "/p", isolation: "decide" },

@@ -3,13 +3,18 @@ import {
   CHECKPOINT_REF_NAMESPACE,
   CHANGE_SCOPES,
   CHECKPOINT_RETENTION_DEFAULT,
+  GIT_EMPTY_TREE,
   checkpointRef,
   checkpointRefPrefix,
+  checkpointRetentionFromSettingsJson,
   checkpointRetentionKeep,
+  gitLooksBinary,
   isChangeScope,
   isCheckpointRetention,
+  mergeSourceControlSettingsJson,
   parseCheckpointRef,
 } from "../src/index.js";
+import { checkpointSessionKey } from "../src/checkpoint-key.js";
 
 describe("checkpoint refs", () => {
   it("lays out refs under the product namespace without a hard-coded name", () => {
@@ -30,5 +35,12 @@ describe("checkpoint refs", () => {
     expect(isCheckpointRetention("20")).toBe(false);
     expect(CHANGE_SCOPES).toEqual(["session", "turn", "uncommitted", "range", "agent"]);
     expect(isChangeScope("session")).toBe(true);
+    expect(GIT_EMPTY_TREE).toMatch(/^[0-9a-f]{40}$/);
+    expect(gitLooksBinary(Buffer.from("hello"))).toBe(false);
+    expect(gitLooksBinary(Buffer.from([0, 1, 2]))).toBe(true);
+    expect(checkpointRetentionFromSettingsJson('{"checkpointRetention":"50"}')).toBe("50");
+    expect(mergeSourceControlSettingsJson({}, "off")).toContain("off");
+    expect(checkpointSessionKey("/sessions/demo.jsonl")).toHaveLength(32);
+    expect(checkpointSessionKey("/sessions/demo.jsonl")).toBe(checkpointSessionKey("/sessions/demo.jsonl"));
   });
 });

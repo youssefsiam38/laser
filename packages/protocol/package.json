@@ -25,6 +25,14 @@
     "./revision-node": {
       "types": "./dist/session-revision-node.d.ts",
       "import": "./dist/session-revision-node.js"
+    },
+    "./checkpoint-key": {
+      "types": "./dist/checkpoint-key.d.ts",
+      "import": "./dist/checkpoint-key.js"
+    },
+    "./git-run": {
+      "types": "./dist/git-run.d.ts",
+      "import": "./dist/git-run.js"
     }
   },
   "files": ["dist"],

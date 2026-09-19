@@ -79,6 +79,21 @@ describe("ProjectRegistry", () => {
     expect(reloaded.list().map((p) => [p.name, p.pinned])).toEqual([["seen", false]]);
   });
 
+  it("persists the per-project checkpoint retention and treats missing as 200", () => {
+    const store = join(base, "projects.json");
+    const added = project("added");
+    const { reg } = registry({ storePath: store });
+    reg.add(added);
+    expect(reg.checkpointRetentionOf(added)).toBe("200");
+    expect(reg.list()[0]?.checkpointRetention).toBe("200");
+    expect(reg.setCheckpointRetention(added, "50").checkpointRetention).toBe("50");
+    const { reg: reloaded } = registry({ storePath: store });
+    expect(reloaded.checkpointRetentionOf(added)).toBe("50");
+    expect(reloaded.setCheckpointRetention(added, "200").checkpointRetention).toBe("200");
+    const { reg: again } = registry({ storePath: store });
+    expect(again.checkpointRetentionOf(added)).toBe("200");
+  });
+
   it("persists the per-project agent isolation default and treats missing as decide", () => {
     const store = join(base, "projects.json");
     const added = project("added");

@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { publishFailedCheckpoint } from "../src/source-control/capture.js";
 import {
   SourceControlService,
   captureCheckpoint,
@@ -255,10 +256,11 @@ describe.skipIf(!haveGit)("retention", () => {
 
     const session = await ctl.changes({ cwd: dir, path: SESSION, scope: "session" });
     expect(session.pruned?.detail).toMatch(/Older checkpoints were removed/);
-    expect(session.repos).toEqual([]);
+    expect(session.pruned?.oldestTurn).toBeGreaterThan(0);
+    expect(session.repos[0]!.files.some((file) => file.path === "a.txt")).toBe(true);
 
     writeCheckpointRetention(dir, "off");
-    await ctl.captureAfterTurn(SESSION, dir);
+    await ctl.applyRetention(SESSION, "off");
     expect((await ctl.list(SESSION, dir)).checkpoints).toEqual([]);
   });
 });
@@ -294,7 +296,7 @@ describe.skipIf(!haveGit)("paged payloads", () => {
 });
 
 describe.skipIf(!haveGit)("restore", () => {
-  it("names what would be restored and lost, then puts files and staging back", async () => {
+  it("names what would be restored and lost, then puts the working tree back without rewriting staging", async () => {
     const dir = temp("undo");
     initRepo(dir);
     writeFileSync(join(dir, "staged.txt"), "keep\n");
@@ -308,15 +310,19 @@ describe.skipIf(!haveGit)("restore", () => {
     expect(preview.restored).toBeUndefined();
     expect(preview.preview.repos[0]!.uncommittedLost).toEqual(expect.arrayContaining(["a.txt", "danger.txt", "staged.txt"]));
     expect(preview.preview.hidden).not.toContain("files");
+    expect(preview.preview.hidden).not.toContain("conversation");
+    expect(preview.preview.staging).toBe("not_restored");
+    expect(preview.preview.detail).toMatch(/staging is not/i);
 
     const done = await ctl.restore({ cwd: dir, path: SESSION, turn: 0, restore: "files", confirm: true });
-    expect(done.restored).toEqual({ files: true, conversation: false });
+    expect(done.restored?.files).toBe(true);
+    expect(done.restored?.conversation).toBe(false);
     expect(readFileSync(join(dir, "a.txt"), "utf8")).toBe("captured\n");
     expect(existsSync(join(dir, "danger.txt"))).toBe(false);
     expect(existsSync(join(dir, "staged.txt"))).toBe(true);
     const cached = git(dir, ["diff", "--cached", "--name-only"]);
     expect(cached).toContain("staged.txt");
-    expect(cached).toContain("a.txt");
+    expect(cached).not.toContain("a.txt");
   });
 
   it("is refused with a sentence while a turn is running", async () => {
@@ -327,6 +333,161 @@ describe.skipIf(!haveGit)("restore", () => {
       code: ErrorCodes.SessionBusy,
       message: expect.stringMatching(/turn is running/i),
     });
+  });
+});
+
+describe.skipIf(!haveGit)("multi-repository restore", () => {
+  it("restores each repository from its own commit and does not clean a repo whose checkpoint is missing", async () => {
+    const workspace = temp("multi-restore");
+    const repoA = join(workspace, "alpha");
+    const repoB = join(workspace, "beta");
+    mkdirSync(repoA);
+    mkdirSync(repoB);
+    initRepo(repoA, { "a.txt": "alpha-one\n" });
+    initRepo(repoB, { "b.txt": "beta-one\n" });
+    const ctl = service(workspace, { sessionWorkdir: () => workspace, projectCwd: workspace });
+    await ctl.captureBaseline(SESSION, workspace);
+    writeFileSync(join(repoA, "a.txt"), "alpha-two\n");
+    writeFileSync(join(repoA, "keep-a.txt"), "keep-a\n");
+    writeFileSync(join(repoB, "b.txt"), "beta-two\n");
+    writeFileSync(join(repoB, "keep-b.txt"), "keep-b\n");
+    await ctl.captureAfterTurn(SESSION, workspace);
+    const first = await ctl.list(SESSION, workspace);
+    const turn = first.checkpoints[first.checkpoints.length - 1]!.turn;
+    const commitA = first.checkpoints.at(-1)?.repos?.find((row) => row.repo === repoA)?.commit;
+    const commitB = first.checkpoints.at(-1)?.repos?.find((row) => row.repo === repoB)?.commit;
+    expect(commitA).toBeTruthy();
+    expect(commitB).toBeTruthy();
+    expect(commitA).not.toBe(commitB);
+
+    writeFileSync(join(repoA, "a.txt"), "alpha-lost\n");
+    writeFileSync(join(repoA, "extra-a.txt"), "extra-a\n");
+    writeFileSync(join(repoB, "b.txt"), "beta-lost\n");
+    writeFileSync(join(repoB, "extra-b.txt"), "extra-b\n");
+
+    const preview = await ctl.restore({ cwd: workspace, path: SESSION, turn, restore: "files" });
+    expect(preview.preview.repos.find((row) => row.repo === repoB)?.files).toEqual(
+      expect.arrayContaining(["b.txt", "extra-b.txt"]),
+    );
+
+    git(repoB, ["update-ref", "-d", first.checkpoints.at(-1)!.ref]);
+    const done = await ctl.restore({ cwd: workspace, path: SESSION, turn, restore: "files", confirm: true });
+    expect(done.restored?.files).toBe(true);
+    expect(readFileSync(join(repoA, "a.txt"), "utf8")).toBe("alpha-two\n");
+    expect(existsSync(join(repoA, "keep-a.txt"))).toBe(true);
+    expect(existsSync(join(repoA, "extra-a.txt"))).toBe(false);
+    expect(readFileSync(join(repoB, "b.txt"), "utf8")).toBe("beta-lost\n");
+    expect(existsSync(join(repoB, "keep-b.txt"))).toBe(true);
+    expect(existsSync(join(repoB, "extra-b.txt"))).toBe(true);
+    expect(done.restored?.repos?.find((row) => row.repo === repoA)?.restored).toBe(true);
+    expect(done.restored?.repos?.find((row) => row.repo === repoB)?.restored).toBe(false);
+    expect(done.restored?.repos?.find((row) => row.repo === repoB)?.detail).toMatch(/not in this repository|left unchanged/i);
+  });
+
+  it("refuses a caller-controlled workdir on the write path", async () => {
+    const dir = temp("restore-cwd");
+    initRepo(dir);
+    const ctl = service(dir);
+    await ctl.captureBaseline(SESSION, dir);
+    await expect(
+      ctl.restore({ cwd: dir, path: SESSION, turn: 0, restore: "files", confirm: true, workdir: temp("foreign") }),
+    ).rejects.toMatchObject({
+      code: ErrorCodes.InvalidParams,
+      message: expect.stringMatching(/working files/i),
+    });
+  });
+});
+
+describe.skipIf(!haveGit)("agent-scope file_diff", () => {
+  it("opens a diff in a child worktree that is a different path", async () => {
+    const parent = temp("agent-parent");
+    const child = temp("agent-child");
+    initRepo(parent);
+    initRepo(child, { "a.txt": "child-base\n" });
+    const head = git(child, ["rev-parse", "HEAD"]).trim();
+    writeFileSync(join(child, "only-child.ts"), "export const n = 1;\n");
+    const ctl = service(parent, {
+      agentRun: (runId) =>
+        runId === "run_child"
+          ? {
+              agentName: "worker",
+              subagentName: "w",
+              sessionId: "s",
+              runId: "run_child",
+              sessionPath: SESSION,
+              projectCwd: parent,
+              rootSessionPath: SESSION,
+              depth: 1,
+              parent: { sessionPath: SESSION, sessionId: "s" },
+              worktree: { path: child, branch: "main", baseCommit: head },
+              origin: "agent",
+              status: "running",
+              task: "t",
+              startedAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+            }
+          : undefined,
+    });
+    const changes = await ctl.changes({ cwd: parent, path: SESSION, scope: "agent", runId: "run_child" });
+    expect(changes.repos.map((row) => row.repo)).toEqual([child]);
+    expect(changes.repos[0]!.files.some((file) => file.path === "only-child.ts")).toBe(true);
+    const diff = await ctl.fileDiff({
+      cwd: parent,
+      path: SESSION,
+      scope: "agent",
+      runId: "run_child",
+      repo: child,
+      file: "only-child.ts",
+    });
+    expect(diff.text).toMatch(/export const n/);
+    const source = await ctl.fileSource({
+      cwd: parent,
+      path: SESSION,
+      runId: "run_child",
+      repo: child,
+      file: "only-child.ts",
+      ref: "worktree",
+    });
+    expect(source.text).toMatch(/export const n/);
+  });
+});
+
+describe.skipIf(!haveGit)("capture numbering", () => {
+  it("keeps a whitespace-bearing entry id and does not reuse a failed turn number", async () => {
+    const dir = temp("turns");
+    initRepo(dir);
+    const ctl = service(dir);
+    await ctl.captureBaseline(SESSION, dir, "leaf with spaces");
+    const [repo] = await sessionRepositories(dir);
+    const baseline = (await ctl.list(SESSION, dir)).checkpoints[0];
+    expect(baseline?.entryId).toBe("leaf with spaces");
+    expect(await publishFailedCheckpoint({ repo: repo!, sessionPath: SESSION, turn: 1 }, baseline?.commit)).toBe(true);
+    writeFileSync(join(dir, "a.txt"), "after-fail\n");
+    await ctl.captureAfterTurn(SESSION, dir, "leaf-2");
+    const listed = await ctl.list(SESSION, dir);
+    expect(listed.checkpoints.map((row) => ({ turn: row.turn, failed: row.failed ?? false }))).toEqual([
+      { turn: 0, failed: false },
+      { turn: 1, failed: true },
+      { turn: 2, failed: false },
+    ]);
+    await expect(ctl.changes({ cwd: dir, path: SESSION, scope: "turn", turn: 0 })).rejects.toMatchObject({
+      code: ErrorCodes.InvalidParams,
+      message: expect.stringMatching(/baseline/i),
+    });
+    const failedTurn = await ctl.changes({ cwd: dir, path: SESSION, scope: "turn", turn: 1 });
+    expect(failedTurn.pruned?.detail).toMatch(/not captured/i);
+    expect(failedTurn.repos).toEqual([]);
+  });
+
+  it("reuses one durable isolated index per repository", async () => {
+    const dir = temp("index");
+    initRepo(dir);
+    const ctl = service(dir);
+    await ctl.captureBaseline(SESSION, dir);
+    writeFileSync(join(dir, "a.txt"), "now\n");
+    await ctl.changes({ cwd: dir, path: SESSION, scope: "session" });
+    const gitDir = git(dir, ["rev-parse", "--absolute-git-dir"]).trim();
+    expect(existsSync(join(gitDir, `${PRODUCT_NAME}-checkpoint-index`))).toBe(true);
   });
 });
 

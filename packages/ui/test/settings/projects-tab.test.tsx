@@ -124,12 +124,15 @@ it("replaces Environment with collapsible Projects and saves exactly one Bash pr
 
 it("saves the per-project agent isolation default with token-only controls", async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-  mocks.request.mockImplementation(async (method: string, params: { cwd?: string; isolation?: string }) => {
+  mocks.request.mockImplementation(async (method: string, params: { cwd?: string; isolation?: string; retention?: string }) => {
     if (method === "pi/project/env/status") {
       return { status: { cwd: params.cwd, state: "not-configured", approved: false } };
     }
     if (method === "pi/project/isolation/set") {
       return { project: { cwd: params.cwd, name: "API", addedAt: "2026-01-01T00:00:00.000Z", trust: "trusted", pinned: true, sessionCount: 2, agentIsolation: params.isolation } };
+    }
+    if (method === "pi/project/checkpoint/retention/set") {
+      return { project: { cwd: params.cwd, name: "API", addedAt: "2026-01-01T00:00:00.000Z", trust: "trusted", pinned: true, sessionCount: 2, checkpointRetention: params.retention } };
     }
     return {};
   });
@@ -143,4 +146,27 @@ it("saves the per-project agent isolation default with token-only controls", asy
   await click("Share my checkout");
   expect(mocks.request).toHaveBeenCalledWith("pi/project/isolation/set", { cwd: "/workspace/api", isolation: "share" });
   expect(text()).toContain("New agents share this checkout");
+});
+
+it("saves per-project checkpoint retention with token-only controls", async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+  mocks.request.mockImplementation(async (method: string, params: { cwd?: string; retention?: string }) => {
+    if (method === "pi/project/env/status") {
+      return { status: { cwd: params.cwd, state: "not-configured", approved: false } };
+    }
+    if (method === "pi/project/checkpoint/retention/set") {
+      return { project: { cwd: params.cwd, name: "API", addedAt: "2026-01-01T00:00:00.000Z", trust: "trusted", pinned: true, sessionCount: 2, checkpointRetention: params.retention } };
+    }
+    return {};
+  });
+
+  ({ root } = await render(
+    <TooltipProvider><WorkbenchProvider><SettingsScreen initialTab="projects" /></WorkbenchProvider></TooltipProvider>,
+  ));
+  await act(async () => { await Promise.resolve(); });
+  await click("Expand API project settings");
+  expect(text()).toContain("Last 200 turns");
+  await click("Off");
+  expect(mocks.request).toHaveBeenCalledWith("pi/project/checkpoint/retention/set", { cwd: "/workspace/api", retention: "off" });
+  expect(text()).toContain("Existing checkpoints for this project are removed now");
 });

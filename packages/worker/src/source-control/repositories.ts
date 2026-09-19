@@ -1,11 +1,9 @@
 /**
- * Narrow seam for "which repositories does this working directory belong to".
- *
- * TODO(M18-T1): replace this body with the shared workspace resolver
+ * Repositories this working directory belongs to, via the shared workspace resolver (M18-T1).
  */
-import { readdir } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { runGit } from "./git-run.js";
+import { createWorkspaceResolver } from "../workspace.js";
 
 export interface RepoRef {
   /** Work-tree root (`rev-parse --show-toplevel`). */
@@ -14,27 +12,14 @@ export interface RepoRef {
   gitDir: string;
 }
 
-const SKIP_NAMES = new Set(["node_modules", "dist", "build", "out", "coverage", "vendor", ".git"]);
-const MAX_CHILDREN = 64;
-const MAX_DIR_ENTRIES = 256;
+const resolver = createWorkspaceResolver();
 
 export async function sessionRepositories(cwd: string): Promise<RepoRef[]> {
-  const root = resolve(cwd);
-  const self = await repoAt(root);
-  if (self) return [self];
-  // TODO(M18-T1): replace this body with the shared workspace resolver
-  let names: string[];
-  try {
-    names = await readdir(root);
-  } catch {
-    return [];
-  }
+  const shape = await resolver.resolve(cwd, { rescan: true });
   const found: RepoRef[] = [];
-  for (const name of names.slice(0, MAX_DIR_ENTRIES)) {
-    if (SKIP_NAMES.has(name) || name.startsWith(".")) continue;
-    const child = await repoAt(join(root, name));
-    if (child) found.push(child);
-    if (found.length >= MAX_CHILDREN) break;
+  for (const row of shape.repositories) {
+    const repo = await repoAt(row.root);
+    if (repo) found.push(repo);
   }
   return found;
 }

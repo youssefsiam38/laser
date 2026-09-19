@@ -1,4 +1,4 @@
-import { ErrorCodes, FILE_DIFF_MAX_BYTES, ProtocolError, sliceUtf8RangeFrom, utf8ByteLength, type FileSlice } from "@lasercode/protocol";
+import { ErrorCodes, FILE_DIFF_MAX_BYTES, ProtocolError, gitLooksBinary, sliceUtf8RangeFrom, utf8ByteLength, type FileSlice } from "@lasercode/protocol";
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { ResolvedRange } from "./changes.js";
@@ -19,7 +19,7 @@ export function assertRepoFile(repo: string, file: string): string {
 
 export async function fileDiff(repo: RepoRef, range: ResolvedRange, file: string, context = 3, offset = 0, limit = FILE_DIFF_MAX_BYTES): Promise<FileSlice> {
   const path = assertRepoFile(repo.path, file);
-  if (range.pruned) {
+  if (range.pruned && range.pruned.oldestTurn === undefined) {
     return emptySlice(repo.path, path, offset);
   }
   const ends = range.to ? [range.from, range.to] : [range.from];
@@ -39,6 +39,9 @@ export async function fileDiff(repo: RepoRef, range: ResolvedRange, file: string
     timeoutMs: 15_000,
     maxBuffer: 8 * 1024 * 1024,
   });
+  if (diff.timedOut || diff.overflow) {
+    throw new ProtocolError(ErrorCodes.Internal, "Reading that diff took too long or the result was too large.");
+  }
   if (diff.exitCode > 1) {
     throw new ProtocolError(ErrorCodes.InvalidParams, diff.stderr.trim() || "Could not read that diff.");
   }
@@ -74,7 +77,7 @@ function pageWorktree(repo: string, path: string, offset: number, limit: number)
       return { repo, path, totalBytes: info.size, offset: 0, bytes: 0, truncated: true, binary: true };
     }
     const buffer = readFileSync(target);
-    if (looksBinary(buffer)) {
+    if (gitLooksBinary(buffer)) {
       return { repo, path, totalBytes: buffer.length, offset: 0, bytes: 0, truncated: buffer.length > 0, binary: true };
     }
     return pageText(repo, path, buffer.toString("utf8"), offset, limit);
@@ -85,7 +88,7 @@ function pageWorktree(repo: string, path: string, offset: number, limit: number)
 }
 
 function pageText(repo: string, path: string, text: string, offset: number, limit: number): FileSlice {
-  if (looksBinary(Buffer.from(text.slice(0, 8192)))) {
+  if (gitLooksBinary(Buffer.from(text.slice(0, 8192)))) {
     const totalBytes = utf8ByteLength(text);
     return { repo, path, totalBytes, offset: 0, bytes: 0, truncated: totalBytes > 0, binary: true };
   }
@@ -109,8 +112,3 @@ function emptySlice(repo: string, path: string, offset: number): FileSlice {
   return { repo, path, totalBytes: 0, offset, bytes: 0, truncated: false };
 }
 
-function looksBinary(buffer: Uint8Array): boolean {
-  const end = Math.min(buffer.length, 8192);
-  for (let i = 0; i < end; i++) if (buffer[i] === 0) return true;
-  return false;
-}

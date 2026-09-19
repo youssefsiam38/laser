@@ -24,7 +24,7 @@
  *   pi/ui/response       every live worker (the worker that owns the dialog id
  *                        answers; the others ignore it)
  */
-import { AGENT_ISOLATION_DEFAULTS, ENVIRONMENT_DESCRIBE_METHOD, ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentIsolationDefault, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type ProjectEnvStatus, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
+import { AGENT_ISOLATION_DEFAULTS, ENVIRONMENT_DESCRIBE_METHOD, ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isCheckpointRetention, isTerminalRunStatus, parseClientRequest, type AgentIsolationDefault, type AgentRun, type AgentWorktreeStatus, type CheckpointRetention, type JsonRpcError, type JsonRpcResponse, type NamerState, type ProjectEnvStatus, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { HOST_ENVIRONMENT_METHOD, applyHostEnvironment } from "./environment.js";
@@ -54,7 +54,8 @@ import type { PushService } from "./push.js";
 import { RESOURCE_REPORT_METHOD } from "./resources/guard.js";
 import type { PressureAdmission } from "./pressure/index.js";
 import type { ResourceService } from "./resources/index.js";
-import { deleteSessionCheckpoints } from "./source-control/cleanup.js";
+import { deleteAllCheckpoints, deleteSessionCheckpoints } from "./source-control/cleanup.js";
+import { writeProjectCheckpointRetention } from "./source-control/settings.js";
 import { canonical } from "./trust.js";
 import { SessionRouteLeases } from "./session-route-lease.js";
 import type { SessionProjection } from "./session-projection.js";
@@ -796,6 +797,24 @@ export class Router {
         const live = this.pool.liveClients().find((entry) => entry.cwd === cwd);
         if (live) {
           await live.client.request("pi/project/isolation/set", { cwd, isolation }).catch(() => undefined);
+        }
+        return { project };
+      }
+
+      case "pi/project/checkpoint/retention/set": {
+        const cwd = projectRootOf(req.params.cwd);
+        const retention = req.params.retention;
+        if (!isCheckpointRetention(retention)) {
+          throw new ProtocolError(ErrorCodes.InvalidParams, "Retention must be 50, 200, 1000, all, or off.");
+        }
+        const project = this.deps.projects.setCheckpointRetention(cwd, retention as CheckpointRetention);
+        try {
+          writeProjectCheckpointRetention(cwd, retention);
+        } catch {
+          // The registry still holds the setting; a project directory we cannot write is not a reason to refuse.
+        }
+        if (retention === "off") {
+          await deleteAllCheckpoints(cwd).catch(() => 0);
         }
         return { project };
       }

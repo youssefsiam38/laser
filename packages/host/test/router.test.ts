@@ -1090,6 +1090,37 @@ describe("Router · source-control methods", () => {
     }
   });
 
+  it("sets checkpoint retention on the host without a worker, and Off deletes refs now", async () => {
+    const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-retention-`));
+    const project = join(dir, "project");
+    execFileSync("git", ["init", "-q", "-b", "main", project]);
+    execFileSync("git", ["-C", project, "config", "user.email", "t@x"]);
+    execFileSync("git", ["-C", project, "config", "user.name", "t"]);
+    writeFileSync(join(project, "a.txt"), "one\n");
+    execFileSync("git", ["-C", project, "add", "-A"]);
+    execFileSync("git", ["-C", project, "commit", "-q", "-m", "one"]);
+    const child = join(dir, "child.jsonl");
+    writeFileSync(child, "");
+    const key = createHash("sha256").update(child).digest("hex").slice(0, 32);
+    const ref = `${CHECKPOINT_REF_NAMESPACE}/${key}/0`;
+    const head = execFileSync("git", ["-C", project, "rev-parse", "HEAD"]).toString().trim();
+    execFileSync("git", ["-C", project, "update-ref", ref, head]);
+    const h = harness();
+    try {
+      h.projects.add(project);
+      const saved = await rpc(h.router, "pi/project/checkpoint/retention/set", { cwd: project, retention: "50" });
+      expect(saved).toMatchObject({ result: { project: { cwd: project, checkpointRetention: "50" } } });
+      expect(h.projects.checkpointRetentionOf(project)).toBe("50");
+      expect(h.workerRequests).toHaveLength(0);
+      const off = await rpc(h.router, "pi/project/checkpoint/retention/set", { cwd: project, retention: "off" });
+      expect(off).toMatchObject({ result: { project: { checkpointRetention: "off" } } });
+      expect(execFileSync("git", ["-C", project, "for-each-ref", "--format=%(refname)", ref]).toString().trim()).toBe("");
+    } finally {
+      h.cleanup();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("deletes a session's checkpoint refs with the transcript", async () => {
     const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-ckpt-`));
     const project = join(dir, "project");

@@ -19,10 +19,13 @@ import { basename, dirname, join } from "node:path";
 import {
   AGENT_ISOLATION_DEFAULT,
   AGENT_ISOLATION_DEFAULTS,
+  CHECKPOINT_RETENTION_DEFAULT,
   ErrorCodes,
   PRODUCT_NAME,
   ProtocolError,
+  isCheckpointRetention,
   type AgentIsolationDefault,
+  type CheckpointRetention,
   type ProjectInfo,
   type ProjectTrust,
 } from "@lasercode/protocol";
@@ -40,6 +43,8 @@ interface StoredProject {
   trust?: "trusted" | "declined";
   /** Absent means decide-per-agent, the product default. */
   agentIsolation?: AgentIsolationDefault;
+  /** Absent means last 200 turns, the product default (D-316). */
+  checkpointRetention?: CheckpointRetention;
 }
 
 export interface TrustRequest {
@@ -126,6 +131,7 @@ export class ProjectRegistry {
         pinned: stored?.pinned ?? false,
         sessionCount: counts.get(cwd) ?? 0,
         agentIsolation: stored?.agentIsolation ?? AGENT_ISOLATION_DEFAULT,
+        checkpointRetention: stored?.checkpointRetention ?? CHECKPOINT_RETENTION_DEFAULT,
       });
     }
     return out.sort((a, b) => {
@@ -156,6 +162,7 @@ export class ProjectRegistry {
         pinned: stored?.pinned ?? false,
         sessionCount: count,
         agentIsolation: stored?.agentIsolation ?? AGENT_ISOLATION_DEFAULT,
+        checkpointRetention: stored?.checkpointRetention ?? CHECKPOINT_RETENTION_DEFAULT,
       };
     }
     const { trust, reasons } = this.trustOf(key);
@@ -168,6 +175,7 @@ export class ProjectRegistry {
       pinned: false,
       sessionCount: 0,
       agentIsolation: AGENT_ISOLATION_DEFAULT,
+      checkpointRetention: CHECKPOINT_RETENTION_DEFAULT,
     };
   }
 
@@ -287,6 +295,26 @@ export class ProjectRegistry {
     return this.get(key);
   }
 
+  checkpointRetentionOf(cwd: string): CheckpointRetention {
+    return this.stored.get(canonical(cwd))?.checkpointRetention ?? CHECKPOINT_RETENTION_DEFAULT;
+  }
+
+  setCheckpointRetention(cwd: string, retention: CheckpointRetention): ProjectInfo {
+    const key = canonical(cwd);
+    this.assertProject(key);
+    const existing = this.stored.get(key) ?? { addedAt: this.now().toISOString(), pinned: false };
+    if (retention === CHECKPOINT_RETENTION_DEFAULT) {
+      const { checkpointRetention: _dropped, ...rest } = existing;
+      void _dropped;
+      this.stored.set(key, rest);
+    } else {
+      this.stored.set(key, { ...existing, checkpointRetention: retention });
+    }
+    this.persist();
+    this.emit();
+    return this.get(key);
+  }
+
   /**
    * Resolve trust for a directory we are about to start a worker in, asking a
    * client when nobody has decided. Returns the flag the worker should run
@@ -371,6 +399,11 @@ export class ProjectRegistry {
           (AGENT_ISOLATION_DEFAULTS as readonly string[]).includes(v.agentIsolation) &&
           v.agentIsolation !== AGENT_ISOLATION_DEFAULT
             ? { agentIsolation: v.agentIsolation as AgentIsolationDefault }
+            : {}),
+          ...(typeof v.checkpointRetention === "string" &&
+          isCheckpointRetention(v.checkpointRetention) &&
+          v.checkpointRetention !== CHECKPOINT_RETENTION_DEFAULT
+            ? { checkpointRetention: v.checkpointRetention }
             : {}),
         });
       }
