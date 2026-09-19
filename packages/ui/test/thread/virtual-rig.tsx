@@ -96,6 +96,11 @@ export interface Rig {
   render(ids: readonly string[]): Promise<void>;
   /** Replace what the producer says about earlier history. */
   setHistory(history: RigHistory): Promise<void>;
+  /**
+   * The head's own content changes height: a notice appearing or going, the
+   * history control becoming a refusal, the loading state.
+   */
+  setHead(height: number): Promise<void>;
   /** Deliver pending resizes and let the engine's frames run. */
   settle(rounds?: number): Promise<void>;
   /**
@@ -190,15 +195,23 @@ export async function mountRig(options: RigOptions): Promise<Rig> {
     return Object.assign(list, { item: (index: number) => list[index] ?? null }) as unknown as DOMRectList;
   };
   const originalRect = Element.prototype.getBoundingClientRect;
+  const itemTop = (item: HTMLElement) => layout.above + (Number.parseFloat(item.style.top) || 0) - scrollTop;
   Element.prototype.getBoundingClientRect = function rect(this: Element): DOMRect {
     if (this === viewport) return new DOMRect(0, 0, 600, layout.clientHeight);
     const content = messages();
     if (this === content) return new DOMRect(0, layout.above - scrollTop, 600, contentHeight());
-    const item = itemOf(this);
-    if (item) {
-      const top = layout.above + (Number.parseFloat(item.style.top) || 0) - scrollTop;
-      return new DOMRect(0, top, 600, fakeHeight(item));
+    // The placeholder region is inside the head item but is not the head: it
+    // starts below whatever the head's own content is, and the controller asks
+    // it where it is. Resolving it to its item's box would hide exactly the
+    // offset a real history control introduces.
+    const region = this instanceof HTMLElement && this.dataset["slot"] === "history-reserve" ? this : undefined;
+    if (region) {
+      const head = itemOf(region);
+      const turns = region.querySelectorAll('[data-slot="history-reserve-turn"]').length;
+      return new DOMRect(0, (head ? itemTop(head) : 0) + layout.headHeight, 600, turns * TURN);
     }
+    const item = itemOf(this);
+    if (item) return new DOMRect(0, itemTop(item), 600, fakeHeight(item));
     return new DOMRect(0, 0, 0, 0);
   };
 
@@ -298,6 +311,7 @@ export async function mountRig(options: RigOptions): Promise<Rig> {
     async setIds(next) { ids = [...next]; await act(async () => { apply(); }); await settle(); },
     async render(next) { ids = [...next]; await act(async () => { apply(); }); },
     async setHistory(next) { history = next; await act(async () => { apply(); }); await settle(); },
+    async setHead(height) { layout.headHeight = height; await settle(2); },
     settle,
     async idle() {
       await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 200)); });

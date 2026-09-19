@@ -162,8 +162,10 @@ async function mount(store: ReturnType<typeof createStateStore>, presentation: T
           <ThreadPrimitive.Root>
             <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnRunStart={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} data-slot="thread-viewport">
               <TranscriptViewportBinding />
-              <HistoryControls />
-              <WindowedMessages />
+              {/* The controls are the head item's content, exactly as the app
+                  mounts them: chrome above the list would be a scroll margin
+                  the engine cannot anchor through (M16-T87). */}
+              <WindowedMessages head={<HistoryControls />} />
             </ThreadPrimitive.Viewport>
           </ThreadPrimitive.Root>
         </FileOpenerProvider>
@@ -252,9 +254,12 @@ describe("a trim while somebody is reading", () => {
       expect(exposed[0]!.classList.contains("sr-only")).toBe(true);
       expect(container.querySelector('[data-slot="thread-messages"]')!.getAttribute("aria-busy")).toBe("true");
       // Nothing visible says so: no card, no copy in the transcript region.
+      // The explicit control is the one exception and always was — it is the
+      // button the person pressed, and it lives in the head item with the
+      // rest of what stands above the conversation.
       expect(container.querySelector('[data-slot="history-reserve-loading"]')).toBeNull();
       const visibleCopy = [...container.querySelectorAll('[data-slot="thread-messages"] *')]
-        .filter(node => node.childElementCount === 0 && /loading/i.test(node.textContent ?? "") && !node.closest(".sr-only"));
+        .filter(node => node.childElementCount === 0 && /loading/i.test(node.textContent ?? "") && !node.closest(".sr-only") && !node.closest("button"));
       expect(visibleCopy).toHaveLength(0);
       // The overdue mark appears only past one slow motion step, only while
       // the person is inside the estimated range, and goes on arrival.
@@ -297,16 +302,19 @@ describe("a trim while somebody is reading", () => {
     hydrateThrough(store, undefined);
     const controller = await mount(store, presentation);
 
-    // A real message action, focused, and the row it belongs to.
-    // Read an older part of the conversation: scroll the real viewport there
-    // and let the controller do what it does with a scroll.
+    // Read an older part of the conversation: land at the newest turn the way
+    // an opening conversation does, then travel back up through it and let the
+    // browser's own scroll event reach the controller, as a wheel would.
     const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]')!;
     await act(async () => { controller.latest(); await Promise.resolve(); });
     await act(async () => { viewport.dispatchEvent(new Event("scroll")); await Promise.resolve(); });
-    // The newest turn, which is where a reader lands and which the transcript
-    // is showing: the surface picks it, the test only names it.
-    const knownId = rowIds().at(-1)!;
-    expect(knownId).toBe("entry:e23");
+    await act(async () => { viewport.scrollTop = Math.max(0, viewport.scrollTop - ROW * 12); await Promise.resolve(); });
+    await act(async () => { viewport.dispatchEvent(new Event("scroll")); await Promise.resolve(); });
+    // The row the reading position is on: the surface picks it, the test only
+    // names it — and it is not the newest turn, which is the easy case.
+    const knownId = controller.capture().anchor?.messageId ?? rowIds().at(-1)!;
+    expect(rowIds()).toContain(knownId);
+    expect(knownId, "the reader never left the live edge").not.toBe(rowIds().at(-1));
     const knownEntry = knownId.slice("entry:".length);
     const target = rowOf(knownId)!;
     const action = target.querySelector("button")!;
@@ -320,9 +328,8 @@ describe("a trim while somebody is reading", () => {
     presentation.rememberEdit(SESSION, knownId, draft);
     draft.update({ draft: "half an edit", editing: true });
 
-    // Reading an older part of the conversation: scroll there and let the
-    // viewport publish what it is standing on. No timer is guessed — the
-    // publication itself is what is waited for.
+    // Let the viewport publish what it is standing on. No timer is guessed —
+    // the publication itself is what is waited for.
     await act(async () => { controller.capture(); controller.committed(); });
     await act(async () => { await Promise.resolve(); });
     expect(standingRows(SESSION)?.focusedEntryId).toBe(knownEntry);

@@ -7,10 +7,11 @@
 import type { ImageMessagePart, ImageMessagePartComponent } from "@assistant-ui/react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Copy, Download, Image as ImageIcon, ImageOff, ShieldAlert, X } from "lucide-react";
-import { memo, useCallback, useContext, useEffect, useRef, useState, type ComponentProps, type PropsWithChildren } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type PropsWithChildren } from "react";
 import { createPortal } from "react-dom";
 
 import { StatusDot } from "@/components/status";
+import { dataUriImageDimensions } from "@/runtime/view-measure";
 import { useFileOpener } from "@/lib/file-opener";
 import { useProjectImage } from "@/hooks/use-project-image";
 import { FileLinkDirectory } from "@/components/ui/source-file-link";
@@ -109,6 +110,16 @@ function ImagePreview({ className, containerClassName, onLoad, onError, alt = "I
   const [errorSrc, setErrorSrc] = useState<string | undefined>(undefined);
   const loaded = loadedSrc === src;
   const error = errorSrc === src;
+  /**
+   * The box this picture will occupy, taken from its own header before it has
+   * decoded. A picture that appears at its full height in a row somebody is
+   * already reading moves their text by that much: the transcript's engine
+   * anchors rows, and growth *inside* a row, above the reading line, is the one
+   * thing it cannot hold (D-303, `docs/transcript-reading.md`). Reserved here,
+   * the decode changes nothing at all. An image whose header says nothing
+   * reserves nothing — the old behaviour, honestly.
+   */
+  const reserved = useMemo(() => (typeof src === "string" ? dataUriImageDimensions(src) : undefined), [src]);
 
   useEffect(() => {
     const image = imgRef.current;
@@ -118,7 +129,14 @@ function ImagePreview({ className, containerClassName, onLoad, onError, alt = "I
   }, [src]);
 
   return (
-    <div data-slot="image-preview" className={cn("relative min-h-32", containerClassName)}>
+    <div
+      data-slot="image-preview"
+      data-reserved={reserved && !error ? `${reserved.width}x${reserved.height}` : undefined}
+      className={cn("relative min-h-32", containerClassName)}
+      // A picture that failed is never going to fill the box it asked for, so
+      // the reservation goes with it and the failure state keeps its own size.
+      style={reserved && !error ? { aspectRatio: `${reserved.width} / ${reserved.height}` } : undefined}
+    >
       {!loaded && !error ? (
         <div data-slot="image-preview-loading" role="status" aria-label="Loading image" className="absolute inset-0 flex items-center justify-center bg-surface-2">
           <ImageIcon aria-hidden="true" className="size-8 text-ink-3" />
@@ -133,6 +151,7 @@ function ImagePreview({ className, containerClassName, onLoad, onError, alt = "I
           ref={imgRef}
           src={src}
           alt={alt}
+          {...(reserved ? { width: reserved.width, height: reserved.height } : {})}
           className={cn("block h-auto w-full object-contain", !loaded && "invisible", className)}
           onLoad={(e) => {
             if (typeof src === "string") setLoadedSrc(src);

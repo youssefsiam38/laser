@@ -3,6 +3,7 @@ import type { ImageContent } from "@lasercode/protocol";
 
 import {
   byteLength,
+  dataUriImageDimensions,
   entryBytes,
   IMAGE_PROBE_BYTES,
   imageDimensions,
@@ -95,6 +96,26 @@ describe("image size", () => {
     expect(imageDimensions(gif(320, 200))).toEqual({ width: 320, height: 200 });
     expect(imageDimensions(jpeg(640, 480))).toEqual({ width: 640, height: 480 });
     expect(imageDimensions(webpLossy(300, 150))).toEqual({ width: 300, height: 150 });
+  });
+
+  it("reads the same dimensions out of a rendered image's data URI, and refuses anything else", () => {
+    // The transcript reserves a picture's box from this before it decodes, so
+    // a wrong answer is a layout that moves under a reader and a missing one
+    // is only the old behaviour (M16-T87).
+    expect(dataUriImageDimensions(`data:image/png;base64,${png(2048, 1024)}`)).toEqual({ width: 2048, height: 1024 });
+    expect(dataUriImageDimensions(`data:image/jpeg;base64,${jpeg(640, 480)}`)).toEqual({ width: 640, height: 480 });
+    // Not inline bytes at all: a remote picture, or one this window is holding
+    // as a blob. Honestly unknown.
+    expect(dataUriImageDimensions("https://example.invalid/picture.png")).toBeUndefined();
+    expect(dataUriImageDimensions("blob:https://example.invalid/0-1-2")).toBeUndefined();
+    // Inline, but not base64 image bytes, or a header this parser does not know.
+    expect(dataUriImageDimensions("data:text/plain,hello")).toBeUndefined();
+    expect(dataUriImageDimensions(`data:image/svg+xml;base64,${btoa("<svg></svg>")}`)).toBeUndefined();
+    // A megabyte of picture costs a bounded prefix, not a copy of the payload.
+    const slice = vi.spyOn(String.prototype, "slice");
+    expect(dataUriImageDimensions(`data:image/png;base64,${png(300, 150, 4 * 1024 * 1024)}`)).toEqual({ width: 300, height: 150 });
+    expect(slice.mock.results.every(result => typeof result.value !== "string" || result.value.length <= IMAGE_PROBE_BYTES * 2)).toBe(true);
+    slice.mockRestore();
   });
 
   it("charges encoded bytes plus the decoded surface an image really keeps", () => {

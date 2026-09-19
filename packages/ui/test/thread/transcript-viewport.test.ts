@@ -92,6 +92,83 @@ describe("actions that move the conversation", () => {
   });
 });
 
+/**
+ * A gesture is what the person can actually do with the scroller. The engine
+ * owns where the transcript goes; this is only the question of when a person's
+ * movement ends a destination and this surface's claim on the live edge.
+ */
+describe("gestures that move nothing", () => {
+  /** Long enough for a cancellation to have settled its promise if it came. */
+  const drain = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
+  /** A scroller with room below the reader and none above them. */
+  function scroller(scrollTop: number, total = 2_000) {
+    const viewport = document.createElement("div");
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, clientWidth: { value: 600 }, scrollHeight: { value: total } });
+    viewport.scrollTop = scrollTop;
+    return viewport;
+  }
+
+  it("does not cancel a destination for a no-op wheel at the bottom", async () => {
+    const controller = new TranscriptViewport(), viewport = scroller(1_400);
+    controller.configure("/destination");
+    const detach = controller.attach(viewport);
+    try {
+      let settled = false;
+      const pending = controller.ensureVisible({ messageId: "missing" }, { reason: "find", locate: () => new Promise<void>(() => {}) })
+        .finally(() => { settled = true; });
+      // Further down, from the end: the browser has nowhere to take them.
+      viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: 300 }));
+      await drain();
+      expect(settled, "a wheel that could move nothing ended the destination").toBe(false);
+      // Upwards is movement, and movement is the person saying where they are
+      // going instead.
+      viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -300 }));
+      expect(await pending).toBe("cancelled");
+    } finally { detach(); }
+  });
+
+  it("keeps a destination through a no-op Space at the bottom", async () => {
+    const controller = new TranscriptViewport(), viewport = scroller(1_400);
+    controller.configure("/space");
+    const detach = controller.attach(viewport);
+    try {
+      let settled = false;
+      const pending = controller.ensureVisible({ messageId: "missing" }, { reason: "find", locate: () => new Promise<void>(() => {}) })
+        .finally(() => { settled = true; });
+      // Space is a page down, and the page below is already the last one.
+      viewport.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+      await drain();
+      expect(settled, "a page down at the last page ended the destination").toBe(false);
+      // Shift+Space is a page up, and there is a conversation above.
+      viewport.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, shiftKey: true }));
+      expect(await pending).toBe("cancelled");
+    } finally { detach(); }
+  });
+
+  it("keeps a destination through a touch that never becomes a drag", async () => {
+    const controller = new TranscriptViewport(), viewport = scroller(1_400);
+    controller.configure("/touch");
+    const detach = controller.attach(viewport);
+    try {
+      let settled = false;
+      const pending = controller.ensureVisible({ messageId: "missing" }, { reason: "find", locate: () => new Promise<void>(() => {}) })
+        .finally(() => { settled = true; });
+      const touch = (type: string, clientY: number) => {
+        const event = new Event(type, { bubbles: true }) as Event & { touches: { clientY: number }[] };
+        Object.defineProperty(event, "touches", { value: [{ clientY }] });
+        viewport.dispatchEvent(event);
+      };
+      touch("touchstart", 400);
+      await drain();
+      expect(settled, "a tap ended the destination").toBe(false);
+      // The same finger, moved: the person is taking the conversation upwards.
+      touch("touchmove", 460);
+      expect(await pending).toBe("cancelled");
+    } finally { detach(); }
+  });
+});
+
 describe("earlier-history requests", () => {
   it("tracks requests in flight and is idempotent about ending them", () => {
     const controller = new TranscriptViewport();

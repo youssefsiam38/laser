@@ -27,19 +27,44 @@
  *   fence (D-303). Their outcomes are covered by the tests above;
  * - the block-level reading anchor is gone with `reading-anchor.ts`. The row
  *   is the unit of identity the engine can express, so content growing inside
- *   the row the reader is on, above their line, moves their text by that much
- *   — as it would on any page. `docs/transcript-reading.md` records this.
+ *   the row the reader is on, above their line, moves their text by that much.
+ *   That is worse than a plain page, whose browser anchoring this scroller
+ *   switches off on purpose; `docs/transcript-reading.md` records the trade,
+ *   and images now reserve their box so the largest instance cannot happen.
+ *
+ * Which option each group pins, so the suite can be read as evidence rather
+ * than taken on trust (each verified by removing the option and watching these
+ * tests go red):
+ *
+ * - `shouldAdjustScrollPositionOnItemSizeChange` — `reading upwards > holds the
+ *   reader's row through twenty-four pages`, `rows that grow > holds the
+ *   reading position when a row above it grows`, `the head > …`;
+ * - `measureElement` (rounding both paths identically) — `rows that grow >
+ *   counts a sub-pixel change as no change at all`;
+ * - `observeElementRect` (a zero-height scroller reads as the window) — every
+ *   test here mounts in happy-dom, and the wider suites
+ *   (`trim-interaction`, `session-opening`, `immediate-paint`) fail without it;
+ * - the placeholder's turn floor — `the unloaded-history placeholder > …`.
  */
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountRig, TURN, type Rig } from "./virtual-rig.js";
 import type { LocateResult, TranscriptTarget } from "../../src/components/thread/transcript-viewport.js";
 
-// The subject is geometry, not the message body: a row is a labelled box.
+/**
+ * The subject is geometry, not the message body: a row is a labelled box with
+ * one control — except the rows a test puts in `quiet`, which stand for a
+ * notice nobody can focus.
+ */
+const quiet = vi.hoisted(() => new Set<string>());
 vi.mock("../../src/components/thread/messages.js", async () => {
   const { useAuiState } = await import("@assistant-ui/react");
-  return { ThreadMessage: function Message() { const id = useAuiState(s => s.message.id); return <div data-message-id={id}><button>{id}</button></div>; } };
+  return { ThreadMessage: function Message() {
+    const id = useAuiState(s => s.message.id);
+    return <div data-message-id={id}>{quiet.has(id) ? <span>{id}</span> : <button>{id}</button>}</div>;
+  } };
 });
+afterEach(() => quiet.clear());
 
 let rig: Rig | undefined;
 beforeEach(() => { globalThis.IS_REACT_ACT_ENVIRONMENT = true; });
@@ -323,6 +348,28 @@ describe("the conversation changing underneath", () => {
     expect(uncovered(rig)).toBe("");
   });
 
+  it("takes Tab past a row with nothing in it to focus", async () => {
+    rig = await mountRig({ ids: rows(0, 200), height: realHeight, clientHeight: 900 });
+    await rig.scrollTo(Math.round(rig.scrollHeight() / 2));
+    const last = rig.mounted().at(-1)!;
+    // The row Tab reaches next is a notice: no button, no link, nothing to
+    // land on. Focus belongs to the row after it, not to the window's gap.
+    const notice = `r${ordinalOf(last) + 1}`;
+    const after = `r${ordinalOf(last) + 2}`;
+    quiet.add(notice);
+    expect(rig.mounted()).not.toContain(notice);
+    const control = rig.node(last)!.querySelector("button")!;
+    await act(async () => {
+      control.focus();
+      control.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+      await new Promise<void>(resolve => setTimeout(resolve, 1200));
+    });
+    await rig.settle(2);
+    expect(rig.mounted(), "the notice never mounted").toContain(notice);
+    expect(rig.node(notice)!.querySelector("button")).toBeNull();
+    expect((document.activeElement as HTMLElement | null)?.textContent).toBe(after);
+  });
+
   it("takes Tab into a row the window had released", async () => {
     rig = await mountRig({ ids: rows(0, 200), height: realHeight, clientHeight: 900 });
     await rig.scrollTo(Math.round(rig.scrollHeight() / 2));
@@ -368,6 +415,26 @@ describe("rows that grow", () => {
     expect(Math.abs(rig.screenTop(reader)! - before)).toBeLessThanOrEqual(1);
   });
 
+  it("counts a sub-pixel change as no change at all", async () => {
+    // Real rows do not measure in whole pixels. Both measurement paths are
+    // rounded the same way, so a row that reflows by a third of a pixel is not
+    // a resize: nothing is compensated, and nothing moves by a third of a
+    // pixel either. Without that rounding these two assertions are off by the
+    // fractions of every row above the reader.
+    const fractional = (id: string) => realHeight(id) + 0.1;
+    rig = await mountRig({ ids: rows(0, 80), height: fractional, clientHeight: 900 });
+    await rig.scrollTo(Math.round(rig.scrollHeight() / 2));
+    await rig.scrollBy(-40);
+    const reader = rig.topVisible()!;
+    const before = rig.screenTop(reader)!;
+    const top = rig.scrollTop();
+    const above = rig.mounted()[0]!;
+    expect(above).not.toBe(reader);
+    await rig.grow(above, fractional(above) + 0.3);
+    expect(rig.scrollTop()).toBe(top);
+    expect(rig.screenTop(reader)).toBe(before);
+  });
+
   it("stays at the newest turn while it streams", async () => {
     const ids = rows(0, 60);
     rig = await mountRig({ ids, height: realHeight, clientHeight: 900 });
@@ -376,6 +443,24 @@ describe("rows that grow", () => {
       await rig.grow(last, height);
       expect(rig.scrollTop(), `at ${height}px`).toBeCloseTo(rig.scrollHeight() - 900, 0);
     }
+  });
+});
+
+describe("the head", () => {
+  it("holds the reader when a notice appears above the conversation and goes again", async () => {
+    // The worker-recovery notice and the load error live in the head item, so
+    // they arrive as an item resize the engine anchors through — not as a
+    // change of the ground the whole list stands on, which moves everybody by
+    // exactly the height that appeared (M16-T87, B2).
+    rig = await mountRig({ ids: rows(0, 120), height: realHeight, clientHeight: 900, headHeight: 40 });
+    await rig.scrollTo(Math.round(rig.scrollHeight() / 2));
+    const reader = rig.topVisible()!;
+    const held = rig.screenTop(reader)!;
+    await rig.setHead(240);
+    expect(Math.abs(rig.screenTop(reader)! - held), "the notice pushed the reader").toBeLessThanOrEqual(1);
+    await rig.setHead(40);
+    expect(Math.abs(rig.screenTop(reader)! - held), "the notice going pulled the reader").toBeLessThanOrEqual(1);
+    expect(uncovered(rig)).toBe("");
   });
 });
 
@@ -409,6 +494,35 @@ describe("the unloaded-history placeholder", () => {
     // The beginning of the conversation, not the end of it.
     expect(rig.scrollTop()).toBe(0);
     expect(rig.mounted()[0]).toBe("r95");
+  });
+
+  it("gives its turns back to pages that arrive even when the producer's count does not move", async () => {
+    // The producer's remaining-prompt count is the producer's. A page that
+    // does not move it must still take the pixels it replaced, or the region
+    // never yields, the reader stays pinned inside it and continuous paging
+    // asks for ever (M16-T87, M1).
+    let ids = rows(200, 40);
+    rig = await mountRig({
+      ids,
+      height: realHeight,
+      clientHeight: 900,
+      headHeight: 40,
+      history: { before: "cursor", userOffset: 120 },
+    });
+    await rig.scrollTo(0);
+    expect(rig.controller.isReadingHistoryReserve()).toBe(true);
+    const ceiling = rig.placeholderTurns();
+    expect(ceiling).toBeGreaterThan(1);
+    for (let page = 0; page < 8; page++) {
+      const turns = rig.placeholderTurns();
+      ids = [...rows(200 - (page + 1) * 5, 5), ...ids];
+      await rig.setIds(ids);
+      // The count is frozen: the producer says exactly what it said before.
+      await rig.setHistory({ before: "cursor", userOffset: 120 });
+      expect(rig.placeholderTurns(), `page ${page}: the region grew`).toBeLessThanOrEqual(turns);
+      expect(rig.scrollTop(), `page ${page}: the view was pushed forward`).toBe(0);
+    }
+    expect(rig.placeholderTurns(), "the region never gave anything back").toBeLessThan(ceiling);
   });
 
   it("grows back under a settled reader on loaded rows, and never under one inside it", async () => {

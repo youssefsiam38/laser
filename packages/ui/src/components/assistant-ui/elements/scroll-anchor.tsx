@@ -9,6 +9,16 @@
  * with a fake message feed; only the pill survives, and it is a real
  * `ScrollToBottom`. No new-message count: the runtime does not expose one,
  * and a guessed number would violate R3.
+ *
+ * The primitive decides whether this button exists — it knows when the
+ * viewport is pinned to the end and hides itself there. It does not decide
+ * where the transcript goes: `preventDefault` stops its own
+ * `scrollToBottom`, which writes `scrollTop` directly on the scroller and
+ * then keeps re-writing it on every content resize until the element reports
+ * bottom. That is a second authority over the pixels the transcript's
+ * virtualizer owns, during the measurement storm a jump sets off (D-303).
+ * `composeEventHandlers` runs the primitive's callback after this one and
+ * honours a default-prevented event, so the click reaches exactly one writer.
  */
 import { ThreadPrimitive } from "@assistant-ui/react";
 import { ArrowDown } from "lucide-react";
@@ -26,7 +36,7 @@ export interface ScrollAnchorProps extends Omit<ComponentProps<"button">, "child
 export function ScrollAnchor({ label = "Jump to latest", className, ...props }: ScrollAnchorProps) {
   const viewport = useTranscriptViewport();
   return (
-    <ThreadPrimitive.ScrollToBottom asChild onClick={() => viewport.latest()}>
+    <ThreadPrimitive.ScrollToBottom asChild onClick={event => { event.preventDefault(); viewport.latest(); }}>
       <button
         type="button"
         data-slot="scroll-anchor"

@@ -128,24 +128,10 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
               {/* A long transcript gets a rail of ticks at the viewport's edge, on a wide screen only. */}
               <ConversationMapAui side="right" className="hidden lg:block" />
               <div className="mx-auto flex w-full max-w-(--measure-thread) flex-1 flex-col px-4 md:px-6">
-                {cwd && (
-                  <WorkerRecoveryNotice
-                    className="mt-6"
-                    worker={worker}
-                    onRestart={(mode) => void actions.restartWorker(cwd, mode)}
-                  />
-                )}
-                {loadError && (
-                  <ErrorState className="mt-6"
-                    title={open.provisional ? "Couldn’t reach the host. This is your last view of this conversation."
-                      : open.hasTranscript ? "Couldn’t refresh this conversation." : open.path ? "This session didn’t load." : "Couldn’t open this view."}
-                    detail={worker?.status === "crashed" ? undefined : open.reason}
-                    onRetry={() => {
-                      if (destination.phase === "unavailable") void actions.retryDestination();
-                      else if (open.path) void actions.openSession(open.path).catch(() => {});
-                    }} />
-                )}
-                <ConversationLoadingGate key={open.path} active={loading} hasContent={open.hasTranscript || loadError || !open.expectsTranscript}>
+                {/* A crashed worker is content: it is the answer to “why is
+                    nothing arriving”, and it now lives in the transcript's head
+                    item, so the loader must not stand in front of it. */}
+                <ConversationLoadingGate key={open.path} active={loading} hasContent={open.hasTranscript || loadError || !open.expectsTranscript || worker?.status === "crashed"}>
                   {/* The welcome is for a conversation that has nothing in it —
                       decided from the session (its view is hydrated and holds
                       no history, or no session is open at all), never from the
@@ -156,11 +142,33 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
                   <AuiIf condition={(s) => s.thread.isEmpty}>
                     {(open.phase === "idle" || (open.phase === "ready" && !open.expectsTranscript)) && (emptyState ?? <EmptyState />)}
                   </AuiIf>
-                  {/* The history controls scroll with the conversation and are
-                      measured with it: they are the transcript's head item, not
-                      chrome above it, so the control appearing or going moves
-                      nobody (M16-T87). */}
-                  <WindowedMessages head={<HistoryControls key={path} />} />
+                  {/* Everything above the conversation scrolls with it and is
+                      measured with it: the notices and the history controls are
+                      the transcript's head item, not chrome above the list, so
+                      one of them appearing or going is a size change the engine
+                      anchors through rather than a push nobody accounted for
+                      (M16-T87, D-303). Nothing above the transcript inside this
+                      scroller may change height. */}
+                  <WindowedMessages head={<>
+                    {cwd && (
+                      <WorkerRecoveryNotice
+                        className="mt-6"
+                        worker={worker}
+                        onRestart={(mode) => void actions.restartWorker(cwd, mode)}
+                      />
+                    )}
+                    {loadError && (
+                      <ErrorState className="mt-6"
+                        title={open.provisional ? "Couldn’t reach the host. This is your last view of this conversation."
+                          : open.hasTranscript ? "Couldn’t refresh this conversation." : open.path ? "This session didn’t load." : "Couldn’t open this view."}
+                        detail={worker?.status === "crashed" ? undefined : open.reason}
+                        onRetry={() => {
+                          if (destination.phase === "unavailable") void actions.retryDestination();
+                          else if (open.path) void actions.openSession(open.path).catch(() => {});
+                        }} />
+                    )}
+                    <HistoryControls key={path} />
+                  </>} />
                 </ConversationLoadingGate>
                 <ThreadPrimitive.ViewportFooter
                   data-slot="thread-footer"
@@ -280,8 +288,9 @@ export function HistoryControls() {
     busy.current = true;
     requestedHistory.current = true;
     setLoading(all ? "all" : "earlier");
-    // The controller holds this surface's place across the page it is about to
-    // commit; nothing else may restore from estimates while that page arrives.
+    // One earlier-history request more in flight. The controller counts them
+    // for one reason: a page that is late while the person is inside the
+    // placeholder says so. The place they are reading is the engine's.
     if (!all) controller.beginEarlierPage();
     pending.current = { focused: root.current?.contains(document.activeElement) ? document.activeElement : null, page: !all };
     let loaded = false;
@@ -300,7 +309,7 @@ export function HistoryControls() {
       }
     } catch {
       // The action already owns the person-facing transport error. Locally this
-      // request is a cancellation: release its geometry fence and stay retryable.
+      // request is a cancellation: stop counting it as in flight, stay retryable.
       loaded = false;
     } finally {
       busy.current = false;

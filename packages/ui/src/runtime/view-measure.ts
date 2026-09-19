@@ -234,6 +234,19 @@ export function imageDimensions(base64: string): { width: number; height: number
   return undefined;
 }
 
+/**
+ * The same dimensions, for an image already written as a `data:` URI — what a
+ * rendered image part carries. Only the prefix the prober needs is copied out
+ * of the URI, so asking a megabyte-long picture how big it is stays cheap, and
+ * a URI that is not inline base64 image bytes (a blob or a remote URL) is
+ * honestly unknown rather than guessed.
+ */
+export function dataUriImageDimensions(src: string): { width: number; height: number } | undefined {
+  const comma = src.indexOf(",");
+  if (comma < 0 || !/^data:image\/[^;,]+;base64$/i.test(src.slice(0, comma))) return undefined;
+  return imageDimensions(src.slice(comma + 1, comma + 1 + Math.ceil(IMAGE_PROBE_BYTES / 3) * 4));
+}
+
 function webpDimensions(bytes: Uint8Array): { width: number; height: number } | undefined {
   if (ascii(bytes, 12, "VP8X")) return valid(u24le(bytes, 24) + 1, u24le(bytes, 27) + 1);
   if (ascii(bytes, 12, "VP8L")) {

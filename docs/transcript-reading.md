@@ -6,14 +6,33 @@ change belong to `@tanstack/react-virtual` (D-303, `docs/transcript-virtualizati
 `TranscriptViewport` owns what is Laser's — which conversation is on screen,
 which rows are held open, where a destination is going, how much unloaded
 history stands above the loaded rows, and what this surface is standing on —
-and writes no scroll position of its own. The assistant-ui viewport does not
-reposition the conversation either, and the scroller carries
+and writes no scroll position of its own. The scroller carries
 `overflow-anchor: none` so the browser's own anchoring never competes.
+
+The assistant-ui viewport is kept out of the same pixels deliberately, and it
+takes two things to do it: the thread viewport's automatic scrolling is off
+(`autoScroll`, run start, initialize and thread switch, `Thread.tsx`), and
+"Jump to latest" prevents the default on its own click. That button is
+`ThreadPrimitive.ScrollToBottom`: the primitive decides whether it exists —
+it knows when the viewport is pinned to the end and hides itself there — and
+without `preventDefault` its own handler would also run, writing `scrollTop`
+directly on the scroller and re-writing it on every content resize until the
+element reported bottom, which is exactly the measurement storm a jump sets
+off. `composeEventHandlers` honours a default-prevented event, so the click
+reaches one writer: the engine's `scrollToIndex`.
+
+One browser-owned exception remains, and it is not a scroll position anybody
+computes: `.focus()` without `preventScroll` asks the browser to reveal the
+element. Every focus move the transcript makes passes `preventScroll: true`;
+the two that do not are a zoom dialog and a diagram dialog returning focus to
+the in-row control that opened them (`elements/image.tsx`,
+`elements/mermaid-diagram.tsx`), where the row is on screen by construction.
 
 ## The shape of the list
 
 ```
-item 0            the head: history controls, then the unloaded-history placeholder
+item 0            the head: the notices, the history controls, then the
+                  unloaded-history placeholder
 item 1 … item n   one per message, in normal chronological order
 ```
 
@@ -22,6 +41,16 @@ measures it and anchors through it exactly as it does a row, so the history
 control appearing or the placeholder shrinking moves nobody. And a list whose
 first key never changes lets the engine detect every prepend, trim and
 replacement from the item count alone.
+
+**Everything above the conversation lives there**, including the two notices
+that appear while a person is reading: the worker-recovery notice and the
+load/refresh error. Anything left above the transcript inside the same scroller
+is a `scrollMargin` to the engine — the ground the list stands on — and a
+*change* in that ground moves every item without moving the scroll position,
+which the person feels as the view pushing them down by exactly the height that
+appeared. Inside the head the same appearance is an ordinary item resize, which
+the engine compensates to the pixel. The rule is therefore flat: nothing above
+the transcript in this scroller may change height.
 
 Rows are positioned absolutely from the engine's own measurements (`top`, never
 a transform, so nothing inside a row loses its containing block) inside a
@@ -62,9 +91,19 @@ is a reader thrown by the page they asked for.
 
 **The row is the unit.** The block-level reading anchor that M16-T85 built
 (`reading-anchor.ts`) is gone with the second authority it belonged to. Content
-growing *inside* the row the reader is in, above their line — an image
-decoding, a disclosure opening on its own — moves their text by that much, as
-it would on any page. A row above them growing does not.
+growing *inside* the row the reader is in, above their line — late syntax
+highlighting, a formula, a diagram resolving — moves their text by that much.
+A row above them growing does not.
+
+That is worse than an ordinary web page, not the same: a plain page has the
+browser's own scroll anchoring to hold the reader through exactly this, and
+this scroller switches it off (`overflow-anchor: none`) so that one engine owns
+the pixels. The trade is deliberate — a second authority over `scrollTop` cost
+four person-visible defects — and the way to make the loss smaller is to stop
+rows growing, not to anchor finer. The largest instance is gone already: an
+image reserves its box from its own header before it decodes
+(`elements/image.tsx`, `runtime/view-measure.ts`), so a picture arriving
+changes no height at all.
 
 ## The unloaded-history placeholder
 
@@ -81,7 +120,13 @@ How many turns:
   "unknown" — one tool-heavy prompt can be a page of rows — so that case
   counts as two turns, not none;
 - an arriving page takes the turns it replaced, from the bottom of the region,
-  because that is where the rows belong;
+  because that is where the rows belong. How many it replaced is the drop in
+  the producer's count, **or one turn, whichever is larger, whenever rows
+  really did arrive at the front.** The count is the producer's and the region
+  may not depend on it alone: a page that did not move it would leave the
+  placeholder never yielding, the reader pinned inside it and continuous paging
+  asking for ever. The two agree in the normal case, because a page always
+  walks back to a user prompt;
 - **except the turns the person is looking at.** While the reading position is
   inside the region, only turns below the fold are given back. A row never
   materialises in front of somebody who has not reached it yet; the rest of the
@@ -118,7 +163,12 @@ and Tab into a row the window had released all go through `ensureVisible`,
 which uses the engine's own `scrollToIndex` to land and then its
 `scrollToOffset` to place the exact block — a text range, a tool call — a third
 of the way down. The destination row is held mounted while it is the target.
-Nothing else writes a scroll position.
+
+A gesture the person makes ends a destination, because the row they were being
+taken to is no longer where they are going. A gesture that cannot move
+anything is not one: a wheel down at the bottom of the conversation, a tap that
+never becomes a drag, Space at the end. Those leave the destination, and the
+placement this surface still owes, exactly where they were.
 
 ## Held rows
 
