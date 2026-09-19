@@ -20,7 +20,7 @@ import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { WorktreeManager, worktreeSlug, type CreateWorktreeInput, type Worktree, type WorktreeFacts } from "../../src/agents/worktrees.js";
 import { projectBashPrefix } from "../../src/project-env.js";
 import type { IndexedTask } from "../../src/agents/tasks.js";
-import { AGENT_EVENT_MESSAGE_TYPE, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse } from "@lasercode/protocol";
+import { AGENT_EVENT_MESSAGE_TYPE, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentIsolationDefault, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse, type WorkspaceShape } from "@lasercode/protocol";
 
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -183,7 +183,7 @@ function snapshotWith(agents: AgentDefinition[], maxDepth = 3): AgentsSnapshot {
   return { ...base, revision: 1, agents: [...agents, ...base.agents.filter((a) => a.kind === "builtin")], policy: { ...base.policy, maxDepth } };
 }
 
-function makeWorld(projectCwd = "/repo", projectTrusted = true) {
+function makeWorld(projectCwd = "/repo", projectTrusted = true, isolationDefault: AgentIsolationDefault = "decide") {
   const drivers = new Map<string, FakeDriver>();
   const notifications: Notification[] = [];
   const opened: Array<{ cwd: string; parentSessionPath: string; agent: DriverAgentOptions }> = [];
@@ -195,6 +195,7 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true) {
   let admitNewWork = true;
   let facts: WorktreeFacts = { exists: true, unmergedCommits: 0, uncommittedFiles: 0 };
   let root: string | undefined = "/repo";
+  let workspaceShape: WorkspaceShape = { cwd: projectCwd, kind: "repo", repositories: [{ root: projectCwd, name: "repo", projectRoot: true }] };
   /** The worker's task index, as the harness reads it: commands by the session that ran them. */
   const tasks = new Map<string, IndexedTask[]>();
   const worktrees: WorktreeProvider & { created: CreateWorktreeInput[]; removed: string[]; removedWith: Array<{ root: string; path: string; branch?: string }> } = {
@@ -214,6 +215,7 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true) {
     ownedBy: () => undefined,
     async rootOf() { return root; },
     async facts() { return facts; },
+    async shape() { return workspaceShape; },
   };
   const host: SessionHost = {
     async openChild(open) {
@@ -238,7 +240,7 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true) {
     taskLogRoot: () => tmpdir(),
   };
   const definitions = new DefinitionsCache();
-  const harness = new AgentHarness({ host, definitions, worktrees, projectTrusted, admitNewWork: () => admitNewWork, backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: 120, commandPrefix: projectBashPrefix("source scripts/project-shell.sh") }), now: () => Date.now() });
+  const harness = new AgentHarness({ host, definitions, worktrees, projectTrusted, isolationDefault, admitNewWork: () => admitNewWork, backgroundWork: (cwd) => ({ cwd, foregroundCommandSeconds: 120, commandPrefix: projectBashPrefix("source scripts/project-shell.sh") }), now: () => Date.now() });
   const openRoot = (name = "default", path = "/sessions/root.jsonl", id = "root-1") => {
     const def = definitions.definition(name)!;
     const handle = harness.prepareSession({ role: rootRole(name), definition: def, record: rootRecord(name), projectCwd });
@@ -258,6 +260,7 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true) {
     setAdmitNewWork: (value: boolean) => { admitNewWork = value; },
     /** Stand in for a project git cannot give a worktree: not a repository, no commit, a path another agent owns. */
     setRefuseWorktrees: (message: string | undefined) => { refuseWorktrees = message; },
+    setWorkspaceShape: (next: WorkspaceShape) => { workspaceShape = next; },
     /** What the child's branch and directory hold, when the parent asks to remove them. */
     setWorktreeFacts: (next: WorktreeFacts) => { facts = next; },
     setWorktreeRoot: (next: string | undefined) => { root = next; },
@@ -1826,25 +1829,76 @@ describe("AgentHarness", () => {
     expect(await child.completeRun({ status: "completed", message: "Reviewed; two notes." })).toEqual({ ok: true, runId: result.runId });
   });
 
-  it("still gives a worktree when the flag is absent or true, and refuses anything that is not a boolean", async () => {
+  it("still gives a worktree when the flag is absent or true, and refuses anything that is not true, false, or strict", async () => {
     const root = world.openRoot("lead");
     const absent = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "a", task: "t" });
     expect(absent.branch).toBe(`agents/a-${absent.runId.slice(4)}`);
     expect(world.harness.run(absent.runId)!.worktree).toMatchObject({ branch: `agents/a-${absent.runId.slice(4)}` });
+    expect(absent.isolation).toMatchObject({ mode: "worktree", shape: "repo" });
     const asked = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "b", task: "t", worktree: true });
     expect(asked.branch).toBe(`agents/b-${asked.runId.slice(4)}`);
     expect(world.worktrees.created).toHaveLength(2);
-    await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "c", task: "t", worktree: "false" as unknown as boolean })).rejects.toThrow(/worktree must be true or false/);
-    expect(world.worktrees.created).toHaveLength(2);
+    const strict = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "d", task: "t", worktree: "strict" });
+    expect(strict.branch).toBeDefined();
+    expect(world.worktrees.created).toHaveLength(3);
+    await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "c", task: "t", worktree: "false" as unknown as boolean })).rejects.toThrow(/worktree must be true, false, or "strict"/);
+    expect(world.worktrees.created).toHaveLength(3);
   });
 
-  it("starts an uninsulated child in a project that cannot give a worktree at all", async () => {
+  it("shares the checkout in a no-git directory instead of failing, and strict still refuses", async () => {
     const root = world.openRoot("lead");
-    world.setRefuseWorktrees("This project is not a git repository, so agents cannot get an isolated worktree. Initialise git in the project first.");
-    await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "iso", task: "t" })).rejects.toThrow(/not a git repository/);
-    const shared = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "read", task: "t", worktree: false });
-    expect(shared).toMatchObject({ status: "running", cwd: "/repo" });
-    expect(world.harness.run(shared.runId)!.worktree).toBeNull();
+    world.setWorkspaceShape({ cwd: "/repo", kind: "no-git", repositories: [] });
+    const shared = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "iso", task: "t" });
+    expect(shared).toMatchObject({
+      status: "running",
+      cwd: "/repo",
+      isolation: { mode: "shared", shape: "no-git", reason: "No repository here, so this agent shares your checkout." },
+    });
+    expect(shared).not.toHaveProperty("branch");
+    expect(world.worktrees.created).toHaveLength(0);
+    expect(world.harness.run(shared.runId)!.isolation).toEqual(shared.isolation);
+    const seen = await root.handle.bridge.inspectAgent({ runId: shared.runId });
+    expect(seen.isolation).toEqual(shared.isolation);
+    await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "need", task: "t", worktree: "strict" })).rejects.toThrow(/not a git repository/);
+    await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "need", task: "t", worktree: "strict" })).rejects.toThrow(/worktree false/);
+  });
+
+  it("shares a workspace of many repositories and names the count", async () => {
+    const root = world.openRoot("lead");
+    world.setWorkspaceShape({
+      cwd: "/repo",
+      kind: "workspace-of-repos",
+      repositories: Array.from({ length: 41 }, (_, i) => ({ root: `/repo/r${i}`, name: `r${i}`, projectRoot: false })),
+    });
+    const shared = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "many", task: "t" });
+    expect(shared.isolation).toEqual({
+      mode: "shared",
+      shape: "workspace-of-repos",
+      reason: "This workspace holds 41 repositories, so an agent cannot be isolated from all of them; sharing your checkout.",
+    });
+    expect(world.worktrees.created).toHaveLength(0);
+    await expect(root.handle.bridge.startAgent({ agentName: "worker", subagentName: "need", task: "t", worktree: "strict" })).rejects.toThrow(/41 repositories/);
+  });
+
+  it("lets the project isolation default change how true behaves", async () => {
+    const shareWorld = makeWorld("/repo", true, "share");
+    shareWorld.definitions.sync(snapshotWith([PARENT, WORKER, REVIEWER]));
+    const shareRoot = shareWorld.openRoot("lead");
+    const shared = await shareRoot.handle.bridge.startAgent({ agentName: "worker", subagentName: "s", task: "t" });
+    expect(shared.isolation?.mode).toBe("shared");
+    expect(shareWorld.worktrees.created).toHaveLength(0);
+
+    const isolateWorld = makeWorld("/repo", true, "isolate");
+    isolateWorld.definitions.sync(snapshotWith([PARENT, WORKER, REVIEWER]));
+    isolateWorld.setWorkspaceShape({ cwd: "/repo", kind: "no-git", repositories: [] });
+    const isolateRoot = isolateWorld.openRoot("lead");
+    await expect(isolateRoot.handle.bridge.startAgent({ agentName: "worker", subagentName: "i", task: "t" })).rejects.toThrow(/not a git repository/);
+    const forcedShare = await isolateRoot.handle.bridge.startAgent({ agentName: "worker", subagentName: "ok", task: "t", worktree: false });
+    expect(forcedShare.isolation?.mode).toBe("shared");
+
+    world.harness.setIsolationDefault("share");
+    const after = await world.openRoot("lead").handle.bridge.startAgent({ agentName: "worker", subagentName: "later", task: "t" });
+    expect(after.isolation?.mode).toBe("shared");
   });
 
   it("removes nothing when a child with no worktree fails to open, ends, or has its session deleted", async () => {

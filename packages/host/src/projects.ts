@@ -16,7 +16,16 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { ErrorCodes, PRODUCT_NAME, ProtocolError, type ProjectInfo, type ProjectTrust } from "@lasercode/protocol";
+import {
+  AGENT_ISOLATION_DEFAULT,
+  AGENT_ISOLATION_DEFAULTS,
+  ErrorCodes,
+  PRODUCT_NAME,
+  ProtocolError,
+  type AgentIsolationDefault,
+  type ProjectInfo,
+  type ProjectTrust,
+} from "@lasercode/protocol";
 import type { SessionCatalog } from "./catalog.js";
 import { isWithinDirectory } from "./paths.js";
 import { canonical, trustReasons } from "./trust.js";
@@ -29,6 +38,8 @@ interface StoredProject {
   order?: number;
   /** Only set once a person decided in laser and asked us to remember. */
   trust?: "trusted" | "declined";
+  /** Absent means decide-per-agent, the product default. */
+  agentIsolation?: AgentIsolationDefault;
 }
 
 export interface TrustRequest {
@@ -114,6 +125,7 @@ export class ProjectRegistry {
         ...(reasons.length > 0 ? { trustReasons: reasons } : {}),
         pinned: stored?.pinned ?? false,
         sessionCount: counts.get(cwd) ?? 0,
+        agentIsolation: stored?.agentIsolation ?? AGENT_ISOLATION_DEFAULT,
       });
     }
     return out.sort((a, b) => {
@@ -143,6 +155,7 @@ export class ProjectRegistry {
         ...(reasons.length > 0 ? { trustReasons: reasons } : {}),
         pinned: stored?.pinned ?? false,
         sessionCount: count,
+        agentIsolation: stored?.agentIsolation ?? AGENT_ISOLATION_DEFAULT,
       };
     }
     const { trust, reasons } = this.trustOf(key);
@@ -154,6 +167,7 @@ export class ProjectRegistry {
       ...(reasons.length > 0 ? { trustReasons: reasons } : {}),
       pinned: false,
       sessionCount: 0,
+      agentIsolation: AGENT_ISOLATION_DEFAULT,
     };
   }
 
@@ -252,6 +266,27 @@ export class ProjectRegistry {
     return this.get(key);
   }
 
+  /** How `start_agent` treats `worktree: true` / absent in this project. */
+  agentIsolationOf(cwd: string): AgentIsolationDefault {
+    return this.stored.get(canonical(cwd))?.agentIsolation ?? AGENT_ISOLATION_DEFAULT;
+  }
+
+  setAgentIsolation(cwd: string, isolation: AgentIsolationDefault): ProjectInfo {
+    const key = canonical(cwd);
+    this.assertProject(key);
+    const existing = this.stored.get(key) ?? { addedAt: this.now().toISOString(), pinned: false };
+    if (isolation === AGENT_ISOLATION_DEFAULT) {
+      const { agentIsolation: _dropped, ...rest } = existing;
+      void _dropped;
+      this.stored.set(key, rest);
+    } else {
+      this.stored.set(key, { ...existing, agentIsolation: isolation });
+    }
+    this.persist();
+    this.emit();
+    return this.get(key);
+  }
+
   /**
    * Resolve trust for a directory we are about to start a worker in, asking a
    * client when nobody has decided. Returns the flag the worker should run
@@ -332,6 +367,11 @@ export class ProjectRegistry {
           ...(typeof v.lastUsedAt === "string" ? { lastUsedAt: v.lastUsedAt } : {}),
           ...(typeof v.order === "number" && Number.isSafeInteger(v.order) && v.order >= 0 ? { order: v.order } : {}),
           ...(v.trust === "trusted" || v.trust === "declined" ? { trust: v.trust } : {}),
+          ...(typeof v.agentIsolation === "string" &&
+          (AGENT_ISOLATION_DEFAULTS as readonly string[]).includes(v.agentIsolation) &&
+          v.agentIsolation !== AGENT_ISOLATION_DEFAULT
+            ? { agentIsolation: v.agentIsolation as AgentIsolationDefault }
+            : {}),
         });
       }
     } catch {

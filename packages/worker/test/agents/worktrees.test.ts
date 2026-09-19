@@ -114,6 +114,21 @@ describe.skipIf(!haveGit)("WorktreeManager against a repository", () => {
     expect(manager.ownedBy("run_0a1b2c3d")).toBeUndefined();
   });
 
+  it("lands a worktree of a worktree beside its siblings, not nested inside one", async () => {
+    const repo = repoWithCommit();
+    const linked = join(base, "linked");
+    git(repo, "worktree", "add", "-q", "-b", "linked-branch", linked);
+    const manager = new WorktreeManager();
+    const fromMain = await manager.create({ projectCwd: repo, baseCwd: repo, subagentName: "a", runId: "run_aaaaaaaa" });
+    expect(fromMain.root).toBe(repo);
+    expect(fromMain.path).toBe(join(repo, WORKTREES_DIR_NAME, "a-aaaaaaaa"));
+    const fromLinked = await manager.create({ projectCwd: linked, baseCwd: linked, subagentName: "b", runId: "run_bbbbbbbb" });
+    expect(fromLinked.root).toBe(repo);
+    expect(fromLinked.path).toBe(join(repo, WORKTREES_DIR_NAME, "b-bbbbbbbb"));
+    expect(fromLinked.path.startsWith(linked + "/")).toBe(false);
+    expect(existsSync(join(linked, WORKTREES_DIR_NAME))).toBe(false);
+  });
+
   it("keeps the project's subdirectory as the child's cwd and branches from the parent worktree", async () => {
     const repo = repoWithCommit();
     mkdirSync(join(repo, "packages", "app"), { recursive: true });

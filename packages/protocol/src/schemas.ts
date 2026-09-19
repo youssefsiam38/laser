@@ -39,6 +39,7 @@ import { BODY_COMPONENT_KINDS, BODY_REGION_MAX_ITEMS, ENTRY_RANGE_MAX_BYTES } fr
 import { CHANGE_SCOPES, FILE_DIFF_MAX_BYTES, RESTORE_TARGETS } from "./source-control.js";
 import { HISTORY_PAGE_BYTE_LIMIT, HISTORY_PAGE_TURN_MAX } from "./history-window.js";
 import { TELEMETRY_SECTIONS } from "./telemetry.js";
+import { AGENT_ISOLATION_DEFAULTS } from "./workspace.js";
 
 /** Opt-in browse replies must not silently reinterpret legacy folders as files. */
 export const explorerListingSchema = z.object({
@@ -875,6 +876,10 @@ export const clientParamsSchemas = {
     confirm: z.boolean().optional(),
     workdir: z.string().min(1).max(4096).optional(),
   }).strict(),
+  "pi/project/workspace": z.object({ cwd: z.string().min(1), rescan: z.boolean().optional() }).strict(),
+  "pi/project/isolation/set": z
+    .object({ cwd: z.string().min(1), isolation: z.enum(AGENT_ISOLATION_DEFAULTS) })
+    .strict(),
   "pi/project/browse": z.object({
     path: z.string().min(1).max(4096).optional(),
     explorer: z.object({

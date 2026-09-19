@@ -22,7 +22,7 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, isLiveEdgeWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TelemetrySection, type TypedClientRequest, type WorkerActivationState, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, isLiveEdgeWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, WIRE_NAMESPACE, AGENT_ISOLATION_DEFAULT, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TelemetrySection, type TypedClientRequest, type WorkerActivationState, type AgentIsolationDefault } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
 import {
   PRESSURE_MAX_REPLAY_DROPS,
@@ -106,6 +106,8 @@ export interface WorkerServerOptions {
   stateDir?: string;
   /** Host-resolved Pi project trust for `cwd`; see `DriverOpenOptions.projectTrusted`. */
   projectTrusted?: boolean;
+  /** Per-project isolation default for `start_agent`. */
+  agentIsolation?: AgentIsolationDefault;
   /**
    * The environment durable revisions belong to (RP-9). The host always passes
    * its own; the default exists only so a worker constructed directly (a test,
@@ -366,6 +368,7 @@ export class WorkerServer {
       host,
       definitions: this.definitions,
       worktrees: new WorktreeManager(),
+      isolationDefault: options.agentIsolation ?? AGENT_ISOLATION_DEFAULT,
       ...(options.projectTrusted !== undefined ? { projectTrusted: options.projectTrusted } : {}),
       admitNewWork: () => this.activationGate === undefined,
       backgroundWork: (cwd) => ({
@@ -1033,6 +1036,13 @@ export class WorkerServer {
       case "pi/project/restore": {
         this.assertCwd(req.params.cwd);
         return (await this.sourceControl().restore(req.params)) satisfies Result<"pi/project/restore">;
+      }
+      case "pi/project/workspace":
+        throw new ProtocolError(ErrorCodes.Unsupported, `${req.method} is answered by the host, not a worker`);
+      case "pi/project/isolation/set": {
+        this.assertCwd(req.params.cwd);
+        this.harness.setIsolationDefault(req.params.isolation);
+        return { project: { cwd: this.options.cwd, name: "", addedAt: "", trust: "not_required", pinned: false, sessionCount: 0, agentIsolation: req.params.isolation } } satisfies Result<"pi/project/isolation/set">;
       }
 
       // ------------------------------------------- M16-T17 project env ---

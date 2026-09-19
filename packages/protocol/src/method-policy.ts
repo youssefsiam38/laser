@@ -166,6 +166,7 @@ export const METHOD_POLICY = {
   "pi/project/file_diff": { scope: "read", reach: "any" },
   "pi/project/file_source": { scope: "read", reach: "any" },
   "pi/project/checkpoint/list": { scope: "read", reach: "any" },
+  "pi/project/workspace": { scope: "read", reach: "any" },
   "pi/project/browse": { scope: "read", reach: "any" },
   "pi/project/files": { scope: "read", reach: "any" },
   // Machine-wide file preview, deliberately available to a paired device:
@@ -254,6 +255,7 @@ export const METHOD_POLICY = {
   "pi/project/remove": { scope: "settings", reach: "any" },
   "pi/project/reorder": { scope: "settings", reach: "any" },
   "pi/project/trust": { scope: "settings", reach: "any" },
+  "pi/project/isolation/set": { scope: "settings", reach: "any" },
   // ---------------------------------------------------------- execution ---
   // Running something this machine can execute. `mcp/call` runs a configured
   // server's tool; the project environment helpers run the command a project

@@ -107,6 +107,8 @@ export interface WorkerPoolOptions {
   resolveTrust?: (cwd: string) => Promise<boolean | undefined>;
   /** Synchronous, nonprompting admission. Undefined refuses speculation. */
   prepareTrust?: (cwd: string) => { projectTrusted?: boolean } | undefined;
+  /** Per-project isolation default the worker applies to `start_agent`. */
+  agentIsolation?: (cwd: string) => "decide" | "isolate" | "share";
   /** Unused speculation expires independently of ordinary ten-minute idleness. */
   warmIdleMs?: number;
   /** Deferred user-facing background initialization, once speculation is used. */
@@ -970,6 +972,7 @@ export class WorkerPool {
         ? { env: { ...(this.options.env ?? {}), ...(this.options.envForCwd?.(entry.cwd, entry.mode) ?? {}) } }
         : {}),
       ...(projectTrusted !== undefined ? { projectTrusted } : {}),
+      ...(this.options.agentIsolation ? { agentIsolation: this.options.agentIsolation(entry.cwd) } : {}),
       oldSpaceMiB: configuredWorkerOldSpaceMiB,
       mode: entry.mode,
       onNotification: (n) => this.onWorkerNotification(entry, client, n),

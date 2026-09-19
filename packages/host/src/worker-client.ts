@@ -46,6 +46,8 @@ export interface WorkerClientOptions {
    * default, which is "trusted".
    */
   projectTrusted?: boolean;
+  /** Per-project `start_agent` default; omitted means decide-per-agent. */
+  agentIsolation?: "decide" | "isolate" | "share";
   /**
    * The environment its durable revisions belong to (RP-9), so a live session
    * and the same session read from disk produce the same value. Not a secret,
@@ -278,6 +280,7 @@ export class WorkerClient {
     if (options.sessionDir) args.push("--session-dir", options.sessionDir);
     if (options.stateDir) args.push("--state-dir", options.stateDir);
     if (options.projectTrusted !== undefined) args.push("--project-trusted", options.projectTrusted ? "yes" : "no");
+    if (options.agentIsolation) args.push("--agent-isolation", options.agentIsolation);
     if (options.environmentId) args.push("--environment-id", options.environmentId);
     if (options.providerPayloads) args.push("--provider-payloads", options.providerPayloads);
     this.workerGeneration = options.workerGeneration;

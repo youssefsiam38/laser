@@ -160,6 +160,8 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/file_source": { cwd: "/p", path: "/s.jsonl", repo: "/p", file: "src/a.ts", ref: "HEAD", offset: 0, limit: 65536 },
   "pi/project/checkpoint/list": { cwd: "/p", path: "/s.jsonl" },
   "pi/project/restore": { cwd: "/p", path: "/s.jsonl", turn: 3, restore: "both", confirm: true },
+  "pi/project/workspace": { cwd: "/p", rescan: true },
+  "pi/project/isolation/set": { cwd: "/p", isolation: "decide" },
   "pi/project/browse": { path: "~\\code", explorer: { mode: "explorer", cwd: "/home/me/code", prefix: "node", offset: 80, limit: 80 } },
   "pi/project/env/status": { cwd: "/home/me/code/app" },
   "pi/project/env/set": {

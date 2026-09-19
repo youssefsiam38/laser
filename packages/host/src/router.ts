@@ -24,7 +24,7 @@
  *   pi/ui/response       every live worker (the worker that owns the dialog id
  *                        answers; the others ignore it)
  */
-import { ENVIRONMENT_DESCRIBE_METHOD, ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type ProjectEnvStatus, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
+import { AGENT_ISOLATION_DEFAULTS, ENVIRONMENT_DESCRIBE_METHOD, ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isTerminalRunStatus, parseClientRequest, type AgentIsolationDefault, type AgentRun, type AgentWorktreeStatus, type JsonRpcError, type JsonRpcResponse, type NamerState, type ProjectEnvStatus, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { HOST_ENVIRONMENT_METHOD, applyHostEnvironment } from "./environment.js";
@@ -63,6 +63,7 @@ import type { SessionRevisions } from "./session-revision.js";
 import type { SessionTelemetryReader } from "./session-telemetry.js";
 import type { ViewCache } from "./views.js";
 import type { WorkerPool } from "./worker-pool.js";
+import { createWorkspaceResolver } from "./workspace.js";
 import type { RuntimeActivationGate } from "./runtime-activation.js";
 import { WorkerRpcError, type WorkerClient } from "./worker-client.js";
 
@@ -239,6 +240,8 @@ export class Router {
    * request runs under it, ensure-open included.
    */
   private readonly leases: SessionRouteLeases;
+  /** Host-answered workspace shape; no worker is started to ask git. */
+  private readonly workspaces = createWorkspaceResolver();
 
   constructor(
     private readonly pool: WorkerPool,
@@ -776,6 +779,26 @@ export class Router {
 
       case "pi/project/browse":
         return req.params.explorer ? browseExplorer(req.params.path, req.params.explorer) : browseDirectories(req.params.path);
+
+      case "pi/project/workspace": {
+        const cwd = projectRootOf(req.params.cwd);
+        this.deps.projects.assertProject(cwd);
+        return this.workspaces.resolve(cwd, { rescan: req.params.rescan === true });
+      }
+
+      case "pi/project/isolation/set": {
+        const cwd = projectRootOf(req.params.cwd);
+        const isolation = req.params.isolation;
+        if (!(AGENT_ISOLATION_DEFAULTS as readonly string[]).includes(isolation)) {
+          throw new ProtocolError(ErrorCodes.InvalidParams, "isolation must be decide, isolate, or share.");
+        }
+        const project = this.deps.projects.setAgentIsolation(cwd, isolation as AgentIsolationDefault);
+        const live = this.pool.liveClients().find((entry) => entry.cwd === cwd);
+        if (live) {
+          await live.client.request("pi/project/isolation/set", { cwd, isolation }).catch(() => undefined);
+        }
+        return { project };
+      }
 
       // --------------------------------- project environment (M16-T17) ---
       // Configuration and trust live here; the worker runs the hook and owns

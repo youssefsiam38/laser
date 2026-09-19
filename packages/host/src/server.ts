@@ -758,6 +758,7 @@ export class HostServer {
         }
         this.logs?.observeWorkerStatus(info);
       },
+      agentIsolation: (cwd) => this.projects.agentIsolationOf(cwd),
       prepareTrust: (cwd) => {
         // Catalog membership is necessary, never sufficient intent. No mkdir,
         // trust question, environment hook or Namer qualification on a hint.

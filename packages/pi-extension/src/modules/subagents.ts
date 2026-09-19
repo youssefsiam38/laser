@@ -78,7 +78,7 @@ export function startAgentDescription(catalog: AgentCatalogEntry[]): string {
   return (
     `Start another agent for an independent piece of work. Available agents: ${entries || "none are allowed for this session"}. ` +
     "It runs in the background: do not wait for it — its result is delivered to you as a message when it ends, and inspect_agent shows how it is doing meanwhile. " +
-    "Unless you pass worktree false, the agent gets a git worktree and a branch of its own; reviewing that branch, merging it, and removing the worktree with remove_agent_worktree are yours, not the agent's."
+    "worktree true (the default) isolates the agent when this workspace can be isolated, false shares your checkout, and \"strict\" demands isolation and refuses without it. Reviewing a branch, merging it, and removing the worktree with remove_agent_worktree are yours, not the agent's."
   );
 }
 
@@ -136,8 +136,8 @@ export function roleBlock(role: HarnessSessionRole, canDelegate: boolean, cwd: s
   }
   if (canDelegate) {
     parts.push(
-      "You can start other agents with start_agent; they run in the background, by default each in its own isolated worktree, and their results arrive here as messages that wake you. Never wait for one: carry on with your own work. inspect_fleet shows everything going on under you — the agents you started, theirs, and every background command — as the one tree the person sees; use inspect_agent to check on a single agent — it also shows a question the agent is paused on, which you can answer with send_agent_message mode answer. Use stop_agent for work that is no longer needed.",
-      "A child with its own worktree leaves its work on a branch of its own when it finishes. Reviewing that branch, merging it into your checkout with git, and removing the worktree with remove_agent_worktree are yours: nothing does any of it for you, and the directory stays until you ask for it to go. A child started with worktree false has neither a branch nor a worktree, because its changes are already in your files.",
+      "You can start other agents with start_agent; they run in the background, by default isolated when this workspace can isolate them, and their results arrive here as messages that wake you. Never wait for one: carry on with your own work. inspect_fleet shows everything going on under you — the agents you started, theirs, and every background command — as the one tree the person sees; use inspect_agent to check on a single agent — it also shows a question the agent is paused on, which you can answer with send_agent_message mode answer. Use stop_agent for work that is no longer needed.",
+      'A child with its own worktree leaves its work on a branch of its own when it finishes. Reviewing that branch, merging it into your checkout with git, and removing the worktree with remove_agent_worktree are yours: nothing does any of it for you, and the directory stays until you ask for it to go. start_agent says which way it went. A child started with worktree false, or in a workspace that cannot isolate, has neither a branch nor a worktree, because its changes are already in your files.',
     );
   }
   return parts.length > 0 ? parts.join("\n") : undefined;
@@ -203,6 +203,7 @@ export function startedView(result: StartAgentResult): Record<string, unknown> {
     runId: result.runId,
     status: result.status,
     working_directory: result.cwd,
+    ...(result.isolation ? { isolation: result.isolation } : {}),
     ...(result.branch !== undefined ? { branch: result.branch } : {}),
     ...(result.environment ? { environment: result.environment } : {}),
     ...(result.setup ? { setup: result.setup } : {}),
@@ -321,7 +322,7 @@ function registerStartAgent(pi: ExtensionAPI, bridge: AgentHarnessBridge, catalo
       "Use start_agent for independent work another agent can do in parallel; it returns immediately with sessionId and runId. Do not wait for it and do not poll: its result is delivered to you as a message when it ends, and inspect_agent shows one agent in depth meanwhile.",
       "Give start_agent a self-contained task: the new agent sees none of this conversation.",
       'For start_agent, write subagent_name as a short human-readable name of two to five words in sentence case with spaces—never a slug, dash- or underscore-separated words, or camelCase. Example: "Review login flow".',
-      "Leave start_agent's worktree alone for work that changes files, and pass worktree false only for a task that just reads, such as a review or a search.",
+      'Leave start_agent\'s worktree at true (the default) for work that changes files: the agent is isolated when this workspace can be isolated, and otherwise shares your checkout and says so. Pass false only for a task that just reads. Pass "strict" only when isolation is required and a shared checkout is not acceptable.',
       "A worktree start_agent created is yours afterwards: review the branch, merge it yourself with git, then call remove_agent_worktree. The child never merges or removes its own work.",
     ],
     parameters: Type.Object({
@@ -329,10 +330,16 @@ function registerStartAgent(pi: ExtensionAPI, bridge: AgentHarnessBridge, catalo
       subagent_name: Type.String({ minLength: 1, maxLength: SUBAGENT_NAME_MAX, description: 'A short human-readable name of two to five words for this running instance and its task, in sentence case with spaces. Never use a slug, dash- or underscore-separated words, or camelCase. Example: "Review login flow".' }),
       task: Type.String({ minLength: 1, maxLength: AGENT_TASK_MAX, description: "The complete task and all context the new agent needs." }),
       worktree: Type.Optional(
-        Type.Boolean({
-          description:
-            "Give the new agent its own git worktree, isolated from your files. Default true. Pass false for a task that only reads — a review, a search, an explanation: the agent then works in the same checkout and the same files as you, keeps every tool, and anything it writes lands in your working copy. false is also the only way to start an agent in a project that is not a git repository or has no commit yet.",
-        }),
+        Type.Union([
+          Type.Boolean({
+            description:
+              "true (the default) isolates the agent when this workspace can be isolated, and shares your checkout — saying so — when it cannot. false runs it in this session's checkout for a task that only reads. It keeps every tool, and anything it writes lands in your working copy.",
+          }),
+          Type.Literal("strict", {
+            description:
+              'Demand an isolated git worktree. Refused, naming git or worktree false as the ways forward, when this workspace cannot isolate an agent.',
+          }),
+        ]),
       ),
     }),
     async execute(_toolCallId, params, signal) {
