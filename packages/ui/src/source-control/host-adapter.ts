@@ -94,6 +94,10 @@ export function mapAgentRunContext(run: AgentRun): AgentChangesContext {
   if (!tree) {
     return { runId: run.runId, checkout: "shared" };
   }
+  // `removedAt` means the directory is gone. The branch name stays on the
+  // record as history (AgentWorktree). That is the surviving-branch overlay
+  // state — not `branchGone`. AgentWorktree has no field for a deleted git
+  // branch, so this mapper never sets `branchGone`.
   return {
     runId: run.runId,
     checkout: "worktree",

@@ -56,11 +56,50 @@ it("maps an isolated run and a shared checkout", () => {
   expect(mapAgentRunContext(isolated)).toMatchObject({ checkout: "worktree", worktreePath: "/p/.worktrees/a" });
   const shared = { runId: "run_2", worktree: null } as AgentRun;
   expect(mapAgentRunContext(shared).checkout).toBe("shared");
+});
+
+it("maps a removed worktree as surviving-branch, never as branchGone", () => {
   const removed = {
     runId: "run_3",
     worktree: { path: "/w", branch: "agents/a", baseCommit: "abc", removedAt: "2026-09-20T00:00:00.000Z" },
   } as AgentRun;
-  expect(mapAgentRunContext(removed).worktreeRemoved).toBe(true);
+  expect(mapAgentRunContext(removed)).toEqual({
+    runId: "run_3",
+    checkout: "worktree",
+    worktreePath: "/w",
+    branch: "agents/a",
+    baseCommit: "abc",
+    worktreeRemoved: true,
+  });
+});
+
+it("getAgentContext from a faked run reaches the surviving-branch state and not the gone-branch state", async () => {
+  const adapter = createHostChangesAdapter({
+    request: async () => {
+      throw new Error("should not run");
+    },
+    session: () => ({ cwd: "/p", path: "/s.jsonl" }),
+    agentRun: (runId) => {
+      if (runId !== "run_removed") return undefined;
+      return {
+        runId,
+        worktree: {
+          path: "/p/.worktrees/review",
+          branch: "agents/review",
+          baseCommit: "abc1234",
+          removedAt: "2026-09-20T00:00:00.000Z",
+        },
+      } as AgentRun;
+    },
+  });
+  const context = await adapter.getAgentContext?.("run_removed");
+  expect(context).toMatchObject({
+    runId: "run_removed",
+    checkout: "worktree",
+    worktreeRemoved: true,
+    branch: "agents/review",
+  });
+  expect(context?.branchGone).toBeUndefined();
 });
 
 it("fills protocol params from a scope", () => {
