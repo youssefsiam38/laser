@@ -341,10 +341,16 @@ and not what a person means:
 
 The mechanism gives this for free in the checkpoint scopes: a checkpoint holds
 what git would commit, so a file that appears between two checkpoints is an
-addition and a file that vanishes is a deletion. The **Uncommitted** scope needs
-one extra step, because `git diff` alone never mentions untracked files: it
-reads `git status --porcelain` as well and renders a new, unignored file as an
-addition with its bytes from disk.
+addition and a file that vanishes is a deletion.
+
+**The Uncommitted scope is deliberately different.** It answers a different
+question — "what would I commit right now" — so it lists **everything
+`git status` lists**, including untracked files that existed before the session
+and that no agent touched. It reads `git status --porcelain` beside the diff
+and renders each new, unignored file as an addition with its bytes from disk.
+The noisy, complete list lives in the scope where completeness is the point;
+the session and turn scopes stay the agent's own work, so nothing buries it.
+Ignored files appear in neither.
 
 Checkpoints stay on the machine. They are never pushed, and no git action in
 §9 can push a ref under `refs/laser/`.
