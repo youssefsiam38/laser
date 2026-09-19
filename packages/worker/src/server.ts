@@ -22,7 +22,7 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, isLiveEdgeWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TypedClientRequest, type WorkerActivationState, WIRE_NAMESPACE } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, isLiveEdgeWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TelemetrySection, type TypedClientRequest, type WorkerActivationState, WIRE_NAMESPACE } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
 import {
   PRESSURE_MAX_REPLAY_DROPS,
@@ -67,6 +67,8 @@ import type {
 import { ProjectFilesService } from "./files.js";
 import { RevisionCanonicalisationError, type SessionRevisionHeader } from "@lasercode/protocol";
 import { SessionRevisionTracker } from "./history-revision.js";
+import { childSources, computeLiveTelemetry, liveOverlay, telemetryUpdateKind } from "./telemetry.js";
+import { TelemetryFold } from "@lasercode/protocol";
 import { ReplayBudget, ReplayBuffer } from "./replay-buffer.js";
 import { sessionPins, type SessionSafetySnapshot } from "./session-safety.js";
 import { SessionRuntimes } from "./session-runtimes.js";
@@ -201,6 +203,8 @@ interface Live {
   historyEpoch: string;
   /** Durable revision fold for this session (RP-9), kept across reads. */
   revisions: SessionRevisionTracker;
+  /** Incremental whole-session telemetry fold (L3). */
+  telemetry: TelemetryFold;
   seq: number;
   buffer: ReplayBuffer;
   /** Read-only hydration baseline while a first turn is speculative/restoring. */
@@ -781,6 +785,38 @@ export class WorkerServer {
         // does not replace the runtime. Its live canonical reads must remain
         // available so a no-signal question can be answered after reconnect.
         return (await live.driver.entries()) satisfies Result<"pi/session/entries">;
+      }
+      case "pi/session/telemetry": {
+        const live = this.live(req.params.path);
+        const snapshot = live.preAcceptance ?? await live.driver.entries();
+        if (this.runtimes.get(live.path) !== live) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation was closed. Open it again.");
+        const { revision, environmentKey } = this.revisionOf(live, snapshot);
+        if (req.params.environmentKey !== undefined && req.params.environmentKey !== environmentKey) {
+          throw new ProtocolError(ErrorCodes.InvalidParams, "That conversation belongs to a different connection.");
+        }
+        if (req.params.revision !== undefined && req.params.revision !== revision) {
+          throw new ProtocolError(
+            ErrorCodes.RevisionUnavailable,
+            "This conversation moved on since that reading. Open it again to see the rest.",
+          );
+        }
+        try {
+          return this.sessionTelemetry(live, snapshot, {
+            revision,
+            environmentKey,
+            ...(req.params.include ? { include: req.params.include } : {}),
+            ...(req.params.scope ? { scope: req.params.scope } : {}),
+            ...(req.params.turnId ? { turnId: req.params.turnId } : {}),
+          }) satisfies Result<"pi/session/telemetry">;
+        } catch (error) {
+          if (error instanceof Error && error.message === "turn") {
+            throw new ProtocolError(ErrorCodes.InvalidParams, "A turn-scoped telemetry read names the turn.");
+          }
+          if (error instanceof Error && error.message === "turn-missing") {
+            throw new ProtocolError(ErrorCodes.InvalidParams, "That turn is not part of this conversation any more.");
+          }
+          throw error;
+        }
       }
       // RP-5b: one body of one entry, from the authority that owns this
       // session right now. The revision is computed from the very snapshot the
@@ -1490,6 +1526,24 @@ export class WorkerServer {
     return this.revisionHeader(live).id;
   }
 
+  private sessionTelemetry(
+    live: Live,
+    snapshot: { entries: unknown[]; leafId: string | null },
+    options: { revision: string; environmentKey: string; include?: TelemetrySection[]; scope?: "session" | "turn"; turnId?: string },
+  ) {
+    const state = this.decorate(live, live.driver.state());
+    return computeLiveTelemetry(live.telemetry, snapshot.entries, snapshot.leafId, {
+      revision: options.revision,
+      environmentKey: options.environmentKey,
+    }, {
+      ...(options.include ? { include: options.include } : {}),
+      ...(options.scope ? { scope: options.scope } : {}),
+      ...(options.turnId ? { turnId: options.turnId } : {}),
+      overlay: liveOverlay(state),
+      children: childSources(live.path, this.harness.runs(), (path) => this.runtimes.get(path)?.driver.entriesNow?.()?.entries),
+    });
+  }
+
   /** The revision for one snapshot, or a refusal that says the read is unavailable. */
   private revisionOf(live: Live, snapshot: { entries: unknown[]; leafId: string | null }): { revision: string; environmentKey: string } {
     try {
@@ -1712,7 +1766,7 @@ export class WorkerServer {
     // have used it, where a person can read it.
     await this.ensureProjectEnv().catch(() => {});
     const driver = this.options.createDriver();
-    const live: Live = { driver, historyEpoch: randomUUID(), revisions: new SessionRevisionTracker(this.environmentId), seq: 0, touchedAtMs: Date.now(), buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? REPLAY_BYTES_PER_SESSION, this.replayBudget), unsubscribe: () => {}, path: "" };
+    const live: Live = { driver, historyEpoch: randomUUID(), revisions: new SessionRevisionTracker(this.environmentId), telemetry: TelemetryFold.create(), seq: 0, touchedAtMs: Date.now(), buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? REPLAY_BYTES_PER_SESSION, this.replayBudget), unsubscribe: () => {}, path: "" };
     driver.setExtensionModelWorkHandler?.((request) => this.admitExtensionModelWork(live, request));
     const queued: DriverEvent[] = [];
     let ready = false;
@@ -2394,6 +2448,15 @@ export class WorkerServer {
           update,
           at: new Date().toISOString(),
         };
+        if (telemetryUpdateKind(update.kind)) {
+          const snapshot = live.driver.entriesNow?.() ?? live.preAcceptance;
+          if (snapshot) {
+            try {
+              const { revision, environmentKey } = this.revisionOf(live, snapshot);
+              params.telemetry = this.sessionTelemetry(live, snapshot, { revision, environmentKey });
+            } catch { /* a turn still streams; the next fold will carry numbers */ }
+          }
+        }
         live.buffer.push(params);
         this.notify("session/update", params);
         // The run is over: whatever the person wrote while it ran goes in now,
