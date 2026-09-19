@@ -202,7 +202,13 @@ export function createHostChangesAdapter(opts: {
         limit: FILE_DIFF_MAX_BYTES,
       });
       if (slice.binary || slice.text === undefined) return null;
-      return { repo: slice.repo, path: slice.path, ref: ref ?? side, contents: slice.text };
+      return {
+        repo: slice.repo,
+        path: slice.path,
+        ref: ref ?? side,
+        contents: slice.text,
+        ...(slice.truncated === true ? { truncated: true } : {}),
+      };
     },
     async getAgentContext(runId) {
       const run = opts.agentRun?.(runId);

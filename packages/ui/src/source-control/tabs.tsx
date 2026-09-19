@@ -103,7 +103,7 @@ export function ChangesTabStrip({
                 onClose(tab);
               }}
               className={cn(
-                "me-1 flex size-6 shrink-0 items-center justify-center rounded-md text-ink-3 outline-none",
+                "me-1 flex size-7 shrink-0 items-center justify-center rounded-md text-ink-3 outline-none",
                 "pointer-coarse:size-11 pointer-coarse:opacity-100",
                 "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
                 "transition-opacity duration-(--motion-instant) motion-reduce:transition-none",

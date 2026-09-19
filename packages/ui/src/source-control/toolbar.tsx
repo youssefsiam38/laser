@@ -18,7 +18,7 @@ import type { WorkspaceRepository } from "@lasercode/protocol";
 
 import { scopeLabel, scopeShortLabel, type OverlayToolbarPlan } from "./classify.js";
 import type { AgentChangesContext, ChangesScope, ChangesScopeKind, ChangedRepo } from "./contract.js";
-import { ChangesGitActions, GitHostStatusLine, useGitToolbarState } from "./git-toolbar.js";
+import { ChangesGitActions, useGitToolbarState } from "./git-toolbar.js";
 import type { DiffStylePref } from "./prefs.js";
 import { AgentCheckoutLine } from "./states.js";
 import { ChangeTotals } from "./totals.js";
@@ -100,12 +100,13 @@ export function ChangesToolbar({
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          size="sm"
           data-slot="changes-repo-filter"
           aria-label={`Repository filter: ${repoText}`}
           className={cn("min-w-0 gap-1 pointer-coarse:min-h-11", long ? "max-w-44" : "max-w-28")}
         >
-          <span className="typed min-w-0 truncate">{repoText}</span>
+          {/* A repository is a path, so it stays mono — but at the body size,
+              beside the other controls, not at the 12px floor. */}
+          <span className="min-w-0 truncate font-mono text-sm leading-sm">{repoText}</span>
           <ChevronDown />
         </Button>
       </DropdownMenuTrigger>
@@ -138,11 +139,18 @@ export function ChangesToolbar({
       <div className="flex min-w-0 items-center gap-1">
         {plan.tree !== "hidden" ? (
           plan.tree === "icon" ? (
-            <TooltipIconButton tooltip="Changed files" shortcut="B" side="bottom" onClick={onOpenTree}>
+            <TooltipIconButton
+              size="icon"
+              className="pointer-coarse:size-11"
+              tooltip="Changed files"
+              shortcut="B"
+              side="bottom"
+              onClick={onOpenTree}
+            >
               <PanelLeft />
             </TooltipIconButton>
           ) : (
-            <Button variant="ghost" size="sm" onClick={onOpenTree} className="gap-1.5 pointer-coarse:min-h-11">
+            <Button variant="ghost" onClick={onOpenTree} className="gap-1.5 pointer-coarse:min-h-11">
               <PanelLeft />
               Files
             </Button>
@@ -153,7 +161,7 @@ export function ChangesToolbar({
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
-              size="sm"
+              data-slot="changes-scope"
               /* The accessible name carries the visible words verbatim, so the
                  short label is still what a voice user says. */
               aria-label={`Scope: ${plan.scope === "long" ? scopeLabel(scope.kind) : scopeShortLabel(scope.kind)}`}
@@ -186,6 +194,8 @@ export function ChangesToolbar({
         <div className="ms-auto flex min-w-0 items-center gap-1">
           {plan.split ? (
             <TooltipIconButton
+              size="icon"
+              className="pointer-coarse:size-11"
               tooltip={unifiedFallback ? "Split needs two columns of code" : diffStyle === "split" ? "Unified view" : "Split view"}
               {...(unifiedFallback ? {} : { shortcut: "U" })}
               disabled={unifiedFallback}
@@ -196,7 +206,7 @@ export function ChangesToolbar({
           ) : null}
           <ChangesGitActions state={gitState} git={plan.git} commit={plan.commit} />
           {plan.esc ? <Kbd>Esc</Kbd> : null}
-          <TooltipIconButton tooltip="Close" shortcut="Esc" onClick={onClose}>
+          <TooltipIconButton size="icon" className="pointer-coarse:size-11" tooltip="Close" shortcut="Esc" onClick={onClose}>
             <X />
           </TooltipIconButton>
         </div>
@@ -211,7 +221,10 @@ export function ChangesToolbar({
         <RangeFields from={rangeFrom} to={rangeTo} onCommit={onRange} />
       ) : null}
       {agent ? <AgentCheckoutLine context={agent} className="px-1" /> : null}
-      <GitHostStatusLine state={gitState} className="px-1" />
+      {/* Nothing else below the row. The git host's status used to live here,
+          in attention colour, as the second thing a person read on a screen
+          they opened to read a diff; it is now inside the Git menu
+          (`git-menu-status`), beside the controls it explains. */}
     </header>
   );
 }
@@ -251,7 +264,7 @@ export function RangeFields({
   };
   return (
     <div className="flex flex-wrap items-center gap-2 px-1 pb-1">
-      <label className="flex items-center gap-1 text-xs text-ink-2">
+      <label className="flex items-center gap-1.5 text-sm leading-sm text-ink-2">
         From
         <Input
           value={draftFrom}
@@ -263,11 +276,11 @@ export function RangeFields({
               commit();
             }
           }}
-          className="h-7 w-40 text-sm pointer-coarse:text-base"
+          className="h-8 w-40 text-sm pointer-coarse:min-h-11 pointer-coarse:text-base"
           aria-label="Range start"
         />
       </label>
-      <label className="flex items-center gap-1 text-xs text-ink-2">
+      <label className="flex items-center gap-1.5 text-sm leading-sm text-ink-2">
         To
         <Input
           value={draftTo}
@@ -279,7 +292,7 @@ export function RangeFields({
               commit();
             }
           }}
-          className="h-7 w-40 text-sm pointer-coarse:text-base"
+          className="h-8 w-40 text-sm pointer-coarse:min-h-11 pointer-coarse:text-base"
           aria-label="Range end"
         />
       </label>

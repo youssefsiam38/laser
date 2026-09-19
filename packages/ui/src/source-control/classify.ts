@@ -238,8 +238,11 @@ export const OVERLAY_TOOLBAR_MIN_PX = 288;
 
 /**
  * What each control costs the row, in CSS px at the default text scale: the
- * control's own box plus its chevron, measured from the `sm` button (h-7,
- * `px-2`, 12px text) and the 12px tabular mono the totals are set in.
+ * control's own box plus its chevron, measured from the **default** button
+ * (`h-8`, `px-3`/`px-2.5`, 13px label) and the 12px tabular mono the totals
+ * are set in. A full-screen surface's primary actions are not `sm`: the
+ * toolbar's controls paint 32px on a fine pointer and 44px on a coarse one,
+ * and their words are the body size, not the floor.
  *
  * These are layout arithmetic, not style: nothing here is painted. They exist
  * so the plan below can be *proved* to fit 288px instead of hoped to.
@@ -248,19 +251,19 @@ export const OVERLAY_TOOLBAR_COST = {
   gap: 4,
   padding: 16,
   title: 72,
-  treeIcon: 28,
-  treeLabel: 56,
-  scopeShort: 84,
+  treeIcon: 32,
+  treeLabel: 76,
+  scopeShort: 88,
   scopeLong: 120,
-  repoShort: 88,
-  repoLong: 144,
+  repoShort: 100,
+  repoLong: 176,
   totals: 88,
-  split: 28,
+  split: 32,
   commit: 64,
-  gitIcon: 28,
-  gitLabel: 60,
+  gitIcon: 32,
+  gitLabel: 64,
   esc: 34,
-  close: 28,
+  close: 32,
 } as const;
 
 export type OverlayToolbarTier = "tight" | "compact" | "medium" | "wide";
@@ -314,8 +317,11 @@ export function overlayToolbarPlan(widthPx: number, rootFontPx: number): Overlay
       return { tier, title: true, tree: "hidden", scope: "long", repo: "long", totals: "row", split: true, commit: true, git: "label", esc: true };
     case "medium":
       return { tier, title: true, tree: "hidden", scope: "long", repo: "long", totals: "row", split: true, commit: false, git: "label", esc: false };
+    // The word "Files" is the one thing this tier cannot afford once the
+    // controls are full size: the icon opens the same sheet, and the totals
+    // are information where the label is chrome.
     case "compact":
-      return { tier, title: false, tree: "label", scope: "short", repo: "short", totals: "row", split: false, commit: false, git: "label", esc: false };
+      return { tier, title: false, tree: "icon", scope: "short", repo: "short", totals: "row", split: false, commit: false, git: "label", esc: false };
     case "tight":
       return { tier, title: false, tree: "icon", scope: "short", repo: "short", totals: "second-row", split: false, commit: false, git: "icon", esc: false };
   }

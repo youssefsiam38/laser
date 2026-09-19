@@ -3,7 +3,6 @@ import type { GitHostStatus } from "@lasercode/protocol";
 import { ChevronDown, GitBranch, GitPullRequestArrow } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { ControlHint } from "@/components/ui/hint";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -91,22 +90,12 @@ export function useGitToolbarState({
 }
 
 /**
- * The sentence a person needs when the git controls cannot act: its own line
- * under the toolbar row, at full width, rather than a clipped fragment
- * wedged between two buttons.
+ * The sentence a person needs when the git controls cannot act lives in the
+ * menu below (`git-menu-status`), beside the actions it is about. It used to
+ * sit permanently under the toolbar in attention colour, which made "Add a
+ * GitHub or Bitbucket remote" the second thing anyone read on a screen they
+ * opened to read a diff.
  */
-export function GitHostStatusLine({ state, className }: { state: GitToolbarState; className?: string | undefined }) {
-  if (!state.available || !state.status) return null;
-  const text = `${state.status}${state.neighbourUsable ? " Other repositories still work." : ""}`;
-  return (
-    <ControlHint hint={text}>
-      <p data-slot="git-host-status" className={cn("min-w-0 truncate text-xs text-attention", className)}>
-        {text}
-      </p>
-    </ControlHint>
-  );
-}
-
 export function ChangesGitActions({
   state,
   git = "label",
@@ -133,7 +122,7 @@ export function ChangesGitActions({
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          size={git === "icon" ? "icon-sm" : "sm"}
+          size={git === "icon" ? "icon" : "default"}
           className={cn("pointer-coarse:min-h-11", git === "label" && "gap-1")}
           aria-label={commit ? "More git actions" : "Git actions"}
         >
@@ -178,7 +167,7 @@ export function ChangesGitActions({
   return (
     <div data-slot="changes-git-actions" className="flex min-w-0 items-center gap-1">
       {commit ? (
-        <Button variant="ghost" size="sm" className="pointer-coarse:min-h-11" disabled={!repo} onClick={() => run("commit")}>
+        <Button variant="ghost" className="pointer-coarse:min-h-11" disabled={!repo} onClick={() => run("commit")}>
           Commit
         </Button>
       ) : null}

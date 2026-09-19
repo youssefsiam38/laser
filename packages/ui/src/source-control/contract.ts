@@ -73,6 +73,13 @@ export type FileSource = {
   path: string;
   ref: string;
   contents: string;
+  /**
+   * The authority sent one page of a file it could not send whole. These
+   * bytes are a prefix, never the file, so they must not be handed to the
+   * renderer as a side of the diff: every line number past the cut would be
+   * wrong. See `expandableSides` in `diff-files.ts`.
+   */
+  truncated?: boolean;
 };
 
 export type AgentCheckoutKind = "worktree" | "shared";

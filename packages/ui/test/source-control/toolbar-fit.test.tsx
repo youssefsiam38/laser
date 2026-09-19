@@ -185,12 +185,35 @@ it("keeps every toolbar value at or above the 12px floor, and the totals tabular
   expect(totals.className).toContain("typed");
 });
 
+it("paints its controls at the full size a whole-window surface deserves", async () => {
+  // Measured before this landed: 28px boxes with 12px labels on a surface
+  // that takes the whole window — the primary actions read as an
+  // afterthought. `default` is `h-8` with a 13px label; `icon` is `size-8`.
+  // The small steps are what this toolbar must never go back to.
+  const small = new Set(["sm", "xs", "icon-sm", "icon-xs"]);
+  for (const width of [288, 480, 640, 1024]) {
+    const header = await renderToolbar(width);
+    const sizes = [...header.querySelectorAll<HTMLElement>("button")].map((node) => node.getAttribute("data-size"));
+    expect(sizes.length).toBeGreaterThan(0);
+    expect({ width, small: sizes.filter((size) => size !== null && small.has(size)) }).toEqual({ width, small: [] });
+    // Coarse pointers get the 44px target whatever the paint is.
+    for (const node of header.querySelectorAll<HTMLElement>("button")) {
+      expect({
+        width,
+        label: node.getAttribute("aria-label") ?? node.textContent,
+        touch: /pointer-coarse:(?:min-h-11|size-11)/.test(node.className),
+      }).toMatchObject({ touch: true });
+    }
+  }
+});
+
 it("puts the toolbar's plan in one place, so the header cannot disagree with it", () => {
   const plans: OverlayToolbarPlan[] = [288, 480, 640, 1024].map((width) => overlayToolbarPlan(width, ROOT_FONT));
   // Totals never vanish; they move to their own line only at the tightest tier.
   expect(plans.map((plan) => plan.totals)).toEqual(["second-row", "row", "row", "row"]);
-  // The tree control exists exactly while the tree is a sheet.
-  expect(plans.map((plan) => plan.tree)).toEqual(["icon", "label", "hidden", "hidden"]);
+  // The tree control exists exactly while the tree is a sheet, and at full
+  // control size neither narrow tier can afford its label.
+  expect(plans.map((plan) => plan.tree)).toEqual(["icon", "icon", "hidden", "hidden"]);
   // … and "while the tree is a sheet" means the same width the layout means.
   for (const width of [288, 480, 639, 640, 1024]) {
     expect({

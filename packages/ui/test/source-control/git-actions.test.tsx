@@ -6,11 +6,7 @@ import type { GitActionExpect, GitCommitResult, GitHostStatus, GitPrReadResult, 
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import type { ChangesDataAdapter } from "../../src/source-control/data.js";
 import { GitActionDialog } from "../../src/source-control/git-dialog.js";
-import {
-  ChangesGitActions,
-  GitHostStatusLine,
-  useGitToolbarState,
-} from "../../src/source-control/git-toolbar.js";
+import { ChangesGitActions, useGitToolbarState } from "../../src/source-control/git-toolbar.js";
 import { createMockAdapter } from "../../src/source-control/mock.js";
 import { resetChangesAdapter, setChangesAdapter } from "../../src/source-control/data.js";
 import { requestGitAction, resetChangesUi } from "../../src/source-control/store.js";
@@ -153,12 +149,7 @@ function GitToolbarFixture({
   commit?: boolean;
 }) {
   const state = useGitToolbarState({ repos: REPOS, repoFilter, activeRepo: "app" });
-  return (
-    <>
-      <ChangesGitActions state={state} git={git} commit={commit} />
-      <GitHostStatusLine state={state} />
-    </>
-  );
+  return <ChangesGitActions state={state} git={git} commit={commit} />;
 }
 
 async function mount(opts?: {
@@ -305,10 +296,27 @@ it("shows an uncertain push and does not retry it", async () => {
   expect(pushes.filter((call) => call.confirm === true)).toHaveLength(1);
 });
 
-it("names the signed-out fix while the neighbour still commits", async () => {
+it("names the signed-out fix inside the menu, not permanently under the toolbar", async () => {
+  const { adapter } = recordingAdapter();
+  await mount({ adapter, repoFilter: "other" });
+  // The row itself stays about the diff: the blocked-host sentence is not the
+  // second thing a person reads on a screen they opened to read code.
+  expect(document.body.textContent).not.toMatch(/Run gh auth login/);
+  expect(document.querySelector('[data-slot="git-host-status"]')).toBeNull();
+
+  const trigger = button("Git");
+  await act(async () => {
+    trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  await flush();
+  const status = document.querySelector('[data-slot="git-menu-status"]');
+  expect(status?.textContent).toMatch(/Run gh auth login/);
+  expect(status?.textContent).toMatch(/Other repositories still work/);
+});
+
+it("still commits in a neighbour repository the host can reach", async () => {
   const { adapter, commits } = recordingAdapter();
   await mount({ adapter, repoFilter: "other" });
-  expect(document.body.textContent).toMatch(/Run gh auth login/);
   await act(async () => {
     root.render(
       <TooltipProvider>
