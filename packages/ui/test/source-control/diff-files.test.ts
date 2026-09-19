@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { appendPatchPage, expandableSides } from "../../src/source-control/diff-files.js";
+import { appendPatchPage, expandableSides, expansionNotice } from "../../src/source-control/diff-files.js";
 import type { FileDiffPage, FileSource } from "../../src/source-control/contract.js";
 
 const source = (extra: Partial<FileSource> = {}): FileSource => ({
@@ -40,6 +40,20 @@ it("never hydrates from a file the authority could only send in part", () => {
   // bounded-expansion rule at its source.
   expect(expandableSides("change", { old: source({ ref: "old", truncated: true }), next: source() })).toBe("too-large");
   expect(expandableSides("change", { old: source({ ref: "old" }), next: source({ truncated: true }) })).toBe("too-large");
+});
+
+it("says what it cannot do, and says nothing when there is nothing to say", () => {
+  expect(expansionNotice("ready")).toBeNull();
+  expect(expansionNotice("loading")).toBeNull();
+  expect(expansionNotice("unsupported")).toBeNull();
+  expect(expansionNotice("unavailable")).toMatch(/could not be read/);
+  expect(expansionNotice("too-large")).toMatch(/too large to read whole/);
+  // Sides that do not belong to this patch are a different fact from sides
+  // that could not be read, and the person is told which it is.
+  expect(expansionNotice("mismatched")).toMatch(/no longer matches this diff/);
+  for (const state of ["unavailable", "too-large", "mismatched"] as const) {
+    expect(expansionNotice(state)).not.toMatch(/may be available/);
+  }
 });
 
 it("separates waiting, refusal and a file that never had surrounding lines", () => {

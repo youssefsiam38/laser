@@ -36,7 +36,14 @@ import { classifyDiffPage } from "./classify.js";
 import type { ChangesScope, FileDiffPage } from "./contract.js";
 import { getChangesAdapter } from "./data.js";
 import { EXPANSION_LINE_COUNT } from "./diff-expand.js";
-import { expandableSides, expansionApplies, expansionNotice, type FetchedSides } from "./diff-files.js";
+import {
+  expandableSides,
+  expansionApplies,
+  expansionNotice,
+  hydrationMismatch,
+  type ExpansionState,
+  type FetchedSides,
+} from "./diff-files.js";
 import { useDiffShadowChrome } from "./diff-shadow.js";
 import { DIFF_HOST_STYLE } from "./diff-typography.js";
 import { DiffErrorState, EmptyBodyState } from "./states.js";
@@ -73,13 +80,21 @@ export function DiffBody({ page, scope, diffStyle }: { page: FileDiffPage; scope
   // Both sides of the file, so the renderer holds the whole text and can open
   // the lines around a hunk without asking anyone. Fetched after the patch has
   // already painted: the hunks are the thing a person came to read.
-  const [sides, setSides] = useState<FetchedSides | undefined>(undefined);
+  //
+  // The sides are stored *with the file they belong to*. Selecting another
+  // file re-renders this component with the new patch before the effect that
+  // clears the old sides has run, and hydrating file B's patch with file A's
+  // text is a guaranteed mismatch — which is why switching files crashed the
+  // window just as reliably as opening one did.
+  const fileKey = `${repo}\u0000${oldPath ?? ""}\u0000${path}\u0000${JSON.stringify(scope)}`;
+  const [held, setHeld] = useState<{ key: string; sides: FetchedSides } | undefined>(undefined);
+  const sides = held?.key === fileKey ? held.sides : undefined;
   useEffect(() => {
-    setSides(undefined);
+    setHeld(undefined);
     if (!expansionApplies(pierreType)) return;
     const load = adapter.getFileSource;
     if (!load) {
-      setSides({ old: null, next: null });
+      setHeld({ key: fileKey, sides: { old: null, next: null } });
       return;
     }
     let cancelled = false;
@@ -87,14 +102,25 @@ export function DiffBody({ page, scope, diffStyle }: { page: FileDiffPage; scope
       load(scope, repo, oldPath ?? path, "old").catch(() => null),
       load(scope, repo, path, "new").catch(() => null),
     ]).then(([old, next]) => {
-      if (!cancelled) setSides({ old, next });
+      if (!cancelled) setHeld({ key: fileKey, sides: { old, next } });
     });
     return () => {
       cancelled = true;
     };
-  }, [adapter, pierreType, scope, repo, path, oldPath]);
+  }, [adapter, pierreType, scope, repo, path, oldPath, fileKey]);
 
-  const expansion = expandableSides(pierreType, sides);
+  // Fetched is not the same as usable. `hydratePartialDiff` asks no questions
+  // of the two sides it is given; the renderer asks them later, mid-render,
+  // and throws. So the sides are checked against the patch *here*, before
+  // anything is handed over: they either are the two ends this patch was
+  // computed from, or the file opens at its hunks and says so.
+  const fetched = expandableSides(pierreType, sides);
+  const mismatch = useMemo(() => {
+    if (fetched !== "ready" || !partial || !sides?.old || !sides.next) return undefined;
+    return hydrationMismatch(partial, sides.old.contents, sides.next.contents);
+  }, [fetched, partial, sides]);
+  const expansion: ExpansionState = mismatch ? "mismatched" : fetched;
+
   const fileDiff = useMemo<FileDiffMetadata | undefined>(() => {
     if (!partial) return undefined;
     const old = sides?.old;
@@ -147,6 +173,7 @@ export function DiffBody({ page, scope, diffStyle }: { page: FileDiffPage; scope
         ref={host}
         data-slot="changes-diff"
         data-expansion={expansion}
+        {...(mismatch ? { "data-expansion-detail": mismatch } : {})}
         style={DIFF_HOST_STYLE}
         className="min-h-0 min-w-0 flex-1 overflow-hidden"
       >

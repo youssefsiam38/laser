@@ -188,6 +188,20 @@ export function DiffErrorState({ message, onRetry }: { message: string; onRetry?
   );
 }
 
+/**
+ * The renderer threw while drawing this file. Not an apology and not a stack
+ * trace: what happened, what is still true, and the two things that work.
+ * The file list, the tabs and the toolbar are all still there behind it.
+ */
+export function DiffDrawFailedState() {
+  return (
+    <ChangesNotice data-slot="changes-draw-failed" title="This diff could not be drawn.">
+      <p>Something in this file's diff did not add up, so the reader stopped before drawing it.</p>
+      <p>Nothing was changed by trying. Pick another file to keep reading, or close this overlay — the conversation is exactly where you left it.</p>
+    </ChangesNotice>
+  );
+}
+
 export function LargeFileState({
   path,
   lines,
