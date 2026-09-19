@@ -44,7 +44,7 @@ import { identity as product } from "./identity/identity.mjs";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HostServer } from "@lasercode/host";
@@ -75,6 +75,81 @@ try {
 } catch (error) {
   console.error(`sandbox: could not initialise a git repository in ${project}; subagent worktrees will be refused (${error instanceof Error ? error.message : String(error)})`);
 }
+// ---- the four workspace shapes (source-control leap §13.2) ----
+//
+// The leap's acceptance needs more than one repository shape in front of the
+// person: a single repository, a monorepo with one `.git`, a workspace whose
+// root is not a repository but whose children are, and a directory with no git
+// at all. Each one is seeded with work a diff can show — a modified file, a new
+// file, a deleted file, a rename, a binary, and a file `.gitignore` excludes so
+// a person can prove it is never captured and never listed.
+const workspaces = [];
+function gitIn(dir, ...args) {
+  return execFileSync(
+    "git",
+    ["-C", dir, "-c", "user.name=Sandbox", "-c", "user.email=sandbox@example.invalid", "-c", "commit.gpgsign=false", ...args],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+}
+
+/** A repository with one commit and, optionally, uncommitted work of every kind. */
+function seedRepository(dir, { name, dirty = true } = {}) {
+  mkdirSync(join(dir, "src"), { recursive: true });
+  writeFileSync(join(dir, "README.md"), `# ${name}\n\nA scratch repository for demos.\n`);
+  writeFileSync(join(dir, ".gitignore"), "secrets.env\ndist/\n");
+  writeFileSync(join(dir, "src", "index.ts"), "export function greet(name: string) {\n  return `hi ${name}`;\n}\n");
+  writeFileSync(join(dir, "src", "legacy.ts"), "export const legacy = true;\n");
+  writeFileSync(join(dir, "src", "moved.ts"), "export const moved = 1;\n");
+  writeFileSync(join(dir, "logo.png"), Buffer.from("89504e470d0a1a0a0000000d49484452", "hex"));
+  // `git init` is idempotent, and the single-repository project already has a
+  // commit from the block above, so an empty commit here is not a failure.
+  gitIn(dir, "init", "-q", "-b", "main");
+  gitIn(dir, "add", "-A");
+  try {
+    gitIn(dir, "commit", "-q", "-m", `${name}: first commit`);
+  } catch {
+    /* Nothing to commit: the directory was already seeded. */
+  }
+  if (!dirty) return;
+  // Modified, new, deleted, renamed, binary, and ignored — one of each.
+  writeFileSync(join(dir, "src", "index.ts"), "export function greet(name: string, loud = false) {\n  const line = `hi ${name}`;\n  return loud ? line.toUpperCase() : line;\n}\n");
+  writeFileSync(join(dir, "src", "added.ts"), "export const added = [\n  \"one\",\n  \"two\",\n];\n");
+  writeFileSync(join(dir, "secrets.env"), "TOKEN=this-file-is-ignored-and-must-never-be-captured\n");
+  rmSync(join(dir, "src", "legacy.ts"));
+  renameSync(join(dir, "src", "moved.ts"), join(dir, "src", "renamed.ts"));
+  writeFileSync(join(dir, "logo.png"), Buffer.from("89504e470d0a1a0a0000000d4948445200000001", "hex"));
+}
+
+if (process.env.SANDBOX_SOURCE_CONTROL === "1") {
+  try {
+    seedRepository(project, { name: "single repository" });
+
+    const monorepo = join(base, "monorepo");
+    mkdirSync(join(monorepo, "packages", "api"), { recursive: true });
+    mkdirSync(join(monorepo, "packages", "web"), { recursive: true });
+    writeFileSync(join(monorepo, "packages", "api", "server.ts"), "export const port = 3000;\n");
+    writeFileSync(join(monorepo, "packages", "web", "app.tsx"), "export const App = () => null;\n");
+    seedRepository(monorepo, { name: "monorepo" });
+    workspaces.push(["monorepo (one .git at the root)", monorepo]);
+
+    const workspaceOfRepos = join(base, "workspace-of-repos");
+    mkdirSync(workspaceOfRepos, { recursive: true });
+    for (const child of ["alpha", "beta", "gamma"]) {
+      const dir = join(workspaceOfRepos, child);
+      mkdirSync(dir, { recursive: true });
+      seedRepository(dir, { name: child, dirty: child !== "gamma" });
+    }
+    workspaces.push(["workspace of repositories (root is not one, three children are)", workspaceOfRepos]);
+
+    const noGit = join(base, "no-git");
+    mkdirSync(join(noGit, "notes"), { recursive: true });
+    writeFileSync(join(noGit, "notes", "todo.md"), "# Todo\n\n- nothing here is a repository\n");
+    workspaces.push(["no git at all", noGit]);
+  } catch (error) {
+    console.error(`sandbox: could not seed the workspace shapes (${error instanceof Error ? error.message : String(error)})`);
+  }
+}
+
 const skillDir = join(agentDir, "skills", "sandbox-review");
 mkdirSync(skillDir, { recursive: true });
 writeFileSync(
@@ -179,6 +254,33 @@ const provider = createServer((req, res) => {
       if (lastRole === "tool") return sayShort("Noted the result.");
       if (/explorer|counted/i.test(prompt)) return sayShort("The explorer finished: it counted the files.");
       return sayShort("Noted. Say **delegate** to start a subagent, **background** to start a command that reports back, or **fleet** to read the tree of work under this session.");
+    }
+    // Source-control scene (the leap's §13.2 sandbox). A turn has to *change
+    // files* for a checkpoint, a turn scope and a diff to have anything in
+    // them, so this scene writes and edits real files through the engine's own
+    // tools rather than describing a change in prose.
+    if (process.env.SANDBOX_SOURCE_CONTROL === "1") {
+      const lastRole = msgs.at(-1)?.role;
+      const previousTool = lastToolName(msgs);
+      if (lastRole === "user" && /\b(change|edit|refactor|write)\b/i.test(prompt)) {
+        return callTool("write", {
+          path: "src/feature.ts",
+          content: "export interface Feature {\n  name: string;\n  enabled: boolean;\n}\n\nexport const features: Feature[] = [\n  { name: \"overlay\", enabled: true },\n  { name: \"checkpoints\", enabled: true },\n];\n",
+        });
+      }
+      if (lastRole === "tool" && previousTool === "write") {
+        return callTool("edit", {
+          path: "src/index.ts",
+          edits: [{ oldText: "export function greet(", newText: "/** Greets somebody. */\nexport function greet(" }],
+        });
+      }
+      if (lastRole === "tool" && previousTool === "edit") {
+        return sayShort("Added **src/feature.ts** and documented `greet`. Open the changes to read the diff.");
+      }
+      if (lastRole === "tool") return sayShort("Noted the result.");
+      if (lastRole === "user") {
+        return sayShort("Say **change** and I will write a new file and edit an existing one, so this turn has a real diff.");
+      }
     }
     // Goal regression specimen: the real engine terminates on this tool with
     // no assistant text. Its durable summary must remain readable in chat.
@@ -319,8 +421,26 @@ writeHostFile(hostFile, {
   ...(identity ? { identity } : {}),
 });
 
+// The seeded shapes are pinned as trusted projects, so the person opens the
+// rail and finds all four already there rather than typing four paths.
+for (const [, dir] of workspaces) {
+  try {
+    host.projects.add(dir);
+    host.projects.setTrust(dir, true, true);
+  } catch (error) {
+    console.error(`sandbox: could not register ${dir} (${error instanceof Error ? error.message : String(error)})`);
+  }
+}
+try {
+  host.projects.add(project);
+  host.projects.setTrust(project, true, true);
+} catch {
+  /* The single-repository project is registered on first use anyway. */
+}
+
 console.log(
   `${product.name} sandbox\n  ui:       ${url}\n  project:  ${project}\n  agentDir: ${agentDir}\n  stateDir: ${stateDir}\n  provider: ${providerUrl}\n` +
+    workspaces.map(([label, dir]) => `  also:     ${dir}  — ${label}\n`).join("") +
     `  cli:      ${product.env.stateDir}=${stateDir} ${product.env.agentDir}=${agentDir} ${product.binary} status`,
 );
 
