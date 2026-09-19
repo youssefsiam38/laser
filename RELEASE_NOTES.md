@@ -1,13 +1,62 @@
-# Laser 0.9.4
+# Laser 0.9.5 — long conversations, read properly
 
-One fix, for long conversations.
+This release is about one thing: a long conversation with pictures in it now
+works. If you have a chat that would not scroll back, or that stopped showing
+older messages entirely, this is the release that fixes it.
 
-## The top of a long conversation stops being a skeleton
+## Older messages come back
 
-Scrolling up far enough in a long conversation could leave the screen full of placeholder rows that never became messages, however long you waited or however much you scrolled.
+A conversation that had grown past a certain size stopped serving its older
+half. Scrolling up reached a point and stopped there, for ever — the messages
+were still on disk, but nothing could read them back.
 
-The conversation was asking for the older messages the whole time, and the answers were arriving — they were being thrown away. A page of earlier history is placed against the oldest row the window is holding, and in a long conversation that row is not always one the transcript draws (a very large tool result, for example, is held as a reference). When it was not, the page was refused, the same request went out again, and the placeholders stayed for ever.
+Two things caused it, and both are gone.
 
-Now such a page is kept: it is older than everything on screen by definition, so it goes where it belongs. Measured on a real 27 MB conversation, the loaded transcript goes from 3,800 px of content to 54,000 px as you read upwards, instead of standing still.
+**Pictures no longer travel inside a message.** A screenshot pasted into a chat,
+or one a tool returned, was carried inline as part of the message itself. A
+single screenshot is often two or three megabytes, which is larger than a whole
+page of conversation is allowed to be — so any page containing one could not be
+sent, and every page older than it was unreachable. Pictures are now sent as
+references and fetched when they are shown, at every size, in every kind of
+message. A page of conversation carrying two multi-megabyte screenshots went
+from 6.4 MB to under 4 KB.
 
-Two supporting changes: unloaded history now occupies at most three screens in front of you rather than an estimate of the entire past — an estimate of tens of thousands of pixels was a blank region no amount of loading could fill — and reading upwards into it loads pages one after another as you go, while the explicit "Load earlier messages" button still loads exactly one.
+**A page is now a number of turns, not a number of bytes.** Reading backwards
+loads the last ten exchanges, then twenty more each time you continue. One real
+27 MB conversation now reaches its very first message in 22 requests, taking
+under a second; it previously needed 56 and gave up partway.
+
+## Reading upwards no longer moves the text
+
+While you read back through a conversation, things above you finish loading —
+images arrive, reasoning streams in, a tool result expands. Each of those used
+to shift the text under your eyes, so the line you were reading moved away from
+you.
+
+The transcript is now built on a list that refuses to let content above you
+move, rather than correcting the scroll position afterwards. Folding a tool
+result open or closed keeps the row you clicked exactly where it was, and the
+composer growing taller no longer moves the conversation.
+
+One honest limit: if the row you are *halfway through* grows below your reading
+line, the view still moves by that much.
+
+## Every picture stays reachable
+
+A picture that is not in the loaded window is now opened on demand rather than
+reported as missing, including pictures inside tool results and inside results
+from MCP servers. A picture reserves the right amount of space before its bytes
+arrive, so the conversation does not jump when it appears. Pictures whose file
+header does not state a size are the exception and still appear without a
+reserved box.
+
+## Mentions
+
+Typing a space after `@something` now ends the file suggestion list, as you
+would expect. A path with a space in it still works if you quote it —
+`@"./my folder/notes.md"` — and the list stays open while the quote is open.
+
+## Upgrading
+
+Nothing to do beyond installing. Existing conversations are read as they are:
+nothing is rewritten, migrated, or moved on disk.
