@@ -77,6 +77,7 @@ import { assertFirstTurnAdmission, FirstTurnLock } from "./first-turn.js";
 import { PendingTray } from "./pending.js";
 import { GitService } from "./git.js";
 import { SourceControlService } from "./source-control/index.js";
+import { excerptFromEntries, GitActionError, GitActionsService, type GitActionsFetcher, type GitProseRuntime, type ProcessRunner } from "./git-actions/index.js";
 import { KeybindingsAdapter } from "./keybindings.js";
 import { ModelsAdapter, PackagesAdapter } from "./packages.js";
 import { SettingsAdapter } from "./settings.js";
@@ -140,6 +141,14 @@ export interface WorkerServerOptions {
   npmCommand?: string[];
   /** Test seam: the model runtime Namer completes through. Defaults to the engine's. */
   namerModels?: () => Promise<NamerModelRuntime>;
+  /** Test seam for git actions (L6). */
+  gitActions?: {
+    run?: ProcessRunner;
+    fetch?: GitActionsFetcher;
+    env?: NodeJS.ProcessEnv;
+    viewedFile?: string;
+    proseRuntime?: () => Promise<GitProseRuntime>;
+  };
   /**
    * Bytes accepted for the host and not yet written (RP-7). Read by the
    * capture producer: when the link is backed up, a provider capture is
@@ -257,6 +266,7 @@ export class WorkerServer {
   /** M2-T6 git line. Built on first use like the adapters above. */
   private gitService: GitService | undefined;
   private sourceControlService: SourceControlService | undefined;
+  private gitActionsService: GitActionsService | undefined;
   /** M4-T7 keybindings, and the `@` popover's file list. Both built on first use. */
   private keybindingsAdapter: KeybindingsAdapter | undefined;
   private filesService: ProjectFilesService | undefined;
@@ -1044,6 +1054,36 @@ export class WorkerServer {
         this.harness.setIsolationDefault(req.params.isolation);
         return { project: { cwd: this.options.cwd, name: "", addedAt: "", trust: "not_required", pinned: false, sessionCount: 0, agentIsolation: req.params.isolation } } satisfies Result<"pi/project/isolation/set">;
       }
+      case "pi/project/git/hosts":
+        this.assertCwd(req.params.cwd);
+        return (await this.gitAction(() => this.gitActions().hosts(req.params))) satisfies Result<"pi/project/git/hosts">;
+      case "pi/project/git/commit":
+        this.assertCwd(req.params.cwd);
+        return (await this.gitAction(() => this.gitActions().commit(req.params))) satisfies Result<"pi/project/git/commit">;
+      case "pi/project/git/push":
+        this.assertCwd(req.params.cwd);
+        return (await this.gitAction(() => this.gitActions().push(req.params))) satisfies Result<"pi/project/git/push">;
+      case "pi/project/git/branch":
+        this.assertCwd(req.params.cwd);
+        return (await this.gitAction(() => this.gitActions().branch(req.params))) satisfies Result<"pi/project/git/branch">;
+      case "pi/project/git/prose":
+        this.assertCwd(req.params.cwd);
+        return (await this.gitAction(() => this.gitActions().prose(req.params))) satisfies Result<"pi/project/git/prose">;
+      case "pi/project/pr/create":
+        this.assertCwd(req.params.cwd);
+        return (await this.gitAction(() => this.gitActions().createPr(req.params))) satisfies Result<"pi/project/pr/create">;
+      case "pi/project/pr/read":
+        this.assertCwd(req.params.cwd);
+        return (await this.gitAction(() => this.gitActions().readPr(req.params))) satisfies Result<"pi/project/pr/read">;
+      case "pi/project/pr/checkout":
+        this.assertCwd(req.params.cwd);
+        return (await this.gitAction(() => this.gitActions().checkoutPr(req.params))) satisfies Result<"pi/project/pr/checkout">;
+      case "pi/project/pr/merge":
+        this.assertCwd(req.params.cwd);
+        return (await this.gitAction(() => this.gitActions().mergePr(req.params))) satisfies Result<"pi/project/pr/merge">;
+      case "pi/project/pr/viewed":
+        this.assertCwd(req.params.cwd);
+        return (await this.gitAction(() => this.gitActions().viewed(req.params))) satisfies Result<"pi/project/pr/viewed">;
 
       // ------------------------------------------- M16-T17 project env ---
       case "pi/project/env/status": {
@@ -1399,6 +1439,43 @@ export class WorkerServer {
       },
     });
     return this.sourceControlService;
+  }
+
+  private gitActions(): GitActionsService {
+    this.gitActionsService ??= new GitActionsService({
+      projectCwd: this.options.cwd,
+      ...(this.options.gitActions?.run ? { run: this.options.gitActions.run } : {}),
+      ...(this.options.gitActions?.fetch ? { fetch: this.options.gitActions.fetch } : {}),
+      ...(this.options.gitActions?.env ? { env: this.options.gitActions.env } : {}),
+      viewedFile:
+        this.options.gitActions?.viewedFile ??
+        join(this.options.stateDir ?? join(this.options.agentDir ?? this.options.cwd, "..", "state"), "git-viewed.json"),
+      proseRuntime: this.options.gitActions?.proseRuntime ?? (async () => (await this.modelCatalog().modelRuntime()) as unknown as GitProseRuntime),
+      sessionContext: async (path) => {
+        if (!this.runtimes.has(path)) {
+          throw new GitActionError("Open the conversation first so the current model can write this.");
+        }
+        const live = this.live(path);
+        const model = live.driver.state().model;
+        const { entries } = await live.driver.entries({ tail: 30 });
+        return {
+          model: model ? { provider: model.provider, id: model.id } : null,
+          excerpt: excerptFromEntries(entries),
+        };
+      },
+    });
+    return this.gitActionsService;
+  }
+
+  private async gitAction<T>(work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
+    } catch (error) {
+      if (error instanceof GitActionError) {
+        throw new ProtocolError(ErrorCodes.InvalidParams, error.message);
+      }
+      throw error;
+    }
   }
 
   private keybindings(): KeybindingsAdapter {

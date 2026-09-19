@@ -31,6 +31,28 @@ import type {
   RestoreTarget,
   ChangeScope,
 } from "./source-control.js";
+import type {
+  GitBranchParams,
+  GitBranchResult,
+  GitCommitParams,
+  GitCommitResult,
+  GitHostsParams,
+  GitHostsResult,
+  GitPrCheckoutParams,
+  GitPrCheckoutResult,
+  GitPrCreateParams,
+  GitPrCreateResult,
+  GitPrMergeParams,
+  GitPrMergeResult,
+  GitProseParams,
+  GitProseResult,
+  GitPrReadParams,
+  GitPrReadResult,
+  GitPrViewedParams,
+  GitPrViewedResult,
+  GitPushParams,
+  GitPushResult,
+} from "./git-actions.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
 
@@ -1606,6 +1628,33 @@ export interface ClientRequests {
     params: { cwd: string; isolation: AgentIsolationDefault };
     result: { project: ProjectInfo };
   };
+  /**
+   * Per-repository host discovery for git actions (L6). Each named repository
+   * is classified from its remotes; a missing or signed-out CLI is a sentence
+   * with the one command that fixes it, and every other repository still answers.
+   */
+  "pi/project/git/hosts": { params: GitHostsParams; result: GitHostsResult };
+  /** Commit an explicit path set. `confirm: true` writes; omitted is a preview. */
+  "pi/project/git/commit": { params: GitCommitParams; result: GitCommitResult };
+  /** Push the named branch to the named remote. Never force. */
+  "pi/project/git/push": { params: GitPushParams; result: GitPushResult };
+  /** Create a branch from an explicit base. */
+  "pi/project/git/branch": { params: GitBranchParams; result: GitBranchResult };
+  /** Generate commit/PR prose with the session's current model. Never commits. */
+  "pi/project/git/prose": { params: GitProseParams; result: GitProseResult };
+  /** Open a pull request on the repository's discovered host. */
+  "pi/project/pr/create": { params: GitPrCreateParams; result: GitPrCreateResult };
+  /** A pull request with its comments, checks and viewed marks. */
+  "pi/project/pr/read": { params: GitPrReadParams; result: GitPrReadResult };
+  /** Check out the pull request's branch. */
+  "pi/project/pr/checkout": { params: GitPrCheckoutParams; result: GitPrCheckoutResult };
+  /** Merge the pull request. */
+  "pi/project/pr/merge": { params: GitPrMergeParams; result: GitPrMergeResult };
+  /**
+   * Mark a file viewed. GitHub syncs its own viewed marks; Bitbucket keeps
+   * ours locally on this machine.
+   */
+  "pi/project/pr/viewed": { params: GitPrViewedParams; result: GitPrViewedResult };
   /**
    * Subdirectories of `path` (the home directory when omitted), for picking a
    * project without typing a path (M10-T6). Directories only, hidden ones
