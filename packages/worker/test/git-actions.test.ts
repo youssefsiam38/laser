@@ -4,14 +4,16 @@
  */
 import { PRODUCT_NAME } from "@lasercode/protocol";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { GitActionsService } from "../src/git-actions/service.js";
 import { hiddenRefPrefix, isHiddenProductRef, parseRemoteUrl } from "../src/git-actions/remotes.js";
 import { cleanProse, excerptFromEntries, prosePrompt } from "../src/git-actions/prose.js";
-import { redactSecrets, type GitActionsFetcher, type ProcessResult, type ProcessRunner } from "../src/git-actions/runner.js";
+import { bitbucketMessage } from "../src/git-actions/bitbucket.js";
+import { GitActionError } from "../src/git-actions/paths.js";
+import { createProcessRunner, redactSecrets, type GitActionsFetcher, type ProcessResult, type ProcessRunner } from "../src/git-actions/runner.js";
 
 const temps: string[] = [];
 afterEach(() => {
@@ -180,7 +182,7 @@ describe("commit, push, branch", () => {
     const service = new GitActionsService({ projectCwd: dir, env: {} });
     const preview = await service.push({ cwd: dir, remote: "origin", branch: "main" });
     expect(preview.outcome).toBe("preview");
-    expect(preview.copyable?.argv).toEqual(["git", "push", "origin", "main"]);
+    expect(preview.copyable?.argv).toEqual(["git", "push", "origin", "refs/heads/main:refs/heads/main"]);
     const done = await service.push({ cwd: dir, remote: "origin", branch: "main", confirm: true });
     expect(done.outcome).toBe("done");
     expect(done.pushed).toEqual({ remote: "origin", branch: "main" });
@@ -214,7 +216,7 @@ describe("commit, push, branch", () => {
     const service = new GitActionsService({ projectCwd: dir, run, env: {} });
     await service.commit({ cwd: dir, paths: [hostilePath], message: hostileMessage, confirm: true });
     await service.branch({ cwd: dir, name: hostileBranch, base: "main", confirm: true }).catch(() => undefined);
-    expect(calls.some((call) => call.command === "git" && call.args[0] === "commit" && call.args.includes(hostileMessage) && call.args.includes("--") && call.args.includes(hostilePath))).toBe(true);
+    expect(calls.some((call) => call.command === "git" && call.args[0] === "commit" && call.args.includes(hostileMessage) && call.args.includes("--") && call.args.includes(`:(literal)${hostilePath}`))).toBe(true);
     expect(calls.some((call) => call.command === "git" && call.args.includes(hostileBranch))).toBe(true);
     expect(calls.every((call) => Array.isArray(call.args))).toBe(true);
     expect(calls.every((call) => !call.args.some((arg) => arg.includes("git commit") || arg.includes("git branch")))).toBe(true);
@@ -309,6 +311,7 @@ describe("pull requests", () => {
       }
       if (request.url.includes("/comments")) return { status: 200, text: JSON.stringify({ values: [{ id: 1, user: { display_name: "Ada" }, content: { raw: "nits" } }] }) };
       if (request.url.includes("/statuses")) return { status: 200, text: JSON.stringify({ values: [{ name: "build", state: "SUCCESSFUL" }] }) };
+      if (request.url.includes("/diffstat")) return { status: 200, text: JSON.stringify({ values: [{ new: { path: "src/a.ts" } }, { new: { path: "src/b.ts" } }] }) };
       return {
         status: 200,
         text: JSON.stringify({
@@ -341,6 +344,7 @@ describe("pull requests", () => {
     expect(JSON.stringify(created)).not.toContain(token);
     const read = await service.readPr({ cwd: dir, number: 9 });
     expect(read.pullRequest?.comments[0]?.author).toBe("Ada");
+    expect(read.pullRequest?.files?.map((file) => file.path)).toEqual(["src/a.ts", "src/b.ts"]);
     expect(JSON.stringify(read)).not.toContain(token);
     expect(bodies).toEqual([]);
   });
@@ -422,6 +426,299 @@ describe("copyable fallback", () => {
     }));
     const dir = temp("copy");
     const service = new GitActionsService({ projectCwd: dir, run, env: {} });
-    await expect(service.createPr({ cwd: dir, title: "Fix", body: "x", base: "main", head: "f", confirm: true })).rejects.toThrow(/gh auth login/);
+    const result = await service.createPr({ cwd: dir, title: "Fix", body: "x", base: "main", head: "f", confirm: true });
+    expect(result.outcome).toBe("needs_copy");
+    expect(result.copyable?.argv).toEqual(["gh", "auth", "login"]);
+    expect(result.message).toMatch(/gh auth login/);
+  });
+});
+
+describe("B1 force-push and tag-move fence", () => {
+  it("rejects a leading-plus branch, a colon refspec, and a plus-tag, and pushes a fully qualified heads refspec", async () => {
+    const dir = temp("b1");
+    gitInit(dir);
+    writeFileSync(join(dir, "a.ts"), "a\n");
+    execFileSync("git", ["add", "a.ts"], { cwd: dir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+    execFileSync("git", ["tag", "v1"], { cwd: dir });
+    const bare = temp("b1-bare");
+    execFileSync("git", ["init", "--bare", "-b", "main"], { cwd: bare });
+    execFileSync("git", ["remote", "add", "origin", bare], { cwd: dir });
+    execFileSync("git", ["push", "origin", "main"], { cwd: dir });
+    execFileSync("git", ["push", "origin", "v1"], { cwd: dir });
+
+    const other = temp("b1-other");
+    execFileSync("git", ["clone", bare, other]);
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: other });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: other });
+    writeFileSync(join(other, "a.ts"), "other\n");
+    execFileSync("git", ["add", "a.ts"], { cwd: other });
+    execFileSync("git", ["commit", "-m", "other"], { cwd: other });
+    execFileSync("git", ["push", "origin", "main"], { cwd: other });
+
+    writeFileSync(join(dir, "a.ts"), "dir\n");
+    execFileSync("git", ["add", "a.ts"], { cwd: dir });
+    execFileSync("git", ["commit", "-m", "dir"], { cwd: dir });
+
+    const nff = (() => {
+      try {
+        execFileSync("git", ["push", "origin", "main"], { cwd: dir, stdio: ["pipe", "pipe", "pipe"] });
+        return false;
+      } catch {
+        return true;
+      }
+    })();
+    expect(nff).toBe(true);
+    execFileSync("git", ["push", "origin", "+main"], { cwd: dir, stdio: ["pipe", "pipe", "pipe"] });
+    execFileSync("git", ["push", "origin", "+v1"], { cwd: dir, stdio: ["pipe", "pipe", "pipe"] });
+
+    const service = new GitActionsService({ projectCwd: dir, env: {} });
+    await expect(service.push({ cwd: dir, remote: "origin", branch: "+main", confirm: true })).rejects.toThrow(/branch name/);
+    await expect(service.push({ cwd: dir, remote: "origin", branch: "main:main", confirm: true })).rejects.toThrow(/branch name/);
+    await expect(service.push({ cwd: dir, remote: "origin", branch: "+v1", confirm: true })).rejects.toThrow(/branch name/);
+
+    const preview = await service.push({ cwd: dir, remote: "origin", branch: "main" });
+    expect(preview.copyable?.argv).toEqual(["git", "push", "origin", "refs/heads/main:refs/heads/main"]);
+    expect(preview.copyable?.argv.some((arg) => arg.startsWith("+") || arg.includes(":") && !arg.startsWith("refs/"))).toBe(false);
+  });
+});
+
+describe("B2 pathspec magic", () => {
+  it("refuses a leading colon and commits only literal paths", async () => {
+    const dir = temp("b2");
+    gitInit(dir);
+    writeFileSync(join(dir, "a.ts"), "a\n");
+    writeFileSync(join(dir, "b.ts"), "b\n");
+    execFileSync("git", ["add", "."], { cwd: dir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+    writeFileSync(join(dir, "a.ts"), "a2\n");
+    writeFileSync(join(dir, "b.ts"), "b2\n");
+    const service = new GitActionsService({ projectCwd: dir, env: {} });
+    await expect(service.commit({ cwd: dir, paths: [":/"], message: "only a", confirm: true })).rejects.toThrow(/colon/);
+    await expect(service.commit({ cwd: dir, paths: [":(exclude)nothing"], message: "only a", confirm: true })).rejects.toThrow(/colon/);
+    await expect(service.commit({ cwd: dir, paths: [":(literal)a.ts"], message: "only a", confirm: true })).rejects.toThrow(/colon/);
+    expect(execFileSync("git", ["log", "-1", "--format=%s"], { cwd: dir }).toString().trim()).toBe("init");
+
+    const { run, calls } = recording(githubScript((command, args) => {
+      if (command === "git" && (args[0] === "add" || args[0] === "commit")) return { code: 0 };
+      if (command === "git" && args[0] === "rev-parse" && args.includes("--short")) return "abc123\n";
+      if (command === "git" && args[0] === "log") return "subject\n";
+      return undefined;
+    }));
+    const mocked = new GitActionsService({ projectCwd: dir, run, env: {} });
+    await mocked.commit({ cwd: dir, paths: ["a.ts"], message: "only a", confirm: true });
+    expect(calls.some((call) => call.command === "git" && call.args[0] === "commit" && call.args.includes(":(literal)a.ts"))).toBe(true);
+    expect(calls.some((call) => call.command === "git" && call.args[0] === "add" && call.args.includes(":(literal)a.ts"))).toBe(true);
+  });
+});
+
+describe("B3 new files", () => {
+  it("stages and commits a file the session created", async () => {
+    const dir = temp("b3");
+    gitInit(dir);
+    writeFileSync(join(dir, "a.ts"), "a\n");
+    execFileSync("git", ["add", "a.ts"], { cwd: dir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+    writeFileSync(join(dir, "new.ts"), "export const n = 1;\n");
+    const service = new GitActionsService({ projectCwd: dir, env: {} });
+    const preview = await service.commit({ cwd: dir, paths: ["new.ts"], message: "add new" });
+    expect(preview.confirmation.summary).toMatch(/stage/i);
+    const done = await service.commit({ cwd: dir, paths: ["new.ts"], message: "add new", confirm: true });
+    expect(done.outcome).toBe("done");
+    expect(done.commit?.subject).toBe("add new");
+    expect(execFileSync("git", ["ls-files", "new.ts"], { cwd: dir }).toString().trim()).toBe("new.ts");
+  });
+});
+
+describe("S5 Bitbucket error classification", () => {
+  it("separates token scope, repository role, workspace role, HTML challenge and throttle", () => {
+    expect(bitbucketMessage({
+      status: 403,
+      text: JSON.stringify({
+        type: "error",
+        error: {
+          message: "Your credentials lack one or more required privilege scopes.",
+          detail: { required: ["read:pullrequest:bitbucket"], granted: ["write:repository:bitbucket"] },
+        },
+      }),
+    }, "fallback")).toMatch(/missing a required scope/);
+    expect(bitbucketMessage({
+      status: 403,
+      text: JSON.stringify({
+        type: "error",
+        error: { message: "Access denied. You must have write or admin access.", data: { key: "INSUFFICIENT_RIGHTS" } },
+      }),
+    }, "fallback")).toMatch(/repository admin/);
+    expect(bitbucketMessage({
+      status: 403,
+      text: JSON.stringify({ type: "error", error: { message: "You do not have access to view this workspace." } }),
+    }, "fallback")).toMatch(/workspace admin/);
+    expect(bitbucketMessage({ status: 403, text: "<!DOCTYPE html><html>challenge</html>" }, "fallback")).toMatch(/security challenge/);
+    expect(bitbucketMessage({ status: 429, text: "" }, "The pull request was not merged.")).toMatch(/throttling/);
+  });
+});
+
+describe("S6 queued Bitbucket merge", () => {
+  it("reports 202 as uncertain and does not retry", async () => {
+    let merges = 0;
+    const fetchImpl: GitActionsFetcher = async (request) => {
+      if (request.method === "POST" && request.url.includes("/merge")) {
+        merges += 1;
+        return { status: 202, text: JSON.stringify({ links: { "merge/task-status": { href: "https://api.bitbucket.org/2.0/repositories/ws/app/pullrequests/9/merge/task-status/1" } } }) };
+      }
+      return { status: 200, text: "{}" };
+    };
+    const { run } = recording(githubScript((command, args) => {
+      if (command === "git" && args[0] === "remote" && args[1] === "-v") {
+        return "origin\thttps://bitbucket.org/ws/app.git (fetch)\n";
+      }
+      return undefined;
+    }));
+    const dir = temp("bb-202");
+    const service = new GitActionsService({
+      projectCwd: dir,
+      run,
+      fetch: fetchImpl,
+      env: { BITBUCKET_API_TOKEN: "ATATT" + "queued0000000000" },
+    });
+    const first = await service.mergePr({ cwd: dir, number: 9, method: "merge", confirm: true });
+    expect(first.outcome).toBe("uncertain");
+    expect(first.message).toMatch(/still running/);
+    const second = await service.mergePr({ cwd: dir, number: 9, method: "merge", confirm: true });
+    expect(second.outcome).toBe("uncertain");
+    expect(merges).toBe(2);
+  });
+});
+
+describe("S12 expect binding", () => {
+  it("refuses a confirm whose HEAD no longer matches the preview", async () => {
+    const dir = temp("expect");
+    gitInit(dir);
+    writeFileSync(join(dir, "a.ts"), "a\n");
+    execFileSync("git", ["add", "a.ts"], { cwd: dir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+    writeFileSync(join(dir, "a.ts"), "a2\n");
+    const service = new GitActionsService({ projectCwd: dir, env: {} });
+    const preview = await service.commit({ cwd: dir, paths: ["a.ts"], message: "bump" });
+    expect(preview.expect?.head).toBeTruthy();
+    writeFileSync(join(dir, "a.ts"), "a3\n");
+    execFileSync("git", ["add", "a.ts"], { cwd: dir });
+    execFileSync("git", ["commit", "-m", "sneak"], { cwd: dir });
+    writeFileSync(join(dir, "a.ts"), "a4\n");
+    const refused = await service.commit({
+      cwd: dir,
+      paths: ["a.ts"],
+      message: "bump",
+      confirm: true,
+      expect: preview.expect,
+    });
+    expect(refused.outcome).toBe("refused");
+    expect(refused.message).toMatch(/HEAD has moved/);
+  });
+});
+
+describe("S13 viewed store", () => {
+  it("refuses to overwrite a corrupt file and writes through a temp rename", async () => {
+    const dir = temp("viewed-store");
+    const viewedFile = join(dir, "viewed.json");
+    writeFileSync(viewedFile, "{not json", { mode: 0o600 });
+    const { run } = recording(githubScript((command, args) => {
+      if (command === "git" && args[0] === "remote" && args[1] === "-v") {
+        return "origin\thttps://bitbucket.org/ws/app.git (fetch)\n";
+      }
+      return undefined;
+    }));
+    const service = new GitActionsService({
+      projectCwd: dir,
+      run,
+      fetch: async () => ({ status: 200, text: "{}" }),
+      env: { BITBUCKET_API_TOKEN: "ATATT" + "localonly00000000" },
+      viewedFile,
+    });
+    await expect(service.viewed({ cwd: dir, number: 3, path: "src/a.ts", viewed: true })).rejects.toThrow(/parsed/);
+    expect(readFileSync(viewedFile, "utf8")).toBe("{not json");
+
+    writeFileSync(viewedFile, "{}\n", { mode: 0o644 });
+    const marked = await service.viewed({ cwd: dir, number: 3, path: "src/a.ts", viewed: true });
+    expect(marked.outcome).toBe("done");
+    expect((readFileSync(viewedFile, "utf8").match(/src\/a\.ts/) ?? []).length).toBe(1);
+    expect(statSync(viewedFile).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe("S3 one gh auth probe", () => {
+  it("probes gh auth status once for several GitHub repositories", async () => {
+    const project = temp("many-gh");
+    const a = join(project, "a");
+    const b = join(project, "b");
+    mkdirSync(a); mkdirSync(b);
+    let auths = 0;
+    const run: ProcessRunner = async (command, args, options) => {
+      if (command === "gh" && args[0] === "auth") {
+        auths += 1;
+        return { code: 0, stdout: "", stderr: "Logged in\n", spawned: true, timedOut: false };
+      }
+      if (command === "git" && args[0] === "rev-parse" && args.includes("--is-inside-work-tree")) {
+        return { code: 0, stdout: "true\n", stderr: "", spawned: true, timedOut: false };
+      }
+      if (command === "git" && args[0] === "symbolic-ref") {
+        return { code: 0, stdout: args.some((arg) => String(arg).includes("remotes")) ? "origin/main\n" : "main\n", stderr: "", spawned: true, timedOut: false };
+      }
+      if (command === "git" && args[0] === "remote" && args[1] === "-v") {
+        return { code: 0, stdout: "origin\tgit@github.com:acme/app.git (fetch)\n", stderr: "", spawned: true, timedOut: false };
+      }
+      if (command === "gh" && args[0] === "repo") {
+        return { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: "main" } }), stderr: "", spawned: true, timedOut: false };
+      }
+      void options;
+      return { code: 0, stdout: "", stderr: "", spawned: true, timedOut: false };
+    };
+    const service = new GitActionsService({
+      projectCwd: project,
+      run,
+      env: {},
+      workspace: async () => ({
+        cwd: project,
+        kind: "workspace-of-repos",
+        repositories: [
+          { root: a, name: "a", projectRoot: false },
+          { root: b, name: "b", projectRoot: false },
+        ],
+      }),
+    });
+    const { hosts } = await service.hosts({ cwd: project });
+    expect(hosts).toHaveLength(2);
+    expect(auths).toBe(1);
+    expect(hosts.every((row) => row.defaultBranch === "main")).toBe(true);
+  });
+});
+
+describe("S1 inherited GIT_DIR", () => {
+  it("does not let an inherited GIT_DIR redirect a commit", async () => {
+    const dir = temp("gitdir");
+    gitInit(dir);
+    writeFileSync(join(dir, "a.ts"), "a\n");
+    execFileSync("git", ["add", "a.ts"], { cwd: dir });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: dir });
+    writeFileSync(join(dir, "a.ts"), "a2\n");
+    const other = temp("other-gitdir");
+    gitInit(other);
+    writeFileSync(join(other, "x.ts"), "x\n");
+    execFileSync("git", ["add", "x.ts"], { cwd: other });
+    execFileSync("git", ["commit", "-m", "other"], { cwd: other });
+    const previous = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(other, ".git");
+    try {
+      const run = createProcessRunner();
+      const service = new GitActionsService({ projectCwd: dir, run, env: {} });
+      const done = await service.commit({ cwd: dir, paths: ["a.ts"], message: "bump", confirm: true });
+      expect(done.outcome).toBe("done");
+      const env = { ...process.env };
+      delete env.GIT_DIR;
+      expect(execFileSync("git", ["-C", dir, "log", "-1", "--format=%s"], { env }).toString().trim()).toBe("bump");
+    } finally {
+      if (previous === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = previous;
+    }
   });
 });

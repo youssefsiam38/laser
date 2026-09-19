@@ -40,8 +40,8 @@ JSON-RPC `InvalidParams` is only for "cannot even start": path outside the proje
 
 `pi/project/git/hosts { cwd, repos? }`
 
-- `repos` omitted: just `cwd`.
-- `repos` set: each path, independently. One failure never blocks another.
+- `repos` omitted: every repository the workspace resolver found (or `cwd` if none).
+- `repos` set: optional filter of that list. One failure never blocks another.
 - Each path is fenced inside the project (realpath; no `..`).
 - Host from remotes (`origin` preferred): `github.com` → GitHub, `bitbucket.org` → Bitbucket, anything else → `unsupported`.
 - GitHub: `gh --version` / `gh auth status`. Missing → `Install the GitHub CLI, then run gh auth login.` Signed out → `Run gh auth login.`
@@ -182,7 +182,7 @@ No `confirm` (not a commit/push). GitHub syncs github.com; Bitbucket is local on
 | `outcome: "uncertain"` | Show `message`; **do not retry**; offer `copyable`. |
 | `outcome: "needs_copy"` | Show `copyable.argv` (join with spaces for display only) and `copyable.url` if present. |
 
-Phone/remote: the worker still runs on the desktop, so `gh`/token usually work. When they do not, `copyable` is the fallback.
+Phone/remote: the worker still runs on the desktop, so `gh`/token usually work. When they do not, `copyable` is the fallback. A preview result includes `expect` (branch, files, HEAD); the confirming call must send it back so a changed tree is refused rather than written.
 
 ## Validation
 
@@ -202,5 +202,26 @@ No browser run. No live GitHub/Bitbucket mutation. CLI/HTTP go through an inject
 ## Integration notes for the orchestrator
 
 - Overlay toolbar: this document is the contract. Do not read the worker source.
-- `packages/ui/test/runtime/environment-capabilities.test.ts` maps every `POLICED_METHODS` row. It will fail until the UI owner adds empty-capability rows for the ten new methods. This worker must not edit `packages/ui/**`.
+- The ten UI capability rows for git-action methods are in `packages/ui/test/runtime/environment-capabilities.test.ts`.
 - Host `worker-pool` / fake-worker launch-identity failures on this worktree were already present before the new methods landed in protocol dist (`host.e2e` against the real worker is green). Re-run the pool suite on a fully built checkout.
+
+## Corrections
+
+Independent review rejected the first L6 engine. This section is the correction batch. Each paragraph is a decision the orchestrator should record as a `D-<n>`.
+
+**Force-push fence.** `git check-ref-format --branch` accepts `+main`. A client-supplied branch that starts with `+` or `:` or contains `:` is refused before git runs. Push requires `git show-ref --verify --quiet refs/heads/<branch>` and uses the fully qualified refspec `refs/heads/<b>:refs/heads/<b>`, so the value cannot be a force refspec or resolve to a tag.
+
+**Literal pathspecs.** Paths starting with `:` are refused. Every path passed to `git add` / `git commit` is prefixed `:(literal)` so pathspec magic (`:/`, `:(exclude)`, globs) cannot expand the set past `confirmation.files`.
+
+**Stage then commit.** `git commit -- <paths>` does not pick up an untracked file the session created. The engine runs `git add --` on the same literal pathspecs first. The confirmation says those paths get staged.
+
+**`needs_copy` is a result.** Missing `gh`, a signed-out GitHub CLI, or a missing Bitbucket token is `outcome: "needs_copy"` with `copyable`, not JSON-RPC `InvalidParams`. `InvalidParams` remains "cannot even start" (path outside the project, no live session for prose).
+
+**`pi/project/git/prose` keeps `session_write`.** It does not match the scope's written definition, but it is the safest available scope because it stops a read-only device spending the person's tokens. The rationale lives next to the row in `method-policy.ts`.
+
+**Expect binds preview to mutation.** Mutating calls take optional `expect` (branch, exact file list, HEAD sha). A preview returns it. A confirm that no longer matches is refused with a person-facing sentence. That also answers a caller that forwards `confirm: true` blindly without the snapshot.
+
+**Bitbucket 403s are not one failure.** Token-scope (`error.detail.required`/`granted`), repository role (`data.key = "INSUFFICIENT_RIGHTS"`), workspace role, and an HTML security challenge are distinct sentences. Throttling is 429. A 202 merge with a task-status link is `uncertain` and is never retried automatically.
+
+**Canonical git env.** Git actions import `runGit` / `gitEnv` from `packages/worker/src/source-control/git-run.ts` and do not reimplement them. The hidden-ref prefix is derived from `CHECKPOINT_REF_NAMESPACE`. Host discovery enumerates `WorkspaceResolver` repositories; `repos` is an optional filter. `runGit` still does not surface `timedOut`/`killed`; git-actions treats a wrapped `runGit` result as not timed-out and would need that signal added on the source-control side.
+

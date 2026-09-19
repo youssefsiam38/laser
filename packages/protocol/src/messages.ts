@@ -1607,9 +1607,10 @@ export interface ClientRequests {
     result: { project: ProjectInfo };
   };
   /**
-   * Per-repository host discovery for git actions (L6). Each named repository
-   * is classified from its remotes; a missing or signed-out CLI is a sentence
-   * with the one command that fixes it, and every other repository still answers.
+   * Per-repository host discovery for git actions (L6). The worker enumerates
+   * the workspace's repositories; `repos` is an optional filter of that list.
+   * A missing or signed-out CLI is a sentence with the one command that fixes
+   * it, and every other repository still answers.
    */
   "pi/project/git/hosts": { params: GitHostsParams; result: GitHostsResult };
   /** Commit an explicit path set. `confirm: true` writes; omitted is a preview. */

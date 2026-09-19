@@ -6,6 +6,7 @@
  */
 import type {
   GitActionConfirmation,
+  GitActionExpect,
   GitActionResult,
   GitPrMergeMethod,
   GitPullRequest,
@@ -13,51 +14,79 @@ import type {
   GitPullRequestComment,
   GitPullRequestFile,
 } from "@lasercode/protocol";
-import { copyable, previewResult } from "./git-ops.js";
+import { copyable, previewResult, verifyExpect } from "./git-ops.js";
 import { GitActionError } from "./paths.js";
 import type { ParsedRemote } from "./remotes.js";
 import { githubRepo } from "./remotes.js";
-import { combinedOutput, looksUncertain, redactSecrets, type ProcessRunner } from "./runner.js";
+import { combinedOutput, looksUncertain, personFacingMessage, type ProcessRunner } from "./runner.js";
+import { setLocalViewed } from "./viewed.js";
 
 const GH_LOGIN = "gh auth login";
 
-export async function ensureGh(run: ProcessRunner, repo: string): Promise<void> {
+export interface GithubActionContext {
+  repo: string;
+  remote: ParsedRemote;
+  remoteName: string;
+  /** Locate already proved `gh` is present and signed in. */
+  cliReady?: boolean;
+  viewedFile?: string;
+}
+
+function needsGhCopy(repo: string, message: string): GitActionResult {
+  return {
+    outcome: "needs_copy",
+    message,
+    confirmation: { repo, branch: "", summary: message },
+    copyable: { argv: ["gh", "auth", "login"], cwd: repo },
+  };
+}
+
+export async function ensureGh(run: ProcessRunner, repo: string): Promise<GitActionResult | undefined> {
   const version = await run("gh", ["--version"], { cwd: repo, timeoutMs: 5_000 });
-  if (!version.spawned) throw new GitActionError(`Install the GitHub CLI, then run ${GH_LOGIN}.`, "needs_copy");
+  if (!version.spawned) return needsGhCopy(repo, `Install the GitHub CLI, then run ${GH_LOGIN}.`);
   const status = await run("gh", ["auth", "status"], { cwd: repo, timeoutMs: 8_000 });
-  if (status.code !== 0) throw new GitActionError(`Run ${GH_LOGIN}.`, "needs_copy");
+  if (status.code !== 0) return needsGhCopy(repo, `Run ${GH_LOGIN}.`);
+  return undefined;
+}
+
+async function ready(run: ProcessRunner, ctx: GithubActionContext): Promise<GitActionResult | undefined> {
+  if (ctx.cliReady) return undefined;
+  return ensureGh(run, ctx.repo);
 }
 
 export async function createGithubPr(
   run: ProcessRunner,
-  repo: string,
-  remote: ParsedRemote,
+  ctx: GithubActionContext,
   title: string,
   body: string,
   base: string,
   head: string,
   confirm: boolean | undefined,
+  expect?: GitActionExpect,
 ): Promise<GitActionResult & { pullRequest?: Pick<GitPullRequest, "number" | "url" | "title" | "host"> }> {
-  await ensureGh(run, repo);
-  const ownerRepo = githubRepo(remote);
+  const missing = await ready(run, ctx);
+  if (missing) return missing;
+  const ownerRepo = githubRepo(ctx.remote);
   const confirmation: GitActionConfirmation = {
-    repo,
+    repo: ctx.repo,
     branch: head,
-    remote: "origin",
+    remote: ctx.remoteName,
     summary: `Open a pull request from ${head} into ${base} on ${ownerRepo}.`,
   };
   const argv = ["gh", "pr", "create", "--repo", ownerRepo, "--title", title, "--body", body, "--base", base, "--head", head];
-  const copy = copyable(argv, repo, `https://github.com/${ownerRepo}/compare/${base}...${head}?expand=1`);
-  if (confirm !== true) return previewResult(confirmation, copy);
+  const copy = copyable(argv, ctx.repo, `https://github.com/${ownerRepo}/compare/${base}...${head}?expand=1`);
+  const mismatch = confirm === true ? verifyExpect(expect, { branch: head }, confirmation, copy) : undefined;
+  if (mismatch) return mismatch;
+  if (confirm !== true) return previewResult(confirmation, copy, { expect: { branch: head } });
   const result = await run("gh", ["pr", "create", "--repo", ownerRepo, "--title", title, "--body", body, "--base", base, "--head", head], {
-    cwd: repo,
+    cwd: ctx.repo,
     timeoutMs: 60_000,
   });
   if (looksUncertain(result)) {
     return { outcome: "uncertain", message: "The pull request may or may not have been opened. Check the host before trying again.", confirmation, copyable: copy };
   }
   if (result.code !== 0) {
-    return { outcome: "refused", message: personGh(combinedOutput(result), "The pull request was not opened."), confirmation, copyable: copy };
+    return { outcome: "refused", message: personFacingMessage(combinedOutput(result), "The pull request was not opened."), confirmation, copyable: copy };
   }
   const url = result.stdout.trim().split("\n").find((line) => line.startsWith("https://")) ?? "";
   const number = Number.parseInt(/\/pull\/(\d+)/.exec(url)?.[1] ?? "", 10);
@@ -69,142 +98,219 @@ export async function createGithubPr(
   };
 }
 
-export async function readGithubPr(run: ProcessRunner, repo: string, remote: ParsedRemote, number: number): Promise<GitActionResult & { pullRequest?: GitPullRequest }> {
-  await ensureGh(run, repo);
-  const ownerRepo = githubRepo(remote);
-  const confirmation: GitActionConfirmation = { repo, branch: "", summary: `Read pull request ${number} on ${ownerRepo}.` };
-  const copy = copyable(["gh", "pr", "view", String(number), "--repo", ownerRepo], repo, `https://github.com/${ownerRepo}/pull/${number}`);
+export async function readGithubPr(
+  run: ProcessRunner,
+  ctx: GithubActionContext,
+  number: number,
+): Promise<GitActionResult & { pullRequest?: GitPullRequest }> {
+  const missing = await ready(run, ctx);
+  if (missing) return missing;
+  const ownerRepo = githubRepo(ctx.remote);
+  const confirmation: GitActionConfirmation = { repo: ctx.repo, branch: "", summary: `Read pull request ${number} on ${ownerRepo}.` };
+  const copy = copyable(["gh", "pr", "view", String(number), "--repo", ownerRepo], ctx.repo, `https://github.com/${ownerRepo}/pull/${number}`);
   const fields = "id,number,title,body,url,state,baseRefName,headRefName,comments,reviews,statusCheckRollup,files";
-  const result = await run("gh", ["pr", "view", String(number), "--repo", ownerRepo, "--json", fields], { cwd: repo, timeoutMs: 30_000 });
-  if (!result.spawned) throw new GitActionError(`Install the GitHub CLI, then run ${GH_LOGIN}.`, "needs_copy");
+  const result = await run("gh", ["pr", "view", String(number), "--repo", ownerRepo, "--json", fields], { cwd: ctx.repo, timeoutMs: 30_000 });
+  if (!result.spawned) return needsGhCopy(ctx.repo, `Install the GitHub CLI, then run ${GH_LOGIN}.`);
   if (result.code !== 0) {
-    return { outcome: "refused", message: personGh(combinedOutput(result), "That pull request could not be read."), confirmation, copyable: copy };
+    return { outcome: "refused", message: personFacingMessage(combinedOutput(result), "That pull request could not be read."), confirmation, copyable: copy };
   }
   const parsed = parseGhJson(result.stdout);
   if (!parsed) {
     return { outcome: "refused", message: "GitHub returned a response that could not be read.", confirmation, copyable: copy };
   }
   const pullRequest = mapGhPr(parsed, number);
-  const viewed = await viewedFiles(run, repo, typeof parsed.id === "string" ? parsed.id : undefined);
+  const viewed = await viewedFiles(run, ctx.repo, typeof parsed.id === "string" ? parsed.id : undefined);
   if (viewed && pullRequest.files) {
     pullRequest.files = pullRequest.files.map((file: GitPullRequestFile) => {
-      const mark = viewed.get(file.path) ?? file.viewed;
+      const mark = viewed.marks.get(file.path) ?? file.viewed;
       return mark === undefined ? { path: file.path } : { path: file.path, viewed: mark };
     });
   }
-  return { outcome: "done", confirmation: { ...confirmation, branch: pullRequest.head }, copyable: copy, pullRequest };
+  const truncated = viewed?.truncated
+    ? " Only the first page of files includes GitHub viewed marks."
+    : "";
+  return {
+    outcome: "done",
+    confirmation: { ...confirmation, branch: pullRequest.head },
+    copyable: copy,
+    pullRequest,
+    ...(truncated ? { message: `Pull request ${number}.${truncated}` } : {}),
+  };
 }
 
 export async function checkoutGithubPr(
   run: ProcessRunner,
-  repo: string,
-  remote: ParsedRemote,
+  ctx: GithubActionContext,
   number: number,
   confirm: boolean | undefined,
+  expect?: GitActionExpect,
 ): Promise<GitActionResult & { checkedOut?: { branch: string } }> {
-  await ensureGh(run, repo);
-  const ownerRepo = githubRepo(remote);
+  const missing = await ready(run, ctx);
+  if (missing) return missing;
+  const ownerRepo = githubRepo(ctx.remote);
   const confirmation: GitActionConfirmation = {
-    repo,
+    repo: ctx.repo,
     branch: `pr/${number}`,
+    remote: ctx.remoteName,
     summary: `Check out pull request ${number} from ${ownerRepo}.`,
   };
   const argv = ["gh", "pr", "checkout", String(number), "--repo", ownerRepo];
-  const copy = copyable(argv, repo);
+  const copy = copyable(argv, ctx.repo);
+  const mismatch = confirm === true ? verifyExpect(expect, { branch: confirmation.branch }, confirmation, copy) : undefined;
+  if (mismatch) return mismatch;
   if (confirm !== true) return previewResult(confirmation, copy);
-  const result = await run("gh", ["pr", "checkout", String(number), "--repo", ownerRepo], { cwd: repo, timeoutMs: 60_000 });
+  const result = await run("gh", ["pr", "checkout", String(number), "--repo", ownerRepo], { cwd: ctx.repo, timeoutMs: 60_000 });
   if (looksUncertain(result)) {
     return { outcome: "uncertain", message: "The checkout may or may not have switched branches. Check git status before trying again.", confirmation, copyable: copy };
   }
   if (result.code !== 0) {
-    return { outcome: "refused", message: personGh(combinedOutput(result), "The pull request was not checked out."), confirmation, copyable: copy };
+    return { outcome: "refused", message: personFacingMessage(combinedOutput(result), "The pull request was not checked out."), confirmation, copyable: copy };
   }
-  const branch = (await run("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: repo, timeoutMs: 5_000 })).stdout.trim();
+  const branch = (await run("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: ctx.repo, timeoutMs: 5_000 })).stdout.trim();
   return { outcome: "done", confirmation: { ...confirmation, branch }, copyable: copy, checkedOut: { branch } };
 }
 
 export async function mergeGithubPr(
   run: ProcessRunner,
-  repo: string,
-  remote: ParsedRemote,
+  ctx: GithubActionContext,
   number: number,
   method: GitPrMergeMethod,
   confirm: boolean | undefined,
+  expect?: GitActionExpect,
 ): Promise<GitActionResult & { merged?: { number: number; method: GitPrMergeMethod } }> {
-  await ensureGh(run, repo);
-  const ownerRepo = githubRepo(remote);
+  const missing = await ready(run, ctx);
+  if (missing) return missing;
+  const ownerRepo = githubRepo(ctx.remote);
   const confirmation: GitActionConfirmation = {
-    repo,
+    repo: ctx.repo,
     branch: "",
+    remote: ctx.remoteName,
     summary: `Merge pull request ${number} on ${ownerRepo} with ${method}.`,
   };
   const flag = method === "squash" ? "--squash" : method === "rebase" ? "--rebase" : "--merge";
   const argv = ["gh", "pr", "merge", String(number), "--repo", ownerRepo, flag];
-  const copy = copyable(argv, repo, `https://github.com/${ownerRepo}/pull/${number}`);
+  const copy = copyable(argv, ctx.repo, `https://github.com/${ownerRepo}/pull/${number}`);
+  const mismatch = confirm === true ? verifyExpect(expect, {}, confirmation, copy) : undefined;
+  if (mismatch) return mismatch;
   if (confirm !== true) return previewResult(confirmation, copy);
-  const result = await run("gh", ["pr", "merge", String(number), "--repo", ownerRepo, flag], { cwd: repo, timeoutMs: 60_000 });
+  const result = await run("gh", ["pr", "merge", String(number), "--repo", ownerRepo, flag], { cwd: ctx.repo, timeoutMs: 60_000 });
   if (looksUncertain(result)) {
     return { outcome: "uncertain", message: "The merge may or may not have completed. Check the pull request before trying again.", confirmation, copyable: copy };
   }
   if (result.code !== 0) {
-    return { outcome: "refused", message: personGh(combinedOutput(result), "The pull request was not merged."), confirmation, copyable: copy };
+    return { outcome: "refused", message: personFacingMessage(combinedOutput(result), "The pull request was not merged."), confirmation, copyable: copy };
   }
   return { outcome: "done", confirmation, copyable: copy, merged: { number, method } };
 }
 
 export async function setGithubViewed(
   run: ProcessRunner,
-  repo: string,
-  remote: ParsedRemote,
+  ctx: GithubActionContext,
   number: number,
   path: string,
   viewed: boolean,
 ): Promise<GitActionResult & { path: string; viewed: boolean }> {
-  await ensureGh(run, repo);
-  const ownerRepo = githubRepo(remote);
+  const missing = await ready(run, ctx);
+  if (missing) return { ...missing, path, viewed };
+  const ownerRepo = githubRepo(ctx.remote);
   const confirmation: GitActionConfirmation = {
-    repo,
+    repo: ctx.repo,
     branch: "",
     files: [path],
     summary: viewed ? `Mark ${path} viewed on pull request ${number}.` : `Mark ${path} unviewed on pull request ${number}.`,
   };
-  const copy = copyable(["gh", "pr", "view", String(number), "--repo", ownerRepo], repo);
-  const idResult = await run("gh", ["pr", "view", String(number), "--repo", ownerRepo, "--json", "id"], { cwd: repo, timeoutMs: 20_000 });
+  const copy = copyable(["gh", "pr", "view", String(number), "--repo", ownerRepo], ctx.repo);
+  const idResult = await run("gh", ["pr", "view", String(number), "--repo", ownerRepo, "--json", "id"], { cwd: ctx.repo, timeoutMs: 20_000 });
   const id = parseGhJson(idResult.stdout)?.id;
   if (typeof id !== "string" || !id) {
-    return { outcome: "refused", message: "That pull request could not be read.", confirmation, copyable: copy, path, viewed };
+    return localViewedFallback(ctx, number, path, viewed, confirmation, copy, "That pull request could not be read.");
   }
   const mutation = viewed
     ? "mutation($id:ID!,$path:String!){markFileAsViewed(input:{pullRequestId:$id,path:$path}){clientMutationId}}"
     : "mutation($id:ID!,$path:String!){unmarkFileAsViewed(input:{pullRequestId:$id,path:$path}){clientMutationId}}";
   const result = await run("gh", ["api", "graphql", "-f", `query=${mutation}`, "-f", `id=${id}`, "-f", `path=${path}`], {
-    cwd: repo,
+    cwd: ctx.repo,
     timeoutMs: 20_000,
   });
   if (looksUncertain(result)) {
     return { outcome: "uncertain", message: "The viewed mark may or may not have been saved. Check the pull request before trying again.", confirmation, copyable: copy, path, viewed };
   }
   if (result.code !== 0) {
-    return { outcome: "refused", message: personGh(combinedOutput(result), "The viewed mark was not saved."), confirmation, copyable: copy, path, viewed };
+    return localViewedFallback(
+      ctx,
+      number,
+      path,
+      viewed,
+      confirmation,
+      copy,
+      personFacingMessage(combinedOutput(result), "The viewed mark was not saved."),
+    );
   }
   return { outcome: "done", confirmation, copyable: copy, path, viewed };
 }
 
-async function viewedFiles(run: ProcessRunner, repo: string, id: string | undefined): Promise<Map<string, boolean> | undefined> {
-  if (!id) return undefined;
-  const query = "query($id:ID!){node(id:$id){...on PullRequest{files(first:100){nodes{path viewerViewedState}}}}}";
-  const result = await run("gh", ["api", "graphql", "-f", `query=${query}`, "-f", `id=${id}`], { cwd: repo, timeoutMs: 20_000 });
-  if (result.code !== 0) return undefined;
-  const parsed = parseGhJson(result.stdout);
-  const files = asRecord(asRecord(asRecord(parsed?.data)?.node)?.files);
-  const nodes = files?.nodes;
-  const map = new Map<string, boolean>();
-  if (!Array.isArray(nodes)) return map;
-  for (const node of nodes) {
-    const row = asRecord(node);
-    if (typeof row?.path === "string") map.set(row.path, row.viewerViewedState === "VIEWED");
+function localViewedFallback(
+  ctx: GithubActionContext,
+  number: number,
+  path: string,
+  viewed: boolean,
+  confirmation: GitActionConfirmation,
+  copy: GitActionResult["copyable"],
+  failed: string,
+): GitActionResult & { path: string; viewed: boolean } {
+  if (!ctx.viewedFile) {
+    return { outcome: "refused", message: failed, confirmation, ...(copy ? { copyable: copy } : {}), path, viewed };
   }
-  return map;
+  try {
+    const local = setLocalViewed(
+      ctx.viewedFile,
+      ctx.repo,
+      ctx.remote,
+      number,
+      path,
+      viewed,
+      "The mark is local-only until it syncs with GitHub.",
+    );
+    return copy ? { ...local, copyable: copy } : local;
+  } catch (error) {
+    const message = error instanceof GitActionError ? error.message : failed;
+    return { outcome: "refused", message, confirmation, ...(copy ? { copyable: copy } : {}), path, viewed };
+  }
+}
+
+async function viewedFiles(
+  run: ProcessRunner,
+  repo: string,
+  id: string | undefined,
+): Promise<{ marks: Map<string, boolean>; truncated: boolean } | undefined> {
+  if (!id) return undefined;
+  const map = new Map<string, boolean>();
+  let after: string | undefined;
+  let pages = 0;
+  const pageLimit = 20;
+  while (pages < pageLimit) {
+    pages += 1;
+    const query =
+      "query($id:ID!,$after:String){node(id:$id){...on PullRequest{files(first:100,after:$after){pageInfo{hasNextPage endCursor}nodes{path viewerViewedState}}}}}";
+    const args = ["api", "graphql", "-f", `query=${query}`, "-f", `id=${id}`];
+    if (after) args.push("-f", `after=${after}`);
+    const result = await run("gh", args, { cwd: repo, timeoutMs: 20_000 });
+    if (result.code !== 0) return pages === 1 ? undefined : { marks: map, truncated: true };
+    const parsed = parseGhJson(result.stdout);
+    const files = asRecord(asRecord(asRecord(parsed?.data)?.node)?.files);
+    const nodes = files?.nodes;
+    if (Array.isArray(nodes)) {
+      for (const node of nodes) {
+        const row = asRecord(node);
+        if (typeof row?.path === "string") map.set(row.path, row.viewerViewedState === "VIEWED");
+      }
+    }
+    const pageInfo = asRecord(files?.pageInfo);
+    if (pageInfo?.hasNextPage !== true) return { marks: map, truncated: false };
+    after = typeof pageInfo.endCursor === "string" ? pageInfo.endCursor : undefined;
+    if (!after) return { marks: map, truncated: true };
+  }
+  return { marks: map, truncated: true };
 }
 
 interface GhJson {
@@ -303,10 +409,4 @@ function arrayOf(value: unknown): unknown[] {
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-}
-
-function personGh(output: string, fallback: string): string {
-  const line = redactSecrets(output).split("\n").map((row) => row.trim()).find((row) => row);
-  if (!line || line.length > 240) return fallback;
-  return line;
 }

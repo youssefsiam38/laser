@@ -171,6 +171,10 @@ export const METHOD_POLICY = {
   "pi/project/git/commit": { scope: "execution", reach: "any" },
   "pi/project/git/push": { scope: "execution", reach: "any" },
   "pi/project/git/branch": { scope: "execution", reach: "any" },
+  // session_write even though this does not write a session: it spends the
+  // session's current model. `read` would let a read-only paired device burn
+  // the person's tokens; this is the safest scope that still allows a live
+  // conversation to ask for commit/PR prose.
   "pi/project/git/prose": { scope: "session_write", reach: "any" },
   "pi/project/pr/create": { scope: "execution", reach: "any" },
   "pi/project/pr/read": { scope: "read", reach: "any" },

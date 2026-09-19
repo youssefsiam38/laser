@@ -4,8 +4,7 @@
  * Host discovery is from remotes only. A custom host (GitLab, a self-hosted
  * Bitbucket) is unsupported — said in a sentence, never probed.
  */
-import { PRODUCT_NAME } from "@lasercode/protocol";
-import type { GitActionHost } from "@lasercode/protocol";
+import { CHECKPOINT_REF_NAMESPACE, type GitActionHost } from "@lasercode/protocol";
 
 export interface ParsedRemote {
   host: GitActionHost | "unsupported";
@@ -18,8 +17,10 @@ export interface ParsedRemote {
 const SSH = /^(?:ssh:\/\/)?(?:git@)?([^/:]+)[:/](.+?)(?:\.git)?$/i;
 const HTTPS = /^(?:https?:\/\/)(?:[^/@]+@)?([^/]+)\/(.+?)(?:\.git)?$/i;
 
+/** `refs/<product>/` — parent of {@link CHECKPOINT_REF_NAMESPACE}. */
 export function hiddenRefPrefix(): string {
-  return `refs/${PRODUCT_NAME}/`;
+  const ns = CHECKPOINT_REF_NAMESPACE;
+  return ns.endsWith("/checkpoints") ? ns.slice(0, -"checkpoints".length) : `${ns.replace(/\/$/, "")}/`;
 }
 
 /** True when a ref sits under the product's hidden namespace. */

@@ -1055,35 +1055,16 @@ export class WorkerServer {
         return { project: { cwd: this.options.cwd, name: "", addedAt: "", trust: "not_required", pinned: false, sessionCount: 0, agentIsolation: req.params.isolation } } satisfies Result<"pi/project/isolation/set">;
       }
       case "pi/project/git/hosts":
-        this.assertCwd(req.params.cwd);
-        return (await this.gitAction(() => this.gitActions().hosts(req.params))) satisfies Result<"pi/project/git/hosts">;
       case "pi/project/git/commit":
-        this.assertCwd(req.params.cwd);
-        return (await this.gitAction(() => this.gitActions().commit(req.params))) satisfies Result<"pi/project/git/commit">;
       case "pi/project/git/push":
-        this.assertCwd(req.params.cwd);
-        return (await this.gitAction(() => this.gitActions().push(req.params))) satisfies Result<"pi/project/git/push">;
       case "pi/project/git/branch":
-        this.assertCwd(req.params.cwd);
-        return (await this.gitAction(() => this.gitActions().branch(req.params))) satisfies Result<"pi/project/git/branch">;
       case "pi/project/git/prose":
-        this.assertCwd(req.params.cwd);
-        return (await this.gitAction(() => this.gitActions().prose(req.params))) satisfies Result<"pi/project/git/prose">;
       case "pi/project/pr/create":
-        this.assertCwd(req.params.cwd);
-        return (await this.gitAction(() => this.gitActions().createPr(req.params))) satisfies Result<"pi/project/pr/create">;
       case "pi/project/pr/read":
-        this.assertCwd(req.params.cwd);
-        return (await this.gitAction(() => this.gitActions().readPr(req.params))) satisfies Result<"pi/project/pr/read">;
       case "pi/project/pr/checkout":
-        this.assertCwd(req.params.cwd);
-        return (await this.gitAction(() => this.gitActions().checkoutPr(req.params))) satisfies Result<"pi/project/pr/checkout">;
       case "pi/project/pr/merge":
-        this.assertCwd(req.params.cwd);
-        return (await this.gitAction(() => this.gitActions().mergePr(req.params))) satisfies Result<"pi/project/pr/merge">;
       case "pi/project/pr/viewed":
-        this.assertCwd(req.params.cwd);
-        return (await this.gitAction(() => this.gitActions().viewed(req.params))) satisfies Result<"pi/project/pr/viewed">;
+        return await this.dispatchGitAction(req);
 
       // ------------------------------------------- M16-T17 project env ---
       case "pi/project/env/status": {
@@ -1446,11 +1427,11 @@ export class WorkerServer {
       projectCwd: this.options.cwd,
       ...(this.options.gitActions?.run ? { run: this.options.gitActions.run } : {}),
       ...(this.options.gitActions?.fetch ? { fetch: this.options.gitActions.fetch } : {}),
-      ...(this.options.gitActions?.env ? { env: this.options.gitActions.env } : {}),
+      envProvider: () => this.options.gitActions?.env ?? this.projectEnv?.apply({ ...process.env }) ?? process.env,
       viewedFile:
         this.options.gitActions?.viewedFile ??
         join(this.options.stateDir ?? join(this.options.agentDir ?? this.options.cwd, "..", "state"), "git-viewed.json"),
-      proseRuntime: this.options.gitActions?.proseRuntime ?? (async () => (await this.modelCatalog().modelRuntime()) as unknown as GitProseRuntime),
+      proseRuntime: this.options.gitActions?.proseRuntime ?? (() => this.modelCatalog().modelRuntime()),
       sessionContext: async (path) => {
         if (!this.runtimes.has(path)) {
           throw new GitActionError("Open the conversation first so the current model can write this.");
@@ -1467,11 +1448,63 @@ export class WorkerServer {
     return this.gitActionsService;
   }
 
+  private async dispatchGitAction(
+    req: Extract<
+      TypedClientRequest,
+      {
+        method:
+          | "pi/project/git/hosts"
+          | "pi/project/git/commit"
+          | "pi/project/git/push"
+          | "pi/project/git/branch"
+          | "pi/project/git/prose"
+          | "pi/project/pr/create"
+          | "pi/project/pr/read"
+          | "pi/project/pr/checkout"
+          | "pi/project/pr/merge"
+          | "pi/project/pr/viewed";
+      }
+    >,
+  ): Promise<Result<(typeof req)["method"]>> {
+    this.assertCwd(req.params.cwd);
+    const svc = this.gitActions();
+    switch (req.method) {
+      case "pi/project/git/hosts":
+        return (await this.gitAction(() => svc.hosts(req.params))) satisfies Result<"pi/project/git/hosts">;
+      case "pi/project/git/commit":
+        return (await this.gitAction(() => svc.commit(req.params))) satisfies Result<"pi/project/git/commit">;
+      case "pi/project/git/push":
+        return (await this.gitAction(() => svc.push(req.params))) satisfies Result<"pi/project/git/push">;
+      case "pi/project/git/branch":
+        return (await this.gitAction(() => svc.branch(req.params))) satisfies Result<"pi/project/git/branch">;
+      case "pi/project/git/prose":
+        return (await this.gitAction(() => svc.prose(req.params))) satisfies Result<"pi/project/git/prose">;
+      case "pi/project/pr/create":
+        return (await this.gitAction(() => svc.createPr(req.params))) satisfies Result<"pi/project/pr/create">;
+      case "pi/project/pr/read":
+        return (await this.gitAction(() => svc.readPr(req.params))) satisfies Result<"pi/project/pr/read">;
+      case "pi/project/pr/checkout":
+        return (await this.gitAction(() => svc.checkoutPr(req.params))) satisfies Result<"pi/project/pr/checkout">;
+      case "pi/project/pr/merge":
+        return (await this.gitAction(() => svc.mergePr(req.params))) satisfies Result<"pi/project/pr/merge">;
+      case "pi/project/pr/viewed":
+        return (await this.gitAction(() => svc.viewed(req.params))) satisfies Result<"pi/project/pr/viewed">;
+    }
+  }
+
   private async gitAction<T>(work: () => Promise<T>): Promise<T> {
     try {
       return await work();
     } catch (error) {
       if (error instanceof GitActionError) {
+        if (error.outcome === "needs_copy") {
+          return {
+            outcome: "needs_copy",
+            message: error.message,
+            confirmation: { repo: this.options.cwd, branch: "", summary: error.message },
+            ...(error.copyable ? { copyable: error.copyable } : {}),
+          } as T;
+        }
         throw new ProtocolError(ErrorCodes.InvalidParams, error.message);
       }
       throw error;

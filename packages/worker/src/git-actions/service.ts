@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
+  GitActionResult,
   GitBranchParams,
   GitBranchResult,
   GitCommitParams,
@@ -25,14 +26,17 @@ import type {
   GitPrViewedResult,
   GitPushParams,
   GitPushResult,
+  WorkspaceShape,
 } from "@lasercode/protocol";
-import { PROJECT_DIR_NAME } from "@lasercode/protocol";
+import { createWorkspaceResolver } from "../workspace.js";
 import {
   bitbucketAuthFrom,
   checkoutBitbucketPr,
   createBitbucketPr,
   mergeBitbucketPr,
+  missingTokenResult,
   readBitbucketPr,
+  type BitbucketActionContext,
 } from "./bitbucket.js";
 import { commitPaths, createBranch, pushBranch } from "./git-ops.js";
 import {
@@ -41,6 +45,7 @@ import {
   mergeGithubPr,
   readGithubPr,
   setGithubViewed,
+  type GithubActionContext,
 } from "./github.js";
 import { discoverHosts } from "./hosts.js";
 import { GitActionError, assertPathspec, resolveRepoRoot } from "./paths.js";
@@ -59,30 +64,46 @@ export interface GitActionsServiceOptions {
   run?: ProcessRunner;
   fetch?: GitActionsFetcher;
   env?: NodeJS.ProcessEnv;
+  /** Fresh overlay each call (project environment). Overrides `env` when set. */
+  envProvider?: () => NodeJS.ProcessEnv;
   viewedFile?: string;
   proseRuntime?: () => Promise<GitProseRuntime>;
   sessionContext?: (path: string) => Promise<GitActionsSessionContext>;
+  workspace?: () => Promise<WorkspaceShape>;
 }
+
+type Located =
+  | { ok: true; repo: string; remote: ParsedRemote; remoteName: string; host: "github" | "bitbucket"; cliReady: boolean }
+  | { ok: false; result: GitActionResult };
 
 export class GitActionsService {
   private readonly run: ProcessRunner;
   private readonly fetch: GitActionsFetcher;
-  private readonly env: NodeJS.ProcessEnv;
-  private readonly viewedFile: string;
+  private readonly viewedFile: string | undefined;
+  private readonly envProvider: () => NodeJS.ProcessEnv;
+  private readonly workspace: () => Promise<WorkspaceShape>;
 
   constructor(private readonly options: GitActionsServiceOptions) {
-    this.env = options.env ?? process.env;
-    this.run = options.run ?? createProcessRunner(this.env);
+    this.envProvider = options.envProvider ?? (() => options.env ?? process.env);
+    this.run = options.run ?? createProcessRunner(() => this.envProvider());
     this.fetch = options.fetch ?? createFetcher();
-    this.viewedFile = options.viewedFile ?? join(options.projectCwd, PROJECT_DIR_NAME, "git-viewed.json");
+    this.viewedFile = options.viewedFile;
+    this.workspace = options.workspace ?? (() => createWorkspaceResolver().resolve(options.projectCwd));
+  }
+
+  private env(): NodeJS.ProcessEnv {
+    return this.envProvider();
   }
 
   async hosts(params: GitHostsParams): Promise<GitHostsResult> {
+    const shape = await this.workspace().catch(() => undefined);
     return {
       hosts: await discoverHosts({
         projectCwd: this.options.projectCwd,
         run: this.run,
-        env: this.env,
+        env: this.env(),
+        fetch: this.fetch,
+        ...(shape ? { workspace: shape } : {}),
         ...(params.repos ? { repos: params.repos } : {}),
       }),
     };
@@ -90,17 +111,17 @@ export class GitActionsService {
 
   async commit(params: GitCommitParams): Promise<GitCommitResult> {
     const repo = await resolveRepoRoot(this.options.projectCwd, params.repo);
-    return commitPaths(this.run, repo, params.paths, params.message, params.confirm);
+    return commitPaths(this.run, repo, params.paths, params.message, params.confirm, params.expect);
   }
 
   async push(params: GitPushParams): Promise<GitPushResult> {
     const repo = await resolveRepoRoot(this.options.projectCwd, params.repo);
-    return pushBranch(this.run, repo, params.remote, params.branch, params.confirm);
+    return pushBranch(this.run, repo, params.remote, params.branch, params.confirm, params.expect);
   }
 
   async branch(params: GitBranchParams): Promise<GitBranchResult> {
     const repo = await resolveRepoRoot(this.options.projectCwd, params.repo);
-    return createBranch(this.run, repo, params.name, params.base, params.checkout, params.confirm);
+    return createBranch(this.run, repo, params.name, params.base, params.checkout, params.confirm, params.expect);
   }
 
   async prose(params: GitProseParams): Promise<GitProseResult> {
@@ -122,54 +143,154 @@ export class GitActionsService {
   }
 
   async createPr(params: GitPrCreateParams): Promise<GitPrCreateResult> {
-    const { repo, remote, host } = await this.locate(params.repo);
-    if (host === "github") {
-      return createGithubPr(this.run, repo, remote, params.title, params.body, params.base, params.head, params.confirm);
+    const located = await this.locate(params.repo);
+    if (!located.ok) return located.result;
+    if (located.host === "github") {
+      return createGithubPr(this.run, this.githubCtx(located), params.title, params.body, params.base, params.head, params.confirm, params.expect);
     }
-    return createBitbucketPr(this.fetch, bitbucketAuthFrom(this.env), repo, remote, params.title, params.body, params.base, params.head, params.confirm);
+    return createBitbucketPr(
+      this.fetch,
+      bitbucketAuthFrom(this.env()),
+      this.bitbucketCtx(located),
+      params.title,
+      params.body,
+      params.base,
+      params.head,
+      params.confirm,
+      params.expect,
+    );
   }
 
   async readPr(params: GitPrReadParams): Promise<GitPrReadResult> {
-    const { repo, remote, host } = await this.locate(params.repo);
-    if (host === "github") return readGithubPr(this.run, repo, remote, params.number);
-    const result = await readBitbucketPr(this.fetch, bitbucketAuthFrom(this.env), repo, remote, params.number);
-    if (result.pullRequest) {
-      const viewed = listViewed(this.viewedFile, remote, params.number);
-      result.pullRequest.files = [...viewed.entries()].map(([path, mark]) => ({ path, viewed: mark }));
+    const located = await this.locate(params.repo);
+    if (!located.ok) return located.result;
+    if (located.host === "github") return readGithubPr(this.run, this.githubCtx(located), params.number);
+    const result = await readBitbucketPr(this.fetch, bitbucketAuthFrom(this.env()), this.bitbucketCtx(located), params.number);
+    if (result.pullRequest && this.viewedFile) {
+      const viewed = listViewed(this.viewedFile, located.remote, params.number);
+      const files = result.pullRequest.files ?? [];
+      result.pullRequest.files = files.map((file) => {
+        const mark = viewed.get(file.path);
+        return mark === undefined ? file : { path: file.path, viewed: mark };
+      });
     }
     return result;
   }
 
   async checkoutPr(params: GitPrCheckoutParams): Promise<GitPrCheckoutResult> {
-    const { repo, remote, host } = await this.locate(params.repo);
-    if (host === "github") return checkoutGithubPr(this.run, repo, remote, params.number, params.confirm);
-    return checkoutBitbucketPr(this.run, this.fetch, bitbucketAuthFrom(this.env), repo, remote, params.number, params.confirm);
+    const located = await this.locate(params.repo);
+    if (!located.ok) return located.result;
+    if (located.host === "github") return checkoutGithubPr(this.run, this.githubCtx(located), params.number, params.confirm, params.expect);
+    return checkoutBitbucketPr(
+      this.run,
+      this.fetch,
+      bitbucketAuthFrom(this.env()),
+      this.bitbucketCtx(located),
+      params.number,
+      params.confirm,
+      params.expect,
+    );
   }
 
   async mergePr(params: GitPrMergeParams): Promise<GitPrMergeResult> {
-    const { repo, remote, host } = await this.locate(params.repo);
-    if (host === "github") return mergeGithubPr(this.run, repo, remote, params.number, params.method, params.confirm);
-    return mergeBitbucketPr(this.fetch, bitbucketAuthFrom(this.env), repo, remote, params.number, params.method, params.confirm);
+    const located = await this.locate(params.repo);
+    if (!located.ok) return located.result;
+    if (located.host === "github") {
+      return mergeGithubPr(this.run, this.githubCtx(located), params.number, params.method, params.confirm, params.expect);
+    }
+    return mergeBitbucketPr(
+      this.fetch,
+      bitbucketAuthFrom(this.env()),
+      this.bitbucketCtx(located),
+      params.number,
+      params.method,
+      params.confirm,
+      params.expect,
+    );
   }
 
   async viewed(params: GitPrViewedParams): Promise<GitPrViewedResult> {
     assertPathspec(params.path);
-    const { repo, remote, host } = await this.locate(params.repo);
-    if (host === "github") return setGithubViewed(this.run, repo, remote, params.number, params.path, params.viewed);
-    return setLocalViewed(this.viewedFile, repo, remote, params.number, params.path, params.viewed);
+    const located = await this.locate(params.repo);
+    if (!located.ok) return { ...located.result, path: params.path, viewed: params.viewed };
+    if (located.host === "github") {
+      return setGithubViewed(this.run, this.githubCtx(located), params.number, params.path, params.viewed);
+    }
+    if (!this.viewedFile) {
+      return {
+        outcome: "refused",
+        message: "The viewed-file store is not configured.",
+        confirmation: { repo: located.repo, branch: "", files: [params.path], summary: `Mark ${params.path} on pull request ${params.number}.` },
+        path: params.path,
+        viewed: params.viewed,
+      };
+    }
+    return setLocalViewed(this.viewedFile, located.repo, located.remote, params.number, params.path, params.viewed);
   }
 
-  private async locate(repoParam: string | undefined): Promise<{ repo: string; remote: ParsedRemote; host: "github" | "bitbucket" }> {
+  private githubCtx(located: Extract<Located, { ok: true }>): GithubActionContext {
+    return {
+      repo: located.repo,
+      remote: located.remote,
+      remoteName: located.remoteName,
+      cliReady: located.cliReady,
+      ...(this.viewedFile ? { viewedFile: this.viewedFile } : {}),
+    };
+  }
+
+  private bitbucketCtx(located: Extract<Located, { ok: true }>): BitbucketActionContext {
+    return { repo: located.repo, remote: located.remote, remoteName: located.remoteName };
+  }
+
+  private async locate(repoParam: string | undefined): Promise<Located> {
     const repo = await resolveRepoRoot(this.options.projectCwd, repoParam);
-    const hosts = await discoverHosts({ projectCwd: this.options.projectCwd, run: this.run, env: this.env, repos: [repo] });
+    const shape = await this.workspace().catch(() => undefined);
+    const hosts = await discoverHosts({
+      projectCwd: this.options.projectCwd,
+      run: this.run,
+      env: this.env(),
+      fetch: this.fetch,
+      repos: [repo],
+      ...(shape ? { workspace: shape } : {}),
+    });
     const row = hosts[0];
     if (!row?.usable || (row.host !== "github" && row.host !== "bitbucket")) {
-      const copy = row?.fix?.includes("gh auth") || row?.fix?.startsWith("Set BITBUCKET") || row?.fix?.startsWith("Install the GitHub");
-      throw new GitActionError(row?.fix ?? "This repository's host cannot be used.", copy ? "needs_copy" : "refused");
+      const credential = row?.reason === "missing_cli" || row?.reason === "signed_out" || row?.reason === "missing_token";
+      if (credential && row.host === "bitbucket") return { ok: false, result: missingTokenResult(repo) };
+      const message = row?.fix ?? "This repository's host cannot be used.";
+      const copyable =
+        row?.reason === "missing_cli" || row?.reason === "signed_out"
+          ? { argv: ["gh", "auth", "login"], cwd: repo }
+          : undefined;
+      return {
+        ok: false,
+        result: {
+          outcome: credential ? "needs_copy" : "refused",
+          message,
+          confirmation: { repo, branch: row?.branch ?? "", summary: message },
+          ...(copyable ? { copyable } : {}),
+        },
+      };
     }
     const parsed = parseRemoteUrl(row.remoteUrl ?? "");
-    if (!parsed || parsed.host !== row.host) throw new GitActionError("This repository's host cannot be used.");
-    return { repo, remote: parsed, host: row.host };
+    if (!parsed || parsed.host !== row.host) {
+      return {
+        ok: false,
+        result: {
+          outcome: "refused",
+          message: "This repository's host cannot be used.",
+          confirmation: { repo, branch: "", summary: "This repository's host cannot be used." },
+        },
+      };
+    }
+    return {
+      ok: true,
+      repo,
+      remote: parsed,
+      remoteName: row.remote ?? "origin",
+      host: row.host,
+      cliReady: row.host === "github" && row.usable === true,
+    };
   }
 }
 
