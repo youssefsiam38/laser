@@ -203,6 +203,7 @@ describe("deleting a child agent's session", () => {
     expect(dialog()?.getAttribute("data-worktree")).toBeNull();
     expect(dialog()!.querySelector('[data-slot="delete-session-worktree"]')).toBeNull();
     expect(dialog()!.textContent).not.toContain("worktree");
+    expect(dialog()!.textContent).toContain("including its checkpoints");
     await act(async () => buttons("Delete transcript")[0]!.click());
     expect(deleted).toEqual([{ path: CHILD, worktree: "keep" }]);
   });

@@ -9,7 +9,8 @@
  * session in the list forever, which is exactly the kind of bug a test is the
  * cheapest way to rule out.
  */
-import { ErrorCodes, PRODUCT_NAME } from "@lasercode/protocol";
+import { CHECKPOINT_REF_NAMESPACE, ErrorCodes, PRODUCT_NAME } from "@lasercode/protocol";
+import { createHash } from "node:crypto";
 import { BROWSER_ACCESS, LOCAL_ACCESS, testAccess } from "./actors.js";
 import { describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
@@ -1062,6 +1063,61 @@ it('serves another host RPC between bounded sorting steps, not only during files
     expect(atReply).toBeGreaterThan(0); expect(atReply).toBeLessThan(atEnd);
     expect(h.workerRequests).toHaveLength(0);
   } finally { spy.mockRestore(); h.cleanup(); rmSync(root, { recursive: true, force: true }); }
+});
+
+describe("Router · source-control methods", () => {
+  const rpc = (router: Router, method: string, params: unknown = {}) =>
+    router.handle({ jsonrpc: "2.0", id: 1, method, params }, LOCAL_ACCESS);
+
+  it("forwards checkpoint methods to the project's worker", async () => {
+    const h = harness();
+    try {
+      const path = PATH_A;
+      const cwd = CWD_A;
+      const calls: Array<[string, unknown]> = [
+        ["pi/project/changes", { cwd, path, scope: "session" }],
+        ["pi/project/file_diff", { cwd, path, scope: "turn", repo: cwd, file: "a.ts", turn: 1 }],
+        ["pi/project/file_source", { cwd, path, repo: cwd, file: "a.ts" }],
+        ["pi/project/checkpoint/list", { cwd, path }],
+        ["pi/project/restore", { cwd, path, turn: 1, restore: "files" }],
+      ];
+      for (const [method, params] of calls) {
+        expect(await rpc(h.router, method, params)).toHaveProperty("result");
+        expect(h.workerRequests.at(-1)).toMatchObject({ cwd, method, params });
+      }
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("deletes a session's checkpoint refs with the transcript", async () => {
+    const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-ckpt-`));
+    const project = join(dir, "project");
+    execFileSync("git", ["init", "-q", "-b", "main", project]);
+    execFileSync("git", ["-C", project, "config", "user.email", "t@x"]);
+    execFileSync("git", ["-C", project, "config", "user.name", "t"]);
+    writeFileSync(join(project, "a.txt"), "one\n");
+    execFileSync("git", ["-C", project, "add", "-A"]);
+    execFileSync("git", ["-C", project, "commit", "-q", "-m", "one"]);
+    const child = join(dir, "child.jsonl");
+    writeFileSync(child, "");
+    const key = createHash("sha256").update(child).digest("hex").slice(0, 32);
+    const ref = `${CHECKPOINT_REF_NAMESPACE}/${key}/0`;
+    const head = execFileSync("git", ["-C", project, "rev-parse", "HEAD"]).toString().trim();
+    execFileSync("git", ["-C", project, "update-ref", ref, head]);
+    expect(execFileSync("git", ["-C", project, "for-each-ref", "--format=%(refname)", ref]).toString()).toContain(ref);
+
+    const row: SessionSummary = { path: child, id: "c", cwd: project, createdAt: "2026-01-01T00:00:00Z", modifiedAt: "2026-01-01T00:00:00Z", messageCount: 0 };
+    const h = harness({ catalogRows: [row], open: {} });
+    try {
+      expect(await rpc(h.router, "pi/session/delete", { path: child })).toMatchObject({ result: {} });
+      expect(existsSync(child)).toBe(false);
+      expect(execFileSync("git", ["-C", project, "for-each-ref", "--format=%(refname)", ref]).toString().trim()).toBe("");
+    } finally {
+      h.cleanup();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 it("routes explorer opt-in without opening workers and keeps legacy browse shape", async () => {

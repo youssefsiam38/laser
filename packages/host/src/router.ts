@@ -54,6 +54,7 @@ import type { PushService } from "./push.js";
 import { RESOURCE_REPORT_METHOD } from "./resources/guard.js";
 import type { PressureAdmission } from "./pressure/index.js";
 import type { ResourceService } from "./resources/index.js";
+import { deleteSessionCheckpoints } from "./source-control/cleanup.js";
 import { canonical } from "./trust.js";
 import { SessionRouteLeases } from "./session-route-lease.js";
 import type { SessionProjection } from "./session-projection.js";
@@ -188,6 +189,11 @@ const CWD_ROUTED = new Set([
   // The git status of a project. The UI always sends a `path` as well, but the
   // CLI and any cwd-only caller must still reach the right worker.
   "pi/project/git",
+  "pi/project/changes",
+  "pi/project/file_diff",
+  "pi/project/file_source",
+  "pi/project/checkpoint/list",
+  "pi/project/restore",
   // The worker discovers user skills and supplies Laser's default instructions;
   // the Namer benchmark needs a provider. All three name the answering cwd.
   "agents/skills",
@@ -512,6 +518,7 @@ export class Router {
         this.deps.views.invalidate(path);
         this.deps.revisions?.invalidate(path);
         this.unwritten.delete(path);
+        await deleteSessionCheckpoints(entry.cwd, path).catch(() => 0);
         // A child's runs cannot go on without their session. Its worktree is a
         // separate thing on disk, and it is kept unless this request asked for
         // it to go (M13-T42): a caller that omits the field never destroys work.
