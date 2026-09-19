@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
-import { act, useMemo, useState } from "react";
+import { act, useMemo, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { AssistantRuntimeProvider, ComposerPrimitive, useExternalStoreRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, ComposerPrimitive, useExternalStoreRuntime, type Unstable_TriggerItem } from "@assistant-ui/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ComposerTriggerPopover } from "../../src/components/assistant-ui/elements/composer-trigger-popover.aui.js";
 import { useDirectoryPage } from "../../src/components/thread/use-directory-page.js";
-import { matchProjectMention, projectMentionFormatter } from "../../src/components/thread/project-path.js";
+import { projectMentionFormatter } from "../../src/components/thread/project-path.js";
+import { ComposerMentionField } from "../../src/components/thread/composer-mention-tags.js";
+import { createFinishedMentions, type FinishedMentions } from "../../src/components/thread/finished-mentions.js";
 import { explorerItems, explorerNavigation, explorerPageItem } from "../../src/components/thread/project-explorer-model.js";
 
 // The listing validator is a lazy chunk (M16-T31) and these tests run on fake
@@ -17,16 +19,24 @@ const client = { request };
 vi.mock('@/runtime', () => ({ useLaserStable: () => ({ client }) }));
 const inserted = vi.fn(), sent = vi.fn();
 let container: HTMLDivElement, root: Root;
+// The wiring under test is the composer's own (`Composer.tsx`): the picker's
+// matcher and its insertion both go through one record of finished mentions,
+// and the draft's tag layer reads the same record.
 function Picker() {
   const [query, setQuery] = useState(''); const [open, setOpen] = useState(false);
+  const store = useRef<FinishedMentions>(undefined);
+  store.current ??= createFinishedMentions();
+  const mentions = store.current;
   const page = useDirectoryPage('/project', query, open);
   const adapter = useMemo(() => ({ categories: () => [], categoryItems: () => [], search: () => [
     ...(page.navigation.previous ? [explorerPageItem('previous')] : []),
     ...explorerItems(page.entries, '/project'), ...(page.navigation.next ? [explorerPageItem('next')] : []),
   ] }), [page.entries, page.navigation.next, page.navigation.previous]);
+  const onInserted = (item: Unstable_TriggerItem) => { inserted(item); mentions.noteInsertion(item); };
   return <ComposerPrimitive.Unstable_TriggerPopoverRoot><ComposerPrimitive.Root>
-    <ComposerPrimitive.Input />
-    <ComposerTriggerPopover char="@" matcher={matchProjectMention} adapter={adapter} directive={{ onInserted: inserted, formatter: projectMentionFormatter }} navigation={explorerNavigation(page.navigation)} onQueryChange={setQuery} onOpenChange={setOpen} isLoading={page.loading} unavailableLabel={page.issue ? 'Update or retry this path.' : undefined} notice={<>{page.issue?.message}{page.retry && <button type="button" onClick={page.retry}>Try again</button>}</>} />
+    <ComposerMentionField mentions={mentions} className="composer-text" />
+    <ComposerTriggerPopover char="@" matcher={mentions.matcher} adapter={adapter} directive={{ onInserted, formatter: projectMentionFormatter }} navigation={explorerNavigation(page.navigation)} onQueryChange={setQuery} onOpenChange={setOpen} isLoading={page.loading} unavailableLabel={page.issue ? 'Update or retry this path.' : undefined} notice={<>{page.issue?.message}{page.retry && <button type="button" onClick={page.retry}>Try again</button>}</>} />
+    <ComposerPrimitive.Send>Send</ComposerPrimitive.Send>
   </ComposerPrimitive.Root></ComposerPrimitive.Unstable_TriggerPopoverRoot>;
 }
 function Fixture() {
@@ -48,11 +58,24 @@ beforeEach(async () => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); });
 const input = () => container.querySelector('textarea')!;
 const options = () => [...container.querySelectorAll<HTMLButtonElement>('[role="option"]')];
-async function type(text: string) {
+const listbox = () => container.querySelector('[role="listbox"]');
+const tags = () => [...container.querySelectorAll<HTMLElement>('[data-slot="composer-mention-tag"]')];
+async function type(text: string, caret = text.length) {
   await act(async () => {
     input().focus(); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(input(), text);
-    input().setSelectionRange(text.length, text.length); input().dispatchEvent(new Event('input', { bubbles: true }));
+    input().setSelectionRange(caret, caret); input().dispatchEvent(new Event('input', { bubbles: true }));
   });
+}
+/** One character at a time, at the caret, the way a person produces a sentence. */
+async function typeOn(suffix: string): Promise<string[]> {
+  const opened: string[] = [];
+  for (const char of suffix) {
+    const at = input().selectionStart;
+    const next = input().value.slice(0, at) + char + input().value.slice(at);
+    await type(next, at + 1);
+    if (listbox()) opened.push(next);
+  }
+  return opened;
 }
 async function tick() { await act(async () => { await vi.advanceTimersByTimeAsync(150); }); }
 async function key(key: string) { await act(async () => { input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); }); }
@@ -147,6 +170,56 @@ it('literal pagination and sentinel-like filenames keep unique React/DOM identit
     expect(sent).not.toHaveBeenCalled();
     expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key|unique.*key/u);
   } finally { errors.mockRestore(); }
+});
+
+// M16-T86. Choosing is the end of the question: the picker stops asking it.
+it('a chosen file is finished — the picker never reopens, and the message sends the literal path', async () => {
+  await type('@ser'); await tick(); await key('/'); await tick(); await key('Enter');
+  expect(input().value).toBe('@./server/index.ts ');
+  expect(listbox()).toBeNull();
+  expect(await typeOn('and then some words')).toEqual([]);
+  expect(input().value).toBe('@./server/index.ts and then some words');
+  // The tag is presentation; the payload is the text the person can read.
+  expect(tags().map(tag => [tag.dataset.mentionKind, tag.dataset.mentionLabel, tag.textContent])).toEqual([['file', 'server/index.ts', '@./server/index.ts']]);
+  await act(async () => container.querySelector<HTMLElement>('button')!.click());
+  await act(async () => { await Promise.resolve(); });
+  expect(sent.mock.calls.at(-1)?.[0].content).toEqual([{ type: 'text', text: '@./server/index.ts and then some words' }]);
+});
+
+it('several mentions live in one message, and a fresh @ after a finished one opens the picker', async () => {
+  await type('@ser'); await tick(); await key('Enter');
+  expect(input().value).toBe('@./server/ ');
+  expect(await typeOn('and ')).toEqual([]);
+  // A fresh `@` is a fresh question — even for the same folder, which is the
+  // case that tells the two tokens apart by where they were written.
+  expect(await typeOn('@ser')).toHaveLength(4);
+  await tick(); await key('Enter');
+  expect(input().value).toBe('@./server/ and @./server/ ');
+  expect(tags().map(tag => [tag.dataset.mentionKind, tag.textContent])).toEqual([['directory', '@./server/'], ['directory', '@./server/']]);
+  expect(await typeOn('please')).toEqual([]);
+});
+
+it('editing inside a finished mention makes it a query again; deleting it leaves plain text', async () => {
+  await type('@ser'); await tick(); await key('Enter'); await typeOn('now');
+  expect(input().value).toBe('@./server/ now');
+  expect(tags()).toHaveLength(1);
+  // The caret goes back inside the path, and a character of it goes away.
+  await type('@./sever/ now', 6);
+  expect(listbox()).not.toBeNull();
+  expect(tags()).toHaveLength(0);
+  await tick();
+  await type('now', 0);
+  expect(listbox()).toBeNull();
+  expect(tags()).toHaveLength(0);
+});
+
+it('a pasted message that already carries a path is finished, not an open query', async () => {
+  const pasted = 'Look at @./server/index.ts and @./server/ too';
+  await type(pasted);
+  expect(listbox()).toBeNull();
+  expect(tags().map(tag => [tag.dataset.mentionKind, tag.textContent])).toEqual([['file', '@./server/index.ts'], ['directory', '@./server/']]);
+  expect(await typeOn(' please')).toEqual([]);
+  expect(input().value).toBe(`${pasted} please`);
 });
 
 it('More entries reads one next page while keeping the composer query', async () => {
