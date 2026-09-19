@@ -24,11 +24,38 @@ import type { BodyComponent, BodyRegion, ElidedEntry, EntryRegionsResult, ImageP
 
 // ---------- Shared value types (no Pi types allowed here) ----------
 
+/**
+ * What a caller asks a page to cover.
+ *
+ * Two families, and both stay supported for ever (M16-T90):
+ *
+ * - **Turns.** `{ turns: 10 }` is the newest page and `{ before, turns: 20 }`
+ *   each page after it. The counted unit is a **user message on the rendered
+ *   branch**; everything after one up to the next — replies, tool calls and
+ *   their results, subagent rows, reasoning, custom records — rides along in
+ *   that turn, and the user message that anchors the oldest turn is part of the
+ *   page it anchors. This is what a person means by "show me the last ten
+ *   things I said", and it is what the transcript pages by.
+ * - **Entries.** `{ tail: 40 }` and `{ before, limit: 40 }` count messages
+ *   rather than turns. Older frontends ask this way and are answered exactly as
+ *   before; turn windows are additive.
+ *
+ * A page that does not fit the wire ceilings is **shrunk**, never refused: a
+ * turn window drops turns, and a single turn larger than any page is split
+ * inside itself. `window.before` is the cursor and the answer to "is there
+ * more": it is present exactly when older rows remain on this branch.
+ */
 export type HistoryWindowRequest =
   | { tail: number }
   | { before: string; limit?: number }
   /** A bounded page ending immediately before this active-ancestry entry. */
   | { beforeEntry: string; limit?: number }
+  /** The newest page, counted in user-anchored turns (M16-T90). */
+  | { turns: number }
+  /** The page of turns immediately older than this cursor. */
+  | { before: string; turns: number }
+  /** The page of turns immediately older than this active-ancestry entry. */
+  | { beforeEntry: string; turns: number }
   | { from: string }
   | { all: true };
 
@@ -54,6 +81,13 @@ export interface HistoryWindow {
    * A cache keys by this, never by a path, an origin or the revision itself.
    */
   environmentKey: string;
+  /**
+   * The cursor for the page immediately older than this one, and the answer to
+   * "is there more": it is the identity of the oldest row this page carries, and
+   * it is present exactly when older rows remain on the rendered branch. Absent
+   * means this page reached the root — nothing about bytes, nothing about
+   * budgets (M16-T90). Opaque: pass it back as `window.before`, never parse it.
+   */
   before?: string;
   /** First loaded entry, retained when refreshing an expanded window. */
   anchor?: string;

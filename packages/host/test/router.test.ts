@@ -420,6 +420,36 @@ describe("Router · history windows", () => {
       expect(h.workerRequests[0]?.params).toEqual({ path, window: { tail: 40 } });
     } finally { h.cleanup(); rmSync(directory, { recursive: true, force: true }); }
   });
+
+  it("routes a turn window and its cursor verbatim, and refuses a malformed turn count (M16-T90)", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "turn-window-"));
+    const path = join(directory, "session.jsonl");
+    writeFileSync(path, "session fixture");
+    const page = { entries: [{ id: "u" }], leafId: "u", window: { epoch: "one", seq: 1 } };
+    const h = harness({ workerRequest: async () => page });
+    h.bind(path, CWD_A);
+    h.open[CWD_A]!.push(path);
+    const call = (id: number, params: Record<string, unknown>) =>
+      h.router.handle({ jsonrpc: "2.0", id, method: "pi/session/entries", params: { path, ...params } }, LOCAL_ACCESS);
+    try {
+      expect(await call(1, { window: { turns: 10 } })).toMatchObject({ result: page });
+      expect(await call(2, { window: { before: "cursor", turns: 20 }, baseRevision: "r1.test" })).toMatchObject({ result: page });
+      expect(await call(3, { window: { beforeEntry: "u190", turns: 20 }, baseRevision: "r1.test" })).toMatchObject({ result: page });
+      expect(h.workerRequests.map(request => request.params)).toEqual([
+        { path, window: { turns: 10 } },
+        { path, window: { before: "cursor", turns: 20 }, baseRevision: "r1.test" },
+        { path, window: { beforeEntry: "u190", turns: 20 }, baseRevision: "r1.test" },
+      ]);
+      // The whole-transcript cache is for the windowless route only.
+      expect(h.views.get(path)).toBeUndefined();
+      // A turn count outside the contract, and an older turn page with no base
+      // revision, are refused before anything is routed.
+      for (const params of [{ window: { turns: 0 } }, { window: { turns: 10, tail: 10 } }, { window: { before: "cursor", turns: 20 } }]) {
+        expect(await call(4, params)).toMatchObject({ error: { code: ErrorCodes.InvalidParams } });
+      }
+      expect(h.workerRequests).toHaveLength(3);
+    } finally { h.cleanup(); rmSync(directory, { recursive: true, force: true }); }
+  });
 });
 
 it("declines readiness hints before prepare and returns the same silent answer", async () => {

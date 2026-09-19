@@ -16,6 +16,7 @@ import {
   fitHistoryWindowPlan,
   historyContentSerializedBytes,
   historyWindowNode,
+  isLiveEdgeWindow,
   withElidedBodies,
   type ClientRequests,
   type HistoryWindow,
@@ -72,7 +73,8 @@ export class SessionProjection {
         authority: "durable" as const,
       };
       const deltaScope: HistoryWindowScope | undefined =
-        ("tail" in request) && base && base.base !== "stale" && base.state
+        // A newest-page read, counted in turns or in entries alike (M16-T90).
+        isLiveEdgeWindow(request) && base && base.base !== "stale" && base.state
           ? { ...common, selection: { kind: "delta", after: base.state.leafId } }
           : undefined;
       let scope: HistoryWindowScope = deltaScope ?? { ...common, selection: { kind: "replace" } };
@@ -157,9 +159,18 @@ function withinPlannedBounds(
   if (selected.length > HISTORY_PAGE_ENTRY_LIMIT) return false;
   let bytes = 4 + Math.max(0, selected.length - 1) + Math.max(0, context.length - 1);
   const cost = (index: number): number => {
-    const source = entries[index]!.servedLength;
+    const row = entries[index]!;
+    const source = row.servedLength;
     if (source <= elisionThreshold(bodyLimit)) return source;
-    const escaped = Math.min(Number.MAX_SAFE_INTEGER - ELIDED_METADATA_PLANNING_BYTES, (bodyLimit ?? 0) * 6);
+    // An elided row travels as identity and body metadata. Only a **prompt**
+    // can also carry its complete text beside that metadata, and JSON can
+    // expand one UTF-8 byte of it to six, so only a prompt is priced for it:
+    // charging every elided row for prose it cannot carry made the durable
+    // authority shrink pages the live one served whole, which is the byte
+    // ceiling deciding policy again (M16-T90).
+    const escaped = row.isUser
+      ? Math.min(Number.MAX_SAFE_INTEGER - ELIDED_METADATA_PLANNING_BYTES, (bodyLimit ?? 0) * 6)
+      : 0;
     return Math.min(source, escaped + ELIDED_METADATA_PLANNING_BYTES);
   };
   for (const index of [...selected, ...context]) {
