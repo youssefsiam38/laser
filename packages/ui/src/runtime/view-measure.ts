@@ -21,7 +21,7 @@
  *
  * Pure: no React, no DOM, no network.
  */
-import type { ImageContent } from "@lasercode/protocol";
+import { IMAGE_HEADER_PROBE_BYTES, imageHeaderSize, type ImageContent } from "@lasercode/protocol";
 import type { Block, SessionView } from "../store.js";
 import { omittedBytes, type BodyRef } from "./body-excerpt.js";
 import type { EntryStub } from "./retained-entries.js";
@@ -104,12 +104,13 @@ export const UNSERIALIZABLE_BYTES = 1024;
  */
 export const UNKNOWN_IMAGE_DECODED_BYTES = 512 * 512 * 4;
 
-/** Decoded prefix we are willing to look at to find an image's dimensions. */
-export const IMAGE_PROBE_BYTES = 4 * 1024;
-/** JPEG segments walked before the probe gives up. */
-const IMAGE_PROBE_MAX_SEGMENTS = 16;
-/** Dimensions outside this are not an image we measured; they are noise. */
-const IMAGE_MAX_SIDE = 1 << 16;
+/**
+ * Decoded prefix we are willing to look at to find an image's dimensions.
+ * The authority's own bound, re-exported rather than restated: the producer
+ * publishes the size it read from that prefix, and a second opinion about how
+ * much of a picture to look at is a second answer about how big it is.
+ */
+export const IMAGE_PROBE_BYTES = IMAGE_HEADER_PROBE_BYTES;
 
 export interface ImageMeasure {
   /** Exact bytes of the encoded payload. */
@@ -177,8 +178,14 @@ export function entryBytes(entry: unknown): number {
 export function imageMeasure(image: ImageContent): ImageMeasure {
   const cached = imageCache.get(image);
   if (cached) return cached;
-  const encoded = Math.floor((image.data.length * 3) / 4);
-  const dimensions = imageDimensions(image.data);
+  const served = image.ref;
+  const encoded = served ? served.totalBytes : Math.floor((image.data.length * 3) / 4);
+  // The producer read the header once and published what it found. Parsing is
+  // for an image this view holds the bytes of — a picture still streaming in,
+  // which no page has served yet.
+  const dimensions = served
+    ? (served.width !== undefined && served.height !== undefined ? { width: served.width, height: served.height } : undefined)
+    : imageDimensions(image.data);
   const measure: ImageMeasure = dimensions
     ? { encoded, decoded: dimensions.width * dimensions.height * 4, dimensions }
     : { encoded, decoded: undefined };
@@ -186,57 +193,19 @@ export function imageMeasure(image: ImageContent): ImageMeasure {
   return measure;
 }
 
-/** Decode at most {@link IMAGE_PROBE_BYTES} of a base64 payload. */
-function probePrefix(data: string): Uint8Array | undefined {
-  // 4 base64 characters carry 3 bytes, so a prefix cut on a 4-character
-  // boundary decodes on its own without touching the rest of the payload.
-  const chars = Math.min(data.length - (data.length % 4), Math.ceil(IMAGE_PROBE_BYTES / 3) * 4);
-  if (chars <= 0) return undefined;
-  try {
-    const binary = atob(data.slice(0, chars));
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-    return bytes;
-  } catch {
-    return undefined;
-  }
-}
-
-const valid = (width: number, height: number): { width: number; height: number } | undefined =>
-  width > 0 && height > 0 && width <= IMAGE_MAX_SIDE && height <= IMAGE_MAX_SIDE ? { width, height } : undefined;
-
-const u16be = (b: Uint8Array, at: number): number => ((b[at] ?? 0) << 8) | (b[at + 1] ?? 0);
-const u16le = (b: Uint8Array, at: number): number => ((b[at + 1] ?? 0) << 8) | (b[at] ?? 0);
-const u24le = (b: Uint8Array, at: number): number => ((b[at + 2] ?? 0) << 16) | ((b[at + 1] ?? 0) << 8) | (b[at] ?? 0);
-const u32be = (b: Uint8Array, at: number): number =>
-  (((b[at] ?? 0) << 24) >>> 0) + ((b[at + 1] ?? 0) << 16) + ((b[at + 2] ?? 0) << 8) + (b[at + 3] ?? 0);
-const ascii = (b: Uint8Array, at: number, text: string): boolean => {
-  for (let i = 0; i < text.length; i++) if (b[at + i] !== text.charCodeAt(i)) return false;
-  return true;
-};
-
 /**
- * Dimensions from a validated image header, or `undefined`. PNG, GIF, WebP and
- * JPEG only: a format whose header this does not know is honestly unknown
- * rather than guessed.
+ * Dimensions from a validated image header, or `undefined`. One parser, and it
+ * is the authority's: `@lasercode/protocol`'s `imageHeaderSize` is what fills
+ * an image reference's `width`/`height` on the wire, so a picture measured
+ * here and the same picture measured there can never disagree (M16-T92).
  */
 export function imageDimensions(base64: string): { width: number; height: number } | undefined {
-  const bytes = probePrefix(base64);
-  if (!bytes || bytes.length < 16) return undefined;
-  // PNG: signature, then the IHDR chunk carries the size in its first 8 bytes.
-  if (bytes[0] === 0x89 && ascii(bytes, 1, "PNG") && ascii(bytes, 12, "IHDR")) {
-    return valid(u32be(bytes, 16), u32be(bytes, 20));
-  }
-  // GIF: the logical screen descriptor follows the six-byte signature.
-  if (ascii(bytes, 0, "GIF8")) return valid(u16le(bytes, 6), u16le(bytes, 8));
-  if (ascii(bytes, 0, "RIFF") && ascii(bytes, 8, "WEBP")) return webpDimensions(bytes);
-  if (bytes[0] === 0xff && bytes[1] === 0xd8) return jpegDimensions(bytes);
-  return undefined;
+  return imageHeaderSize(base64);
 }
 
 /**
  * The same dimensions, for an image already written as a `data:` URI — what a
- * rendered image part carries. Only the prefix the prober needs is copied out
+ * rendered image part carries. Only the prefix the parser needs is copied out
  * of the URI, so asking a megabyte-long picture how big it is stays cheap, and
  * a URI that is not inline base64 image bytes (a blob or a remote URL) is
  * honestly unknown rather than guessed.
@@ -245,36 +214,6 @@ export function dataUriImageDimensions(src: string): { width: number; height: nu
   const comma = src.indexOf(",");
   if (comma < 0 || !/^data:image\/[^;,]+;base64$/i.test(src.slice(0, comma))) return undefined;
   return imageDimensions(src.slice(comma + 1, comma + 1 + Math.ceil(IMAGE_PROBE_BYTES / 3) * 4));
-}
-
-function webpDimensions(bytes: Uint8Array): { width: number; height: number } | undefined {
-  if (ascii(bytes, 12, "VP8X")) return valid(u24le(bytes, 24) + 1, u24le(bytes, 27) + 1);
-  if (ascii(bytes, 12, "VP8L")) {
-    // VP8L packs 14-bit width-1 and height-1 little-endian after the 0x2f tag.
-    if (bytes[20] !== 0x2f) return undefined;
-    const packed = (((bytes[24] ?? 0) << 24) | ((bytes[23] ?? 0) << 16) | ((bytes[22] ?? 0) << 8) | (bytes[21] ?? 0)) >>> 0;
-    return valid((packed & 0x3fff) + 1, ((packed >>> 14) & 0x3fff) + 1);
-  }
-  if (ascii(bytes, 12, "VP8 ")) return valid(u16le(bytes, 26) & 0x3fff, u16le(bytes, 28) & 0x3fff);
-  return undefined;
-}
-
-function jpegDimensions(bytes: Uint8Array): { width: number; height: number } | undefined {
-  let at = 2;
-  for (let segment = 0; segment < IMAGE_PROBE_MAX_SEGMENTS; segment++) {
-    if (at + 4 > bytes.length || bytes[at] !== 0xff) return undefined;
-    const marker = bytes[at + 1] ?? 0;
-    const length = u16be(bytes, at + 2);
-    if (length < 2) return undefined;
-    // SOF0..SOF15, minus the four markers that are not frame headers.
-    const isFrame = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
-    if (isFrame) {
-      if (at + 9 > bytes.length) return undefined;
-      return valid(u16be(bytes, at + 7), u16be(bytes, at + 5));
-    }
-    at += 2 + length;
-  }
-  return undefined;
 }
 
 /** Bytes of one derived block, memoized. Image payloads are counted separately. */

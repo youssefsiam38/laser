@@ -1818,6 +1818,30 @@ function boundUserContent(
   const files = split.files;
   const imageRefs: Array<BodyRef | undefined> = [];
   const bounded = images.map((image, index) => {
+    // A part a page served carries no bytes and says where its bytes are
+    // (M16-T89). It is a reference at every size: asking how many bytes are
+    // here would answer zero for every picture in a loaded conversation and
+    // leave the row with nothing to read back.
+    const served = image.ref;
+    if (served) {
+      imageRefs.push({
+        entryId: served.entryId,
+        component: served.component,
+        totalBytes: served.totalBytes,
+        contentDigest: served.contentDigest,
+        ...(source.revision !== undefined ? { revision: source.revision } : {}),
+        excerpt: { offset: 0, bytes: 0 },
+        image: {
+          // The producer measured the header; nothing here parses bytes it
+          // does not have.
+          ...(served.width !== undefined && served.height !== undefined ? { width: served.width, height: served.height } : {}),
+          decodedBytes: served.width !== undefined && served.height !== undefined
+            ? served.width * served.height * 4
+            : UNKNOWN_IMAGE_DECODED_BYTES,
+        },
+      });
+      return image;
+    }
     const bytes = utf8ByteLength(image.data);
     if (bytes <= BODY_EXCERPT_MAX_BYTES) { imageRefs.push(undefined); return image; }
     // Dimensions from a bounded prefix of the image's own bytes, so what it

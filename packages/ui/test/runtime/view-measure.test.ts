@@ -48,8 +48,12 @@ const png = (width: number, height: number, padding = 0): string => {
   ]);
 };
 
+// Padded past its header, the way a GIF that carries an image is: the shared
+// parser reads whole four-character groups and stops at base64 padding, so a
+// sixteen-byte "GIF" is a header with nothing behind it.
 const gif = (width: number, height: number): string =>
-  base64([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, width & 0xff, width >> 8, height & 0xff, height >> 8, 0, 0, 0, 0, 0, 0]);
+  base64([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, width & 0xff, width >> 8, height & 0xff, height >> 8,
+    ...Array.from({ length: 26 }, () => 0)]);
 
 const jpeg = (width: number, height: number): string =>
   base64([
@@ -143,8 +147,10 @@ describe("image size", () => {
     (globalThis as { Image?: unknown }).Image = created;
     const measure = imageMeasure(big);
     expect(measure.dimensions).toEqual({ width: 64, height: 64 });
-    expect(decode).toHaveBeenCalledTimes(1);
-    expect(decode.mock.calls[0]![0]!.length).toBeLessThanOrEqual(Math.ceil(IMAGE_PROBE_BYTES / 3) * 4);
+    // The parser is the authority's own (`@lasercode/protocol`, M16-T92): it
+    // decodes at most one header's worth of quads by hand, so neither the
+    // platform's whole-payload decoder nor an `Image` is ever reached.
+    expect(decode).not.toHaveBeenCalled();
     expect(created).not.toHaveBeenCalled();
     decode.mockRestore();
     if (originalImage === undefined) delete (globalThis as { Image?: unknown }).Image;
