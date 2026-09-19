@@ -253,7 +253,11 @@ function FleetGroups({
         <ul role="list" className="flex flex-col divide-y divide-line">
           {projectedGroup.items.map((item) => (
             <FleetBranch
-              key={`${section}:${item.item.key}`}
+              // A row is the work, not the list it is drawn in. The section and
+              // the context/actual role are this drawing's facts and travel as
+              // props; the key is the work's own identity, so nothing about
+              // where a row is projected can make React replace it.
+              key={item.item.key}
               item={item}
               target={{ surface, groupPath: group.path, section, key: item.item.key, role: item.contextOnly ? "context" : "actual" }}
               expanded={expanded}
@@ -413,7 +417,7 @@ function FleetBranch({
         >
           {item.children.map((child) => (
             <FleetBranch
-              key={`${target.section}:${child.item.key}`}
+              key={child.item.key}
               item={child}
               target={{ ...target, key: child.item.key, role: child.contextOnly ? "context" : "actual" }}
               nested
