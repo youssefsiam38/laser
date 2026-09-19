@@ -61,7 +61,14 @@ surface rather than sitting under ours).
    scroll-position adjustment that follows a data or measurement change. No
    other code writes `scrollTop` except explicit person/destination intent
    (Jump to latest, a search hit, a deep link), and those go through the
-   virtualizer's own `scrollToIndex`/`scrollToOffset`.
+   virtualizer's own `scrollToIndex`/`scrollToOffset`. That includes
+   assistant-ui's own thread viewport: its automatic scrolling is switched off
+   and "Jump to latest" prevents the default on its click, so
+   `ThreadPrimitive.ScrollToBottom` decides whether the button exists and the
+   engine decides where the transcript goes. The remaining browser-owned move
+   is a `.focus()` without `preventScroll`, which asks the browser to reveal an
+   element rather than setting a position; the transcript itself always passes
+   `preventScroll: true`.
 2. **Stable identity.** `getItemKey` is the message id. Indices never key a row.
 3. **Measured, not estimated.** Every mounted row is measured with
    `measureElement`; the estimate is conservative and used only for rows that
@@ -81,6 +88,61 @@ surface rather than sitting under ours).
    for a `content-visibility` hit), native selection across rows and Select All,
    focus and keyboard traversal through approvals and controls, agent/tool rows,
    reduced motion, both themes, both widths, touch.
+
+## As built (M16-T87)
+
+`@tanstack/react-virtual` 3.14.13 is pinned exactly in `packages/ui`
+(`@tanstack/virtual-core` 3.17.11 comes with it; nothing else was added).
+The transcript is one list: a head item — the history controls and the
+unloaded-history placeholder — then one item per message, keyed by message id,
+in chronological DOM order, positioned absolutely from the engine's own
+measurements. `docs/transcript-reading.md` is the working description.
+
+What was deleted with the second authority: `transcript-window.ts`
+(`HeightIndex`, `windowRanges`), `reading-anchor.ts`, the reserve's pixel model
+and its arrival/refinement exchange, the earlier-page transaction and its
+fallback, clamp debt, `layoutStale`, the disclosure hold, the mutation/theme
+/font observers that existed to re-run that arithmetic, and every `scrollTop`
+write Laser computed for itself.
+
+The head item carries **everything above the conversation**: the worker
+recovery notice, the load/refresh error, the history controls, then the
+unloaded-history placeholder. Anything left above the transcript inside the
+same scroller reaches the engine as `scrollMargin`, and a change in that margin
+is neither an edge-key change nor an item resize — the engine keeps the scroll
+offset and moves every item, so the reader is pushed by exactly the height that
+appeared. Inside the head it is an ordinary item resize, compensated to the
+pixel. Nothing above the transcript in this scroller may change height.
+
+Three deliberate adaptations, each supplied through an option the engine
+already has, and each recorded here because a reviewer will ask:
+
+1. **`shouldAdjustScrollPositionOnItemSizeChange`** — Laser's rule from
+   M16-T85 (content ending at or above the reading position moves it by
+   exactly what it changed; content in view does not) replaces the engine's
+   default, which skips a re-measurement while the reader travels upwards.
+   That guard would skip the placeholder shrinking, which happens only while
+   somebody reads upwards.
+2. **`measureElement`** — reads the border box directly and rounds both the
+   synchronous and the `ResizeObserver` path the same way, so a row measured in
+   the commit that mounted it and the same row measured by the observer never
+   differ by a sub-pixel.
+3. **`observeElementRect`** — a scroller reporting no height at all (not laid
+   out yet, a hidden tab) reads as the window's height, so the transcript still
+   mounts a reading window for Find, a deep link or a screen reader.
+
+One guarantee was given up on purpose: the block-level reading anchor. The row
+is the unit of identity a virtualizer can express, so content growing *inside*
+the row the reader is in, above their line, moves their text by that much.
+This is strictly worse than an ordinary page, where the browser's own scroll
+anchoring holds the reader through exactly that; this scroller turns that
+fallback off (`overflow-anchor: none`) so one engine owns the pixels. The way
+to shrink the loss is to stop rows growing rather than to anchor finer, and the
+largest instance is already gone: an image reserves its box from its own header
+before it decodes (`elements/image.tsx` with `runtime/view-measure.ts`'s
+`dataUriImageDimensions`), so a picture arriving changes no height at all. What
+remains is late markdown work in a tall row — highlighting, formulae, diagrams
+— above the reading line.
 
 ## Acceptance (the person runs the browser pass)
 

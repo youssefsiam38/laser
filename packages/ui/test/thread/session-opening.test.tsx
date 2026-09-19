@@ -219,3 +219,47 @@ it("New session waits quietly and a worker-start failure keeps its real reason",
   expect(container.textContent).not.toContain("This session didn’t load.");
   expect(state.toasts.some(toast => toast.text.includes("worker could not start"))).toBe(false);
 });
+
+/**
+ * Everything above the conversation is the transcript's head item, not chrome
+ * above the list (M16-T87, D-303). Chrome that appears while somebody is
+ * reading changes the ground the engine measures from — `scrollMargin` — and
+ * every row moves by its height with the scroll position untouched, which is
+ * the reader being pushed down by exactly that much. Inside the head the same
+ * appearance is an item resize the engine compensates to the pixel; the
+ * geometry of that is proven over a laid-out transcript in
+ * `transcript-virtualization.test.tsx > the head`.
+ */
+const head = () => container.querySelector('[data-slot="transcript-head"]');
+
+it("keeps a load failure inside the transcript head, above the conversation", async () => {
+  world.overrides["session/load"] = () => { throw new Error("The history file is unavailable."); };
+  await act(async () => { await actions.openSession(path).catch(() => {}); await settle(20); });
+  const error = [...container.querySelectorAll('[role="alert"]')]
+    .find(node => node.textContent?.includes("This session didn’t load."));
+  expect(error, "the load failure is not on screen").toBeDefined();
+  expect(head()?.contains(error!), "the load failure is chrome above the list").toBe(true);
+});
+
+it("keeps a crashed worker inside the transcript head, above the conversation", async () => {
+  await visibleHistory();
+  await act(async () => {
+    FakeHostClient.current.notify("pi/worker/status", {
+      cwd: "/p",
+      status: "crashed",
+      mode: "normal",
+      restarts: 0,
+      since: "2026-09-16T00:00:00.000Z",
+      canRestart: true,
+      failure: { owner: { kind: "worker", launchId: "0123456789abcdef0123456789abcdef", cwd: "/p" }, stage: "runtime", category: "process_exit", message: "stopped" },
+      repair: { state: "available", automaticAttempts: 0 },
+    });
+    await settle(30);
+  });
+  const notice = [...container.querySelectorAll('[role="alert"]')]
+    .find(node => node.textContent?.includes("Worker crashed"));
+  expect(notice, "the crash notice is not on screen").toBeDefined();
+  expect(head()?.contains(notice!), "the crash notice is chrome above the list").toBe(true);
+  // And the conversation it appeared over is still there, behind it.
+  expect(container.textContent).toContain("Visible history");
+});

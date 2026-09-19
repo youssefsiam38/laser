@@ -71,15 +71,21 @@ function stubGeometry(): () => void {
     if ((this as HTMLElement).dataset?.slot === "thread-viewport") {
       return { x: 0, y: 0, top: 0, left: 0, right: 600, bottom: 900, width: 600, height: 900, toJSON: () => ({}) } as DOMRect;
     }
-    const row = this.closest?.("[data-message-id]") as HTMLElement | null;
-    // A row sits where its turn sits in the conversation, not where it sits in
-    // the DOM: releasing older rows must be visible as a scroll compensation,
-    // not hidden by renumbering.
-    const id = row?.dataset.messageId ?? "";
-    const index = /^entry:e(\d+)$/.exec(id) ? Number(/^entry:e(\d+)$/.exec(id)![1]) : -1;
-    const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]');
-    const top = index >= 0 ? index * ROW - (viewport?.scrollTop ?? 0) : 0;
-    return { x: 0, y: top, top, left: 0, right: 600, bottom: top + ROW, width: 600, height: index >= 0 ? ROW : 0, toJSON: () => ({}) } as DOMRect;
+    const top = (node: number) => node - scrolled;
+    const messages = container.querySelector<HTMLElement>('[data-slot="thread-messages"]');
+    if (this === messages) {
+      const height = Number.parseFloat(messages.style.height) || 0;
+      return { x: 0, y: top(0), top: top(0), left: 0, right: 600, bottom: top(height), width: 600, height, toJSON: () => ({}) } as DOMRect;
+    }
+    // The transcript positions its rows itself, so a row is where the
+    // transcript put it — its own inline `top` — and a row's height is the
+    // fixture's, whatever the model guessed. A trim must show up as a scroll
+    // compensation, never be hidden by renumbering.
+    const item = this.closest?.("[data-index]") as HTMLElement | null;
+    if (!item) return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}) } as DOMRect;
+    const height = item.dataset.windowMessage ? ROW : 0;
+    const start = top(Number.parseFloat(item.style.top) || 0);
+    return { x: 0, y: start, top: start, left: 0, right: 600, bottom: start + height, width: 600, height, toJSON: () => ({}) } as DOMRect;
   };
   return () => { Element.prototype.getBoundingClientRect = original; };
 }
@@ -156,8 +162,10 @@ async function mount(store: ReturnType<typeof createStateStore>, presentation: T
           <ThreadPrimitive.Root>
             <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnRunStart={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} data-slot="thread-viewport">
               <TranscriptViewportBinding />
-              <HistoryControls />
-              <WindowedMessages />
+              {/* The controls are the head item's content, exactly as the app
+                  mounts them: chrome above the list would be a scroll margin
+                  the engine cannot anchor through (M16-T87). */}
+              <WindowedMessages head={<HistoryControls />} />
             </ThreadPrimitive.Viewport>
           </ThreadPrimitive.Root>
         </FileOpenerProvider>
@@ -175,6 +183,27 @@ async function mount(store: ReturnType<typeof createStateStore>, presentation: T
       </TooltipProvider>
     </LaserStoreProvider>,
   ));
+  // A real scroller around the real transcript: the window is nine hundred
+  // pixels, the range is whatever the transcript rendered, and a write to
+  // `scrollTop` is clamped and reported like a browser's.
+  const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]')!;
+  const content = () => Number.parseFloat(container.querySelector<HTMLElement>('[data-slot="thread-messages"]')?.style.height ?? "0") || 0;
+  Object.defineProperties(viewport, {
+    clientHeight: { value: 900, configurable: true },
+    scrollHeight: { get: content, configurable: true },
+    scrollTop: {
+      configurable: true,
+      get: () => scrolled,
+      set: (value: number) => {
+        const next = Math.min(Math.max(0, value), Math.max(0, content() - 900));
+        if (next === scrolled) return;
+        scrolled = next;
+        queueMicrotask(() => viewport.dispatchEvent(new Event("scroll")));
+      },
+    },
+    scrollTo: { configurable: true, value: (arg: { top?: number } | number) => { viewport.scrollTop = typeof arg === "number" ? arg : arg?.top ?? scrolled; } },
+  });
+  await act(async () => { await Promise.resolve(); });
   return controller!;
 }
 
@@ -225,9 +254,12 @@ describe("a trim while somebody is reading", () => {
       expect(exposed[0]!.classList.contains("sr-only")).toBe(true);
       expect(container.querySelector('[data-slot="thread-messages"]')!.getAttribute("aria-busy")).toBe("true");
       // Nothing visible says so: no card, no copy in the transcript region.
+      // The explicit control is the one exception and always was — it is the
+      // button the person pressed, and it lives in the head item with the
+      // rest of what stands above the conversation.
       expect(container.querySelector('[data-slot="history-reserve-loading"]')).toBeNull();
       const visibleCopy = [...container.querySelectorAll('[data-slot="thread-messages"] *')]
-        .filter(node => node.childElementCount === 0 && /loading/i.test(node.textContent ?? "") && !node.closest(".sr-only"));
+        .filter(node => node.childElementCount === 0 && /loading/i.test(node.textContent ?? "") && !node.closest(".sr-only") && !node.closest("button"));
       expect(visibleCopy).toHaveLength(0);
       // The overdue mark appears only past one slow motion step, only while
       // the person is inside the estimated range, and goes on arrival.
@@ -270,22 +302,19 @@ describe("a trim while somebody is reading", () => {
     hydrateThrough(store, undefined);
     const controller = await mount(store, presentation);
 
-    // A real message action, focused, and the row it belongs to.
-    // Read an older part of the conversation: scroll the real viewport there
-    // and let the controller do what it does with a scroll.
+    // Read an older part of the conversation: land at the newest turn the way
+    // an opening conversation does, then travel back up through it and let the
+    // browser's own scroll event reach the controller, as a wheel would.
     const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]')!;
-    scrolled = 24 * ROW - 900;
-    await act(async () => {
-      Object.defineProperty(viewport, "scrollTop", { value: scrolled, configurable: true, writable: true });
-      Object.defineProperty(viewport, "clientHeight", { value: 900, configurable: true });
-      Object.defineProperty(viewport, "scrollHeight", { value: 24 * ROW, configurable: true });
-      viewport.dispatchEvent(new Event("scroll"));
-    });
-    await act(async () => { await Promise.resolve(); });
-    // The newest turn, which is where a reader lands and which the transcript
-    // is showing: the surface picks it, the test only names it.
-    const knownId = rowIds().at(-1)!;
-    expect(knownId).toBe("entry:e23");
+    await act(async () => { controller.latest(); await Promise.resolve(); });
+    await act(async () => { viewport.dispatchEvent(new Event("scroll")); await Promise.resolve(); });
+    await act(async () => { viewport.scrollTop = Math.max(0, viewport.scrollTop - ROW * 12); await Promise.resolve(); });
+    await act(async () => { viewport.dispatchEvent(new Event("scroll")); await Promise.resolve(); });
+    // The row the reading position is on: the surface picks it, the test only
+    // names it — and it is not the newest turn, which is the easy case.
+    const knownId = controller.capture().anchor?.messageId ?? rowIds().at(-1)!;
+    expect(rowIds()).toContain(knownId);
+    expect(knownId, "the reader never left the live edge").not.toBe(rowIds().at(-1));
     const knownEntry = knownId.slice("entry:".length);
     const target = rowOf(knownId)!;
     const action = target.querySelector("button")!;
@@ -299,9 +328,8 @@ describe("a trim while somebody is reading", () => {
     presentation.rememberEdit(SESSION, knownId, draft);
     draft.update({ draft: "half an edit", editing: true });
 
-    // Reading an older part of the conversation: scroll there and let the
-    // viewport publish what it is standing on. No timer is guessed — the
-    // publication itself is what is waited for.
+    // Let the viewport publish what it is standing on. No timer is guessed —
+    // the publication itself is what is waited for.
     await act(async () => { controller.capture(); controller.committed(); });
     await act(async () => { await Promise.resolve(); });
     expect(standingRows(SESSION)?.focusedEntryId).toBe(knownEntry);
