@@ -12,8 +12,6 @@ import { act, memo } from "react";
 import { type ThreadMessageLike, useAuiState } from "@assistant-ui/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useConversationFind } from "../../src/components/thread/use-conversation-find.js";
-import { useThreadToolTimeline } from "../../src/components/assistant-ui/elements/tool-timeline.js";
-import { useSessionFileChanges } from "../../src/components/assistant-ui/elements/file-tree.js";
 import { mountRig, type Rig } from "./virtual-rig.js";
 
 const renders = new Map<string, number>();
@@ -51,17 +49,6 @@ const FindProbe = memo(function FindProbe() {
   const find = useConversationFind({});
   selectedMessage = find.selectedMessage;
   return <div ref={find.root} />;
-});
-
-let monitorRenders = 0;
-let monitorSteps = 0;
-let monitorFiles = 0;
-/** The monitor's two message-derived sections, memoised like the real column. */
-const MonitorProbe = memo(function MonitorProbe() {
-  monitorRenders++;
-  monitorSteps = useThreadToolTimeline().steps.length;
-  monitorFiles = useSessionFileChanges().length;
-  return null;
 });
 
 /**
@@ -112,31 +99,6 @@ it("re-renders the streaming row and no settled row for each delta", async () =>
   }
   expect(renders.get("live")).toBeGreaterThan(before.get("live")!);
   expect(host.querySelector('[data-window-message="live"]')?.textContent).toBe(live);
-});
-
-it("leaves the monitor's tool and file sections still through a reply, and moves them for a tool call", async () => {
-  live = "Reviewing"; tool = undefined;
-  rig = await mount(4, <MonitorProbe />);
-  const render = async (next: string, call?: ThreadMessageLike) => {
-    live = next; tool = call;
-    await rig!.render([...settled(4).map(message => message.id as string), ...(call ? ["tool"] : []), "live"]);
-  };
-  await render("Reviewing");
-  await frames();
-  const before = monitorRenders;
-
-  let text = "Reviewing";
-  for (let delta = 0; delta < 8; delta++) { text += ` step ${delta},`; await render(text); }
-  await frames();
-  expect(monitorRenders).toBe(before);
-  expect(monitorSteps).toBe(0);
-
-  const call: ThreadMessageLike = { id: "tool", role: "assistant", content: [{ type: "tool-call", toolCallId: "call-1", toolName: "write", args: { path: "src/app.ts" }, argsText: '{"path":"src/app.ts"}', status: { type: "running" } }] };
-  await render(text, call);
-  await frames();
-  expect(monitorRenders).toBeGreaterThan(before);
-  expect(monitorSteps).toBe(1);
-  expect(monitorFiles).toBe(0);
 });
 
 it("holds no transcript subscription while find is closed, and reads the live transcript once it is open", async () => {

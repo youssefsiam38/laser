@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
-import { HistorySection } from "../../src/components/shell/TelemetryPanel.js";
+import { HistorySection } from "../../src/components/telemetry/history-section.js";
 import * as model from "../../src/components/shell/model.js";
 
 const mocks = vi.hoisted(() => ({ loadAllEntries: vi.fn(async () => true), refreshEntries: vi.fn(async () => {}), running: false,

@@ -8,7 +8,6 @@ import { AssistantRuntimeProvider, MessagePrimitive, ThreadPrimitive, useExterna
 import { CodeDiff, DiffStat } from "../../src/components/assistant-ui/elements/code-diff.js";
 import { ToolCall } from "../../src/components/assistant-ui/elements/tool-call.js";
 import { ToolGroup } from "../../src/components/assistant-ui/elements/tool-group.aui.js";
-import { toolTimelineFromParts } from "../../src/components/assistant-ui/elements/tool-timeline.js";
 import { ToolRow } from "../../src/components/thread/ToolRow.js";
 import { projectMessages } from "../../src/runtime/projection.js";
 import { blocksFromEntries, type Block } from "../../src/store.js";
@@ -309,28 +308,6 @@ describe("collapsed diff summaries", () => {
 
     await act(async () => trigger.click());
     expect(container.querySelector('[data-slot="code-diff"]')?.textContent).toContain("new three");
-  });
-
-  it("keeps the tool timeline on the same full-source metric", () => {
-    const added = Array.from({ length: MAX_DIFF_LINES + 11 }, (_, index) => `line ${index + 1}`);
-    const patch = [`@@ -0,0 +1,${added.length} @@`, ...added.map((line) => `+${line}`)].join("\n");
-    const timeline = toolTimelineFromParts([{ parts: [{
-      type: "tool-call",
-      toolCallId: "timeline-edit",
-      toolName: "edit",
-      args: { path: "src/timeline.ts" },
-      status: { type: "complete", reason: "stop" },
-      result: { details: { patch } },
-    } as never] }]);
-
-    expect(timeline.stats).toEqual([{ file: "src/timeline.ts", added: added.length, removed: 0 }]);
-    expect(toolTimelineFromParts([{ parts: [{
-      type: "tool-call",
-      toolCallId: "cancelled-timeline-edit",
-      toolName: "edit",
-      args: { path: "src/timeline.ts", edits: [{ oldText: "old", newText: "new" }] },
-      status: { type: "incomplete", reason: "cancelled" },
-    } as never] }]).stats).toEqual([]);
   });
 
   it("keeps diff text selectable while excluding line-number and marker chrome", async () => {

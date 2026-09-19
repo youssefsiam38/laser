@@ -25,9 +25,13 @@ export function plural(n: number, one: string, many: string): string {
   return `${count(n)} ${n === 1 ? one : many}`;
 }
 
+export type ScopeBarStatus = "idle" | "loading" | "ready" | "error";
+
 /** First row of the panel: what every figure covers, unless a figure says otherwise. */
-export function scopeBarText(history: TelemetryHistory | undefined): string {
-  if (!history) return "Whole session";
+export function scopeBarText(history: TelemetryHistory | undefined, status: ScopeBarStatus = "ready"): string {
+  if (status === "error") return "Could not read this session's totals.";
+  if (status === "idle" || status === "loading") return "Reading session…";
+  if (!history) return "Session totals unavailable";
   return `Whole session · ${plural(history.records, "record", "records")} · ${plural(history.compactions, "compaction", "compactions")}`;
 }
 
@@ -52,8 +56,10 @@ export function spendHeader(spend: TelemetrySpend | undefined): string {
   return "None";
 }
 
-export function hasApiCost(spend: TelemetrySpend | undefined): boolean {
-  return Boolean(spend?.api);
+export function hasApiCost(
+  spend: TelemetrySpend | undefined,
+): spend is TelemetrySpend & { api: NonNullable<TelemetrySpend["api"]> } {
+  return spend?.api !== undefined;
 }
 
 export function workHeader(work: TelemetryWork | undefined): string {
@@ -63,8 +69,11 @@ export function workHeader(work: TelemetryWork | undefined): string {
 
 export function workDurationText(work: TelemetryWork | undefined): string {
   if (!work) return "—";
+  if (work.durationMs <= 0) return "No timestamps";
   return formatElapsed(work.durationMs);
 }
+
+export type FilesStatus = "idle" | "loading" | "ready" | "error";
 
 export type FileTotals = { files: number; added: number; removed: number };
 
@@ -82,9 +91,26 @@ export function fileTotals(changes: ProjectChanges | undefined): FileTotals {
   return { files, added, removed };
 }
 
-export function filesHeader(totals: FileTotals): string {
+export function filesHeader(totals: FileTotals, status: FilesStatus = "ready"): string {
+  if (status === "idle" || status === "loading") return "—";
+  if (status === "error") return "Failed";
   if (totals.files === 0) return "0";
   return `+${count(totals.added)} −${count(totals.removed)}`;
+}
+
+/** Last two path segments so two repos that share a basename stay distinct. */
+export function repoLabel(repo: string): string {
+  const parts = repo.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 2) return parts.join("/") || repo;
+  return parts.slice(-2).join("/");
+}
+
+export function filesErrorText(): string {
+  return "Could not read the changes. Try again.";
+}
+
+export function filesIdleText(): string {
+  return "No working directory to read yet.";
 }
 
 /**

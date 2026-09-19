@@ -48,8 +48,6 @@ const base: Omit<ShellContextValue, "showChat" | "returnToChat"> = {
   historyOpen: false,
   setHistoryOpen: () => {},
   openHistory: () => {},
-  toolsOpen: false,
-  setToolsOpen: () => {},
   addProjectOpen: false,
   setAddProjectOpen: () => {},
   newSession: async () => {},

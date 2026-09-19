@@ -42,8 +42,6 @@ const shell = (layout: ShellContextValue["layout"]): ShellContextValue => ({
   historyOpen: false,
   setHistoryOpen: () => {},
   openHistory: () => {},
-  toolsOpen: false,
-  setToolsOpen: () => {},
   addProjectOpen: false,
   setAddProjectOpen: () => {},
   newSession: async () => {},

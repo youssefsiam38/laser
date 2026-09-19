@@ -1,5 +1,5 @@
 import { Brain, Cpu } from "lucide-react";
-import type { TelemetryModel } from "@lasercode/protocol";
+import { TELEMETRY_SERIES_MAX, type TelemetryModel } from "@lasercode/protocol";
 
 import { Chart } from "@/components/assistant-ui/elements/chart";
 import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
@@ -18,6 +18,8 @@ export function ModelSection({
   onOpenChange: (open: boolean) => void;
 }) {
   const id = model?.id;
+  const series = boundSeries(model?.tokenSeries ?? []);
+  const windowed = (model?.tokenSeries.length ?? 0) > TELEMETRY_SERIES_MAX;
   return (
     <TelemetrySection id="model" title="Model" icon={Cpu} number={id ?? "—"} open={open} onOpenChange={onOpenChange}>
       <InstrumentCard>
@@ -50,12 +52,12 @@ export function ModelSection({
           </div>
         )}
       </InstrumentCard>
-      {model && model.tokenSeries.length > 0 ? (
+      {series.length > 0 ? (
         <InstrumentCard className="mt-3">
           <Chart
-            label="Tokens per turn"
-            value={tokens(model.tokenSeries[model.tokenSeries.length - 1] ?? 0)}
-            points={model.tokenSeries}
+            label={windowed ? `Tokens per turn · last ${TELEMETRY_SERIES_MAX}` : "Tokens per turn"}
+            value={tokens(series[series.length - 1] ?? 0)}
+            points={series}
             pointLabel={(value, index) => `turn ${index + 1}: ${tokens(value)}`}
             variant="bars"
           />
@@ -63,4 +65,9 @@ export function ModelSection({
       ) : null}
     </TelemetrySection>
   );
+}
+
+function boundSeries(points: readonly number[]): number[] {
+  if (points.length <= TELEMETRY_SERIES_MAX) return [...points];
+  return points.slice(-TELEMETRY_SERIES_MAX);
 }

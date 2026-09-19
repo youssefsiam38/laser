@@ -12,8 +12,10 @@ import {
   hasApiCost,
   historyHeader,
   plural,
+  repoLabel,
   scopeBarText,
   spendHeader,
+  workDurationText,
   workHeader,
 } from "../../src/components/telemetry/format.js";
 
@@ -27,8 +29,11 @@ describe("telemetry format", () => {
     expect(plural(2795, "record", "records")).toBe(`2${GROUP}795 records`);
   });
 
-  it("states whole-session coverage on the scope bar", () => {
-    expect(scopeBarText(undefined)).toBe("Whole session");
+  it("states whole-session coverage on the scope bar only when history arrived", () => {
+    expect(scopeBarText(undefined, "loading")).toBe("Reading session…");
+    expect(scopeBarText(undefined, "idle")).toBe("Reading session…");
+    expect(scopeBarText(undefined, "error")).toBe("Could not read this session's totals.");
+    expect(scopeBarText(undefined, "ready")).toBe("Session totals unavailable");
     expect(scopeBarText({ prompts: 10, records: 2795, compactions: 6, branches: 2 })).toBe(
       `Whole session · 2${GROUP}795 records · 6 compactions`,
     );
@@ -96,6 +101,14 @@ describe("telemetry format", () => {
     const totals = fileTotals(changes);
     expect(totals).toEqual({ files: 3, added: 10, removed: 6 });
     expect(filesHeader(totals)).toBe("+10 −6");
+    expect(filesHeader({ files: 0, added: 0, removed: 0 }, "idle")).toBe("—");
+    expect(filesHeader({ files: 0, added: 0, removed: 0 }, "loading")).toBe("—");
+    expect(filesHeader({ files: 0, added: 0, removed: 0 }, "error")).toBe("Failed");
     expect(workHeader({ turns: 48, durationMs: 0, tools: { total: 0, ranked: [], other: 0, failed: [] } })).toBe("48 turns");
+    expect(workDurationText({ turns: 48, durationMs: 0, tools: { total: 0, ranked: [], other: 0, failed: [] } })).toBe(
+      "No timestamps",
+    );
+    expect(repoLabel("/home/a/app")).toBe("a/app");
+    expect(repoLabel("/home/b/app")).toBe("b/app");
   });
 });

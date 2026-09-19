@@ -69,7 +69,7 @@ function useEmptyRuntime() { return useExternalStoreRuntime({ messages: [], isRu
 const showChat = vi.fn();
 const shell: ShellContextValue = {
   layout: "desktop", sessionsOpen: true, fleetOpen: false, telemetryOpen: false, setSessionsOpen: () => {}, setFleetOpen: () => {}, setTelemetryOpen: () => {}, toggleSessions: () => {}, toggleFleet: () => {}, toggleTelemetry: () => {},
-  historyOpen: false, setHistoryOpen: () => {}, openHistory: () => {}, toolsOpen: false, setToolsOpen: () => {}, addProjectOpen: false, setAddProjectOpen: () => {},
+  historyOpen: false, setHistoryOpen: () => {}, openHistory: () => {}, addProjectOpen: false, setAddProjectOpen: () => {},
   newSession: async () => {}, canCreate: true, showChat, returnToChat: () => {},
 };
 let request: ReturnType<typeof useMoveSessionRequest>;

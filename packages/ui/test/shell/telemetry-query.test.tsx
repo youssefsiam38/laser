@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { HistorySection } from "../../src/components/telemetry/history-section.js";
-import { useSessionTelemetry } from "../../src/components/shell/TelemetryPanel.js";
+import { useSessionChanges, useSessionTelemetry } from "../../src/components/telemetry/queries.js";
 import type { SessionTelemetry } from "@lasercode/protocol";
 
 const mocks = vi.hoisted(() => {
@@ -94,7 +94,7 @@ it("requests telemetry once, takes session/update snapshots, and never polls", a
   const next = snapshot({ history: { prompts: 3, records: 6, compactions: 0, branches: 0 } });
   mocks.request.mockImplementation(async () => first);
   function Probe() {
-    const telemetry = useSessionTelemetry();
+    const { telemetry } = useSessionTelemetry();
     return <div>{telemetry ? `${telemetry.history?.records}` : "none"}</div>;
   }
   await act(async () => root.render(<Probe />));
@@ -107,6 +107,39 @@ it("requests telemetry once, takes session/update snapshots, and never polls", a
   });
   expect(container.textContent).toBe("6");
   expect(mocks.request).toHaveBeenCalledTimes(1);
+});
+
+it("a failed telemetry read is an error, not a silent whole-session snapshot", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  mocks.request.mockImplementation(async () => {
+    throw new Error("this worker serves /a, not /b");
+  });
+  function Probe() {
+    const { status, telemetry } = useSessionTelemetry();
+    return <div>{`${status}:${telemetry ? "has" : "none"}`}</div>;
+  }
+  await act(async () => root.render(<Probe />));
+  expect(container.textContent).toBe("error:none");
+  expect(warn).toHaveBeenCalled();
+  warn.mockRestore();
+});
+
+it("files refetch when refreshKey changes", async () => {
+  mocks.request.mockImplementation(async (method: string) => {
+    if (method === "pi/project/changes") return { scope: "session", repos: [] };
+    throw new Error(`unexpected ${method}`);
+  });
+  let setKey: (n: number) => void = () => {};
+  function Probe() {
+    const [key, set] = useState(0);
+    setKey = set;
+    const files = useSessionChanges("/session", "/cwd", key);
+    return <div>{files.status}</div>;
+  }
+  await act(async () => root.render(<Probe />));
+  expect(mocks.request.mock.calls.filter((call) => call[0] === "pi/project/changes")).toHaveLength(1);
+  await act(async () => setKey(1));
+  expect(mocks.request.mock.calls.filter((call) => call[0] === "pi/project/changes")).toHaveLength(2);
 });
 
 it("shows History as the session total when the whole session is loaded", async () => {

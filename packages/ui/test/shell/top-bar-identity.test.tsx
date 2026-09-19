@@ -69,7 +69,7 @@ const touchTap = async (element: HTMLElement) => act(async () => {
 const shell: ShellContextValue = {
   layout: "mobile", sessionsOpen: false, fleetOpen: false, telemetryOpen: false,
   setSessionsOpen: vi.fn(), setFleetOpen: vi.fn(), setTelemetryOpen: vi.fn(), toggleSessions: vi.fn(), toggleFleet: vi.fn(), toggleTelemetry: vi.fn(),
-  historyOpen: false, setHistoryOpen: vi.fn(), openHistory: vi.fn(), toolsOpen: false, setToolsOpen: vi.fn(), addProjectOpen: false, setAddProjectOpen: vi.fn(),
+  historyOpen: false, setHistoryOpen: vi.fn(), openHistory: vi.fn(), addProjectOpen: false, setAddProjectOpen: vi.fn(),
   newSession: vi.fn(), canCreate: true, showChat: vi.fn(), returnToChat: vi.fn(),
 };
 const A = "/project/a.jsonl";

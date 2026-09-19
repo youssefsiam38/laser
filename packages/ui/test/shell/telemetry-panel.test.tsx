@@ -11,9 +11,32 @@ import { ModelSection } from "../../src/components/telemetry/model-section.js";
 import { ScopeBar } from "../../src/components/telemetry/section.js";
 import { SpendSection } from "../../src/components/telemetry/spend-section.js";
 import { WorkSection } from "../../src/components/telemetry/work-section.js";
-import { compositionMissingText, contextLiveOnlyText, count, scopeBarText } from "../../src/components/telemetry/format.js";
+import {
+  compositionMissingText,
+  contextLiveOnlyText,
+  count,
+  filesErrorText,
+  filesHeader,
+  filesIdleText,
+  scopeBarText,
+} from "../../src/components/telemetry/format.js";
 
 const openChanges = vi.hoisted(() => vi.fn());
+const sessionMeta = vi.hoisted(() => ({
+  contextUsage: {
+    tokens: 12_000,
+    contextWindow: 200_000,
+    percent: 42,
+  } as { tokens: number | null; contextWindow: number; percent: number | null } | undefined,
+  running: false,
+  compacting: false,
+  model: { provider: "anthropic", id: "claude-opus-4" } as { provider: string; id: string } | null,
+}));
+
+vi.mock("@/runtime", () => ({
+  useLaserStable: () => ({ actions: { compact: async () => {} } }),
+  useSessionMeta: () => sessionMeta,
+}));
 
 vi.mock("@/source-control/store.js", () => ({
   openChanges: (...args: unknown[]) => openChanges(...args),
@@ -31,6 +54,9 @@ let container: HTMLDivElement;
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   openChanges.mockClear();
+  sessionMeta.contextUsage = { tokens: 12_000, contextWindow: 200_000, percent: 42 };
+  sessionMeta.running = false;
+  sessionMeta.compacting = false;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -39,6 +65,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  document.querySelectorAll('[role="dialog"]').forEach((node) => node.remove());
 });
 
 const render = async (node: ReactNode): Promise<void> => {
@@ -50,13 +77,6 @@ const trigger = (id: string): HTMLButtonElement =>
 
 const numberOf = (id: string): string =>
   container.querySelector(`[data-section="${id}"] [data-slot="telemetry-section-number"]`)?.textContent ?? "";
-
-const pressEnter = async (el: HTMLElement): Promise<void> => {
-  await act(async () => {
-    el.focus();
-    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-  });
-};
 
 function OpenHarness({
   children,
@@ -140,17 +160,19 @@ describe("telemetry sections", () => {
     expect(container.textContent).toContain("read");
   });
 
-  it("collapses and expands by keyboard", async () => {
+  it("section triggers are focusable native buttons; click activates them", async () => {
     await render(
       <OpenHarness>
         {(open, setOpen) => <WorkSection work={work()} open={open} onOpenChange={setOpen} />}
       </OpenHarness>,
     );
-    await pressEnter(trigger("work"));
-    expect(trigger("work").getAttribute("aria-expanded")).toBe("false");
+    const button = trigger("work");
+    expect(button.tagName).toBe("BUTTON");
+    await act(async () => button.focus());
+    expect(document.activeElement).toBe(button);
+    await act(async () => button.click());
+    expect(button.getAttribute("aria-expanded")).toBe("false");
     expect(numberOf("work")).toBe("48 turns");
-    await pressEnter(trigger("work"));
-    expect(trigger("work").getAttribute("aria-expanded")).toBe("true");
   });
 
   it("shows one line when there is no API cost", async () => {
@@ -198,11 +220,24 @@ describe("telemetry sections", () => {
   });
 
   it("says live-only on the context figure when the snapshot has none", async () => {
+    sessionMeta.contextUsage = undefined;
     await render(
       <ContextSection context={undefined} busy={false} compacting={false} open onOpenChange={() => {}} onCompact={() => {}} />,
     );
     expect(container.querySelector("[data-slot='telemetry-context-live-only']")?.textContent).toBe(contextLiveOnlyText());
     expect(numberOf("context")).toBe("Live only");
+  });
+
+  it("opens the window-health inspector from the context ring", async () => {
+    await render(
+      <ContextSection context={context()} busy={false} compacting={false} open onOpenChange={() => {}} onCompact={() => {}} />,
+    );
+    const ring = container.querySelector<HTMLButtonElement>("[data-slot='context-display-trigger']")!;
+    expect(ring.tagName).toBe("BUTTON");
+    await act(async () => ring.click());
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain("Context window");
+    expect(dialog?.textContent).toMatch(/Window health|filled/i);
   });
 
   it("ranks tools with bars and names failed calls", async () => {
@@ -230,12 +265,15 @@ describe("telemetry sections", () => {
     });
   });
 
-  it("opens a files row from the keyboard", async () => {
+  it("file rows are focusable native buttons; click activates them", async () => {
     await render(
       <FilesSection changes={changes()} status="ready" sessionKey="/s.jsonl" open onOpenChange={() => {}} />,
     );
     const row = container.querySelector<HTMLButtonElement>("[data-slot='telemetry-file-row'][data-path='src/index.ts']")!;
-    await pressEnter(row);
+    expect(row.tagName).toBe("BUTTON");
+    await act(async () => row.focus());
+    expect(document.activeElement).toBe(row);
+    await act(async () => row.click());
     expect(openChanges).toHaveBeenCalledWith({
       scope: { kind: "session" },
       repo: "/p/connecting",
@@ -257,6 +295,45 @@ describe("telemetry sections", () => {
     expect(container.querySelector("[data-slot='telemetry-files-pruned']")?.textContent).toContain("pruned");
   });
 
+  it("collapsed Files figure is unknown while idle or loading, and Failed on error", async () => {
+    await render(<FilesSection status="idle" sessionKey="/s.jsonl" open onOpenChange={() => {}} />);
+    expect(numberOf("files")).toBe("—");
+    expect(container.querySelector("[data-slot='telemetry-files-idle']")?.textContent).toBe(filesIdleText());
+    expect(filesHeader({ files: 0, added: 0, removed: 0 }, "idle")).toBe("—");
+
+    await render(<FilesSection status="loading" sessionKey="/s.jsonl" open onOpenChange={() => {}} />);
+    expect(numberOf("files")).toBe("—");
+    expect(container.textContent).toContain("Reading changes");
+    expect(filesHeader({ files: 0, added: 0, removed: 0 }, "loading")).toBe("—");
+
+    await render(
+      <FilesSection status="error" message={filesErrorText()} sessionKey="/s.jsonl" open onOpenChange={() => {}} />,
+    );
+    expect(numberOf("files")).toBe("Failed");
+    expect(container.querySelector("[data-slot='telemetry-files-error']")?.textContent).toBe(filesErrorText());
+    expect(container.textContent).not.toContain("this worker serves");
+    expect(filesHeader({ files: 0, added: 0, removed: 0 }, "error")).toBe("Failed");
+  });
+
+  it("keeps the filename when a Files path is truncated", async () => {
+    const path = "packages/ui/src/components/telemetry/files-section.tsx";
+    await render(
+      <FilesSection
+        changes={{
+          scope: "session",
+          repos: [{ repo: "/p/app", branch: "main", files: [{ path, status: "modified", added: 1, removed: 0 }] }],
+        }}
+        status="ready"
+        sessionKey="/s.jsonl"
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+    const row = container.querySelector("[data-slot='telemetry-file-row']")!;
+    expect(row.textContent).toContain("files-section.tsx");
+    expect(row.textContent).not.toMatch(/packages\/ui\/src\/comp/);
+  });
+
   it("draws a per-turn token sparkline on the model section", async () => {
     await render(
       <ModelSection
@@ -269,6 +346,19 @@ describe("telemetry sections", () => {
     expect(container.textContent).toContain("anthropic");
     expect(container.textContent).toContain("medium");
     expect(container.querySelector("[data-slot='chart']")).not.toBeNull();
+  });
+
+  it("caps the token sparkline at 64 bars", async () => {
+    const tokenSeries = Array.from({ length: 80 }, (_, i) => i + 1);
+    await render(
+      <ModelSection
+        model={{ provider: "anthropic", id: "claude-opus-4", thinkingLevel: "medium", contextWindow: 200_000, tokenSeries }}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
+    expect(container.textContent).toContain("last 64");
+    expect(container.querySelectorAll("[data-slot='chart'] rect")).toHaveLength(64);
   });
 
   it("puts whole-session coverage on the scope bar", async () => {

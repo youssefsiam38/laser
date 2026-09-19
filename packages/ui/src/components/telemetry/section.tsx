@@ -42,11 +42,6 @@ export function TelemetrySection({
             <button
               type="button"
               data-slot="telemetry-section-trigger"
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" && event.key !== " ") return;
-                event.preventDefault();
-                onOpenChange(!open);
-              }}
               className="group -ms-1 flex h-full min-h-11 min-w-0 flex-1 items-center gap-1.5 rounded-md ps-1 text-start outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live"
             >
               <ChevronRight

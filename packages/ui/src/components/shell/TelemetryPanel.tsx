@@ -1,18 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Activity, PanelRightClose } from "lucide-react";
-import type { ProjectChanges, SessionTelemetry, SessionUpdateParams } from "@lasercode/protocol";
 
 import { StatusRing } from "@/components/status";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useWorkbench } from "@/components/workbench/workbench-context";
 import { cn } from "@/lib/utils";
-import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
+import { useLaserStable, useSessionMeta } from "@/runtime";
 
 import { ContextSection } from "@/components/telemetry/context-section.js";
-import { FilesSection, type FilesStatus } from "@/components/telemetry/files-section.js";
+import { FilesSection } from "@/components/telemetry/files-section.js";
 import { scopeBarText } from "@/components/telemetry/format.js";
 import { HistorySection } from "@/components/telemetry/history-section.js";
 import { ModelSection } from "@/components/telemetry/model-section.js";
+import { useSessionChanges, useSessionTelemetry } from "@/components/telemetry/queries.js";
 import { ScopeBar } from "@/components/telemetry/section.js";
 import { SpendSection } from "@/components/telemetry/spend-section.js";
 import { WorkSection } from "@/components/telemetry/work-section.js";
@@ -22,77 +22,6 @@ export interface TelemetryPanelProps {
   variant: "panel" | "sheet";
 }
 
-export { HistorySection };
-
-export function useSessionTelemetry(): SessionTelemetry | undefined {
-  const { client } = useLaserStable();
-  const path = useLaserState((s) => s.current);
-  const [telemetry, setTelemetry] = useState<SessionTelemetry | undefined>();
-  useEffect(() => {
-    if (!path) {
-      setTelemetry(undefined);
-      return;
-    }
-    let cancelled = false;
-    setTelemetry(undefined);
-    void client.request("pi/session/telemetry", { path }).then(
-      (result) => {
-        if (!cancelled) setTelemetry(result);
-      },
-      () => {
-        if (!cancelled) setTelemetry(undefined);
-      },
-    );
-    const unsubscribe = client.subscribe((method, params) => {
-      if (method !== "session/update") return;
-      const update = params as SessionUpdateParams;
-      if (update.sessionPath !== path || !update.telemetry) return;
-      setTelemetry(update.telemetry);
-    });
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, [client, path]);
-  return telemetry;
-}
-
-function useSessionChanges(
-  path: string | undefined,
-  cwd: string | undefined,
-  revision: string | undefined,
-): { status: FilesStatus; changes?: ProjectChanges; message?: string } {
-  const { client } = useLaserStable();
-  const [state, setState] = useState<{ status: FilesStatus; changes?: ProjectChanges; message?: string }>({
-    status: "idle",
-  });
-  useEffect(() => {
-    if (!path || !cwd) {
-      setState({ status: "idle" });
-      return;
-    }
-    let cancelled = false;
-    setState({ status: "loading" });
-    void client.request("pi/project/changes", { cwd, path, scope: "session" }).then(
-      (result) => {
-        if (!cancelled) setState({ status: "ready", changes: result });
-      },
-      (error: unknown) => {
-        if (!cancelled) {
-          setState({
-            status: "error",
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [client, path, cwd, revision]);
-  return state;
-}
-
 /**
  * The session signals a supervisor watches: context, spend, model, work,
  * files and history. Read-only except compact / fork / jump.
@@ -100,10 +29,20 @@ function useSessionChanges(
 export function TelemetryPanel({ variant }: TelemetryPanelProps) {
   const meta = useSessionMeta();
   const shell = useShell();
-  const telemetry = useSessionTelemetry();
+  const { status: telemetryStatus, telemetry } = useSessionTelemetry();
   const workbench = useWorkbench();
   const { actions } = useLaserStable();
-  const files = useSessionChanges(meta.path, meta.session?.cwd, telemetry?.revision);
+  const [filesRefresh, setFilesRefresh] = useState(0);
+  const running = meta.running || meta.compacting;
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    wasRunning.current = false;
+  }, [meta.path]);
+  useEffect(() => {
+    if (wasRunning.current && !running) setFilesRefresh((n) => n + 1);
+    wasRunning.current = running;
+  }, [running]);
+  const files = useSessionChanges(meta.path, meta.session?.cwd, filesRefresh);
 
   const [contextOpen, setContextOpen] = useState(true);
   const [spendOpen, setSpendOpen] = useState(true);
@@ -146,7 +85,7 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         {meta.session ? (
           <>
-            <ScopeBar text={scopeBarText(telemetry?.history)} />
+            <ScopeBar text={scopeBarText(telemetry?.history, telemetryStatus)} />
             <ContextSection
               context={telemetry?.context}
               busy={meta.running || meta.compacting}
@@ -170,6 +109,7 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
               sessionKey={meta.path}
               open={filesOpen}
               onOpenChange={setFilesOpen}
+              onRefresh={() => setFilesRefresh((n) => n + 1)}
             />
             <HistorySection history={telemetry?.history} />
           </>
