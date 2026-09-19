@@ -28,6 +28,8 @@ import { sessionTitle } from "../runtime/threadList.js";
 import { viewFirstUserText } from "../view-summary.js";
 import type { SessionView } from "../store.js";
 import { samePresentationViews } from "../runtime/presentation-state.js";
+import { shortCwd } from "../format.js";
+import { agentHeadline, agentInitials, agentStrip, taskHeadline, taskStrip, type FleetHeadline, type FleetStrip } from "./row.js";
 
 export type FleetItemKind = "agent" | "task";
 
@@ -85,6 +87,16 @@ export interface FleetItem {
    * as the present tense is worse than reading nothing.
    */
   activity: string | undefined;
+  /**
+   * Line 2 of the collapsed row (leap §3 A.1). Never the task brief. Priority:
+   * the question, live activity, a command's last line, the terminal reason,
+   * the result's first sentence.
+   */
+  headline: FleetHeadline | undefined;
+  /** Line 3: agent identity and spend, or the command's own facts. */
+  strip: FleetStrip;
+  /** Agent tile letters, from `agentName`. Undefined on a command. */
+  initials: string | undefined;
   /** Never lost: "you ended it", "exit code 2". */
   terminalReason: string | undefined;
   startedAt: string | undefined;
@@ -115,6 +127,8 @@ export interface FleetGroup {
   /** The top-level session. Its own row is the group header, not an item. */
   path: string;
   cwd: string;
+  /** Folder name of `cwd` — the project as secondary text on the header. */
+  project: string;
   title: string;
   /** Not open in this client: its work kept going without it. */
   orphaned: boolean;
@@ -129,6 +143,8 @@ export interface FleetGroup {
   running: number;
   /** Items that need a person, anywhere in the group. */
   needsYou: number;
+  /** Terminal items, anywhere in the group. */
+  ended: number;
   attention: Attention;
 }
 
@@ -172,6 +188,7 @@ const TASK_STATE: Readonly<Record<BackgroundTask["status"], FleetState>> = {
 function taskItem(task: BackgroundTask, depth: number, now: number): FleetItem {
   const state = TASK_STATE[task.status];
   const own = STATE_ATTENTION[state];
+  const terminalReason = task.terminalReason;
   return {
     key: `task:${task.id}`,
     kind: "task",
@@ -183,7 +200,10 @@ function taskItem(task: BackgroundTask, depth: number, now: number): FleetItem {
     own,
     attention: own,
     activity: task.status === "running" ? task.activity : undefined,
-    terminalReason: task.terminalReason,
+    headline: taskHeadline(task, terminalReason),
+    strip: taskStrip(task),
+    initials: undefined,
+    terminalReason,
     startedAt: task.startedAt,
     endedAt: task.endedAt,
     elapsedMs: elapsed(task.startedAt, task.endedAt, task.status === "running", now),
@@ -211,6 +231,8 @@ function agentItem(node: AgentTreeNode, tasksOf: (path: string) => BackgroundTas
   // "working" or it is nothing, and nothing is not an error.
   const state: FleetState = node.status === "working" ? "running" : node.status === "idle" ? "completed" : node.status;
   const own: Attention = node.status === "idle" ? "idle" : STATE_ATTENTION[state];
+  const terminalReason = reasonOfRun(run);
+  const agentName = run?.agentName ?? node.title;
   return {
     key: `agent:${node.sessionPath}`,
     kind: "agent",
@@ -222,7 +244,10 @@ function agentItem(node: AgentTreeNode, tasksOf: (path: string) => BackgroundTas
     attention: own,
     // A question is what a paused run is "doing", and what the person can act on.
     activity: node.ended ? undefined : run?.status === "needs_input" && run.question ? run.question.title : (run?.activity?.label ?? (run?.activity?.currentTool ? `Running ${run.activity.currentTool}` : undefined)),
-    terminalReason: reasonOfRun(run),
+    headline: agentHeadline(run, node.ended, terminalReason),
+    strip: agentStrip(run, agentName, run?.model),
+    initials: agentInitials(agentName),
+    terminalReason,
     startedAt: run?.startedAt,
     endedAt: run?.endedAt,
     elapsedMs: elapsed(run?.startedAt, run?.endedAt, !node.ended, now),
@@ -249,12 +274,13 @@ function reasonOfRun(run: AgentRun | undefined): string | undefined {
 }
 
 /** Roll attention up and count what is going, in one post-order walk. */
-function settle(items: readonly FleetItem[], counts: { running: number; needsYou: number }): Attention {
+function settle(items: readonly FleetItem[], counts: { running: number; needsYou: number; ended: number }): Attention {
   const seen: Attention[] = [];
   for (const item of items) {
     const below = settle(item.children, counts);
     item.attention = highestAttention([item.own, below]);
     if (!item.terminal) counts.running += 1;
+    else counts.ended += 1;
     if (item.state === "needs_input") counts.needsYou += 1;
     seen.push(item.attention);
   }
@@ -308,7 +334,7 @@ export function buildFleet(input: FleetInput): FleetGroup[] {
     ];
     if (items.length === 0) continue;
 
-    const counts = { running: 0, needsYou: 0 };
+    const counts = { running: 0, needsYou: 0, ended: 0 };
     const attention = settle(items, counts);
     const summary = summaries.get(rootPath);
     const view = views[rootPath];
@@ -320,6 +346,7 @@ export function buildFleet(input: FleetInput): FleetGroup[] {
     groups.push({
       path: rootPath,
       cwd: summary?.cwd ?? view?.state.cwd ?? runList.find((run) => run.rootSessionPath === rootPath)?.projectCwd ?? "",
+      project: shortCwd(summary?.cwd ?? view?.state.cwd ?? runList.find((run) => run.rootSessionPath === rootPath)?.projectCwd ?? ""),
       // A root the catalog cannot name is named the way the top bar names an
       // unscanned session — its name, else its first line — and a deleted one
       // with neither is "Unnamed session", not a file name: the header beside it
@@ -330,6 +357,7 @@ export function buildFleet(input: FleetInput): FleetGroup[] {
       items,
       running: counts.running,
       needsYou: counts.needsYou,
+      ended: counts.ended,
       attention,
     });
   }

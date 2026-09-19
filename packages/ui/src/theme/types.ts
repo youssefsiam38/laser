@@ -59,7 +59,9 @@ export type OptionalColorTokenName =
   | "syntax-punctuation"
   | (typeof ORIGINS)[number]["token"]
   | "shadow-float"
-  | "shadow-float-sm";
+  | "shadow-float-sm"
+  | `fleet-agent-${0 | 1 | 2 | 3 | 4 | 5 | 6 | 7}`
+  | "on-fleet-agent";
 
 export type ThemeTokens = Record<ColorTokenName, string> & Partial<Record<OptionalColorTokenName, string>>;
 

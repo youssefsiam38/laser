@@ -135,6 +135,7 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
     [],
   );
   const renderDetail = useCallback((item: FleetItem, contextOnly: boolean) => <FleetDetail item={item} contextOnly={contextOnly} />, []);
+  const renderAskingActions = useCallback((item: FleetItem) => <AskingActions item={item} />, []);
 
   const hasTreeWork = treeSections.active.count + treeSections.finished.count > 0;
   const hasElsewhereWork = elsewhereSections.active.count + elsewhereSections.finished.count > 0;
@@ -183,7 +184,9 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
               currentKey={`agent:${fleet.current}`}
               onToggle={toggle}
               renderDetail={renderDetail}
+              renderAskingActions={renderAskingActions}
               onClearFinished={hasFinished ? () => clearFinishedFleet() : undefined}
+              filters
             />
           ) : (
             <FleetEmpty />
@@ -195,6 +198,7 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
             expanded={expanded}
             onToggle={toggle}
             renderDetail={renderDetail}
+            renderAskingActions={renderAskingActions}
             onClearFinished={hasFinishedElsewhere ? () => clearFinishedFleet() : undefined}
           />
         )}
@@ -278,6 +282,57 @@ function FleetDetail({ item, contextOnly }: { item: FleetItem; contextOnly: bool
  * that goes where you already are is a control that does nothing, and R4
  * puts the reason where the control would have been.
  */
+/**
+ * Live `needs_input` controls on the collapsed row. Answer never owns the
+ * first Enter: Open is first, Answer is second, and neither is type=submit.
+ * Clicking Answer opens the chat where the question is answered; it never
+ * sends a reply from this column (the approval rule).
+ */
+function AskingActions({ item }: { item: FleetItem }) {
+  const { actions } = useLaserStable();
+  const reachable = useLaserState((s) => s.catalogPresence !== undefined ? s.catalogPresence[item.sessionPath] !== false
+    : s.sessions.length === 0 || s.sessions.some((session) => session.path === item.sessionPath));
+  const here = useLaserState((s) => s.current === item.sessionPath);
+  const open = () => void actions.openSession(item.sessionPath);
+  return (
+    <div
+      data-slot="fleet-asking-actions"
+      className="flex flex-wrap items-center gap-2 px-3 pb-2"
+      onKeyDown={(event) => {
+        if (event.key !== "Enter") return;
+        const target = event.target;
+        if (target instanceof HTMLElement && target.dataset.slot === "fleet-answer") {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }}
+    >
+      {here ? (
+        <span data-slot="fleet-here" className="text-xs leading-xs text-ink-3">This is the chat you are reading.</span>
+      ) : reachable ? (
+        <Button size="xs" variant="outline" data-slot="fleet-open-chat" onClick={open}>
+          Open
+        </Button>
+      ) : null}
+      <Button
+        size="xs"
+        variant="outline"
+        data-slot="fleet-answer"
+        className="text-attention"
+        onClick={here ? undefined : open}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
+      >
+        Answer
+      </Button>
+    </div>
+  );
+}
+
 function DetailActions({
   item,
   onStop,

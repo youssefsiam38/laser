@@ -18,6 +18,17 @@ export const PROVENANCE_SCALE = {
   light: { lightness: 0.51, chroma: 0.13, neutral: 0.62 },
 };
 
+/**
+ * Categorical tints for fleet agent tiles. Distinct from the status ramp so a
+ * worker is not "live" and a reviewer is not "needs you". Eight hues, hashed
+ * from the agent name; lightness is a ground, not text.
+ */
+export const FLEET_AGENT_HUES = [245, 285, 145, 25, 195, 55, 345, 100] as const;
+export const FLEET_AGENT_SCALE = {
+  dark: { lightness: 0.38, chroma: 0.08 },
+  light: { lightness: 0.9, chroma: 0.06 },
+};
+
 /* ----------------------------------------------------------------------------
  * Neutral ramps. One lightness ladder, tinted per family. Step 0 is darkest.
  * -------------------------------------------------------------------------- */

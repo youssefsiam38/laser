@@ -24,14 +24,24 @@
  * actions are callbacks. The surfaces around it (the column and the phone's
  * sheet) own the data and the host.
  */
-import { ChevronDown, FileX, RadioTower } from "lucide-react";
-import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { ChevronDown, FileX } from "lucide-react";
+import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 
+import { FleetFilters } from "@/components/fleet/FleetFilters.js";
+import { FleetWorkRow } from "@/components/fleet/FleetWorkRow.js";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { STATUS_LABEL, StatusDot } from "@/components/status";
-import { formatElapsed, shortCwd } from "@/format";
+import { StatusDot } from "@/components/status";
 import { cn } from "@/lib/utils";
-import { FLEET_STATE_LABEL, type FleetItem, type FleetProjectedGroup, type FleetProjectedItem, type FleetSections } from "@/fleet/model";
+import {
+  DEFAULT_FLEET_FILTER,
+  filterFleetSections,
+  fleetFilterCounts,
+  type FleetFilter,
+  type FleetItem,
+  type FleetProjectedGroup,
+  type FleetProjectedItem,
+  type FleetSections,
+} from "@/fleet";
 
 export type { FleetItem, FleetSections };
 
@@ -57,12 +67,19 @@ export interface SubagentListProps extends Omit<ComponentProps<"div">, "children
   onToggle(target: FleetDisclosure): void;
   /** The body of the open row: the surface owns what a run and a task show. */
   renderDetail(item: FleetItem, contextOnly: boolean): ReactNode;
+  /** Answer / Open on a live `needs_input` row. Absent on context and on commands. */
+  renderAskingActions?: ((item: FleetItem) => ReactNode) | undefined;
   /** Put the finished work away. Absent when there is nothing this view can clear. */
   onClearFinished?: (() => void) | undefined;
+  /** Show Going · Asking · Ended chips. The tree list does; strays do not. */
+  filters?: boolean;
 }
 
-export function SubagentList({ sections, surface, expanded, currentKey, onToggle, renderDetail, onClearFinished, className, ...props }: SubagentListProps) {
+export function SubagentList({ sections, surface, expanded, currentKey, onToggle, renderDetail, renderAskingActions, onClearFinished, filters = false, className, ...props }: SubagentListProps) {
   const [finishedOpen, setFinishedOpen] = useState(false);
+  const [filter, setFilter] = useState<FleetFilter>(DEFAULT_FLEET_FILTER);
+  const counts = useMemo(() => fleetFilterCounts(sections), [sections]);
+  const visible = useMemo(() => (filters ? filterFleetSections(sections, filter) : sections), [filter, filters, sections]);
 
   // Opening a finished row from elsewhere (a task-exit notice) must not land
   // on a fold that hides it. Ordinary rerenders never override a manual fold.
@@ -72,22 +89,25 @@ export function SubagentList({ sections, surface, expanded, currentKey, onToggle
 
   return (
     <div data-slot="subagent-list" className={cn("flex flex-col", className)} {...props}>
-      <FleetSectionHeader icon={RadioTower} label="In progress" count={sections.active.count} />
-      {sections.active.groups.length > 0 ? (
+      {filters ? <FleetFilters filter={filter} counts={counts} onChange={setFilter} /> : null}
+      {visible.active.groups.length > 0 ? (
         <FleetGroups
-          groups={sections.active.groups}
+          groups={visible.active.groups}
           surface={surface}
           section="active"
           expanded={expanded}
           currentKey={currentKey}
           onToggle={onToggle}
           renderDetail={renderDetail}
+          renderAskingActions={renderAskingActions}
         />
       ) : (
-        <p className="px-4 py-5 text-sm leading-sm text-ink-3">Nothing is in progress.</p>
+        <p className="px-4 py-5 text-sm leading-sm text-ink-3">
+          {filters && !filter.lifecycle.going && !filter.lifecycle.asking ? "Nothing matches these filters." : "Nothing is in progress."}
+        </p>
       )}
 
-      {sections.finished.count > 0 && (
+      {visible.finished.count > 0 && (
         <Collapsible open={finishedOpen} onOpenChange={setFinishedOpen} className="hairline-t">
           {/*
             Dimmed, and with no tick. A green double-check here said "done, well
@@ -98,7 +118,7 @@ export function SubagentList({ sections, surface, expanded, currentKey, onToggle
           <div className="flex items-center">
             <CollapsibleTrigger className="group/finished flex min-h-11 min-w-0 flex-1 items-center gap-2 ps-4 pe-2 py-3 text-start text-ink-3 outline-none transition-colors duration-(--motion-instant) hover:text-ink-2 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset">
               <span className="text-xs leading-xs font-medium">Finished</span>
-              <span className="tnum text-xs leading-xs">{sections.finished.count}</span>
+              <span className="tnum text-xs leading-xs">{visible.finished.count}</span>
               <ChevronDown
                 aria-hidden="true"
                 className="ms-auto size-4 shrink-0 transition-transform duration-(--motion-fast) group-data-[state=open]/finished:rotate-180 motion-reduce:transition-none"
@@ -117,28 +137,19 @@ export function SubagentList({ sections, surface, expanded, currentKey, onToggle
           </div>
           <CollapsibleContent>
             <FleetGroups
-              groups={sections.finished.groups}
+              groups={visible.finished.groups}
               surface={surface}
               section="finished"
               expanded={expanded}
               currentKey={currentKey}
               onToggle={onToggle}
               renderDetail={renderDetail}
+              renderAskingActions={renderAskingActions}
             />
           </CollapsibleContent>
         </Collapsible>
       )}
     </div>
-  );
-}
-
-function FleetSectionHeader({ icon: Icon, label, count }: { icon: typeof RadioTower; label: string; count: number }) {
-  return (
-    <header className="flex items-center gap-2 px-4 py-3">
-      <Icon aria-hidden="true" className="size-4 shrink-0 text-live" />
-      <h3 className="text-xs leading-xs font-medium text-ink">{label}</h3>
-      <span className="tnum text-xs leading-xs text-ink-3">{count}</span>
-    </header>
   );
 }
 
@@ -150,6 +161,7 @@ function FleetGroups({
   currentKey,
   onToggle,
   renderDetail,
+  renderAskingActions,
 }: {
   groups: readonly FleetProjectedGroup[];
   surface: FleetSurfaceName;
@@ -158,6 +170,7 @@ function FleetGroups({
   currentKey?: string | undefined;
   onToggle(target: FleetDisclosure): void;
   renderDetail(item: FleetItem, contextOnly: boolean): ReactNode;
+  renderAskingActions?: ((item: FleetItem) => ReactNode) | undefined;
 }) {
   return groups.map((projectedGroup) => {
     const group = projectedGroup.group;
@@ -169,7 +182,10 @@ function FleetGroups({
           <h4 className="min-w-0 truncate text-xs leading-xs font-medium text-ink" title={group.deleted ? group.path : undefined}>
             {group.title}
           </h4>
-          {group.cwd && <span className="eyebrow shrink-0">{shortCwd(group.cwd)}</span>}
+          {group.project && <span className="eyebrow shrink-0">{group.project}</span>}
+          <span data-slot="fleet-group-counts" className="shrink-0 tnum text-xs leading-xs text-ink-3">
+            {[group.running > 0 ? `${group.running} going` : undefined, group.needsYou > 0 ? `${group.needsYou} asking` : undefined, group.ended > 0 ? `${group.ended} ended` : undefined].filter(Boolean).join(" · ")}
+          </span>
           {group.deleted ? (
             // Deleted, not closed: there is no session to open, so the header
             // says what the work lost rather than implying a way back to it.
@@ -192,6 +208,7 @@ function FleetGroups({
               currentKey={currentKey}
               onToggle={onToggle}
               renderDetail={renderDetail}
+              renderAskingActions={renderAskingActions}
             />
           ))}
         </ul>
@@ -206,6 +223,7 @@ export interface SubagentStraysProps extends Omit<ComponentProps<"div">, "childr
   expanded: FleetDisclosure | undefined;
   onToggle(target: FleetDisclosure): void;
   renderDetail(item: FleetItem, contextOnly: boolean): ReactNode;
+  renderAskingActions?: ((item: FleetItem) => ReactNode) | undefined;
   /** Put its finished work away. Absent when nothing here has finished. */
   onClearFinished?: (() => void) | undefined;
 }
@@ -221,7 +239,7 @@ export interface SubagentStraysProps extends Omit<ComponentProps<"div">, "childr
  * and putting it first would make every fleet start with someone else's
  * leftovers. Closed by default; a reveal that lands inside it opens it.
  */
-export function SubagentStrays({ sections, expanded, onToggle, renderDetail, onClearFinished, className, ...props }: SubagentStraysProps) {
+export function SubagentStrays({ sections, expanded, onToggle, renderDetail, renderAskingActions, onClearFinished, className, ...props }: SubagentStraysProps) {
   const [open, setOpen] = useState(false);
   const count = sections.active.count + sections.finished.count;
   const running = sections.active.running;
@@ -283,6 +301,7 @@ export function SubagentStrays({ sections, expanded, onToggle, renderDetail, onC
             expanded={expanded}
             onToggle={onToggle}
             renderDetail={renderDetail}
+            renderAskingActions={renderAskingActions}
           />
         </CollapsibleContent>
       </Collapsible>
@@ -306,6 +325,7 @@ function FleetBranch({
   currentKey,
   onToggle,
   renderDetail,
+  renderAskingActions,
 }: {
   item: FleetProjectedItem;
   target: FleetDisclosure;
@@ -314,8 +334,11 @@ function FleetBranch({
   currentKey?: string | undefined;
   onToggle(target: FleetDisclosure): void;
   renderDetail(item: FleetItem, contextOnly: boolean): ReactNode;
+  renderAskingActions?: ((item: FleetItem) => ReactNode) | undefined;
 }) {
   const source = item.item;
+  const asking =
+    !item.contextOnly && source.state === "needs_input" && renderAskingActions ? renderAskingActions(source) : undefined;
   return (
     <li
       data-slot="fleet-branch"
@@ -324,7 +347,14 @@ function FleetBranch({
         nested && "before:absolute before:-start-3 before:top-5 before:h-px before:w-3 before:bg-line before:content-['']",
       )}
     >
-      <FleetRow item={item} expanded={sameDisclosure(expanded, target)} current={currentKey === source.key} onToggle={() => onToggle(target)} renderDetail={renderDetail} />
+      <FleetWorkRow
+        item={item}
+        expanded={sameDisclosure(expanded, target)}
+        current={currentKey === source.key}
+        onToggle={() => onToggle(target)}
+        renderDetail={renderDetail}
+        askingActions={asking}
+      />
       {item.children.length > 0 && (
         <ul role="list" aria-label={`Work ${source.title} started`} className="relative ms-4 mt-1.5 flex flex-col gap-1.5 border-s border-line ps-3">
           {item.children.map((child) => (
@@ -337,103 +367,11 @@ function FleetBranch({
               currentKey={currentKey}
               onToggle={onToggle}
               renderDetail={renderDetail}
+              renderAskingActions={renderAskingActions}
             />
           ))}
         </ul>
       )}
     </li>
-  );
-}
-
-/**
- * One piece of work. The row grows its detail in place rather than replacing
- * itself, so the dot keeps ticking and the row keeps its position.
- *
- * `current` is the row for the chat the person is reading: the same treatment
- * the sessions column gives the open session — a filled ground and a word —
- * because "which of these am I in" is the first thing this column answers
- * when a child is open.
- */
-function FleetRow({
-  item,
-  expanded,
-  current = false,
-  onToggle,
-  renderDetail,
-}: {
-  item: FleetProjectedItem;
-  expanded: boolean;
-  current?: boolean;
-  onToggle(): void;
-  renderDetail(item: FleetItem, contextOnly: boolean): ReactNode;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (expanded) ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [expanded]);
-
-  const source = item.item;
-  const label = FLEET_STATE_LABEL[source.state];
-  const rolledUp = item.contextOnly || item.attention !== source.own;
-  const dotLabel = rolledUp ? `${STATUS_LABEL[item.attention]} below` : label;
-  // Context carries lineage, not membership. Its own activity, reason and live
-  // elapsed would make a Working parent look filed under Finished.
-  const line = item.contextOnly ? "Parent of work shown here." : (source.activity ?? source.terminalReason ?? source.subtitle);
-
-  return (
-    <div
-      ref={ref}
-      data-slot="fleet-row"
-      data-kind={source.kind}
-      data-state={source.state}
-      data-attention={item.attention}
-      data-context={item.contextOnly || undefined}
-      data-expanded={expanded || undefined}
-      data-current={current || undefined}
-      className={cn(
-        "flex min-w-0 flex-col rounded-xl border border-line bg-surface text-ink",
-        "transition-[border-color,box-shadow] duration-(--motion-instant) motion-reduce:transition-none",
-        item.contextOnly && "bg-bg text-ink-2",
-        current && "bg-surface-2",
-        expanded && "border-live shadow-[0_0_0_1px_var(--live)]",
-      )}
-    >
-      <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={onToggle}
-        className={cn(
-          "flex min-h-11 min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-start outline-none",
-          "transition-colors duration-(--motion-instant) hover:bg-surface-2 active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]",
-          "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
-          "motion-reduce:transition-none",
-        )}
-      >
-        <StatusDot status={item.attention} label={dotLabel} />
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="flex min-w-0 items-baseline gap-2">
-            <span className={cn("min-w-0 truncate text-sm leading-sm font-medium", item.contextOnly ? "text-ink-2" : "text-ink")}>{source.title}</span>
-            <span className="shrink-0 text-xs leading-xs text-ink-3">{source.kind === "task" ? "command" : label}</span>
-            {item.contextOnly && <span className="eyebrow shrink-0 text-ink-3">context</span>}
-            {current && (
-              <span className="eyebrow shrink-0 text-ink-2" title="The chat you are reading">
-                reading
-              </span>
-            )}
-          </span>
-          {line && (
-            <span className={cn("min-w-0 truncate text-xs leading-xs", !item.contextOnly && source.state === "failed" ? "text-danger" : "text-ink-2")} title={line}>
-              {line}
-            </span>
-          )}
-        </span>
-        {!item.contextOnly && source.elapsedMs !== undefined && <span className="typed shrink-0 tnum text-xs leading-xs text-ink-3">{formatElapsed(source.elapsedMs)}</span>}
-        <ChevronDown
-          aria-hidden="true"
-          className={cn("size-4 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none", expanded && "rotate-180")}
-        />
-      </button>
-      {expanded && <div className="min-w-0 px-3 pb-3 hairline-t pt-3">{renderDetail(source, item.contextOnly)}</div>}
-    </div>
   );
 }

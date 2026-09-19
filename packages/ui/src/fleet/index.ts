@@ -21,6 +21,40 @@ export {
   type FleetSections,
   type FleetState,
 } from "./model.js";
+export {
+  DEFAULT_FLEET_FILTER,
+  filterFleetSections,
+  fleetFilterCounts,
+  itemMatchesFilter,
+  type FleetFilter,
+  type FleetFilterCounts,
+  type FleetKindFilter,
+  type FleetLifecycleFilter,
+} from "./filter.js";
+export {
+  agentHeadline,
+  agentInitials,
+  agentStrip,
+  agentTintIndex,
+  headlineText,
+  taskHeadline,
+  taskStrip,
+  FLEET_AGENT_TINT_COUNT,
+  type FleetAgentStrip,
+  type FleetHeadline,
+  type FleetStrip,
+  type FleetTaskStrip,
+  type FleetWorktreeChip,
+} from "./row.js";
+export {
+  BRANCH_BUDGET,
+  PATH_BUDGET,
+  firstSentence,
+  isPathShaped,
+  middleTruncate,
+  shortModelName,
+  suffixTruncate,
+} from "./truncate.js";
 export { useFleet, useFleetReconcile, type FleetView } from "./hooks.js";
 export {
   clearFleetReveal,
