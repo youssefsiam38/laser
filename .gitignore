@@ -19,3 +19,4 @@ runtime-manifest.json
 *.sqlite
 *.sqlite-*
 docs/research/.playwright-mcp/
+/.playwright-mcp/
