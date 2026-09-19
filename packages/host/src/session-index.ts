@@ -8,6 +8,7 @@
 import { closeSync, fstatSync, openSync, readSync, statSync, type Stats } from "node:fs";
 import {
   RevisionFold,
+  TelemetryFold,
   entryBodyMetadata,
   historyWindowNode,
   servedEntryWireBytes,
@@ -15,6 +16,7 @@ import {
   type RevisionHasher,
   type RevisionState,
   type SessionRevisionHeader,
+  type TelemetryFoldState,
 } from "@lasercode/protocol";
 import { nodeRevisionHasher } from "@lasercode/protocol/revision-node";
 
@@ -97,6 +99,8 @@ export interface SessionIndex {
   leafId: string | null;
   state: RevisionState;
   checkpoints: RevisionState[];
+  /** Whole-session telemetry fold, built during the same scan as the revision. */
+  telemetry: TelemetryFoldState;
   /** Exact file snapshot the fold and line offsets describe. */
   identity: FileIdentity;
 }
@@ -118,11 +122,12 @@ export interface SessionIndexFailure {
 export type SessionIndexResult = { ok: true; index: SessionIndex } | { ok: false; failure: SessionIndexFailure };
 
 type ScanResult =
-  | { ok: true; offset: number; tail?: { entry: IndexedEntry; state: RevisionState } }
+  | { ok: true; offset: number; tail?: { entry: IndexedEntry; state: RevisionState; telemetry: TelemetryFoldState } }
   | { ok: false; failure: SessionIndexFailure };
 
 interface Durable {
   fold: RevisionFold;
+  telemetry: TelemetryFold;
   entries: IndexedEntry[];
   /** Fixed ring; `checkpointStart` is the oldest slot once full. */
   checkpoints: RevisionState[];
@@ -187,6 +192,8 @@ export interface SessionIndexCacheOptions {
   sessions?: number;
   bytes?: number;
   hash?: RevisionHasher;
+  /** Test seam: one callback per record folded into telemetry. */
+  onTelemetryPush?: ((entry: unknown) => void) | undefined;
   now?: () => number;
   stat?: (fd: number) => Stats;
   /** Test seam; production yields to the next event-loop turn. */
@@ -208,6 +215,7 @@ export class SessionIndexCache {
   private readonly stat: (fd: number) => Stats;
   private readonly yieldToHost: () => Promise<void>;
   private readonly yieldEveryLines: number;
+  private readonly onTelemetryPush: ((entry: unknown) => void) | undefined;
   private retained = 0;
 
   constructor(options: SessionIndexCacheOptions = {}) {
@@ -219,6 +227,7 @@ export class SessionIndexCache {
     this.stat = options.stat ?? fstatSync;
     this.yieldToHost = options.yield ?? (() => new Promise<void>((resolve) => setImmediate(resolve)));
     this.yieldEveryLines = Math.max(1, options.yieldEveryLines ?? DEFAULT_YIELD_LINES);
+    this.onTelemetryPush = options.onTelemetryPush;
   }
 
   /** Accounted identity bytes, not physical retained heap. */
@@ -354,6 +363,7 @@ export class SessionIndexCache {
       }
       const durable = resumed?.cached.durable ?? {
         fold: RevisionFold.create(this.hash, header),
+        telemetry: TelemetryFold.create(),
         entries: [],
         checkpoints: [],
         checkpointStart: 0,
@@ -449,6 +459,8 @@ export class SessionIndexCache {
       } catch (error) {
         return failure("uncanonical", error instanceof Error ? error.message : undefined);
       }
+      durable.telemetry.push(entry.value);
+      this.onTelemetryPush?.(entry.value);
       durable.entries.push(entry.identity);
       durable.bytes += entryBytes(entry.identity);
       const checkpoint = { ...durable.fold.state, leafId: entry.identity.id ?? null };
@@ -506,7 +518,10 @@ export class SessionIndexCache {
         } catch (error) {
           return failure("uncanonical", error instanceof Error ? error.message : undefined);
         }
-        return { ok: true, offset, tail: { entry: entry.identity, state: { ...provisional.state, leafId: entry.identity.id ?? null } } };
+        const telemetry = TelemetryFold.resume(durable.telemetry.state);
+        telemetry.push(entry.value);
+        this.onTelemetryPush?.(entry.value);
+        return { ok: true, offset, tail: { entry: entry.identity, state: { ...provisional.state, leafId: entry.identity.id ?? null }, telemetry: telemetry.state } };
       }
     }
     return { ok: true, offset };
@@ -527,14 +542,14 @@ export class SessionIndexCache {
   }
 }
 
-function indexFrom(header: SessionRevisionHeader, durable: Durable, identity: FileIdentity, tail?: { entry: IndexedEntry; state: RevisionState }): SessionIndex {
+function indexFrom(header: SessionRevisionHeader, durable: Durable, identity: FileIdentity, tail?: { entry: IndexedEntry; state: RevisionState; telemetry: TelemetryFoldState }): SessionIndex {
   const entries = tail ? [...durable.entries, tail.entry] : durable.entries;
   const state: RevisionState = { ...(tail ? tail.state : durable.fold.state), leafId: entries.at(-1)?.id ?? null };
   const ordered = durable.checkpoints.length === 0 || durable.checkpointStart === 0
     ? durable.checkpoints
     : [...durable.checkpoints.slice(durable.checkpointStart), ...durable.checkpoints.slice(0, durable.checkpointStart)];
   const checkpoints = tail ? [...ordered, { ...tail.state, leafId: tail.entry.id ?? null }] : ordered;
-  return { header, entries, leafId: state.leafId, state, checkpoints, identity };
+  return { header, entries, leafId: state.leafId, state, checkpoints, telemetry: tail?.telemetry ?? durable.telemetry.state, identity };
 }
 
 function copyIndex(index: SessionIndex): SessionIndex {
@@ -544,6 +559,7 @@ function copyIndex(index: SessionIndex): SessionIndex {
     leafId: index.leafId,
     state: { ...index.state },
     checkpoints: index.checkpoints.map((checkpoint) => ({ ...checkpoint })),
+    telemetry: TelemetryFold.resume(index.telemetry).state,
     identity: { ...index.identity },
   };
 }

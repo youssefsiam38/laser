@@ -72,6 +72,7 @@ import { SearchCancellation } from "./search-cancellation.js";
 import { SessionIndexCache } from "./session-index.js";
 import { SessionProjection } from "./session-projection.js";
 import { SessionBodyRange } from "./session-body-range.js";
+import { SessionTelemetryReader } from "./session-telemetry.js";
 import { SessionRevisions } from "./session-revision.js";
 import { environmentIdentity, type EnvironmentIdentity } from "./environment-identity.js";
 import { ViewCache } from "./views.js";
@@ -279,6 +280,7 @@ export class HostServer {
   readonly projection: SessionProjection;
   /** Bounded, read-only slices of one body of one stored entry (RP-5b). */
   readonly bodyRange: SessionBodyRange;
+  readonly telemetry: SessionTelemetryReader;
   /** M4 log store, or undefined when it could not be opened (see `logsUnavailable`). */
   readonly logs: LogStore | undefined;
   readonly logsUnavailable: string | undefined;
@@ -575,6 +577,7 @@ export class HostServer {
         this.logs?.observeAgentRun(run);
       },
     });
+    this.telemetry = new SessionTelemetryReader({ index: sessionIndex, revisions: this.revisions, runs: this.runs });
     this.agentFailureRecovery = new AgentFailureRecoveryQueue(this.runs, (line) => this.log(line));
     const loadedFailures = new Map<string, AgentRun[]>();
     for (const run of this.runs.takeLoadedFailures()) {
@@ -833,6 +836,7 @@ export class HostServer {
       revisions: this.revisions,
       projection: this.projection,
       bodyRange: this.bodyRange,
+      telemetry: this.telemetry,
       access: this.access,
       audit: this.audit,
       routeLeases: this.routeLeases,
