@@ -2919,10 +2919,10 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M17-T2 | One column for the fleet and the monitor | todo | — | — | audit §4 |
 | M17-T3 | A child's question is answered where it is shown | todo | — | — | audit §4 |
 | M17-T4 | A failed run says what went wrong, for a person | todo | — | — | audit §4 |
-| M17-T5 | The fleet row is a row, not a record | todo | — | — | audit §4 |
-| M17-T6 | Snapshot and restore (protocol) | todo | — | — | audit §4 |
-| M17-T7 | Review the changes before they are yours | todo | — | — | audit §4 |
-| M17-T8 | Commit and push without a terminal | todo | — | — | audit §4 |
+| M17-T5 | The fleet row is a row, not a record | dropped | — | absorbed by M18-T4 | superseded by the source-control leap §3 |
+| M17-T6 | Snapshot and restore (protocol) | dropped | — | absorbed by M18-T2 | checkpoints replace snapshots, leap §7 |
+| M17-T7 | Review the changes before they are yours | dropped | — | absorbed by M18-T5 | the overlay replaces it, leap §8 |
+| M17-T8 | Commit and push without a terminal | dropped | — | absorbed by M18-T6 | leap §9 |
 | M17-T9 | Permissions a person can set once | todo | — | — | audit §4 |
 | M17-T10 | Always allow this command | todo | — | — | audit §4 |
 | M17-T11 | Plan mode | todo | — | — | audit §4 |
@@ -2930,7 +2930,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M17-T13 | Every key is findable | todo | — | — | audit §4 |
 | M17-T14 | Projects you can tell apart | todo | — | — | audit §4 |
 | M17-T15 | A sidebar that scales past one project | todo | — | — | audit §4 |
-| M17-T16 | The monitor stops repeating itself | todo | — | — | audit §4 |
+| M17-T16 | The monitor stops repeating itself | dropped | — | absorbed by M18-T4 | the scope bar replaces the apology, leap §4.1 |
 | M17-T17 | Logs open on what you can act on | todo | — | — | audit §4 |
 | M17-T18 | One noun for an agent | todo | — | — | audit §4 |
 | M17-T19 | Rows shrink their arguments, never their verbs | todo | — | — | audit §4 |
@@ -5607,41 +5607,73 @@ Consequences: pinned by a named test in `packages/ui/test/thread/transcript-posi
 and recorded in `docs/transcript-virtualization.md`. A finer anchor cannot be
 expressed: a ResizeObserver reports a box, not where inside it grew.
 
-## M18 · The source-control leap
+## M20 · The source-control leap
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M18-T0 | Diff-renderer spike | done | worker `01a0ba58-67b7-77ed-9b32-394e67141bdd` | `docs/source-control-spike-evidence.md`; adopt with five mitigations | see notes |
-| M18-T1 | Workspace shapes and the harness | in-progress | worker `run_4615dcd3` | — | spec §6 |
-| M18-T2 | Checkpoints, scopes, restore | in-progress | worker `run_d0309ce4` | — | spec §7, T1 resolver arrives through a one-function seam |
-| M18-T3 | Telemetry query | in-progress | worker `run_224529b5` | — | spec §5 |
-| M18-T4 | The fleet and telemetry columns | in-progress | fleet half: worker `run_1d022794`; telemetry half waits on T3 | — | spec §3, §4 |
-| M18-T5 | The overlay | in-progress | worker `run_29cb486e` | — | spec §8, T2's methods arrive through a one-file data adapter |
-| M18-T6 | Git actions | in-progress | engine half: worker `run_9beb1415`; toolbar half waits on T5 | — | spec §9 |
+| M20-T0 | Diff-renderer spike | done | worker `01a0ba58-67b7-77ed-9b32-394e67141bdd` | `docs/source-control-spike-evidence.md`; adopt with five mitigations | see notes |
+| M20-T1 | Workspace shapes and the harness | done | orchestrator-2026-09-19-leap | `acc1b4a6`, review `run_2e726783`, corrections `009a49a2`, seam `96d1fd3a` | spec §6; see notes |
+| M20-T2 | Checkpoints, scopes, restore | done | orchestrator-2026-09-19-leap | `d7c6d62c`, review `run_fe28f15d` (rejected), corrections `85a74e4a` | spec §7; see notes |
+| M20-T3 | Telemetry query | done | orchestrator-2026-09-19-leap | `69a3fbea`, review `run_85817698` (rejected), corrections `6662afd2` | spec §5; see notes |
+| M20-T4 | The fleet and telemetry columns | done | orchestrator-2026-09-19-leap | fleet `9052cd45` + `175d2dfb`; telemetry `56f1614e` + `9d7b69cd`; reviews `run_796bd859`, `run_96997e49` | spec §3, §4; see notes |
+| M20-T5 | The overlay | done | orchestrator-2026-09-19-leap | `05daced9`, review `run_0802b2eb`, corrections `51b013e2`, fleet entry `6d2231bd` | spec §8; see notes |
+| M20-T6 | Git actions | done | orchestrator-2026-09-19-leap | engine `0c3b0ba4` + `bc00695b` (review `run_6a13e263`, rejected then corrected); toolbar `bb786d1c` | spec §9; see notes |
 
-#### M18-T0 notes
+#### M20-T0 notes
 - 2026-09-19 spike ran against the real library in `/tmp/pierre-spike`, nothing committed to the checkout. Theming from `var(--syntax-*)` recolours with zero shadow mutations; find paints across 9 open shadow roots (17 matches); copy is clean source. Partial: +449 KB main chunk, empty bodies for binary/mode-only/pure-rename, no auto-unify at 320px, expand-all is 20 000 nodes, worker pool needs an explicit `workerFactory`.
-- 2026-09-19 D-313 confirmed, D-317 added (the overlay loads lazily). The five mitigations are acceptance criteria on M18-T5.
+- 2026-09-19 D-313 confirmed, D-317 added (the overlay loads lazily). The five mitigations are acceptance criteria on M20-T5.
 
-#### M18-T1 notes
+#### M20-T1 notes
 - 2026-09-19 claimed by orchestrator-2026-09-19-leap: one worker in its own worktree (`agents/l1-workspace-shapes-and-harness-4615dcd3`) owns the resolver, `pi/project/workspace`, the harness adaptation, `worktree: "strict"`, the common-dir fix and the per-project isolation setting.
 
-#### M18-T3 notes
+#### M20-T3 notes
 - 2026-09-19 claimed: worker on `agents/l3-telemetry-query-224529b5` owns `pi/session/telemetry` in both authorities and the deletion of every client-side aggregation. The Files section of the result is left to T2, which owns the git-backed change model.
 
-#### M18-T4 notes
+#### M20-T4 notes
 - 2026-09-19 claimed, split by surface so the two halves never write the same file: the fleet column (§3) runs now on `agents/l4-fleet-column-1d022794`; the telemetry column (§4) starts once T3 has landed the query it renders. The fleet half must not depend on T1's new `isolation` field; the orchestrator wires the reason tooltip after both merge.
 
-#### M18-T2 notes
-- 2026-09-19 claimed. Started beside T1 rather than behind it: the only dependency is "which repositories does this session touch", which the worker implements as one function (`sessionRepositories`) marked `TODO(M18-T1)`; the orchestrator swaps its body for the shared resolver at merge.
+#### M20-T2 notes
+- 2026-09-19 claimed. Started beside T1 rather than behind it: the only dependency is "which repositories does this session touch", which the worker implements as one function (`sessionRepositories`) marked `TODO(M20-T1)`; the orchestrator swaps its body for the shared resolver at merge.
 
-#### M18-T5 notes
+#### M20-T5 notes
 - 2026-09-19 claimed. Started beside T2 rather than behind it: everything the overlay reads goes through one adapter file with the §7.3 shapes declared locally, so wiring it to `pi/project/changes` / `file_diff` / `file_source` is a single-file change. The two entry points (a telemetry Files row, a fleet row's Changes) belong to T4's files and are the orchestrator's to wire.
 
-#### M18-T6 notes
+#### M20-T6 notes
 - 2026-09-19 claimed for the engine half (hosts, actions, prose, safety). The toolbar half is wired into T5's overlay once both have landed.
 
-#### M18 execution agreement
+#### M20-T1 notes
+- 2026-09-19 built, reviewed and corrected. `workspaceShape` resolves repo, monorepo, workspace-of-repos, nested repo and no-git over real fixtures; `pi/project/workspace` is answered by the host with no worker; `start_agent` never fails over shape and the choice reaches the run record, the result, `inspect_agent` and the fleet row.
+- 2026-09-19 review rejected three things and all three were fixed: `AGENTS.md` still stated the deleted contract; an empty `git init` still failed a default `start_agent` (now `hasCommit` folds into `workspaceCanIsolate`, so it shares and says so); the two `TODO(M20-T1)` seams walked depth 1 while the resolver walked depth 3 (64 vs 41 repositories on a real workspace). Both seams now call `listCheckpointRepositories(shape)` — the harness and the checkpoint engine share `WORKSPACE_SCAN_MAX_DEPTH = 3` and `WORKSPACE_SCAN_MAX_REPOS = 64`.
+- 2026-09-19 the parent walk was dropped (it reached `$HOME` and `/` and relabelled a project `nested-repo` under a dotfiles home), host and worker now share one worktree-home helper, and the Settings copy no longer speaks the model's vocabulary.
+
+#### M20-T2 notes
+- 2026-09-19 checkpoints are captured per turn per repository through an isolated `GIT_INDEX_FILE`; a test compares the person's index bytes, `status`, `branch -a`, `git log` and reflog before and after, and proves an ignored secret's blob is absent from the checkpoint tree.
+- 2026-09-19 the review **rejected** the milestone: `pi/project/restore` merged every repository's checkpoints into one list, applied repo A's commit to repo B, skipped the restore and then ran `git clean -fd` anyway — deleting uncommitted files and reporting success. Fixed: `CheckpointInfo.repos` carries `{repo, ref, commit}`, every repository is validated (`rev-parse <commit>^{commit}` and a zero `ls-files`) before anything is written, and nothing cleans after a failed restore. A multi-repository restore test with distinct OIDs pins it.
+- 2026-09-19 D-321: staging is **not** restored (a single `add -A` tree cannot record the person's staged/unstaged split); the confirmation says so. D-322: `pi/project/restore` is `work_control`, not `session_write` — it destroys uncommitted work, so it belongs with the scope that already governs removing a worktree.
+- 2026-09-19 retention is a real setting now (`pi/project/checkpoint/retention/set`, Settings → Projects); Off deletes the project's checkpoint refs immediately.
+
+#### M20-T3 notes
+- 2026-09-19 `pi/session/telemetry` folds the whole session in one shared `TelemetryFold`, incrementally, fenced by revision and environment key, answered by the worker when live and the host when not.
+- 2026-09-19 the review **rejected** three wrong numbers, each verified against the person's own session files: the live authority merged every run in the project (not just this session's children) into its spend; History's "N of M" compared rows against records and so read "45 of 94" on a fully loaded session; and a provider-less usage record — which is what compaction writes — was counted as API spend, so an account-billed session reported `mixed` with fabricated dollars. All three fixed and tested, with a real cross-authority identity test over a compacted parent with two children.
+- 2026-09-19 context composition is no longer missing: the companion estimates tools/chat/thinking/system from the assembled provider request and the figure says it is an estimate. Streamed snapshots are bounded (series downsampled to 64) and only sent to a session that asked.
+
+#### M20-T4 notes
+- 2026-09-19 fleet rows are three lines: name and elapsed, the work's own words (never the task brief), and the developer strip. Kind is a shape; children nest with a rail; Going · Asking · Ended and the kind filter carry counts; `needs_input` rows carry Answer and Open and Enter never answers — that guard's test was vacuous under review and was rewritten until deleting the guard fails it.
+- 2026-09-19 the telemetry column is the six sections of §4.2 with a scope bar instead of the apology, each header carrying its number. Files is git-backed through `pi/project/changes` and each row opens the overlay; a failed or in-flight read no longer reads as "0 files".
+- 2026-09-19 D-323: a command row shows no pid. §3 A.1 asked for one, but the host strips pids deliberately (RP-1/RP-6) and no client, relay listener or audit may see one. D-324: token counts and an output sparkline per agent run are not shown — `AgentRun.activity` carries turns and tools only, and inventing either would be fake progress.
+
+#### M20-T5 notes
+- 2026-09-19 the overlay renders with `@pierre/diffs` behind a dynamic import: `@pierre` appears in exactly one chunk (`diff-body-*.js`, 310 kB) and in neither startup chunk, proved by a chunk-graph test rather than a grep over source.
+- 2026-09-19 the review found the milestone unreachable — nothing mounted the overlay and the default adapter was the **mock**, so the first real call site would have shown a person invented changes. Both fixed: `ChangesOverlayHost` is mounted beside `Shell`, the host adapter calls `pi/project/changes` / `file_diff` / `file_source`, and the no-adapter default refuses in one sentence instead of fabricating.
+- 2026-09-19 copy now sets the clipboard from the clipped range rather than re-pointing a selection that Chromium retargets; find no longer re-scrolls on every virtualizer mutation; the rail is a real tree through `fileTreeFromChanges`; the overlay uses the project's dialog so it morphs instead of popping.
+- 2026-09-19 a fleet row opens its agent's changes (D-314), and the worktree chip carries the isolation reason as its hint.
+
+#### M20-T6 notes
+- 2026-09-19 ten methods behind one dispatch: hosts, commit, push, branch, prose, and pull-request create/read/checkout/merge/viewed. Prose comes from the session's current model, never the Namer, and is editable before use.
+- 2026-09-19 the review **rejected** the engine: `git check-ref-format --branch` accepts `+main`, so a plain `branch` parameter reached `git push <remote> +main` — a force push, and `+v1` moved a tag. Pathspec magic (`:/`, `:(exclude)…`) let a commit include files the preview never named, and a file the session had just created could not be committed at all. All fixed and pinned with hostile-input tests; pushes now use a fully qualified `refs/heads/<b>:refs/heads/<b>` refspec after proving the branch is local.
+- 2026-09-19 the toolbar is preview → edit → confirm, with the engine's `expect` fingerprint round-tripped so a moved HEAD refuses instead of rubber-stamping; `needs_copy` renders a copyable command rather than an error; an uncertain outcome says so and is never retried.
+
+#### M20 execution agreement
 - 2026-09-19 the person does **all** browser and manual acceptance; agents do all programming and programmatic tests (spec §13). The leap runs in one shot with no mid-leap stop, and nothing is released until the person has tested the sandbox and authorized it.
 
 ### D-307 · 2026-09-19 · A workspace has a shape, and the harness adapts to it
@@ -5734,3 +5766,47 @@ Why: the spike measured `@pierre/diffs` at +449 KB on the main chunk, and no
 weight that only a file reader needs may sit in the startup bundle.
 Consequences: the worker pool stays off and the worker URL is never statically
 referenced — the spike measured that tripling the main chunk.
+
+### D-321 · 2026-09-19 · Restore returns files, and says staging is not restored
+Decision: undo-this-turn restores the working tree from the checkpoint and
+leaves the index alone, and its confirmation says so in one sentence.
+Why: a checkpoint is one `add -A` tree, which cannot record the person's
+staged/unstaged split; `git restore --staged` from it would make everything
+that differs from HEAD look staged — fabricating a state the person never had.
+Consequences: §7 E.4's "files and staging state" is honoured as far as a single
+tree allows, and the gap is visible rather than silently wrong. A future
+capture that stores the index separately can supersede this.
+
+### D-322 · 2026-09-19 · Restore is `work_control`, not `session_write`
+Decision: `pi/project/restore` carries the `work_control` scope.
+Why: with `restore: "files"` it never touches the conversation; it rewrites the
+working tree and can delete uncommitted work. The table's precedent for
+destroying a checkout is `agents/worktree/remove`, which is `work_control`.
+Consequences: an environment that grants read and `session_write` to a phone no
+longer grants the power to delete the person's uncommitted work.
+
+### D-323 · 2026-09-19 · A command row shows no pid
+Decision: the fleet's developer strip for a background command is
+`command · bytes · clock`, with no process id, superseding that detail of the
+leap spec §3 A.1.
+Why: the host strips pids deliberately (RP-1/RP-6) — no client, relay listener
+or audit ever sees one — so the drawing asked for something the architecture
+forbids. Consequences: the spec's drawing is wrong on this point and this
+decision is the record; nothing in the UI may reintroduce it.
+
+### D-324 · 2026-09-19 · No token count or output sparkline per agent run
+Decision: the fleet's agent strip shows agent, model, turns and the worktree
+chip; it does not show a token total or an output sparkline.
+Why: `AgentRun.activity` carries turns and tools only, and no output time
+series exists anywhere. Drawing either would be invented progress.
+Consequences: when a run record carries real token totals, the strip gains
+them; until then the row says only what is true.
+
+### D-325 · 2026-09-19 · The source-control leap is M20, not a second M18
+Decision: the leap's milestone and task IDs are `M20` / `M20-T0…T6`.
+Why: it was first written as `M18`, which already belongs to "Resource
+containment and instant conversations" — two milestones sharing an ID makes
+`grep -n "M18-T5"` ambiguous and breaks the query recipes in `AGENTS.md` §2.
+Consequences: commits and reports written during the leap name `M18-T*`; that
+history stands, and this mapping is the record. The original M18's rows and
+notes are untouched.

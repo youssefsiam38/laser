@@ -850,7 +850,7 @@ Dependencies: M18 is done. These tasks strengthen runtime activation and migrati
 | M19-T4 | The desktop preflight accepts its own install | Runtime verification reads raw bytes under Electron (`app.asar` is a file, not Electron's virtual directory); the packaged clean-machine gate runs the shipped launch preflight inside the packaged Electron and fails the release when it refuses the install; 0.7.1 ships the fix (D-273). |
 | M19-T5 | Every conversation opens, MCP stays quiet, removed projects leave | A turn or goal history too large for one page is paged, never refused; a whole-range reload too large to send opens at the latest page; an unreadable MCP authorization record retries and never reads as a revocation; archived or cached views never keep a removed project in the rail; 0.7.2 ships them (D-274). |
 
-## M18 · The source-control leap
+## M20 · The source-control leap
 
 Goal: a developer can see exactly what a session changed, read it properly, undo
 it, and commit it — in any workspace shape we support. The binding specification
@@ -860,10 +860,10 @@ M17-T8 and M17-T16, which stay in their milestone marked absorbed.
 
 | Task | Title | Acceptance |
 | --- | --- | --- |
-| M18-T0 | Diff-renderer spike | Done: `@pierre/diffs` adopted with five mitigations (`docs/source-control-spike-evidence.md`, spec §8.3a, D-313, D-317) |
-| M18-T1 | Workspace shapes and the harness | Spec §6 and §10 L1. `workspaceShape` resolves repo, monorepo, workspace-of-repos, nested repo and no-git; `start_agent` never fails over shape and reports which way it went; `worktree: "strict"` keeps D-156's refusal; per-project isolation setting |
-| M18-T2 | Checkpoints, scopes, restore | Spec §7 and §10 L2. Hidden refs through an isolated index; the person's index, tree, branches and reflog untouched; five scopes; undo-this-turn; retention default 200 turns, configurable, following session deletion |
-| M18-T3 | Telemetry query | Spec §5 and §10 L3. `pi/session/telemetry` computed by the authority over the whole session, incrementally, fenced; every client-side aggregation deleted |
-| M18-T4 | The fleet and telemetry columns | Spec §3, §4 and §10 L4. Rows that say what is happening; kind as a shape; Cost/Tokens tabs; at 320px in both themes |
-| M18-T5 | The overlay | Spec §8 and §10 L5, including the five mitigations in §8.3a |
-| M18-T6 | Git actions | Spec §9 and §10 L6. Commit, push, branch, PR create/read/checkout/merge for GitHub and Bitbucket through installed CLIs; prose from the session's model |
+| M20-T0 | Diff-renderer spike | Done: `@pierre/diffs` adopted with five mitigations (`docs/source-control-spike-evidence.md`, spec §8.3a, D-313, D-317) |
+| M20-T1 | Workspace shapes and the harness | Spec §6 and §10 L1. `workspaceShape` resolves repo, monorepo, workspace-of-repos, nested repo and no-git; `start_agent` never fails over shape and reports which way it went; `worktree: "strict"` keeps D-156's refusal; per-project isolation setting |
+| M20-T2 | Checkpoints, scopes, restore | Spec §7 and §10 L2. Hidden refs through an isolated index; the person's index, tree, branches and reflog untouched; five scopes; undo-this-turn; retention default 200 turns, configurable, following session deletion |
+| M20-T3 | Telemetry query | Spec §5 and §10 L3. `pi/session/telemetry` computed by the authority over the whole session, incrementally, fenced; every client-side aggregation deleted |
+| M20-T4 | The fleet and telemetry columns | Spec §3, §4 and §10 L4. Rows that say what is happening; kind as a shape; Cost/Tokens tabs; at 320px in both themes |
+| M20-T5 | The overlay | Spec §8 and §10 L5, including the five mitigations in §8.3a |
+| M20-T6 | Git actions | Spec §9 and §10 L6. Commit, push, branch, PR create/read/checkout/merge for GitHub and Bitbucket through installed CLIs; prose from the session's model |
