@@ -533,7 +533,10 @@ describe("WorkerServer · the tray on the wire", () => {
     driver.completion = new Promise<void>((resolve) => (release = resolve));
     driver.streaming = false;
     driver.emit({ type: "update", update: { kind: "agent_settled" } });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    const started = Date.now();
+    while (!driver.streaming && Date.now() - started < 2000) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
 
     expect(driver.streaming).toBe(true);
     expect(driver.prompted).toEqual(["delivered off screen"]);

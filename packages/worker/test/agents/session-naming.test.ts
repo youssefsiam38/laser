@@ -85,6 +85,14 @@ function namedSnapshot() {
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+async function until(cond: () => boolean): Promise<void> {
+  const start = Date.now();
+  while (!cond()) {
+    if (Date.now() - start > 2000) return;
+    await tick();
+  }
+}
+
 function harness(runtime: NamerModelRuntime) {
   const out: JsonRpcMessage[] = [];
   const drivers: LongTurnDriver[] = [];
@@ -127,8 +135,8 @@ describe("naming a session at the start of its first turn", () => {
     await h.call(1, "agents/sync", { snapshot: namedSnapshot() });
     const path = await h.open(2);
     h.prompt(3, path, "please fix the login form");
-    await tick();
     const driver = h.drivers[0]!;
+    await until(() => driver.prompted.length > 0);
     // The turn has not ended — the driver is still inside `prompt()` — and
     // the name is already there.
     expect(driver.prompted).toEqual([{ text: "please fix the login form" }]);
@@ -170,7 +178,7 @@ describe("naming a session at the start of its first turn", () => {
     expect(driver.state().name).toBeUndefined();
     // Queued on request: that goes in, so it names.
     h.prompt(4, path, "and then run the tests", "followUp");
-    await tick();
+    await until(() => driver.prompted.length > 0);
     expect(driver.prompted.at(-1)).toEqual({ text: "and then run the tests", streamingBehavior: "followUp" });
     expect(driver.state().name).toBe("Second thoughts");
   });

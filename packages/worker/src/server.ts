@@ -1978,6 +1978,9 @@ export class WorkerServer {
       // Capture "since the session started" for the git line. Fire and forget:
       // a failure here means the line shows nothing, never that the open fails.
       void this.git().baseline(state.path);
+      // Open-time checkpoint: do not await — session/new must stay fast.
+      // The first prompt waits on awaitBaseline so the snapshot cannot land
+      // after that turn has already written files.
       void this.sourceControl().captureBaseline(state.path, state.cwd).catch(() => {});
       return live;
     } catch (error) {
@@ -2543,6 +2546,9 @@ export class WorkerServer {
     const text = textOf(content);
     const idle = !live.driver.state().isStreaming;
     if ((idle || streamingBehavior) && !live.driver.state().name && text.trim() !== "") void this.nameSession(live, text);
+    // Steer/follow-up are not the open-time turn: waiting here would hold the
+    // first-turn lock across a still-running baseline and miss close/fence races.
+    if (!streamingBehavior && idle) await this.sourceControl().awaitBaseline(live.path);
     return this.harness.promptUser(live.path, content, {
       ...(streamingBehavior ? { streamingBehavior } : {}),
       ...(onAccepted ? { onAccepted } : {}),

@@ -23,6 +23,7 @@ import {
   writeCheckpointRetention,
 } from "../src/source-control/index.js";
 import type { SourceControlDeps } from "../src/source-control/index.js";
+import { runGit } from "../src/source-control/git-run.js";
 
 const haveGit = (() => {
   try {
@@ -90,6 +91,24 @@ function service(cwd: string, extra: Partial<SourceControlDeps> = {}): SourceCon
     agentRun: () => undefined,
     ...extra,
   });
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+function slowAddRunner(gate: { started: { resolve: () => void }; release: { promise: Promise<void> } }): SourceControlDeps["runGit"] {
+  return async (options) => {
+    if (options.args.includes("add") && options.args.includes("-A")) {
+      gate.started.resolve();
+      await gate.release.promise;
+    }
+    return runGit(options);
+  };
 }
 
 const SESSION = "/sessions/demo.jsonl";
@@ -586,5 +605,74 @@ describe.skipIf(!haveGit)("agent scope §8.5", () => {
     const gone = await goneCtl.changes({ cwd: parent, path: SESSION, scope: "agent", runId: removed.runId });
     expect(gone.agent).toEqual({ runId: removed.runId, worktreeRemoved: true, branchGone: true });
     expect(gone.repos).toEqual([]);
+  });
+});
+
+describe.skipIf(!haveGit)("baseline race", () => {
+  it("does not put the first turn's new file in the open-time baseline", async () => {
+    const dir = temp("baseline-race");
+    initRepo(dir, { "src/index.ts": "export {}\n" });
+    const started = deferred();
+    const release = deferred();
+    const ctl = service(dir, { runGit: slowAddRunner({ started, release }) });
+
+    void ctl.captureBaseline(SESSION, dir);
+    await started.promise;
+
+    const firstTurn = (async () => {
+      await ctl.awaitBaseline(SESSION);
+      writeFileSync(join(dir, "src/feature.ts"), "export const feature = 1;\n");
+      writeFileSync(join(dir, "src/index.ts"), "export { feature } from \"./feature.ts\";\n");
+      await ctl.captureAfterTurn(SESSION, dir);
+    })();
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(existsSync(join(dir, "src/feature.ts"))).toBe(false);
+
+    release.resolve();
+    await firstTurn;
+
+    const listed = await ctl.list(SESSION, dir);
+    const baseline = listed.checkpoints.find((row) => row.turn === 0);
+    expect(baseline?.failed).toBeFalsy();
+    const tree = git(dir, ["ls-tree", "-r", "--name-only", baseline!.ref]);
+    expect(tree).not.toMatch(/src\/feature\.ts/);
+    expect(tree).toMatch(/src\/index\.ts/);
+
+    const turn = await ctl.changes({ cwd: dir, path: SESSION, scope: "turn", turn: 1 });
+    expect(turn.pruned).toBeUndefined();
+    expect(turn.repos[0]!.files.some((file) => file.path === "src/feature.ts" && file.status === "added")).toBe(true);
+  });
+
+  it("does not recapture a timed-out baseline as the first turn's tree", async () => {
+    const dir = temp("baseline-timeout");
+    initRepo(dir, { "src/index.ts": "export {}\n" });
+    const started = deferred();
+    const release = deferred();
+    const ctl = service(dir, { runGit: slowAddRunner({ started, release }) });
+
+    void ctl.captureBaseline(SESSION, dir);
+    await started.promise;
+    await ctl.awaitBaseline(SESSION, 50);
+    expect((await ctl.list(SESSION, dir)).lastError).toMatch(/too long/i);
+    writeFileSync(join(dir, "src/feature.ts"), "export const feature = 1;\n");
+    const after = ctl.captureAfterTurn(SESSION, dir);
+    release.resolve();
+    await after;
+    await ctl.captureBaseline(SESSION, dir);
+
+    const listed = await ctl.list(SESSION, dir);
+    const baseline = listed.checkpoints.find((row) => row.turn === 0);
+    expect(baseline?.failed).toBe(true);
+    if (baseline) {
+      const tree = git(dir, ["ls-tree", "-r", "--name-only", baseline.ref]);
+      expect(tree).not.toMatch(/src\/feature\.ts/);
+    }
+
+    const session = await ctl.changes({ cwd: dir, path: SESSION, scope: "session" });
+    expect(session.pruned?.detail).toMatch(/no longer starts at the beginning|No checkpoints are kept/i);
+    const turn = await ctl.changes({ cwd: dir, path: SESSION, scope: "turn", turn: 1 });
+    expect(turn.pruned?.detail).toMatch(/no longer kept|not captured/i);
+    expect(turn.repos).toEqual([]);
   });
 });
