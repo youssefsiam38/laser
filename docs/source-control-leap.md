@@ -40,7 +40,7 @@ source as `docs/transcript-parity.md` and D-305.
 | 6 | **All git actions** are in scope: commit, push, branch, pull request create / review / merge. |
 | 7 | Hosts: **GitHub and Bitbucket**, through the **CLI already installed and signed in** on the machine, autodiscovered per repository. |
 | 8 | A multi-repository workspace shows **one merged list, grouped by repository**. |
-| 9 | **Tracked changes only.** Untracked and ignored files are not shown. |
+| 9 | A **new file the session created is shown** (git calls it untracked; a person calls it new work). **Ignored files are never shown or captured.** A file that was already untracked before the session and was not touched is not shown. |
 | 10 | Commit messages, PR titles and descriptions are written by **the session's current model**, never the Namer. |
 | 11 | Git actions live in the **overlay's toolbar only** this leap. |
 | 12 | A fleet row **opens its agent's changes** in the same overlay (in scope, §10 L5). |
@@ -302,7 +302,9 @@ to, the worker captures a checkpoint:
 - stored at `refs/laser/checkpoints/<sessionId>/<turnCount>`;
 - **invisible** to `git log`, `git status`, branches and the reflog of the
   person's own work; nothing is staged, stashed, reset or cleaned, ever;
-- tracked files only (settled decision 9);
+- everything git would commit: tracked files **and** untracked files that are
+  not ignored, so a file the agent creates is in the checkpoint from the turn
+  it appears (§7.5);
 - captured for `worktreePath ?? projectRoot`, so a child agent's worktree
   checkpoints itself.
 
@@ -313,6 +315,29 @@ says so rather than showing a wrong range. Settings offers, per project:
 deletes its checkpoint refs — stated in the delete dialog, not asked as a
 second question. Refs are packed so thousands do not slow `for-each-ref`, and
 turning retention off removes that session's existing refs too.
+
+### E.5 What counts as a change
+
+Three kinds of file, three different answers, because "untracked" is a git word
+and not what a person means:
+
+| The file | Shown? | Why |
+| --- | --- | --- |
+| **Tracked and modified** | Yes | The obvious case |
+| **New, not ignored** — the agent wrote `packages/ui/src/foo.ts` that did not exist | **Yes, as added** | This is the single most common thing an agent does. A change list that hides new files is useless |
+| **Deleted** | Yes | Comes free from comparing checkpoints |
+| **Ignored** (`.gitignore`: `node_modules`, `dist`, `.env`) | **Never** — not shown, not captured, not stored | It is not the person's work, it would dwarf everything else, and a checkpoint must never hold a secret the repository deliberately excludes |
+| **Already untracked before the session, untouched** | No | It was in the first checkpoint too, so it produces no diff. Stray notes and scratch files stay out of the way without a rule |
+
+The mechanism gives this for free in the checkpoint scopes: a checkpoint holds
+what git would commit, so a file that appears between two checkpoints is an
+addition and a file that vanishes is a deletion. The **Uncommitted** scope needs
+one extra step, because `git diff` alone never mentions untracked files: it
+reads `git status --porcelain` as well and renders a new, unignored file as an
+addition with its bytes from disk.
+
+Checkpoints stay on the machine. They are never pushed, and no git action in
+§9 can push a ref under `refs/laser/`.
 
 ### E.2 Scopes
 
@@ -566,7 +591,8 @@ a parent-built sandbox before any release (the working agreement since 0.9.2).
 - Cloning and publishing repositories.
 - Linked pull requests, stacks, auto-merge, auto-settle.
 - GitLab, Gitea, Forgejo, Azure DevOps.
-- Untracked and ignored files; submodules; bare repositories.
+- Ignored files (never captured, never shown — §7.5); submodules; bare
+  repositories.
 - Any Pi-side change: this leap touches the worker, host, protocol and UI only,
   and imports no engine API beyond what the worker already uses.
 
