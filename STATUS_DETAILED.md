@@ -5606,3 +5606,22 @@ explicitly while images reserve their box.
 Consequences: pinned by a named test in `packages/ui/test/thread/transcript-position.test.tsx`
 and recorded in `docs/transcript-virtualization.md`. A finer anchor cannot be
 expressed: a ResizeObserver reports a box, not where inside it grew.
+
+## M18 · The source-control leap
+
+| ID | Task | State | Owner | Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| M18-T0 | Diff-renderer spike | done | worker `01a0ba58-67b7-77ed-9b32-394e67141bdd` | `docs/source-control-spike-evidence.md`; adopt with five mitigations | see notes |
+| M18-T1 | Workspace shapes and the harness | todo | — | — | spec §6 |
+| M18-T2 | Checkpoints, scopes, restore | todo | — | — | spec §7 |
+| M18-T3 | Telemetry query | todo | — | — | spec §5 |
+| M18-T4 | The fleet and telemetry columns | todo | — | — | spec §3, §4 |
+| M18-T5 | The overlay | todo | — | — | spec §8 |
+| M18-T6 | Git actions | todo | — | — | spec §9 |
+
+#### M18-T0 notes
+- 2026-09-19 spike ran against the real library in `/tmp/pierre-spike`, nothing committed to the checkout. Theming from `var(--syntax-*)` recolours with zero shadow mutations; find paints across 9 open shadow roots (17 matches); copy is clean source. Partial: +449 KB main chunk, empty bodies for binary/mode-only/pure-rename, no auto-unify at 320px, expand-all is 20 000 nodes, worker pool needs an explicit `workerFactory`.
+- 2026-09-19 D-313 confirmed, D-317 added (the overlay loads lazily). The five mitigations are acceptance criteria on M18-T5.
+
+#### M18 execution agreement
+- 2026-09-19 the person does **all** browser and manual acceptance; agents do all programming and programmatic tests (spec §13). The leap runs in one shot with no mid-leap stop, and nothing is released until the person has tested the sandbox and authorized it.
