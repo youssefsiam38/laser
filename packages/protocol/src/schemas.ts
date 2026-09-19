@@ -37,6 +37,7 @@ import { TASK_COMMAND_MAX, TASK_LINE_MAX, TASK_LOG_SEGMENTS_MAX } from "./tasks.
 import { ENVIRONMENT_KEY_PATTERN, SESSION_REVISION_PATTERN } from "./session-revision.js";
 import { BODY_COMPONENT_KINDS, BODY_REGION_MAX_ITEMS, ENTRY_RANGE_MAX_BYTES } from "./body-range.js";
 import { HISTORY_PAGE_BYTE_LIMIT, HISTORY_PAGE_TURN_MAX } from "./history-window.js";
+import { TELEMETRY_SECTIONS } from "./telemetry.js";
 
 /** Opt-in browse replies must not silently reinterpret legacy folders as files. */
 export const explorerListingSchema = z.object({
@@ -767,6 +768,18 @@ export const clientParamsSchemas = {
   }).strict().superRefine((value, context) => {
     if (value.window && ("before" in value.window || "beforeEntry" in value.window) && value.baseRevision === undefined) {
       context.addIssue({ code: "custom", path: ["baseRevision"], message: "Older history pages require the revision already held by the caller." });
+    }
+  }),
+  "pi/session/telemetry": z.object({
+    path: sessionPath,
+    scope: z.enum(["session", "turn"]).optional(),
+    turnId: z.string().min(1).max(256).optional(),
+    include: z.array(z.enum(TELEMETRY_SECTIONS)).max(TELEMETRY_SECTIONS.length).optional(),
+    environmentKey: z.string().min(1).max(256).optional(),
+    revision: z.string().min(1).max(1024).optional(),
+  }).strict().superRefine((value, context) => {
+    if (value.scope === "turn" && value.turnId === undefined) {
+      context.addIssue({ code: "custom", path: ["turnId"], message: "A turn-scoped telemetry read names the turn." });
     }
   }),
   // RP-5b: one body of one entry, bound to the revision the caller read it at.

@@ -18,6 +18,7 @@ const EXPECTED_METHOD_CAPABILITIES = {
   "pi/session/list": [],
   "pi/session/inbox": [],
   "pi/session/entries": ["snapshots"],
+  "pi/session/telemetry": ["snapshots"],
   "pi/session/seen": [],
   "pi/session/detach": [],
   "pi/model/list": [],

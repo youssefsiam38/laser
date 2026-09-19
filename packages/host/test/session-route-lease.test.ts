@@ -26,6 +26,7 @@ import { SessionIndexCache } from "../src/session-index.js";
 import { SessionRevisions } from "../src/session-revision.js";
 import { SessionBodyRange } from "../src/session-body-range.js";
 import { SessionProjection } from "../src/session-projection.js";
+import { SessionTelemetryReader } from "../src/session-telemetry.js";
 import type { WorkerPool } from "../src/worker-pool.js";
 import { LOCAL_ACCESS, testAccess } from "./actors.js";
 
@@ -742,11 +743,12 @@ function liveHarness() {
   const revisions = new SessionRevisions({ index, environmentId: ENVIRONMENT });
   const bodyRange = new SessionBodyRange({ index, revisions });
   const projection = new SessionProjection({ index, revisions });
+  const telemetry = new SessionTelemetryReader({ index, revisions });
   const attention = new AttentionTracker({});
   const projects = new ProjectRegistry({ catalog, agentDir: dir });
   projects.add(CWD);
   const router = new Router(pool, catalog, {
-    attention, projects, views: new ViewCache(2), access: testAccess(), revisions, projection, bodyRange, routeLeases: leases,
+    attention, projects, views: new ViewCache(2), access: testAccess(), revisions, projection, bodyRange, telemetry, routeLeases: leases,
   });
   const call = (method: string, params: unknown) =>
     router.handle({ jsonrpc: "2.0", id: 3, method, params }, LOCAL_ACCESS) as Promise<{ result?: unknown; error?: { code: number; message: string } }>;
@@ -772,6 +774,7 @@ describe("live fast paths under the lease", () => {
     { method: "session/entry_range", params: (revision: string, environmentKey: string) => ({ environmentKey, revision, entryId: "e1", component: { kind: "assistant_text" }, offset: 0 }) },
     { method: "session/entry_regions", params: (revision: string, environmentKey: string) => ({ environmentKey, revision, entryId: "e1", component: { kind: "assistant_text" } }) },
     { method: "pi/session/entries", params: () => ({ authority: "any" }) },
+    { method: "pi/session/telemetry", params: () => ({}) },
   ] as const;
 
   for (const branch of branches) {

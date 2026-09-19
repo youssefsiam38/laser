@@ -52,7 +52,7 @@ const unavailable = (presentation: CapabilityPresentation, explanation: string):
 export function methodCapabilities(method: ClientMethod): readonly EnvironmentCapability[] {
   if (method === "session/revision") return ["revisions"];
   if (method === "session/search" || method === "session/search/cancel") return ["search"];
-  if (method === "pi/session/entries" || method === "session/entry_range" || method === "session/entry_regions") return ["snapshots"];
+  if (method === "pi/session/entries" || method === "pi/session/telemetry" || method === "session/entry_range" || method === "session/entry_regions") return ["snapshots"];
   if (method.startsWith("pi/logs/")) return ["logs"];
   if (method.startsWith("resource/")) return ["diagnostics"];
   if (method.startsWith("pi/push/")) return ["push"];

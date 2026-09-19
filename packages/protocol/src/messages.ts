@@ -21,6 +21,7 @@ import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js
 // cycle exists in the type graph and never in the emitted modules.
 import type { PendingMessage } from "./pending.js";
 import type { BodyComponent, BodyRegion, ElidedEntry, EntryRegionsResult, ImagePartReference, PersistedBodyIdentity } from "./body-range.js";
+import type { SessionTelemetry, SessionTelemetryParams } from "./telemetry.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
 
@@ -469,6 +470,12 @@ export interface SessionUpdateParams {
   seq: number;
   update: SessionUpdate;
   at: string;
+  /**
+   * Whole-session telemetry at this seq, when the update changed numbers.
+   * Numbers only; the panel never polls. Absent on deltas that do not fold
+   * (text, thinking, tool-call streaming).
+   */
+  telemetry?: SessionTelemetry;
 }
 
 // ---------- Extension UI (host → client requests; mirrors Pi RPC extension_ui_request) ----------
@@ -1459,6 +1466,15 @@ export interface ClientRequests {
     };
     result: { entries: unknown[]; leafId?: string | null; window?: HistoryWindow };
   };
+  /**
+   * Whole-session telemetry (L3). Numbers only: no entries, no bodies, no
+   * text. The worker answers when the session is live; the host answers from
+   * the stored conversation otherwise. Both use the same fold, fenced by
+   * revision. A section omitted from `include` is absent, not empty.
+   *
+   * The changed-file summary is not this method — it comes from git (Part E).
+   */
+  "pi/session/telemetry": { params: SessionTelemetryParams; result: SessionTelemetry };
   "pi/session/compact": { params: { path: string; instructions?: string }; result: {} };
   "pi/model/list": { params: { path: string }; result: { models: ModelRef[] } };
   "pi/model/set": { params: { path: string; model: ModelRef }; result: { state: SessionState } };

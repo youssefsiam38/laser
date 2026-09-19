@@ -339,6 +339,16 @@ function handle(world: World, client: FakeWorkerClient, method: string, params: 
       const live = world.live[params.path as string];
       return { entries: live?.entries ?? [], leafId: live?.leafId ?? null };
     }
+    case "pi/session/telemetry":
+      return {
+        revision: "r1.test",
+        environmentKey: "e1.test",
+        authority: "live",
+        scope: "session",
+        spend: { billing: "none" },
+        history: { prompts: 0, records: 0, compactions: 0, branches: 0 },
+        work: { turns: 0, durationMs: 0, tools: { total: 0, ranked: [], other: 0, failed: [] } },
+      };
     /**
      * `AgentSession.navigateTree`, to the letter: a user message puts the leaf
      * on that entry's PARENT and hands its text back for the editor, so what is
