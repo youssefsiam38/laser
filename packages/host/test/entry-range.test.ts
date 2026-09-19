@@ -314,3 +314,73 @@ describe("a tool's output, read from the stored conversation (D-275)", () => {
     } finally { file.cleanup(); }
   });
 });
+
+describe("a screenshot a page served as a reference (M16-T89)", () => {
+  // The bytes are never in a page, so the reference the page published is the
+  // only way back to them: what it says has to be what this reader answers.
+  const shot = (() => {
+    const bytes = Buffer.alloc(240_000, 0x7a);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes, 0);
+    bytes.writeUInt32BE(13, 8);
+    bytes.write("IHDR", 12, "ascii");
+    bytes.writeUInt32BE(1512, 16);
+    bytes.writeUInt32BE(982, 20);
+    return bytes.toString("base64");
+  })();
+  const result = { type: "message", id: "e2", parentId: "e1", timestamp: "2026-01-01T00:00:03.000Z", message: {
+    role: "toolResult", toolCallId: "c1", toolName: "screenshot",
+    content: [{ type: "text", text: "screenshot taken" }, { type: "image", mimeType: "image/png", data: shot }] } };
+
+  function shotFixture() {
+    const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-image-`));
+    const path = join(dir, "session.jsonl");
+    const call = { type: "message", id: "e1", parentId: "e0", timestamp: "2026-01-01T00:00:02.000Z", message: { role: "assistant",
+      content: [{ type: "toolCall", id: "c1", name: "screenshot", arguments: { selector: "body" } }], stopReason: "toolUse" } };
+    writeFileSync(path, [header, JSON.stringify(prompt), JSON.stringify(call), JSON.stringify(result)].join("\n") + "\n");
+    return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  }
+
+  it("answers the exact bytes and digest the reference named, mid-payload included", async () => {
+    const file = shotFixture();
+    try {
+      const { range, revisions, index } = services();
+      const { bodyRangeSlice, entryWithImageReferences } = await import("@lasercode/protocol");
+      const indexed = await index.read(file.path);
+      const revision = revisions.revisionOf(indexed.ok ? indexed.index : (undefined as never));
+      const component = { kind: "image", index: 0 } as const;
+      const read = (offset: number, limit: number) => range.read(file.path, params({ path: file.path,
+        environmentKey: revisions.environmentKey, revision, entryId: "e2", component, offset, limit }));
+
+      // What the page published for this picture.
+      const served = entryWithImageReferences(result, sha256Hex) as { message: { content: Array<{ ref?: { totalBytes: number; contentDigest: string; width?: number; height?: number } }> } };
+      const reference = served.message.content[1]!.ref!;
+      expect(reference).toEqual({ entryId: "e2", component, mimeType: "image/png",
+        totalBytes: utf8ByteLength(shot), contentDigest: sha256Hex(shot), width: 1512, height: 982 });
+
+      let offset = 0;
+      let out = "";
+      for (let step = 0; step < 200; step++) {
+        const answer = await read(offset, 4093);
+        expect(answer.kind).toBe("answer");
+        if (answer.kind !== "answer") return;
+        expect(answer.result.totalBytes).toBe(reference.totalBytes);
+        expect(answer.result.contentDigest).toBe(reference.contentDigest);
+        out += answer.result.text;
+        if (answer.result.next === undefined) break;
+        offset = answer.result.next;
+      }
+      expect(out).toBe(shot);
+
+      // A range that starts and ends mid-payload, from both authorities.
+      const middle = await read(100_000, 1_024);
+      const live = bodyRangeSlice(result, { entryId: "e2", component, offset: 100_000, limit: 1_024 }, revision, "live", sha256Hex);
+      if (middle.kind !== "answer" || !live.ok) throw new Error("expected a mid-payload range");
+      expect(middle.result.text).toBe(shot.slice(100_000, 101_024));
+      expect(middle.result.text).toBe(live.result.text);
+      expect(middle.result.sliceDigest).toBe(live.result.sliceDigest);
+      expect(middle.result.contentDigest).toBe(live.result.contentDigest);
+      expect(middle.result.next).toBe(101_024);
+      expect(middle.result.authority).toBe("durable");
+    } finally { file.cleanup(); }
+  });
+});

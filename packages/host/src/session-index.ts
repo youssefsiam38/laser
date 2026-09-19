@@ -7,7 +7,9 @@
  */
 import { closeSync, fstatSync, openSync, readSync, statSync, type Stats } from "node:fs";
 import {
+  IMAGE_REFERENCE_MAX_BYTES,
   RevisionFold,
+  entryImageParts,
   historyWindowNode,
   sessionRevisionOf,
   type RevisionHasher,
@@ -61,8 +63,18 @@ export interface IndexedEntry {
   /** Byte range of the JSON object only; the newline is never materialised. */
   offset: number;
   length: number;
-  /** Exact UTF-8 length after JSON parse/stringify, for authority-neutral wire bounds. */
-  serializedLength: number;
+  /**
+   * What this row costs on the wire **as a page serves it**, for
+   * authority-neutral wire bounds: its exact length after JSON
+   * parse/stringify, less the image payloads a page never sends, plus the
+   * declared ceiling of the references that replace them (M16-T89).
+   *
+   * Base64 needs no JSON escaping, so the subtraction is exact and the only
+   * approximation is the reference allowance, which is deliberately generous:
+   * this number is never smaller than what will actually be sent, and the exact
+   * materialized page check stays final regardless.
+   */
+  servedLength: number;
 }
 
 export interface SessionIndex {
@@ -539,6 +551,21 @@ function parseHeader(line: string): SessionRevisionHeader | undefined {
   };
 }
 
+/**
+ * The wire cost of one parsed row as a page serves it (M16-T89).
+ *
+ * Digest-free on purpose: a cold scan of a long conversation must not hash
+ * every screenshot in it to price the pages it has not been asked for yet.
+ */
+function servedLengthOf(parsed: unknown): number {
+  const serialized = Buffer.byteLength(JSON.stringify(parsed), "utf8");
+  const images = entryImageParts(parsed);
+  if (images.length === 0) return serialized;
+  let bytes = serialized + images.length * IMAGE_REFERENCE_MAX_BYTES;
+  for (const image of images) bytes -= image.totalBytes;
+  return Math.max(0, bytes);
+}
+
 function parseEntry(line: string, offset: number, length: number): { value: unknown; identity: IndexedEntry } | undefined {
   if (!line.trim()) return undefined;
   let parsed: unknown;
@@ -551,6 +578,6 @@ function parseEntry(line: string, offset: number, length: number): { value: unkn
   if (entry?.type === "session") return undefined;
   return {
     value: parsed,
-    identity: { ...historyWindowNode(parsed), offset, length, serializedLength: Buffer.byteLength(JSON.stringify(parsed), "utf8") },
+    identity: { ...historyWindowNode(parsed), offset, length, servedLength: servedLengthOf(parsed) },
   };
 }

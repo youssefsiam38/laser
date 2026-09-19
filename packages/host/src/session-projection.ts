@@ -88,9 +88,10 @@ export class SessionProjection {
         plan = fitHistoryWindowPlan(index.entries, index.leafId, request, scope, candidate => withinPlannedBounds(index.entries, candidate.entryIndices, candidate.contextIndices, bodyLimit));
       }
       // A single source row may itself exceed the page ceiling while its
-      // elided identity is small (most visibly an image at max bodyLimit).
-      // Materialize at most one such row as a bounded last resort; never use
-      // the optimistic elided estimate to admit a whole large candidate.
+      // elided identity is small (a very large body of prose or structure;
+      // never a picture any more, M16-T89). Materialize at most one such row as
+      // a bounded last resort; never use the optimistic elided estimate to
+      // admit a whole large candidate.
       if (!plan && !("all" in request) && !("from" in request)) {
         plan = fitHistoryWindowPlan(index.entries, index.leafId, request, scope,
           candidate => withinSingleElidedFallback(index.entries, candidate.entryIndices, candidate.contextIndices, bodyLimit));
@@ -119,6 +120,8 @@ export class SessionProjection {
       // A record too large for any page travels as identity even when the
       // caller asked for no body limit at all: a page is never refused
       // because one record is too large (M16-T88).
+      // Images become references here, for both authorities, in the one shared
+      // projection: a served page never carries a picture's bytes (M16-T89).
       const page = withElidedBodies({ entries: selected, leafId: plan.leafId, window: { ...plan.window, context: contextRows } satisfies HistoryWindow }, bodyLimit, sha256Hex);
       if (historyContentSerializedBytes(page.entries, page.window.context)
         + historyContentSerializedBytes(page.window.elided ?? [], []) > HISTORY_PAGE_BYTE_LIMIT) {
@@ -136,10 +139,14 @@ export class SessionProjection {
 const ELIDED_METADATA_PLANNING_BYTES = 16 * 1024;
 
 /**
- * Plan from exact source-wire bytes or a conservative elided ceiling. JSON can
+ * Plan from exact served-wire bytes or a conservative elided ceiling. JSON can
  * expand one UTF-8 body byte to six (`\\u0001`), so `bodyLimit` alone is never
  * a wire estimate. Metadata gets its own fixed allowance, and the exact
  * materialized two-array check remains final.
+ *
+ * `servedLength` already excludes the image payloads no page carries (M16-T89),
+ * so a row with a 2.4 MB screenshot in it is priced at what it will actually
+ * cost — which is what stopped such a page from being planned at all.
  */
 function withinPlannedBounds(
   entries: readonly IndexedEntry[],
@@ -150,7 +157,7 @@ function withinPlannedBounds(
   if (selected.length > HISTORY_PAGE_ENTRY_LIMIT) return false;
   let bytes = 4 + Math.max(0, selected.length - 1) + Math.max(0, context.length - 1);
   const cost = (index: number): number => {
-    const source = entries[index]!.serializedLength;
+    const source = entries[index]!.servedLength;
     if (source <= elisionThreshold(bodyLimit)) return source;
     const escaped = Math.min(Number.MAX_SAFE_INTEGER - ELIDED_METADATA_PLANNING_BYTES, (bodyLimit ?? 0) * 6);
     return Math.min(source, escaped + ELIDED_METADATA_PLANNING_BYTES);
@@ -163,7 +170,7 @@ function withinPlannedBounds(
 }
 
 /**
- * The size past which a stored row can only travel as identity: the caller's
+ * The size past which a served row can only travel as identity: the caller's
  * body ceiling when it asked for one, and in every case the record ceiling the
  * page itself imposes (`ELIDED_RECORD_MAX_BYTES`).
  */
@@ -180,12 +187,12 @@ function withinSingleElidedFallback(
 ): boolean {
   if (selected.length !== 1) return false;
   let bytes = 4;
-  for (const index of context) bytes += entries[index]!.serializedLength;
+  for (const index of context) bytes += entries[index]!.servedLength;
   if (bytes > HISTORY_PAGE_BYTE_LIMIT) return false;
   const row = entries[selected[0]!]!;
   // Only a row larger than the ceiling it will be elided against can possibly
   // become smaller. The exact materialized check remains final.
-  return row.serializedLength > elisionThreshold(bodyLimit);
+  return row.servedLength > elisionThreshold(bodyLimit);
 }
 
 type Materialized =

@@ -114,6 +114,44 @@ describe("a body read from the owning worker", () => {
     }]);
   });
 
+  it("serves a screenshot in a live page as a reference, and still reads its bytes at that revision (M16-T89)", () => {
+    const shot = (() => {
+      const bytes = Buffer.alloc(2_405_990, 0x7a);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes, 0);
+      bytes.writeUInt32BE(13, 8);
+      bytes.write("IHDR", 12, "ascii");
+      bytes.writeUInt32BE(2560, 16);
+      bytes.writeUInt32BE(1440, 20);
+      return bytes.toString("base64");
+    })();
+    const call = { type: "message", id: "e1", parentId: "e0", timestamp: "2026-01-01T00:00:01.000Z", message: { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "screenshot", arguments: {} }] } };
+    const shotResult = { type: "message", id: "e2", parentId: "e1", timestamp: "2026-01-01T00:00:02.000Z", message: {
+      role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "screenshot taken" }, { type: "image", mimeType: "image/png", data: shot }] } };
+    const entries = [prompt, call, shotResult];
+    const tracker = new SessionRevisionTracker(ENVIRONMENT);
+    const { revision, environmentKey } = tracker.compute(header, entries, "e2");
+    const scope = { sessionId: "session-1", epoch: "w1", seq: 4, revision, environmentKey, authority: "live" as const, selection: { kind: "replace" as const } };
+    // No body limit at all, and the page is still served whole: a picture never
+    // travels inside one, so no page can be too large because of a screenshot.
+    const page = boundedHistoryWindow({ entries, leafId: "e2" }, { tail: 40 }, scope, { digest: sha256Hex });
+    expect(page).toBeDefined();
+    expect(page!.entries).toHaveLength(3);
+    expect(page!.window.elided).toBeUndefined();
+    const part = (page!.entries[2] as { message: { content: Array<{ data?: string; ref?: unknown }> } }).message.content[1]!;
+    expect(part.data).toBe("");
+    expect(part.ref).toEqual({
+      entryId: "e2", component: { kind: "image", index: 0 }, mimeType: "image/png",
+      totalBytes: utf8ByteLength(shot), contentDigest: sha256Hex(shot), width: 2560, height: 1440,
+    });
+    // The reference is what this worker answers a range request with.
+    const slice = bodyRangeSlice(shotResult, { entryId: "e2", component: { kind: "image", index: 0 }, offset: 1_000_000, limit: 2_048 }, revision, "live", sha256Hex);
+    expect(slice.ok).toBe(true);
+    if (!slice.ok) return;
+    expect(slice.result.totalBytes).toBe(utf8ByteLength(shot));
+    expect(slice.result.contentDigest).toBe(sha256Hex(shot));
+    expect(slice.result.text).toBe(shot.slice(1_000_000, 1_002_048));
+  });
+
   it("has nothing to address while a turn is still being written", () => {
     // A live message carries no entry id until it is persisted; the reference
     // the transcript holds says `live`, and the transcript says so in words.
