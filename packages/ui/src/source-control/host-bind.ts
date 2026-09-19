@@ -6,6 +6,7 @@ import type { AppState } from "@/store";
 import { getChangesAdapterSource, resetChangesAdapter, setChangesAdapter } from "./data.js";
 import { createHostChangesAdapter, resolveChangesSession } from "./host-adapter.js";
 import { peekChangesUi, useChangesUi } from "./store.js";
+import { bindWorkspaceShapeRequest } from "./workspace-shape.js";
 
 /** Register the protocol adapter for as long as the overlay host is mounted. */
 export function useBindHostChangesAdapter(): void {
@@ -16,6 +17,7 @@ export function useBindHostChangesAdapter(): void {
   live.current = { app, sessionKey };
 
   useEffect(() => {
+    bindWorkspaceShapeRequest((params) => client.request("pi/project/workspace", params));
     setChangesAdapter(
       createHostChangesAdapter({
         request: (method, params) => client.request(method, params),

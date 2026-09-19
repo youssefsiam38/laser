@@ -23,6 +23,7 @@ import type {
 } from "./contract.js";
 import type { ChangesDataAdapter } from "./data.js";
 import { CHANGES_NEED_SESSION } from "./errors.js";
+import { bindWorkspaceShapeRequest, readWorkspaceShape } from "./workspace-shape.js";
 
 export type ChangesHostRequest = <M extends ClientMethod>(
   method: M,
@@ -181,6 +182,11 @@ export function createHostChangesAdapter(opts: {
       };
       const slice = await opts.request("pi/project/file_diff", params);
       return mapFileSlice(slice);
+    },
+    async getWorkspace(options) {
+      const session = needSession();
+      bindWorkspaceShapeRequest((params) => opts.request("pi/project/workspace", params));
+      return readWorkspaceShape(session.cwd, options);
     },
     async getFileSource(scope, repo, path, side) {
       const session = withAgentWorkdir(needSession(), scope, opts.agentRun);

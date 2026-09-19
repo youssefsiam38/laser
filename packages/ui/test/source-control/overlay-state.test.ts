@@ -16,6 +16,9 @@ const base = {
   listLoading: false,
   listError: null as string | null,
   hasContent: true,
+  filtered: false,
+  shapeLoading: false,
+  emptyKind: "empty" as const,
   active: { repo: "app", path: "a.ts" } as const,
   repoError: undefined as { repo: string; message: string } | undefined,
   pageLoading: false,
@@ -31,6 +34,11 @@ it("walks designed states in priority order", () => {
   expect(changesBodyState({ ...base, listLoading: true }).kind).toBe("list-loading");
   expect(changesBodyState({ ...base, listError: "Could not read the changes." }).kind).toBe("list-error");
   expect(changesBodyState({ ...base, hasContent: false }).kind).toBe("empty");
+  expect(changesBodyState({ ...base, hasContent: false, shapeLoading: true }).kind).toBe("list-loading");
+  expect(changesBodyState({ ...base, hasContent: false, emptyKind: "no-git" }).kind).toBe("no-git");
+  expect(changesBodyState({ ...base, hasContent: false, emptyKind: "untouched" }).kind).toBe("untouched");
+  expect(changesBodyState({ ...base, hasContent: false, emptyKind: "unsupported" }).kind).toBe("unsupported");
+  expect(changesBodyState({ ...base, hasContent: false, filtered: true, emptyKind: "no-git" }).kind).toBe("empty");
   expect(changesBodyState({ ...base, active: undefined }).kind).toBe("pick");
   expect(changesBodyState({ ...base, repoError: { repo: "app", message: "locked" } }).kind).toBe("repo-error");
   expect(changesBodyState({ ...base, pageLoading: true }).kind).toBe("page-loading");

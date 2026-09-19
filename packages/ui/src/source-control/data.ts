@@ -17,6 +17,7 @@ import type {
   GitPrReadResult,
   GitPrViewedResult,
   GitPushResult,
+  WorkspaceShape,
 } from "@lasercode/protocol";
 
 import type {
@@ -32,6 +33,7 @@ export type ChangesDataAdapter = {
   listChanges(scope: ChangesScope): Promise<ChangesList>;
   getFileDiff(scope: ChangesScope, repo: string, path: string, options?: { offset?: number }): Promise<FileDiffPage>;
   getFileSource?(scope: ChangesScope, repo: string, path: string, ref: "old" | "new"): Promise<FileSource | null>;
+  getWorkspace?(options?: { rescan?: boolean }): Promise<WorkspaceShape>;
   getAgentContext?(runId: string): Promise<AgentChangesContext>;
   gitHosts?(repos?: string[]): Promise<GitHostsResult>;
   gitProse?(params: { kind: GitProseKind; files: string[]; repo?: string; summary?: string }): Promise<GitProseResult>;

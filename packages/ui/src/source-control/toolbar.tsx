@@ -15,17 +15,21 @@ import { Kbd } from "@/components/ui/kbd";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 
+import type { WorkspaceRepository } from "@lasercode/protocol";
+
 import { scopeLabel } from "./classify.js";
 import type { AgentChangesContext, ChangesScope, ChangesScopeKind, ChangedRepo } from "./contract.js";
 import { ChangesGitActions } from "./git-toolbar.js";
 import type { DiffStylePref } from "./prefs.js";
 import { AgentCheckoutLine } from "./states.js";
+import { shouldShowRepoFilter } from "./workspace-shape.js";
 
 const SCOPES: ChangesScopeKind[] = ["session", "turn", "uncommitted", "range", "agent"];
 
 export function ChangesToolbar({
   scope,
   repos,
+  workspaceRepos,
   repoFilter,
   totals,
   agent,
@@ -48,6 +52,7 @@ export function ChangesToolbar({
 }: {
   scope: ChangesScope;
   repos: readonly ChangedRepo[];
+  workspaceRepos?: readonly WorkspaceRepository[];
   repoFilter: string | null;
   totals: { added: number; removed: number };
   agent?: AgentChangesContext;
@@ -69,7 +74,10 @@ export function ChangesToolbar({
   activeRepo?: string;
 }) {
   const namedRepos = repos.filter((repo) => !repo.error);
-  const showRepos = namedRepos.length > 1;
+  const filterEntries = workspaceRepos
+    ? workspaceRepos.map((repo) => ({ value: repo.root, label: repo.name }))
+    : namedRepos.map((repo) => ({ value: repo.repo, label: repo.repo }));
+  const showRepos = shouldShowRepoFilter(filterEntries.length);
   const pickScope = (kind: string) => {
     if (kind === "session") onScope({ kind: "session" });
     else if (kind === "uncommitted") onScope({ kind: "uncommitted" });
@@ -111,7 +119,7 @@ export function ChangesToolbar({
         {showRepos ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="max-w-40 gap-1 [@media(pointer:coarse)]:min-h-11">
+              <Button variant="ghost" size="sm" data-slot="changes-repo-filter" className="max-w-40 gap-1 [@media(pointer:coarse)]:min-h-11">
                 <span className="typed min-w-0 truncate">{repoFilter ?? "All repositories"}</span>
                 <ChevronDown />
               </Button>
@@ -119,9 +127,9 @@ export function ChangesToolbar({
             <DropdownMenuContent align="start">
               <DropdownMenuRadioGroup value={repoFilter ?? ""} onValueChange={(value) => onRepoFilter(value || null)}>
                 <DropdownMenuRadioItem value="">All repositories</DropdownMenuRadioItem>
-                {namedRepos.map((repo) => (
-                  <DropdownMenuRadioItem key={repo.repo} value={repo.repo}>
-                    <span className="typed">{repo.repo}</span>
+                {filterEntries.map((repo) => (
+                  <DropdownMenuRadioItem key={repo.value} value={repo.value}>
+                    <span className="typed">{repo.label}</span>
                   </DropdownMenuRadioItem>
                 ))}
               </DropdownMenuRadioGroup>

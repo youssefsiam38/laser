@@ -1,14 +1,18 @@
+import { useState } from "react";
 import { FileCode2, RefreshCw } from "lucide-react";
 import type { ChangedFile, ProjectChanges, RepoChanges } from "@lasercode/protocol";
 
 import { DiffStat } from "@/components/assistant-ui/elements/code-diff";
 import { ControlHint } from "@/components/ui/hint";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
+import { useSessionMeta } from "@/runtime";
 import { openChanges } from "@/source-control/store.js";
+import { filesWorkspaceEmptyText, workspaceEmptyKind } from "@/source-control/workspace-shape.js";
 import { PATH_BUDGET, suffixTruncate } from "@/fleet/truncate.js";
 import { cn } from "@/lib/utils";
 
 import { count, fileTotals, filesErrorText, filesHeader, filesIdleText, repoLabel, type FilesStatus } from "./format.js";
+import { useWorkspaceShape } from "./queries.js";
 import { InstrumentCard, TelemetrySection } from "./section.js";
 
 export type { FilesStatus };
@@ -31,6 +35,16 @@ export function FilesSection({
   onRefresh?: (() => void) | undefined;
 }) {
   const totals = fileTotals(changes);
+  const meta = useSessionMeta();
+  const [shapeRefresh, setShapeRefresh] = useState(0);
+  const workspace = useWorkspaceShape(meta.session?.cwd, shapeRefresh);
+  const refresh = onRefresh
+    ? () => {
+        setShapeRefresh((n) => n + 1);
+        onRefresh();
+      }
+    : undefined;
+  const emptyKind = workspaceEmptyKind(workspace.shape);
   return (
     <TelemetrySection
       id="files"
@@ -40,13 +54,13 @@ export function FilesSection({
       open={open}
       onOpenChange={onOpenChange}
       action={
-        onRefresh && status !== "idle" ? (
+        refresh && status !== "idle" ? (
           <TooltipIconButton
             tooltip="Refresh files"
             size="icon-xs"
             className="text-ink-3"
             disabled={status === "loading"}
-            onClick={onRefresh}
+            onClick={refresh}
           >
             <RefreshCw />
           </TooltipIconButton>
@@ -68,7 +82,13 @@ export function FilesSection({
           {changes.pruned.detail}
         </p>
       ) : !changes || totals.files === 0 ? (
-        <p className="text-xs leading-4 text-ink-2">No changes in this workspace.</p>
+        workspace.status === "loading" ? (
+          <p className="text-xs leading-4 text-ink-3">Reading changes…</p>
+        ) : (
+          <p data-slot="telemetry-files-empty" data-kind={emptyKind} className="text-xs leading-4 text-ink-2">
+            {filesWorkspaceEmptyText(emptyKind)}
+          </p>
+        )
       ) : (
         <>
           <InstrumentCard className="mb-3">

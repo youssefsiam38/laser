@@ -12,6 +12,7 @@ import {
 } from "../../src/source-control/host-adapter.js";
 import { CHANGES_NEED_SESSION, CHANGES_UNAVAILABLE } from "../../src/source-control/errors.js";
 import { getChangesAdapter, resetChangesAdapter } from "../../src/source-control/data.js";
+import { resetWorkspaceShapeReader, workspaceShapeRequestCount } from "../../src/source-control/workspace-shape.js";
 
 it("maps a binary numstat file onto our binary status", () => {
   expect(mapChangedFile({ path: "logo.png", status: "modified", added: null, removed: null })).toMatchObject({
@@ -157,6 +158,36 @@ it("refuses when no adapter is registered, and the host adapter refuses without 
     session: () => null,
   });
   await expect(adapter.listChanges({ kind: "session" })).rejects.toThrow(CHANGES_NEED_SESSION);
+});
+
+it("reads workspace shape through the shared reader once per cwd", async () => {
+  resetWorkspaceShapeReader();
+  const calls: Array<{ method: string; params: unknown }> = [];
+  const adapter = createHostChangesAdapter({
+    request: (async (method, params) => {
+      calls.push({ method, params });
+      if (method === "pi/project/workspace") {
+        return {
+          cwd: "/p",
+          kind: "repo",
+          repositories: [
+            { root: "/p", name: "p", projectRoot: true, gitDir: "/p/.git", insideWorkTree: true },
+          ],
+          hasCommit: true,
+          truncated: false,
+        };
+      }
+      return {};
+    }) as never,
+    session: () => ({ cwd: "/p", path: "/s.jsonl" }),
+  });
+  const first = await adapter.getWorkspace?.();
+  const second = await adapter.getWorkspace?.();
+  expect(first?.kind).toBe("repo");
+  expect(second?.kind).toBe("repo");
+  expect(calls.map((call) => call.method)).toEqual(["pi/project/workspace"]);
+  expect(workspaceShapeRequestCount()).toBe(1);
+  resetWorkspaceShapeReader();
 });
 
 it("calls the protocol methods with the session context", async () => {

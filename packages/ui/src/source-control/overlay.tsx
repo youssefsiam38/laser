@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { WorkspaceShape } from "@lasercode/protocol";
 
 import { collectOpenShadowRoots } from "@/components/thread/find-ranges.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -38,6 +39,7 @@ import {
   RepoFailedState,
   TruncatedPatchState,
   UnifiedFallbackNotice,
+  WorkspaceEmptyState,
 } from "./states.js";
 import {
   addTab,
@@ -60,6 +62,7 @@ import {
   useChangesUi,
   type OpenFile,
 } from "./store.js";
+import { workspaceEmptyKind } from "./workspace-shape.js";
 import { GitActionDialog } from "./git-dialog.js";
 import { CHANGES_DIFF_PANEL_ID, ChangesTabStrip } from "./tabs.js";
 import { ChangesToolbar } from "./toolbar.js";
@@ -120,6 +123,8 @@ function ChangesOverlay() {
   const [pageLoading, setPageLoading] = useState(false);
   const [moreLoading, setMoreLoading] = useState(false);
   const [agent, setAgent] = useState<AgentChangesContext | undefined>();
+  const [shape, setShape] = useState<WorkspaceShape | undefined>();
+  const [shapeLoading, setShapeLoading] = useState(Boolean(adapter.getWorkspace));
   const [rangeFrom, setRangeFrom] = useState(ui.scope.kind === "range" ? ui.scope.from : "HEAD");
   const [rangeTo, setRangeTo] = useState(ui.scope.kind === "range" ? ui.scope.to : "");
   const turnId = ui.scope.kind === "turn" ? ui.scope.turnId : ui.request?.scope.kind === "turn" ? ui.request.scope.turnId : undefined;
@@ -171,6 +176,31 @@ function ChangesOverlay() {
       cancelled = true;
     };
   }, [adapter, ui.scope]);
+
+  useEffect(() => {
+    if (!adapter.getWorkspace) {
+      setShape(undefined);
+      setShapeLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setShapeLoading(true);
+    void adapter.getWorkspace().then(
+      (next) => {
+        if (cancelled) return;
+        setShape(next);
+        setShapeLoading(false);
+      },
+      () => {
+        if (cancelled) return;
+        setShape(undefined);
+        setShapeLoading(false);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [adapter, ui.sessionKey]);
 
   const visibleRepos = useMemo(() => {
     const repos = list?.repos ?? [];
@@ -263,6 +293,9 @@ function ChangesOverlay() {
     listLoading,
     listError,
     hasContent: visibleRepos.some((repo) => repo.files.length || repo.error),
+    filtered: Boolean(ui.repoFilter),
+    shapeLoading,
+    emptyKind: workspaceEmptyKind(shape),
     active,
     repoError: activeRepo?.error ? { repo: activeRepo.repo, message: activeRepo.error } : undefined,
     pageLoading,
@@ -355,6 +388,11 @@ function ChangesOverlay() {
     case "list-error":
       body = <DiffErrorState message={bodyState.message} onRetry={() => setChangesScope({ ...ui.scope })} />;
       break;
+    case "no-git":
+    case "untouched":
+    case "unsupported":
+      body = <WorkspaceEmptyState kind={bodyState.kind} />;
+      break;
     case "empty":
       body = <NoChangesState />;
       break;
@@ -424,6 +462,7 @@ function ChangesOverlay() {
         <ChangesToolbar
           scope={ui.scope}
           repos={list?.repos ?? []}
+          {...(shape ? { workspaceRepos: shape.repositories } : {})}
           repoFilter={ui.repoFilter}
           totals={totals}
           {...(agent ? { agent } : {})}
