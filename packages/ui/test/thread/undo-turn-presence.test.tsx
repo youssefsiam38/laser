@@ -61,7 +61,7 @@ vi.mock("@/runtime", async (importActual) => ({
 }));
 
 const { UndoTurn } = await import("../../src/components/thread/UndoTurn.js");
-const { DIALOG_EXIT_FALLBACK_MS } = await import("../../src/components/thread/dialog-presence.js");
+const { EXIT_FALLBACK_MS, EXIT_SLACK_MS } = await import("../../src/components/ui/exit-presence.js");
 
 const SESSION = "/p/work.jsonl";
 
@@ -86,7 +86,7 @@ const flush = async () => {
 };
 /** Past the control's own exit window, with room to spare. */
 const afterExit = async () => {
-  await act(async () => settle(DIALOG_EXIT_FALLBACK_MS + 80));
+  await act(async () => settle(EXIT_FALLBACK_MS + EXIT_SLACK_MS + 80));
   await flush();
 };
 

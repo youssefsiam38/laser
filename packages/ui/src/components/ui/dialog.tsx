@@ -3,6 +3,7 @@ import { XIcon } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
 import { Button } from "@/components/ui/button";
+import { useExitPresence } from "@/components/ui/exit-presence";
 import { cn } from "@/lib/utils";
 
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
@@ -23,10 +24,13 @@ function DialogClose({ ...props }: React.ComponentProps<typeof DialogPrimitive.C
 
 function DialogOverlay({
   className,
+  ref,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Overlay>) {
+  const overlayRef = useExitPresence<HTMLDivElement>(ref);
   return (
     <DialogPrimitive.Overlay
+      ref={overlayRef}
       data-slot="dialog-overlay"
       className={cn(
         "fixed inset-0 isolate z-50 bg-[color-mix(in_oklab,var(--ink)_28%,transparent)]",
@@ -41,18 +45,25 @@ function DialogOverlay({
   );
 }
 
+// The overlay and the content are both `Presence` children, and both have
+// been seen stranded by an exit animation that never ends: the dialog itself
+// over the transcript, and the wash behind it. `useExitPresence` is the floor
+// under the token fix — see `exit-presence.ts`.
 function DialogContent({
   className,
   children,
   showCloseButton = true,
+  ref,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
 }) {
+  const contentRef = useExitPresence<HTMLDivElement>(ref);
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
       <DialogPrimitive.Content
+        ref={contentRef}
         data-slot="dialog-content"
         className={cn(
           // `grid-cols-[minmax(0,1fr)]`: without an explicit column, the implicit one

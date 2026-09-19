@@ -10,10 +10,11 @@
  * fleet Answer rule). Restore is refused with the engine's sentence while a
  * turn runs.
  *
- * The confirmation owns its own unmount (`useDialogPresence`): Radix keeps a
- * closed dialog in the document until the exit animation reports
- * `animationend`, and with motion reduced that animation is never created, so
- * the dialog stayed on screen for good.
+ * Closing it is the shared dialog's business: Radix keeps a closed dialog in
+ * the document until its exit animation reports `animationend`, and with
+ * motion reduced there is no animation to report one — so the confirmation
+ * used to stay on screen for good. The fix is in the token and in
+ * `components/ui/exit-presence.ts`, and every dialog inherits it.
  */
 import type {
   CheckpointInfo,
@@ -43,7 +44,6 @@ import { useCapability, useLaserStable, useLaserState } from "@/runtime";
 // the startup chunk (D-317).
 import { openChanges } from "@/source-control/store.js";
 
-import { useDialogPresence } from "./dialog-presence.js";
 import { requestProjectGitRefresh } from "./project-git.js";
 import {
   boundedRows,
@@ -143,8 +143,7 @@ function UndoTurnControl({
   className?: string | undefined;
 }) {
   const { client, actions } = useLaserStable();
-  const presence = useDialogPresence();
-  const { open, show, hide } = presence;
+  const [open, setOpen] = useState(false);
   const [preview, setPreview] = useState<RestorePreview | undefined>(undefined);
   const [changes, setChanges] = useState<{ turn?: ProjectChanges; uncommitted?: ProjectChanges }>({});
   const [target, setTarget] = useState<RestoreTarget | undefined>(undefined);
@@ -167,11 +166,11 @@ function UndoTurnControl({
   }, []);
 
   const close = useCallback(() => {
-    hide();
+    setOpen(false);
     reset();
     // Anything still in flight for the closed dialog is no longer wanted.
     generation.current += 1;
-  }, [hide, reset]);
+  }, [reset]);
 
   const load = useCallback(async () => {
     const mine = ++generation.current;
@@ -215,10 +214,10 @@ function UndoTurnControl({
   }, [client, cwd, path, turn]);
 
   const openDialog = useCallback(() => {
-    show();
+    setOpen(true);
     reset();
     void load();
-  }, [load, reset, show]);
+  }, [load, reset]);
 
   const confirm = useCallback(async () => {
     if (!preview || !target || busy || confirming.current) return;
@@ -293,89 +292,87 @@ function UndoTurnControl({
       >
         <Undo2 />
       </TooltipIconButton>
-      {presence.mounted ? (
-        <Dialog open={open} onOpenChange={(next) => { if (!next) close(); }}>
-          <DialogContent
-            className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md"
-            showCloseButton={false}
-            data-slot="undo-turn-dialog"
-            onOpenAutoFocus={(event) => {
-              event.preventDefault();
-              cancelRef.current?.focus();
-            }}
-          >
-            <DialogHeader>
-              <DialogTitle>Undo this turn?</DialogTitle>
-              <DialogDescription>
-                {busy === "preview"
-                  ? "Checking what this would restore…"
-                  : chosen
-                    ? `This restores ${restoreWhatCopy(chosen)}.`
-                    : preview
-                      ? "Nothing in this turn would change."
-                      : "One confirmation before any files or the conversation move."}
-              </DialogDescription>
-            </DialogHeader>
+      <Dialog open={open} onOpenChange={(next) => { if (!next) close(); }}>
+        <DialogContent
+          className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md"
+          showCloseButton={false}
+          data-slot="undo-turn-dialog"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            cancelRef.current?.focus();
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Undo this turn?</DialogTitle>
+            <DialogDescription>
+              {busy === "preview"
+                ? "Checking what this would restore…"
+                : chosen
+                  ? `This restores ${restoreWhatCopy(chosen)}.`
+                  : preview
+                    ? "Nothing in this turn would change."
+                    : "One confirmation before any files or the conversation move."}
+            </DialogDescription>
+          </DialogHeader>
 
-            {preview && !error ? (
-              <UndoTurnPreview
-                preview={preview}
-                changes={changes}
-                target={chosen}
-                visible={visible}
-                turn={turn}
-                at={at}
-                expanded={expanded}
-                onExpand={(key) => setExpanded((keys) => (keys.includes(key) ? keys : [...keys, key]))}
-                onTarget={setTarget}
-                onOpenDiff={openDiff}
-              />
-            ) : null}
+          {preview && !error ? (
+            <UndoTurnPreview
+              preview={preview}
+              changes={changes}
+              target={chosen}
+              visible={visible}
+              turn={turn}
+              at={at}
+              expanded={expanded}
+              onExpand={(key) => setExpanded((keys) => (keys.includes(key) ? keys : [...keys, key]))}
+              onTarget={setTarget}
+              onOpenDiff={openDiff}
+            />
+          ) : null}
 
-            {error ? (
-              <p role="alert" data-slot="undo-turn-error" className="border-s-2 border-danger ps-3 text-sm leading-sm text-ink">
-                {error}
-              </p>
-            ) : null}
+          {error ? (
+            <p role="alert" data-slot="undo-turn-error" className="border-s-2 border-danger ps-3 text-sm leading-sm text-ink">
+              {error}
+            </p>
+          ) : null}
 
-            {refusals.length > 0 ? (
-              <div role="alert" data-slot="undo-turn-refusals" className="flex flex-col gap-2 border-s-2 border-danger ps-3 text-sm leading-sm text-ink">
-                {refusals.map((sentence) => (
-                  <p key={sentence}>{sentence}</p>
-                ))}
-              </div>
-            ) : null}
+          {refusals.length > 0 ? (
+            <div role="alert" data-slot="undo-turn-refusals" className="flex flex-col gap-2 border-s-2 border-danger ps-3 text-sm leading-sm text-ink">
+              {refusals.map((sentence) => (
+                <p key={sentence}>{sentence}</p>
+              ))}
+            </div>
+          ) : null}
 
-            <DialogFooter>
+          <DialogFooter>
+            <Button
+              ref={cancelRef}
+              type="button"
+              variant="ghost"
+              autoFocus
+              onClick={close}
+              disabled={busy === "confirm"}
+              className="pointer-coarse:min-h-11"
+            >
+              {refusals.length > 0 ? "Close" : "Cancel"}
+            </Button>
+            {refusals.length === 0 && (canConfirm || busy === "confirm") ? (
               <Button
-                ref={cancelRef}
                 type="button"
-                variant="ghost"
-                autoFocus
-                onClick={close}
-                disabled={busy === "confirm"}
+                variant="destructive"
+                onClick={() => void confirm()}
+                disabled={!canConfirm || busy === "confirm"}
+                aria-busy={busy === "confirm" || undefined}
+                data-slot="undo-turn-confirm"
                 className="pointer-coarse:min-h-11"
               >
-                {refusals.length > 0 ? "Close" : "Cancel"}
+                {busy === "confirm" ? <LoaderCircle className="motion-safe:animate-sweep" aria-hidden="true" /> : null}
+                {busy === "confirm" ? "Restoring…" : "Undo this turn"}
               </Button>
-              {refusals.length === 0 && (canConfirm || busy === "confirm") ? (
-                <Button
-                  type="button"
-                  variant="destructive"
-                  onClick={() => void confirm()}
-                  disabled={!canConfirm || busy === "confirm"}
-                  aria-busy={busy === "confirm" || undefined}
-                  data-slot="undo-turn-confirm"
-                  className="pointer-coarse:min-h-11"
-                >
-                  {busy === "confirm" ? <LoaderCircle className="motion-safe:animate-sweep" aria-hidden="true" /> : null}
-                  {busy === "confirm" ? "Restoring…" : "Undo this turn"}
-                </Button>
-              ) : null}
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      ) : null}
+            ) : null}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

@@ -3,6 +3,7 @@ import { XIcon } from "lucide-react";
 import { Dialog as SheetPrimitive } from "radix-ui";
 
 import { Button } from "@/components/ui/button";
+import { useExitPresence } from "@/components/ui/exit-presence";
 import { cn } from "@/lib/utils";
 import { useDirection } from "@/hooks/use-direction";
 import { logicalSide } from "@/theme/direction";
@@ -25,10 +26,13 @@ function SheetPortal({ ...props }: React.ComponentProps<typeof SheetPrimitive.Po
 
 function SheetOverlay({
   className,
+  ref,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Overlay>) {
+  const overlayRef = useExitPresence<HTMLDivElement>(ref);
   return (
     <SheetPrimitive.Overlay
+      ref={overlayRef}
       data-slot="sheet-overlay"
       className={cn(
         "fixed inset-0 z-50 bg-[color-mix(in_oklab,var(--ink)_28%,transparent)]",
@@ -57,6 +61,7 @@ function SheetContent({
   children,
   side = "right",
   showCloseButton = true,
+  ref,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left";
@@ -64,10 +69,12 @@ function SheetContent({
 }) {
   const direction = useDirection();
   const physicalSide = logicalSide(side, direction);
+  const contentRef = useExitPresence<HTMLDivElement>(ref);
   return (
     <SheetPortal>
       <SheetOverlay />
       <SheetPrimitive.Content
+        ref={contentRef}
         data-slot="sheet-content"
         data-side={physicalSide}
         className={cn(
