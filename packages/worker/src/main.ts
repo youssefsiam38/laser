@@ -221,6 +221,7 @@ async function main(): Promise<void> {
   // Laser-specific instructions. Optional for callers outside the host.
   const stateDir = arg("state-dir");
   const projectTrusted = arg("project-trusted");
+  const agentIsolation = arg("agent-isolation");
   // Which environment the durable revisions this worker mints belong to
   // (RP-9). Never logged, never published: only its derived key is public.
   const environmentId = arg("environment-id");
@@ -245,6 +246,9 @@ async function main(): Promise<void> {
   extendRuntimePath();
   if (projectTrusted !== undefined && projectTrusted !== "yes" && projectTrusted !== "no") {
     throw new Error(`${PRODUCT_NAME} worker: --project-trusted must be "yes" or "no", got ${JSON.stringify(projectTrusted)}`);
+  }
+  if (agentIsolation !== undefined && agentIsolation !== "decide" && agentIsolation !== "isolate" && agentIsolation !== "share") {
+    throw new Error(`${PRODUCT_NAME} worker: --agent-isolation must be decide, isolate, or share, got ${JSON.stringify(agentIsolation)}`);
   }
 
   // The host's bundled package manager, `[command, ...args]` as JSON (M10-T5).
@@ -276,6 +280,7 @@ async function main(): Promise<void> {
     ...(sessionDir ? { sessionDir } : {}),
     ...(stateDir ? { stateDir } : {}),
     ...(projectTrusted !== undefined ? { projectTrusted: projectTrusted === "yes" } : {}),
+    ...(agentIsolation ? { agentIsolation } : {}),
     ...(environmentId ? { environmentId } : {}),
     ...(workerGeneration !== undefined ? { workerGeneration } : {}),
     ...(configuredHeapBytes !== undefined ? { configuredOldSpaceBytes: configuredHeapBytes } : {}),

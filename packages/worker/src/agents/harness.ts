@@ -40,6 +40,15 @@ import {
   SESSION_RUN_ENTRY_TYPE,
   SESSION_AGENT_ENTRY_TYPE,
   type WorktreeSetup,
+  AGENT_ISOLATION_DEFAULT,
+  decideIsolation,
+  describeIsolation,
+  strictIsolationRefusal,
+  workspaceCanIsolate,
+  type AgentIsolation,
+  type AgentIsolationDefault,
+  type WorktreeArg,
+  type WorkspaceShape,
   SUBAGENT_NAME_MAX,
   agentQuestionAnswerHint,
   humanizeLabel,
@@ -111,6 +120,8 @@ export interface WorktreeProvider {
   rootOf(projectCwd: string): Promise<string | undefined>;
   /** What the worktree still holds, measured against the parent's checkout. */
   facts(input: { path: string; branch: string; compareCwd: string }): Promise<WorktreeFacts>;
+  /** Workspace shape of a directory. Absent, the harness treats the project as a single repo. */
+  shape?(cwd: string, rescan?: boolean): Promise<WorkspaceShape>;
 }
 
 /** What a child is told when it stops without its final tool. */
@@ -157,6 +168,8 @@ export interface AgentHarnessOptions {
   worktrees: WorktreeProvider;
   /** Host-resolved trust, shared with the driver's other project-code gates. */
   projectTrusted?: boolean;
+  /** Per-project isolation default; `decide` when omitted. */
+  isolationDefault?: AgentIsolationDefault;
   /** Background-work options for a session running in `cwd`; passed to every child. */
   backgroundWork?: (cwd: string) => BackgroundWorkOptions;
   /** False while an update gate is parked; existing runs remain fully controllable. */
@@ -198,6 +211,7 @@ interface Entry {
   definition: AgentDefinition;
   record: SessionAgentRecord;
   projectCwd: string;
+  isolation?: AgentIsolation;
   bridge: AgentHarnessBridge;
   eventListeners: Set<(event: AgentModelEvent) => void>;
   roleListeners: Set<(role: HarnessSessionRole) => void>;
@@ -353,6 +367,7 @@ export class AgentHarness {
   private readonly definitions: DefinitionsCache;
   private readonly worktrees: WorktreeProvider;
   private readonly projectTrusted: boolean;
+  private isolationDefault: AgentIsolationDefault;
   private readonly backgroundWork: ((cwd: string) => BackgroundWorkOptions) | undefined;
   private readonly admitNewWork: (() => boolean) | undefined;
   private readonly now: () => number;
@@ -366,6 +381,7 @@ export class AgentHarness {
     this.definitions = options.definitions;
     this.worktrees = options.worktrees;
     this.projectTrusted = options.projectTrusted !== false;
+    this.isolationDefault = options.isolationDefault ?? AGENT_ISOLATION_DEFAULT;
     this.backgroundWork = options.backgroundWork;
     this.admitNewWork = options.admitNewWork;
     this.now = options.now ?? Date.now;
@@ -378,6 +394,11 @@ export class AgentHarness {
         this.announceRole(entry);
       }
     });
+  }
+
+  /** Host Settings changed this project's isolation default while the worker is live. */
+  setIsolationDefault(value: AgentIsolationDefault): void {
+    this.isolationDefault = value;
   }
 
   // ------------------------------------------------------------- sessions
@@ -1160,11 +1181,11 @@ export class AgentHarness {
     if (subagentName.length > SUBAGENT_NAME_MAX) throw new HarnessError(`subagent_name must be at most ${SUBAGENT_NAME_MAX} characters.`);
     if (task === "") throw new HarnessError("task is required: the complete task and all context the new agent needs.");
     if (task.length > AGENT_TASK_MAX) throw new HarnessError(`task must be at most ${AGENT_TASK_MAX} characters.`);
-    // Absent means true: an agent that says nothing gets an isolated worktree,
-    // exactly as before. `false` is the parent's judgement that this child only
-    // reads, so it runs in the parent's own checkout with every tool it would
-    // have had (D-144) — nothing is stripped and no write is refused.
-    const isolated = worktreeChoice(input.worktree);
+    // Isolation precedence is pinned in protocol `decideIsolation` (L1):
+    // false always shares; "strict" always demands a worktree; true / absent
+    // follows the project default (isolate → strict, share → shared, decide →
+    // isolate if this workspace can be isolated).
+    const worktreeArg = worktreeChoice(input.worktree);
 
     const catalog = this.catalogFor(parent);
     const definition = this.definitions.definition(agentName);
@@ -1187,6 +1208,20 @@ export class AgentHarness {
 
     const runId = newRunId();
     const baseCwd = parentDriver.state().cwd;
+    const shape = this.worktrees.shape
+      ? await this.worktrees.shape(parent.projectCwd)
+      : { cwd: parent.projectCwd, kind: "repo" as const, repositories: [{ root: parent.projectCwd, name: parent.projectCwd, projectRoot: true }] };
+    const decision = decideIsolation({ worktree: worktreeArg, projectDefault: this.isolationDefault, shape });
+    if (decision.demand && !workspaceCanIsolate(shape)) {
+      throw new HarnessError(strictIsolationRefusal(shape));
+    }
+    const isolated = decision.isolate && workspaceCanIsolate(shape);
+    const isolation = describeIsolation({
+      isolate: isolated,
+      worktree: worktreeArg,
+      projectDefault: this.isolationDefault,
+      shape,
+    });
     const worktree = isolated ? await this.worktrees.create({ projectCwd: parent.projectCwd, projectTrusted: this.projectTrusted, baseCwd, subagentName, runId }) : undefined;
     const childCwd = worktree ? worktree.cwd : baseCwd;
     const goal = await readGoal(parentDriver);
@@ -1247,10 +1282,11 @@ export class AgentHarness {
     // The server attaches on open; attaching again is idempotent for the same path.
     handle.attach(state.path, state.id);
     const entry = this.byPath.get(state.path)!;
+    entry.isolation = isolation;
     const childDriver = this.host.driver(state.path);
     if (childDriver) await childDriver.rename(subagentName).catch(() => undefined);
 
-    const runState = this.createRun(entry, { origin: "agent", task, goal, parentRunId: this.activeRun(parent.path)?.runId });
+    const runState = this.createRun(entry, { origin: "agent", task, goal, parentRunId: this.activeRun(parent.path)?.runId, isolation });
     this.event({
       kind: "started",
       sessionPath: state.path,
@@ -1274,6 +1310,7 @@ export class AgentHarness {
       runId,
       status: "running",
       cwd: childCwd,
+      isolation,
       ...(worktree ? { branch: worktree.branch, environment: worktree.environment, setup: worktree.setup } : {}),
     };
   }
@@ -1597,6 +1634,7 @@ export class AgentHarness {
       depth: run.depth,
       ...(run.model ? { model: `${run.model.provider}/${run.model.id}` } : {}),
       ...(run.cwd !== undefined ? { cwd: run.cwd } : {}),
+      ...(run.isolation ? { isolation: run.isolation } : {}),
       ...(run.worktree && !run.worktree.removedAt ? { branch: run.worktree.branch } : {}),
       worktree: await this.worktreeStatus(parent, run),
       ...(run.worktree?.environment ? { environment: run.worktree.environment } : {}),
@@ -1890,7 +1928,7 @@ export class AgentHarness {
 
   private createRun(
     entry: Entry,
-    init: { origin: AgentRun["origin"]; task: string; goal?: { id: string; objective: string } | null; parentRunId?: string | undefined },
+    init: { origin: AgentRun["origin"]; task: string; goal?: { id: string; objective: string } | null; parentRunId?: string | undefined; isolation?: AgentIsolation },
     queued = false,
   ): RunState {
     const path = entry.path!;
@@ -1917,6 +1955,7 @@ export class AgentHarness {
         ? { sessionPath: parentPath, sessionId: entry.record.parentSessionId ?? "", ...(init.parentRunId !== undefined ? { runId: init.parentRunId } : {}) }
         : null,
       worktree: entry.record.worktree ?? null,
+      ...((init.isolation ?? entry.isolation) ? { isolation: init.isolation ?? entry.isolation } : {}),
       // Where this run actually works, said once so no reader has to infer it
       // from the presence of a worktree.
       ...(runCwd !== undefined ? { cwd: runCwd } : {}),
@@ -2826,14 +2865,15 @@ export function newRunId(): string {
 }
 
 /**
- * `worktree` on `start_agent`: absent means true, so nothing that exists today
- * changes. Anything that is not a boolean is a mistake worth naming rather
- * than a silent default — the bridge crosses a package boundary.
+ * `worktree` on `start_agent`: absent means true. `true` isolates when this
+ * workspace can be isolated, `false` shares the checkout, and `"strict"`
+ * demands isolation and refuses without it. Anything else is a mistake worth
+ * naming rather than a silent default — the bridge crosses a package boundary.
  */
-export function worktreeChoice(value: unknown): boolean {
+export function worktreeChoice(value: unknown): WorktreeArg {
   if (value === undefined) return true;
-  if (typeof value !== "boolean") throw new HarnessError("worktree must be true or false: true (the default) gives the agent its own worktree, false runs it in this session's checkout.");
-  return value;
+  if (value === true || value === false || value === "strict") return value;
+  throw new HarnessError('worktree must be true, false, or "strict": true (the default) isolates when this workspace can be isolated, false runs it in this session\'s checkout, and "strict" demands isolation and refuses without it.');
 }
 
 /** True when removing this worktree would destroy something, or we cannot tell. */

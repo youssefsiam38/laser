@@ -246,10 +246,12 @@ describe("subagents module: tool registration", () => {
   it("passes the worktree choice through and says where the child works, with no branch when it is not isolated", async () => {
     const h = moduleHarness(root, true);
     const start = h.tools.get("start_agent")!;
-    const worktree = start.parameters.properties["worktree"] as { type: string; description: string };
-    expect(worktree.type).toBe("boolean");
-    expect(worktree.description).toContain("Default true");
-    expect(worktree.description).toContain("only reads");
+    const worktree = start.parameters.properties["worktree"] as { anyOf?: Array<{ type?: string; const?: string; description?: string }>; type?: string; description?: string };
+    const variants = worktree.anyOf ?? [worktree];
+    expect(variants.some((variant) => variant.type === "boolean")).toBe(true);
+    expect(variants.some((variant) => variant.const === "strict")).toBe(true);
+    expect(JSON.stringify(worktree)).toContain("only reads");
+    expect(JSON.stringify(worktree)).toContain("strict");
     // Absent is not sent as `false`: the bridge must see nothing at all.
     await start.execute("call", { agent_name: "explorer", subagent_name: "find-auth", task: "Find it." });
     expect(vi.mocked(h.bridge.startAgent).mock.calls[0]![0]).not.toHaveProperty("worktree");
@@ -681,7 +683,7 @@ describe("subagents module: events and the child's role", () => {
     expect(parent).toContain("nothing does any of it for you");
     // And it is told the other shape exists, so it does not go looking for a
     // branch that a `worktree: false` child never had.
-    expect(parent).toContain("A child started with worktree false has neither a branch nor a worktree");
+    expect(parent).toContain("A child started with worktree false, or in a workspace that cannot isolate, has neither a branch nor a worktree");
   });
 
   it("re-reads the role per turn so a follow-up run carries its new task", async () => {

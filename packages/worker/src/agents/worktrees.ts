@@ -13,8 +13,9 @@
 import { execFile, spawn } from "node:child_process";
 import { noteWorkerProcess } from "../process-registry.js";
 import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
-import { PROJECT_DIR_NAME, WORKTREES_DIR_NAME, type WorktreeEnvironment, type WorktreeSetup } from "@lasercode/protocol";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { PROJECT_DIR_NAME, WORKTREES_DIR_NAME, type WorktreeEnvironment, type WorktreeSetup, type WorkspaceShape } from "@lasercode/protocol";
+import { createWorkspaceResolver } from "../workspace.js";
 import { HarnessError } from "./errors.js";
 
 export interface CreateWorktreeInput {
@@ -109,16 +110,25 @@ export function assertSafeWorktreePath(root: string, path: string): void {
 export class WorktreeManager {
   /** runId → worktree path, so a run can only remove what it created. */
   private readonly owned = new Map<string, Worktree>();
+  private readonly workspaces = createWorkspaceResolver();
+
+  async shape(cwd: string, rescan?: boolean): Promise<WorkspaceShape> {
+    return this.workspaces.resolve(cwd, rescan === true ? { rescan: true } : undefined);
+  }
 
   async create(input: CreateWorktreeInput): Promise<Worktree> {
-    let root: string;
+    let toplevel: string;
     try {
-      root = (await git(input.projectCwd, ["rev-parse", "--show-toplevel"])).trim();
+      toplevel = (await git(input.projectCwd, ["rev-parse", "--show-toplevel"])).trim();
     } catch {
       throw new HarnessError(
         "This project is not a git repository, so agents cannot get an isolated worktree. Either initialise git in the project, or start this agent with worktree false so it works in this checkout.",
       );
     }
+    // Worktrees of a worktree land beside their siblings, never nested inside
+    // one: `--git-common-dir` is the main repo's `.git`, so dirname of that is
+    // the checkout `.worktrees/` belongs in.
+    const root = await this.commonRoot(input.projectCwd, toplevel);
     let baseCommit: string;
     try {
       baseCommit = (await git(input.baseCwd, ["rev-parse", "--verify", "HEAD"])).trim();
@@ -164,10 +174,20 @@ export class WorktreeManager {
     return this.owned.get(runId);
   }
 
-  /** The git toplevel a project belongs to; `undefined` when it is not a repository. */
+  /** The checkout `.worktrees/` belongs in — the common dir's parent, not a linked worktree. */
   async rootOf(projectCwd: string): Promise<string | undefined> {
     const found = await gitQuiet(projectCwd, ["rev-parse", "--show-toplevel"]);
-    return found.ok ? found.stdout.trim() || undefined : undefined;
+    if (!found.ok) return undefined;
+    const toplevel = found.stdout.trim();
+    if (!toplevel) return undefined;
+    return this.commonRoot(projectCwd, toplevel);
+  }
+
+  private async commonRoot(cwd: string, toplevel: string): Promise<string> {
+    const common = await gitQuiet(cwd, ["rev-parse", "--git-common-dir"]);
+    if (!common.ok) return toplevel;
+    const commonDir = resolve(cwd, common.stdout.trim());
+    return basename(commonDir) === ".git" ? dirname(commonDir) : toplevel;
   }
 
   /**

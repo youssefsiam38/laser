@@ -14,6 +14,7 @@
  */
 import type {
   AgentEvent,
+  AgentIsolation,
   AgentMessageMode,
   AgentRun,
   AgentRunQuestion,
@@ -65,11 +66,11 @@ export interface StartAgentInput {
   subagentName: string;
   task: string;
   /**
-   * Give the child its own worktree. Absent means true: the default is an
-   * isolated checkout. `false` runs it in this session's own checkout, for
-   * work that only reads.
+   * Give the child its own worktree. Absent means true: isolate if this
+   * workspace can be isolated. `false` runs it in this session's own checkout.
+   * `"strict"` demands isolation and refuses without it (D-156).
    */
-  worktree?: boolean;
+  worktree?: boolean | "strict";
 }
 
 export interface StartAgentResult {
@@ -80,6 +81,8 @@ export interface StartAgentResult {
   status: "running";
   /** The directory the child works in, whichever way it was started. */
   cwd: string;
+  /** Isolated worktree or shared checkout, and why. */
+  isolation?: AgentIsolation;
   /** The branch its worktree is on; absent when it shares its parent's checkout. */
   branch?: string;
   environment?: WorktreeEnvironment;
@@ -250,6 +253,7 @@ export interface InspectAgentResult extends AgentRunSummary {
   model?: string;
   /** Where it works; the branch only when it has a worktree of its own. */
   cwd?: string;
+  isolation?: AgentIsolation;
   branch?: string;
   environment?: WorktreeEnvironment;
   setup?: WorktreeSetup;
