@@ -1,7 +1,8 @@
 import { ErrorCodes, FILE_DIFF_MAX_BYTES, ProtocolError, gitLooksBinary, sliceUtf8RangeFrom, utf8ByteLength, type FileSlice } from "@lasercode/protocol";
 import { readFileSync, statSync } from "node:fs";
+import { devNull } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import type { ResolvedRange } from "./changes.js";
+import { untrackedPaths, type ResolvedRange } from "./changes.js";
 import { runGit } from "./git-run.js";
 import type { RepoRef } from "./repositories.js";
 
@@ -21,6 +22,14 @@ export async function fileDiff(repo: RepoRef, range: ResolvedRange, file: string
   const path = assertRepoFile(repo.path, file);
   if (range.pruned && range.pruned.oldestTurn === undefined) {
     return emptySlice(repo.path, path, offset);
+  }
+  // The uncommitted scope lists a new, unignored file as an addition with the
+  // lines it has on disk. `git diff HEAD` has nothing to say about a path git
+  // does not track, so the body would be empty under a rail row promising
+  // `+N`. Both paths ask `untrackedPaths` the same question, and the patch is
+  // git's own, against the empty file.
+  if (range.porcelain && (await untrackedPaths(repo)).has(path)) {
+    return pageText(repo.path, path, await untrackedPatch(repo, path, context), offset, limit);
   }
   const ends = range.to ? [range.from, range.to] : [range.from];
   const diff = await runGit({
@@ -48,14 +57,58 @@ export async function fileDiff(repo: RepoRef, range: ResolvedRange, file: string
   return pageText(repo.path, path, diff.stdout, offset, limit);
 }
 
+/**
+ * The patch for a file that exists only on disk: git's own diff of the empty
+ * file against it, so the `+` lines, the mode, the no-newline marker and the
+ * "Binary files differ" line are all git's and not ours. Argument array, no
+ * shell, and the path is the repository-relative one `assertRepoFile`
+ * already contained — bare, because `./` would leak into the patch header.
+ */
+async function untrackedPatch(repo: RepoRef, path: string, context: number): Promise<string> {
+  const diff = await runGit({
+    cwd: repo.path,
+    args: [
+      "diff",
+      "--no-index",
+      `--unified=${Math.max(0, Math.min(context, 100))}`,
+      "--no-color",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--",
+      devNull,
+      path,
+    ],
+    timeoutMs: 15_000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (diff.timedOut || diff.overflow) {
+    throw new ProtocolError(ErrorCodes.Internal, "Reading that diff took too long or the result was too large.");
+  }
+  // `--no-index` exits 1 when the two sides differ, which is the whole point.
+  if (diff.exitCode > 1) {
+    throw new ProtocolError(ErrorCodes.InvalidParams, diff.stderr.trim() || "Could not read that diff.");
+  }
+  return diff.stdout;
+}
+
+/**
+ * A revision we are willing to concatenate into `<ref>:<path>`: no option, no
+ * range, no reflog, no pathspec magic. Shared with the byte path (`blob.ts`)
+ * so one file cannot be stricter than the other.
+ */
+export function assertGitRef(ref: string): string {
+  if (ref.startsWith("-") || ref.includes("..") || ref.includes("@{") || /[\s:~^?*\\\[]/.test(ref)) {
+    throw new ProtocolError(ErrorCodes.InvalidParams, "That revision is not a usable git ref.");
+  }
+  return ref;
+}
+
 export async function fileSource(repo: RepoRef, file: string, ref: string | undefined, offset = 0, limit = FILE_DIFF_MAX_BYTES): Promise<FileSlice> {
   const path = assertRepoFile(repo.path, file);
   if (!ref || ref === "worktree") {
     return pageWorktree(repo.path, path, offset, limit);
   }
-  if (ref.startsWith("-") || ref.includes("..") || ref.includes("@{") || /[\s:~^?*\\\[]/.test(ref)) {
-    throw new ProtocolError(ErrorCodes.InvalidParams, "That revision is not a usable git ref.");
-  }
+  assertGitRef(ref);
   const shown = await runGit({
     cwd: repo.path,
     args: ["cat-file", "-p", `${ref}:${path}`],
