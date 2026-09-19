@@ -4,6 +4,7 @@ import type { WorkspaceShape } from "@lasercode/protocol";
 import { collectOpenShadowRoots } from "@/components/thread/find-ranges.js";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 import {
   classifyDiffPage,
@@ -12,8 +13,10 @@ import {
   fileLineCount,
   listTotals,
   overlayChromeLayout,
+  overlayToolbarPlan,
   shouldBoundExpansion,
   splitColumnsFit,
+  type OverlayToolbarPlan,
 } from "./classify.js";
 import type { AgentChangesContext, ChangedFile, ChangesList, FileDiffPage } from "./contract.js";
 import { handleOverlayCopy } from "./copy.js";
@@ -101,11 +104,16 @@ function HostChangesBinder() {
 function ChangesOverlaySurface() {
   const ui = useChangesUi();
   if (!ui.open && !ui.request) return null;
+  // `App` mounts this host beside `Shell`, not inside it, and `Shell` is where
+  // the app's `TooltipProvider` lives. Every tooltip in here — the toolbar's
+  // icon buttons, the find bar's stepper — would otherwise throw and take the
+  // window into the error boundary. The overlay is a window of its own, so it
+  // carries its own provider; nesting one inside another is harmless.
   return (
-    <>
+    <TooltipProvider>
       <ChangesOverlay />
       <GitActionDialog />
-    </>
+    </TooltipProvider>
   );
 }
 
@@ -115,6 +123,7 @@ function ChangesOverlay() {
   const overlayRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [chrome, setChrome] = useState<"phone" | "desktop">("desktop");
+  const [plan, setPlan] = useState<OverlayToolbarPlan>(() => overlayToolbarPlan(0, 0));
   const [list, setList] = useState<ChangesList | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [listLoading, setListLoading] = useState(true);
@@ -261,6 +270,7 @@ function ChangesOverlay() {
       const rem = Number.parseFloat(styles.fontSize);
       const code = Number.parseFloat(styles.getPropertyValue("--text-code"));
       setChrome(overlayChromeLayout(node.clientWidth, rem));
+      setPlan(overlayToolbarPlan(node.clientWidth, rem));
       if (body) {
         setUnifiedFallback(!splitColumnsFit(body.clientWidth, codeSizeFromTheme(code, rem)));
       }
@@ -472,7 +482,7 @@ function ChangesOverlay() {
           canAgent={Boolean(runId)}
           {...(turnId ? { turnId } : {})}
           {...(runId ? { runId } : {})}
-          chrome={chrome}
+          plan={plan}
           diffStyle={ui.diffStyle}
           unifiedFallback={ui.unifiedFallback}
           onScope={setChangesScope}
@@ -498,7 +508,7 @@ function ChangesOverlay() {
         {ui.unifiedFallback && !ui.fallbackSaid ? <UnifiedFallbackNotice onDismiss={dismissFallbackNotice} /> : null}
         <div className="flex min-h-0 min-w-0 flex-1">
           {chrome === "desktop" ? (
-            <aside className="flex w-72 max-w-[40%] shrink-0 flex-col border-e border-line">{rail}</aside>
+            <aside className="flex w-72 max-w-2/5 shrink-0 flex-col hairline-e">{rail}</aside>
           ) : null}
           <div
             ref={bodyRef}
@@ -516,8 +526,8 @@ function ChangesOverlay() {
         {chrome === "phone" ? (
           <Sheet open={ui.treeOpen} onOpenChange={setTreeOpen}>
             <SheetContent side="left" className="p-0">
-              <SheetTitle className="px-4 py-3">Changed files</SheetTitle>
-              {rail}
+              <SheetTitle className="hairline-b px-3 py-2 text-sm font-semibold text-ink">Changed files</SheetTitle>
+              <div className="flex min-h-0 flex-1 flex-col">{rail}</div>
             </SheetContent>
           </Sheet>
         ) : null}

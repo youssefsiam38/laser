@@ -1,40 +1,58 @@
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
+import { ControlHint } from "@/components/ui/hint";
 import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 import { formatBytes } from "@/format";
 
 import type { EmptyBody } from "./classify.js";
-import { modeWords } from "./classify.js";
+import { changeCount, modeWords } from "./classify.js";
 import type { AgentChangesContext } from "./contract.js";
 import { overlayWorkspaceEmptyCopy, type WorkspaceEmptyKind } from "./workspace-shape.js";
 
+/**
+ * Every state in the body has the same shape: what happened, then what it
+ * means or what to do about it, and the act if there is one. Start-aligned on
+ * the body's own ground at the body's own rhythm (`px-4`, the toolbar's step),
+ * never a paragraph of grey text floating in the middle of the pane.
+ */
 export function ChangesNotice({
   title,
   children,
   action,
   className,
+  ...rest
 }: {
   title: string;
   children: ReactNode;
   action?: ReactNode;
   className?: string;
-}) {
+} & Omit<ComponentProps<"div">, "title" | "children">) {
   return (
-    <div data-slot="changes-notice" className={cn("flex min-h-0 flex-1 flex-col justify-center gap-3 px-6 py-10", className)}>
-      <h2 className="text-lg font-semibold text-ink">{title}</h2>
-      <div className="max-w-(--measure-prose) text-md text-ink-2">{children}</div>
-      {action}
+    <div
+      data-slot="changes-notice"
+      className={cn("flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 py-6", className)}
+      {...rest}
+    >
+      <h2 className="text-md font-semibold text-ink">{title}</h2>
+      <div className="flex max-w-(--measure-prose) flex-col gap-1 text-sm leading-sm text-ink-2">{children}</div>
+      {action ? <div className="flex flex-wrap items-center gap-2 pt-2">{action}</div> : null}
     </div>
   );
+}
+
+/** A path inside a sentence: typed, isolated, and never the thing that wraps. */
+function Typed({ children }: { children: ReactNode }) {
+  return <span className="typed break-all text-ink">{children}</span>;
 }
 
 export function NoChangesState() {
   return (
     <ChangesNotice title="Nothing changed">
-      <p>Nothing changed in this scope. These are the changes inside this workspace.</p>
+      <p>Nothing in this scope has changed yet.</p>
+      <p>A file appears here the moment you or an agent edits it in this workspace.</p>
     </ChangesNotice>
   );
 }
@@ -46,8 +64,20 @@ export function WorkspaceEmptyState({ kind }: { kind: Exclude<WorkspaceEmptyKind
       <p data-slot="workspace-empty" data-kind={kind}>
         {copy.body}
       </p>
+      <p>{workspaceEmptyNextLine(kind)}</p>
     </ChangesNotice>
   );
+}
+
+function workspaceEmptyNextLine(kind: Exclude<WorkspaceEmptyKind, "empty">): string {
+  switch (kind) {
+    case "no-git":
+      return "Run git init in this folder, or open a project that is already a repository.";
+    case "untouched":
+      return "Pick another scope, or come back once a turn has edited something.";
+    case "unsupported":
+      return "Open the repository this one belongs to and the changes are all there.";
+  }
 }
 
 export function RepoFailedState({ repo, message, onRetry }: { repo: string; message: string; onRetry?: () => void }) {
@@ -62,7 +92,8 @@ export function RepoFailedState({ repo, message, onRetry }: { repo: string; mess
         ) : undefined
       }
     >
-      <p>{message} Try again, or pick another repository.</p>
+      <p>{message}</p>
+      <p>Try again, or pick another repository from the toolbar.</p>
     </ChangesNotice>
   );
 }
@@ -70,31 +101,29 @@ export function RepoFailedState({ repo, message, onRetry }: { repo: string; mess
 export function AgentGoneState() {
   return (
     <ChangesNotice title="This agent's branch is gone">
-      <p>The branch for this agent is gone, so there is nothing to show.</p>
+      <p>The branch this agent worked on has been removed.</p>
+      <p>There is nothing left to compare it against, so this scope stays empty.</p>
     </ChangesNotice>
   );
 }
 
-export function AgentCheckoutLine({ context }: { context: AgentChangesContext }) {
+export function AgentCheckoutLine({ context, className }: { context: AgentChangesContext; className?: string }) {
   if (context.branchGone) return null;
+  const line = (text: string, hint?: string) => {
+    const paragraph = (
+      <p data-slot="changes-agent-checkout" className={cn("min-w-0 truncate text-xs text-ink-3", className)}>
+        {text}
+      </p>
+    );
+    return hint ? <ControlHint hint={hint}>{paragraph}</ControlHint> : paragraph;
+  };
   if (context.worktreeRemoved && context.branch) {
-    return (
-      <p data-slot="changes-agent-checkout" className="min-w-0 truncate text-xs text-ink-3">
-        This worktree was removed. Showing branch {context.branch}, which still exists.
-      </p>
-    );
+    return line(`This worktree was removed. Showing branch ${context.branch}, which still exists.`);
   }
-  if (context.checkout === "shared") {
-    return (
-      <p data-slot="changes-agent-checkout" className="min-w-0 truncate text-xs text-ink-3">
-        This agent · shared checkout
-      </p>
-    );
-  }
-  return (
-    <p data-slot="changes-agent-checkout" className="min-w-0 truncate text-xs text-ink-3" title={context.worktreePath}>
-      This agent · worktree{context.worktreePath ? ` at ${context.worktreePath}` : ""}
-    </p>
+  if (context.checkout === "shared") return line("This agent · shared checkout");
+  return line(
+    `This agent · worktree${context.worktreePath ? ` at ${context.worktreePath}` : ""}`,
+    context.worktreePath,
   );
 }
 
@@ -104,8 +133,9 @@ export function EmptyBodyState({ body }: { body: EmptyBody }) {
     return (
       <ChangesNotice title="Binary file">
         <p>
-          <span className="typed text-ink">{body.path}</span> is a binary file{size}. A diff of its bytes would not help.
+          <Typed>{body.path}</Typed> is a binary file{size}.
         </p>
+        <p>A diff of its bytes would tell you nothing, so open it where it is meant to be read.</p>
       </ChangesNotice>
     );
   }
@@ -113,18 +143,18 @@ export function EmptyBodyState({ body }: { body: EmptyBody }) {
     return (
       <ChangesNotice title="Renamed">
         <p>
-          <span className="typed text-ink">{body.oldPath ?? body.path}</span> is now{" "}
-          <span className="typed text-ink">{body.path}</span>. The contents did not change.
+          <Typed>{body.oldPath ?? body.path}</Typed> is now <Typed>{body.path}</Typed>.
         </p>
+        <p>The contents did not change, so there is nothing to read here.</p>
       </ChangesNotice>
     );
   }
   return (
     <ChangesNotice title="Mode change">
       <p>
-        <span className="typed text-ink">{body.path}</span> is now {modeWords(body.prevMode, body.mode)}. The contents did
-        not change.
+        <Typed>{body.path}</Typed> is now {modeWords(body.prevMode, body.mode)}.
       </p>
+      <p>The contents did not change, so there is nothing to read here.</p>
     </ChangesNotice>
   );
 }
@@ -133,8 +163,9 @@ export function DeletedFileState({ path }: { path: string }) {
   return (
     <ChangesNotice title="Deleted">
       <p>
-        <span className="typed text-ink">{path}</span> was deleted.
+        <Typed>{path}</Typed> was deleted in this scope.
       </p>
+      <p>Its last contents are in the history of the branch this scope compares against.</p>
     </ChangesNotice>
   );
 }
@@ -152,6 +183,7 @@ export function DiffErrorState({ message, onRetry }: { message: string; onRetry?
       }
     >
       <p>{message}</p>
+      <p>Nothing was changed by trying; the file is still whatever it is on disk.</p>
     </ChangesNotice>
   );
 }
@@ -168,61 +200,57 @@ export function LargeFileState({
   return (
     <ChangesNotice
       title="This file is large"
-      action={
-        <Button onClick={onReveal}>
-          Show the changed hunks
-        </Button>
-      }
+      action={<Button onClick={onReveal}>Show the changed hunks</Button>}
     >
       <p>
-        <span className="typed text-ink">{path}</span> is {lines.toLocaleString().replace(/,/g, "\u00a0")} lines.
-        It opens collapsed so the reader stays light. Expansion is by hunk.
+        <Typed>{path}</Typed> changed on <span className="tnum">{changeCount(lines)}</span> lines.
       </p>
+      <p>It opens collapsed so the reader stays quick; the hunks expand one at a time.</p>
     </ChangesNotice>
   );
 }
 
 export function OverlayLoadingState() {
   return (
-    <div data-slot="changes-loading" className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-8" role="status">
-      <h2 className="text-lg font-semibold text-ink">Opening the file</h2>
-      <p className="max-w-(--measure-prose) text-md text-ink-2">The reader is loading. This only happens the first time.</p>
-      <div className="flex flex-col gap-2" aria-hidden="true">
-        <Skeleton className="h-8 w-full" />
+    <ChangesNotice data-slot="changes-loading" role="status" title="Opening the file">
+      <p>The reader is loading. This only happens the first time.</p>
+      <div className="flex flex-col gap-2 pt-2" aria-hidden="true">
         <SkeletonText width="80%" />
         <SkeletonText width="64%" />
         <SkeletonText width="72%" />
-        <Skeleton className="mt-4 h-40 w-full" />
+        <Skeleton className="mt-2 h-40 w-full" />
       </div>
-    </div>
+    </ChangesNotice>
   );
 }
 
 export function DiffLoadingState({ path }: { path: string }) {
   return (
-    <div data-slot="changes-diff-loading" className="flex min-h-0 flex-1 flex-col gap-3 px-6 py-8" role="status">
-      <h2 className="text-lg font-semibold text-ink">Reading the file</h2>
-      <p className="typed text-ink-2">{path}</p>
-      <div className="flex flex-col gap-2" aria-hidden="true">
+    <ChangesNotice data-slot="changes-diff-loading" role="status" title="Reading the file">
+      <p>
+        <Typed>{path}</Typed>
+      </p>
+      <div className="flex flex-col gap-2 pt-2" aria-hidden="true">
         <SkeletonText width="90%" />
         <SkeletonText width="70%" />
         <SkeletonText width="82%" />
       </div>
-    </div>
+    </ChangesNotice>
   );
 }
 
 export function PickFileState() {
   return (
     <ChangesNotice title="Pick a file">
-      <p>Open a changed file from the list. The conversation stays where you left it.</p>
+      <p>Open a changed file from the list to read what changed in it.</p>
+      <p>The conversation stays exactly where you left it.</p>
     </ChangesNotice>
   );
 }
 
 export function UnifiedFallbackNotice({ onDismiss }: { onDismiss: () => void }) {
   return (
-    <div data-slot="changes-unified-notice" className="flex items-center gap-3 border-b border-line bg-surface-2 px-4 py-2 text-xs text-ink-2">
+    <div data-slot="changes-unified-notice" className="flex items-center gap-3 hairline-b bg-surface-2 px-4 py-1.5 text-xs text-ink-2">
       <p className="min-w-0 flex-1">Split needs two columns of code, so this view is unified.</p>
       <Button variant="ghost" size="xs" onClick={onDismiss}>
         Dismiss
@@ -233,7 +261,7 @@ export function UnifiedFallbackNotice({ onDismiss }: { onDismiss: () => void }) 
 
 export function TruncatedPatchState({ onMore, loading }: { onMore: () => void; loading: boolean }) {
   return (
-    <div data-slot="changes-truncated" className="flex shrink-0 items-center gap-3 border-t border-line bg-surface-2 px-4 py-2">
+    <div data-slot="changes-truncated" className="flex shrink-0 items-center gap-3 hairline-t bg-surface-2 px-4 py-1.5">
       <p className="min-w-0 flex-1 text-xs text-ink-2">This patch is large, so only part of it is shown.</p>
       <Button variant="outline" size="sm" onClick={onMore} disabled={loading}>
         {loading ? "Loading" : "Show more"}

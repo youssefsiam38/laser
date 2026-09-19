@@ -3,6 +3,7 @@ import type { GitHostStatus } from "@lasercode/protocol";
 import { ChevronDown, GitBranch, GitPullRequestArrow } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { ControlHint } from "@/components/ui/hint";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,17 +29,31 @@ import { requestGitAction } from "./store.js";
 
 const MENU_KINDS: GitActionKind[] = ["commit", "push", "branch", "pull-request-create", "pull-request-read"];
 
-export function ChangesGitActions({
+/** What the toolbar knows about the git host behind the repository in view. */
+export type GitToolbarState = {
+  /** Whether the host offers git actions at all. */
+  available: boolean;
+  repo: string | null;
+  host: GitHostStatus | undefined;
+  /** One sentence: what is wrong and what to do about it. */
+  status: string | undefined;
+  neighbourUsable: boolean;
+};
+
+/**
+ * One `gitHosts` read for the whole toolbar. The controls and the sentence
+ * that explains why they cannot act are two places in the chrome, so the
+ * question is asked once, here, and both read the answer.
+ */
+export function useGitToolbarState({
   repos,
   repoFilter,
   activeRepo,
-  chrome,
 }: {
   repos: readonly ChangedRepo[];
   repoFilter: string | null;
   activeRepo?: string;
-  chrome: "phone" | "desktop";
-}) {
+}): GitToolbarState {
   const adapter = getChangesAdapter();
   const [hosts, setHosts] = useState<GitHostStatus[]>([]);
   const [hostsError, setHostsError] = useState<string | null>(null);
@@ -72,8 +87,39 @@ export function ChangesGitActions({
   const host = hostFor(hosts, repo);
   const status = hostsError ?? hostStatusSentence(host);
   const neighbourUsable = hosts.some((row) => row.usable && row.repo !== repo);
+  return { available: Boolean(adapter.gitHosts), repo, host, status: status ?? undefined, neighbourUsable };
+}
 
-  if (!adapter.gitHosts) {
+/**
+ * The sentence a person needs when the git controls cannot act: its own line
+ * under the toolbar row, at full width, rather than a clipped fragment
+ * wedged between two buttons.
+ */
+export function GitHostStatusLine({ state, className }: { state: GitToolbarState; className?: string | undefined }) {
+  if (!state.available || !state.status) return null;
+  const text = `${state.status}${state.neighbourUsable ? " Other repositories still work." : ""}`;
+  return (
+    <ControlHint hint={text}>
+      <p data-slot="git-host-status" className={cn("min-w-0 truncate text-xs text-attention", className)}>
+        {text}
+      </p>
+    </ControlHint>
+  );
+}
+
+export function ChangesGitActions({
+  state,
+  git = "label",
+  commit = true,
+}: {
+  state: GitToolbarState;
+  /** "icon" drops the word "Git"; the menu keeps every action either way. */
+  git?: "icon" | "label";
+  /** Whether the row has space for Commit outside the menu. */
+  commit?: boolean;
+}) {
+  const { available, repo, host, status, neighbourUsable } = state;
+  if (!available) {
     return <div data-slot="changes-git-actions" />;
   }
 
@@ -87,11 +133,11 @@ export function ChangesGitActions({
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          size="sm"
-          className="gap-1 [@media(pointer:coarse)]:min-h-11"
-          aria-label={chrome === "phone" ? "Git actions" : "More git actions"}
+          size={git === "icon" ? "icon-sm" : "sm"}
+          className={cn("pointer-coarse:min-h-11", git === "label" && "gap-1")}
+          aria-label={commit ? "More git actions" : "Git actions"}
         >
-          Git
+          {git === "label" ? "Git" : null}
           <ChevronDown />
         </Button>
       </DropdownMenuTrigger>
@@ -119,7 +165,7 @@ export function ChangesGitActions({
         {status ? (
           <>
             <DropdownMenuSeparator />
-            <p data-slot="git-host-status" className="max-w-64 px-2 py-1.5 text-xs text-ink-2">
+            <p data-slot="git-menu-status" className="max-w-64 px-2 py-1.5 text-xs text-ink-2">
               {status}
               {neighbourUsable ? " Other repositories still work." : ""}
             </p>
@@ -131,27 +177,12 @@ export function ChangesGitActions({
 
   return (
     <div data-slot="changes-git-actions" className="flex min-w-0 items-center gap-1">
-      {chrome === "desktop" ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="[@media(pointer:coarse)]:min-h-11"
-          disabled={!repo}
-          onClick={() => run("commit")}
-        >
+      {commit ? (
+        <Button variant="ghost" size="sm" className="pointer-coarse:min-h-11" disabled={!repo} onClick={() => run("commit")}>
           Commit
         </Button>
       ) : null}
       {menu}
-      {status ? (
-        <p
-          data-slot="git-host-status"
-          title={status}
-          className={cn("hidden min-w-0 max-w-48 truncate text-xs text-ink-2 sm:block", chrome === "phone" && "hidden")}
-        >
-          {status}
-        </p>
-      ) : null}
     </div>
   );
 }

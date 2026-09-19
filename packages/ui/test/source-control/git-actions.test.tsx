@@ -6,7 +6,11 @@ import type { GitActionExpect, GitCommitResult, GitHostStatus, GitPrReadResult, 
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import type { ChangesDataAdapter } from "../../src/source-control/data.js";
 import { GitActionDialog } from "../../src/source-control/git-dialog.js";
-import { ChangesGitActions } from "../../src/source-control/git-toolbar.js";
+import {
+  ChangesGitActions,
+  GitHostStatusLine,
+  useGitToolbarState,
+} from "../../src/source-control/git-toolbar.js";
 import { createMockAdapter } from "../../src/source-control/mock.js";
 import { resetChangesAdapter, setChangesAdapter } from "../../src/source-control/data.js";
 import { requestGitAction, resetChangesUi } from "../../src/source-control/store.js";
@@ -138,20 +142,39 @@ function recordingAdapter(opts?: {
   return { adapter, commits, pushes };
 }
 
+/** The toolbar's two git pieces, fed by the one hook the toolbar uses. */
+function GitToolbarFixture({
+  repoFilter = null,
+  git = "label",
+  commit = true,
+}: {
+  repoFilter?: string | null;
+  git?: "icon" | "label";
+  commit?: boolean;
+}) {
+  const state = useGitToolbarState({ repos: REPOS, repoFilter, activeRepo: "app" });
+  return (
+    <>
+      <ChangesGitActions state={state} git={git} commit={commit} />
+      <GitHostStatusLine state={state} />
+    </>
+  );
+}
+
 async function mount(opts?: {
   adapter?: ChangesDataAdapter;
   repoFilter?: string | null;
-  chrome?: "phone" | "desktop";
+  git?: "icon" | "label";
+  commit?: boolean;
 }): Promise<void> {
   setChangesAdapter(opts?.adapter ?? recordingAdapter().adapter);
   await act(async () => {
     root.render(
       <TooltipProvider>
-        <ChangesGitActions
-          repos={REPOS}
+        <GitToolbarFixture
           repoFilter={opts?.repoFilter ?? null}
-          activeRepo="app"
-          chrome={opts?.chrome ?? "desktop"}
+          git={opts?.git ?? "label"}
+          commit={opts?.commit ?? true}
         />
         <GitActionDialog />
       </TooltipProvider>,
@@ -289,7 +312,7 @@ it("names the signed-out fix while the neighbour still commits", async () => {
   await act(async () => {
     root.render(
       <TooltipProvider>
-        <ChangesGitActions repos={REPOS} repoFilter="app" activeRepo="app" chrome="desktop" />
+        <GitToolbarFixture repoFilter="app" />
         <GitActionDialog />
       </TooltipProvider>,
     );
