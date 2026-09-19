@@ -44,7 +44,7 @@ source as `docs/transcript-parity.md` and D-305.
 | 10 | Commit messages, PR titles and descriptions are written by **the session's current model**, never the Namer. |
 | 11 | Git actions live in the **overlay's toolbar only** this leap. |
 | 12 | A fleet row **opens its agent's changes** in the same overlay (in scope, §10 L5). |
-| 13 | The overlay renders diffs with **our own elements and Shiki**; the only dependency is a patch parser (§8.3). |
+| 13 | The overlay adopts **`@pierre/diffs`** for rendering, subject to the L0 spike; our own elements plus `parse-git-diff` are the fallback (§8.3). |
 | 14 | **Split** is the default view; unified is a toggle that is remembered. |
 | 15 | Checkpoint retention defaults to the **last 200 turns per session**, configurable per project, and deleting a session deletes its checkpoints. |
 | 16 | A repository in the workspace that the session never touched is **not listed**. |
@@ -386,35 +386,47 @@ Candidates considered, with verified facts:
 | `react-diff-view` | MIT · 3.3.3 | None; you feed tokens | Closest to our needs; its parser (`gitdiff-parser`, MIT) is what we actually want |
 | `@codemirror/merge` | MIT · 6.12.2 | Lezer | An editor, not a review surface; only worth it if files become editable |
 
-**Confirmed, and the deciding evidence is Shadow DOM.** `@pierre/diffs`
-renders inside a shadow root: its supported customization is a set of CSS
-custom properties, and anything deeper goes through `unsafeCSS`, which its own
-maintainers mark unstable. Three things Laser already does break against that
-boundary:
+**Decision: adopt `@pierre/diffs`, subject to a spike (L0).** It ships what we
+would otherwise build from scratch — `File`, `FileDiff`, `MultiFileDiff`,
+`PatchDiff`, `CodeView`, split *and* stacked layouts, annotations, selectable
+lines, a `Virtualizer`, worker-thread highlighting through
+`WorkerPoolContextProvider`, and editing for later — on Shiki `^3 || ^4`, which
+is the version we already pin, so there is one highlighter and one copy of the
+grammars.
 
-- **Find.** Our search paints native highlights over DOM ranges
-  (`thread/find-ranges.ts`). `CSS.highlights` is window-wide, but a
-  `::highlight()` rule only paints inside the tree whose stylesheet carries it,
-  and **one `Range` cannot span the light DOM and a shadow tree** — boundary
-  points must share a root. Searching a diff would need a rule injected into
-  every shadow root through the unstable API, and one Range per tree.
-- **Searchable content markers.** AGENTS.md §6b requires value regions to carry
-  `data-search-content`. Inside a shadow root we do not own the markup.
-- **A second highlighter theme and a second virtualizer.** Their theme system
-  is registered Shiki themes plus their own CSS properties, and they ship their
-  own `Virtualizer`; we pin Shiki 4.4.3 and adopted `@legendapp/list` in
-  M16-T91.
+The theme objection dissolves on reading their API: `toCSS(theme)` and
+`cssVariables` emit `var(--hls-*)` custom properties, and **changing those
+variables recolours without re-highlighting**. We generate their theme from our
+own tokens, so the person's theme still drives every colour and no literal
+value enters a component — which is exactly what AGENTS.md demands.
 
-So: **our own rendering, one parser.** The parser is
-[`parse-git-diff`](https://www.npmjs.com/package/parse-git-diff) (MIT, TypeScript,
-last published 2026-02) pinned exactly, with `parse-diff` (MIT, 2026-04) as the
-fallback if an edge case defeats it — renames, mode changes, binary files and
-"no newline at end of file" are the cases to pin with tests. `gitdiff-parser`
-(what `react-diff-view` uses) is untouched since 2023 and is not taken.
+Three risks remain, and they are what the spike is for, not reasons to refuse:
 
-The other deciding reason is not the code: a diff in the overlay must look
-identical to a diff in the transcript, and `docs/ux-elements.md` already claims
-both surfaces.
+1. **Find inside a shadow root.** `CSS.highlights` is window-wide, but a
+   `::highlight()` rule only paints in the tree whose stylesheet carries it,
+   and one `Range` cannot span the light DOM and a shadow tree. Their roots
+   appear to be `open` (their SSR path uses `host.shadowRoot`), so the clean
+   fix is an **adopted stylesheet pushed into each root** plus one `Range` set
+   per root — not `unsafeCSS`. `thread/find-ranges.ts` gains a "roots" concept.
+2. **Searchable value markers.** AGENTS.md §6b's `data-search-content` contract
+   assumes we own the markup. Inside their DOM we must either use their
+   documented `data-*` attributes as the marker, or scope the contract to say
+   the overlay's diff is searched through the same roots mechanism.
+3. **A second virtualizer.** Theirs inside the overlay, `@legendapp/list` in
+   the transcript. Acceptable because the surfaces are disjoint, and recorded
+   so nobody reads it as drift.
+
+**The fallback, if the spike fails:** our own rendering on the elements we
+already own (`code-diff.tsx`, `file-tree.tsx`, `diff.ts`) with
+[`parse-git-diff`](https://www.npmjs.com/package/parse-git-diff) (MIT,
+TypeScript, published 2026-02) as the only dependency, `parse-diff` (MIT,
+2026-04) as its own fallback. `gitdiff-parser` — what `react-diff-view` uses —
+is untouched since 2023 and is not taken in either direction.
+
+Either way, the rule that does not move: a diff in the overlay and a diff in
+the transcript must look like the same product. If we adopt Pierre for the
+overlay, the transcript's `code-diff.tsx` is re-examined in L5 so the two do
+not diverge.
 
 ### F.4 The bar
 
@@ -488,6 +500,7 @@ action needs a credential that lives on another machine.
 
 | # | Title | Done when |
 | --- | --- | --- |
+| **L0** | Diff-renderer spike | A throwaway prototype mounts `FileDiff` and `CodeView` with a Shiki theme generated from our tokens and proves, with evidence: (1) switching Laser's theme recolours through `--hls-*` with no re-highlight and no literal colour in our code; (2) their shadow roots are `open`, an adopted stylesheet carrying `::highlight(...)` paints inside them, and find counts and steps across roots; (3) selecting and copying yields source text with no gutter contamination; (4) keyboard focus and our shortcuts survive retargeting; (5) one Shiki copy in the bundle, with the size delta measured; (6) real patches render — rename, mode change, binary, no-newline-at-EOF, a 10 000-line file; (7) 320px, both themes, reduced motion. All seven pass, or the fallback in §8.3 is taken and D-313 is superseded |
 | **L1** | Workspace shapes and the harness | `workspaceShape` resolves all five shapes with tests over real layouts (a repo, a monorepo, a 41-repo workspace, a nested repo, no git); `start_agent` never fails over shape; `worktree: "strict"` keeps D-156's refusal; the project default exists in Settings; no wasted turn in `~/projects/kwentra` |
 | **L2** | Checkpoints, scopes, restore | Checkpoints captured per turn per repository through an isolated index; the person's index, working tree, branches and reflog provably untouched; `project/changes` returns numstat for all five scopes; live and durable authorities agree; undo-this-turn restores files and staging behind one confirmation; retention cap and off switch |
 | **L3** | Telemetry query | `pi/session/telemetry` computes over the whole session, incrementally, fenced by revision; both authorities identical; opening a 27 MB session performs no full re-read; every client-side aggregation deleted; the panel's apology gone |
@@ -495,8 +508,10 @@ action needs a credential that lives on another machine.
 | **L5** | The overlay | Files open full-screen, tabs, tree grouped by repository, split and unified, Shiki tokens, viewed ticks, all designed states, keyboard path, phone layout; a fleet row's **Changes** opens it scoped to that run (§F.5) |
 | **L6** | Git actions | Commit, push, branch, PR create / read / checkout / merge for GitHub and Bitbucket through installed CLIs, per-repository discovery, session-model prose, explicit confirmations, no interpolation |
 
-L1 and L3 are independent of each other; L2 depends on L1; L4 depends on L3;
-L5 depends on L2 and L4; L6 depends on L5. Each milestone gets one independent
+L0, L1 and L3 are independent of each other; L2 depends on L1; L4 depends on
+L3; L5 depends on L0, L2 and L4; L6 depends on L5. L0 is small and answers the
+only question that could force a redesign of L5, so it runs first or in
+parallel with L1. Each milestone gets one independent
 review and one correction batch, and the person performs browser acceptance on
 a parent-built sandbox before any release (the working agreement since 0.9.2).
 
@@ -512,7 +527,7 @@ a parent-built sandbox before any release (the working agreement since 0.9.2).
 | D-310 | Changed files come from git, never from the agent's tool calls |
 | D-311 | Files open in a read-only full-screen overlay; git actions live in its toolbar and nowhere else this leap |
 | D-312 | Commit messages and pull-request prose are written by the session's current model, never the Namer |
-| D-313 | The overlay renders diffs with Laser's own elements and Shiki; `parse-git-diff` is the only dependency taken. `@pierre/diffs` is rejected because its Shadow DOM breaks our find (one Range cannot span light and shadow trees), our `data-search-content` contract and our single-highlighter, single-virtualizer rule |
+| D-313 | The overlay adopts `@pierre/diffs` (Apache-2.0, Shiki `^3 \|\| ^4`, so one highlighter), themed from Laser's tokens through `toCSS`/`cssVariables`, provided the L0 spike proves find, selection and theming across its Shadow DOM. Its `Virtualizer` is used inside the overlay while `@legendapp/list` keeps the transcript; the surfaces are disjoint and this is deliberate. The fallback is our own elements plus `parse-git-diff` |
 | D-314 | A fleet row opens its agent's changes in the same overlay, scoped from the run's `baseCommit`; the reader never merges |
 | D-315 | Split is the default diff view, remembered per person, falling back to unified when two columns of code do not fit |
 | D-316 | Checkpoint retention defaults to the last 200 turns per session, is configurable per project, and follows the session's deletion |
@@ -542,7 +557,7 @@ a parent-built sandbox before any release (the working agreement since 0.9.2).
 
 ## 13 · Open questions
 
-None. The four that were open are settled above: rendering (§8.3, D-313), split
-as the default (D-315), retention (§7.1, D-316) and untouched repositories
-(§7.3). The next unknown will come from L1's contact with real workspaces, and
+One, and it is a spike rather than a question: whether `@pierre/diffs` survives
+L0's seven criteria (§8.3, D-313). The other three are settled: split as the
+default (D-315), retention (§7.1, D-316) and untouched repositories (§7.3). The next unknown will come from L1's contact with real workspaces, and
 belongs in `STATUS_DETAILED.md` as it is found.
