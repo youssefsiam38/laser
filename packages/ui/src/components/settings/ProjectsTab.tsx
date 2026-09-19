@@ -2,7 +2,7 @@
 /** Settings → Projects: one Bash pre-command per known project. */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, FolderKanban } from "lucide-react";
-import { AGENT_ISOLATION_DEFAULT, type AgentIsolationDefault, type ProjectEnvStatus, type ProjectInfo } from "@lasercode/protocol";
+import { AGENT_ISOLATION_DEFAULT, CHECKPOINT_RETENTION_DEFAULT, type AgentIsolationDefault, type CheckpointRetention, type ProjectEnvStatus, type ProjectInfo } from "@lasercode/protocol";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ export function ProjectsTab() {
   const { client, projectInfo } = useLaserStable();
   const execution = useCapability("pi/project/env/set", { presentation: "explained" });
   const isolation = useCapability("pi/project/isolation/set", { presentation: "explained" });
+  const retention = useCapability("pi/project/checkpoint/retention/set", { presentation: "explained" });
   const projects = useMemo(
     () => Object.values(projectInfo).sort((a, b) => a.name.localeCompare(b.name) || a.cwd.localeCompare(b.cwd)),
     [projectInfo],
@@ -76,6 +77,11 @@ export function ProjectsTab() {
     return answer.project.agentIsolation ?? AGENT_ISOLATION_DEFAULT;
   }, [client]);
 
+  const saveRetention = useCallback(async (cwd: string, value: CheckpointRetention) => {
+    const answer = await client.request("pi/project/checkpoint/retention/set", { cwd, retention: value });
+    return answer.project.checkpointRetention ?? CHECKPOINT_RETENTION_DEFAULT;
+  }, [client]);
+
   if (projects.length === 0) {
     return <Empty title="No projects yet" body="Open a project and it will appear here." />;
   }
@@ -86,7 +92,7 @@ export function ProjectsTab() {
         <div className="flex flex-col gap-1">
           <h2 className="text-base font-semibold text-ink">Projects</h2>
           <p className="text-xs leading-5 text-ink-3">
-            Give any project one optional command to prepare its shell, and choose how agents are isolated. Each project keeps its own settings.
+            Give any project one optional command to prepare its shell, choose how agents are isolated, and how many turn checkpoints to keep. Each project keeps its own settings.
           </p>
         </div>
         {execution.state === "explained" ? (
@@ -94,6 +100,9 @@ export function ProjectsTab() {
         ) : null}
         {isolation.state === "explained" ? (
           <CapabilityNotice title="Agent isolation cannot be changed here" explanation={isolation.explanation ?? "Use a connection with settings access to change how agents are isolated."} />
+        ) : null}
+        {retention.state === "explained" ? (
+          <CapabilityNotice title="Checkpoint retention cannot be changed here" explanation={retention.explanation ?? "Use a connection with settings access to change how long checkpoints are kept."} />
         ) : null}
         <div className="flex flex-col gap-2">
           {projects.map(project => (
@@ -104,8 +113,10 @@ export function ProjectsTab() {
               loadError={failures[project.cwd]}
               writable={execution.state === "available"}
               isolationWritable={isolation.state === "available"}
+              retentionWritable={retention.state === "available"}
               onSave={save}
               onIsolation={saveIsolation}
+              onRetention={saveRetention}
             />
           ))}
         </div>
@@ -120,16 +131,20 @@ function ProjectSection({
   loadError,
   writable,
   isolationWritable,
+  retentionWritable,
   onSave,
   onIsolation,
+  onRetention,
 }: {
   project: ProjectInfo;
   status: ProjectEnvStatus | undefined;
   loadError: string | undefined;
   writable: boolean;
   isolationWritable: boolean;
+  retentionWritable: boolean;
   onSave: (cwd: string, command: string) => Promise<ProjectEnvStatus>;
   onIsolation: (cwd: string, value: AgentIsolationDefault) => Promise<AgentIsolationDefault>;
+  onRetention: (cwd: string, value: CheckpointRetention) => Promise<CheckpointRetention>;
 }) {
   const [open, setOpen] = useState(false);
   const [command, setCommand] = useState("");
@@ -138,6 +153,8 @@ function ProjectSection({
   const [note, setNote] = useState<{ text: string; error?: boolean }>();
   const [isolation, setIsolation] = useState<AgentIsolationDefault>(project.agentIsolation ?? AGENT_ISOLATION_DEFAULT);
   const [isolationNote, setIsolationNote] = useState<{ text: string; error?: boolean }>();
+  const [retention, setRetention] = useState<CheckpointRetention>(project.checkpointRetention ?? CHECKPOINT_RETENTION_DEFAULT);
+  const [retentionNote, setRetentionNote] = useState<{ text: string; error?: boolean }>();
 
   useEffect(() => {
     if (dirty || !status) return;
@@ -147,6 +164,10 @@ function ProjectSection({
   useEffect(() => {
     setIsolation(project.agentIsolation ?? AGENT_ISOLATION_DEFAULT);
   }, [project.agentIsolation]);
+
+  useEffect(() => {
+    setRetention(project.checkpointRetention ?? CHECKPOINT_RETENTION_DEFAULT);
+  }, [project.checkpointRetention]);
 
   const changeIsolation = async (value: AgentIsolationDefault) => {
     const previous = isolation;
@@ -165,6 +186,30 @@ function ProjectSection({
     } catch (error) {
       setIsolation(previous);
       setIsolationNote({ text: error instanceof Error ? error.message : "That setting could not be saved.", error: true });
+    }
+  };
+
+  const changeRetention = async (value: CheckpointRetention) => {
+    const previous = retention;
+    setRetention(value);
+    setRetentionNote(undefined);
+    try {
+      const saved = await onRetention(project.cwd, value);
+      setRetention(saved);
+      setRetentionNote({
+        text: saved === "off"
+          ? "Saved. Existing checkpoints for this project are removed now, and new turns are not captured."
+          : saved === "all"
+            ? "Saved. Every turn is kept until you change this."
+            : saved === "50"
+              ? "Saved. The last 50 turns are kept."
+              : saved === "1000"
+                ? "Saved. The last 1 000 turns are kept."
+                : "Saved. The last 200 turns are kept.",
+      });
+    } catch (error) {
+      setRetention(previous);
+      setRetentionNote({ text: error instanceof Error ? error.message : "That setting could not be saved.", error: true });
     }
   };
 
@@ -234,6 +279,21 @@ function ProjectSection({
             />
           </div>
           {isolationNote && <p className={cn("text-xs leading-5", isolationNote.error ? "text-danger" : "text-ink-2")} role={isolationNote.error ? "alert" : "status"}>{isolationNote.text}</p>}
+          <div className={cn(!retentionWritable && "pointer-events-none opacity-60")}>
+            <Segmented
+              label="Checkpoints"
+              value={retention}
+              onChange={value => { if (retentionWritable) void changeRetention(value); }}
+              options={[
+                { value: "50", label: "Last 50 turns", detail: "Older checkpoints are removed. A scope whose start was pruned says so." },
+                { value: "200", label: "Last 200 turns", detail: "The default. Older checkpoints are removed oldest-first." },
+                { value: "1000", label: "Last 1 000 turns", detail: "Keep a long history. Refs are packed so listing stays fast." },
+                { value: "all", label: "Every turn", detail: "Never prune. Deleting the session still removes its refs." },
+                { value: "off", label: "Off", detail: "Removes this project's existing checkpoints now and captures nothing new." },
+              ]}
+            />
+          </div>
+          {retentionNote && <p className={cn("text-xs leading-5", retentionNote.error ? "text-danger" : "text-ink-2")} role={retentionNote.error ? "alert" : "status"}>{retentionNote.text}</p>}
           <label className="flex flex-col gap-1.5" htmlFor={`project-command-${project.cwd}`}>
             <span className="text-xs font-medium text-ink-2">Command to run before Bash</span>
             <Input

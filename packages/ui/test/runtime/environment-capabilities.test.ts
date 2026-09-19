@@ -29,6 +29,7 @@ const EXPECTED_METHOD_CAPABILITIES = {
   "pi/project/file_diff": [],
   "pi/project/file_source": [],
   "pi/project/checkpoint/list": [],
+  "pi/project/checkpoint/retention/set": [],
   "pi/project/restore": [],
   "pi/project/workspace": [],
   "pi/project/browse": [],

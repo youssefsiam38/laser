@@ -30,6 +30,33 @@ export type RestoreTarget = (typeof RESTORE_TARGETS)[number];
 /** Same ceiling the transcript uses: a large patch is paged, never sent whole. */
 export const FILE_DIFF_MAX_BYTES = ENTRY_RANGE_MAX_BYTES;
 
+/** Git's empty-tree OID. A well-known constant, not a captured object. */
+export const GIT_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/** Per-project settings file under `PROJECT_DIR_NAME`. */
+export const SOURCE_CONTROL_SETTINGS_FILE = "source-control.json";
+
+/** A NUL byte in the first 8 KiB is git's own heuristic for "binary". */
+export function gitLooksBinary(buffer: Uint8Array): boolean {
+  const end = Math.min(buffer.length, 8192);
+  for (let i = 0; i < end; i++) if (buffer[i] === 0) return true;
+  return false;
+}
+
+export function checkpointRetentionFromSettingsJson(text: string): CheckpointRetention | undefined {
+  try {
+    const parsed = JSON.parse(text) as { checkpointRetention?: unknown };
+    if (isCheckpointRetention(parsed.checkpointRetention)) return parsed.checkpointRetention;
+  } catch {
+    // Absent or unreadable: the caller uses the default.
+  }
+  return undefined;
+}
+
+export function mergeSourceControlSettingsJson(existing: Record<string, unknown>, retention: CheckpointRetention): string {
+  return `${JSON.stringify({ ...existing, checkpointRetention: retention }, null, 2)}\n`;
+}
+
 export function isChangeScope(value: unknown): value is ChangeScope {
   return typeof value === "string" && (CHANGE_SCOPES as readonly string[]).includes(value);
 }
@@ -109,12 +136,23 @@ export interface ProjectChanges {
   pruned?: PrunedScope;
 }
 
+/** One repository's object for a session turn. The ref name is the same in every repository; the commit is not. */
+export interface CheckpointRepoRef {
+  repo: string;
+  ref: string;
+  commit: string;
+}
+
 export interface CheckpointInfo {
   turn: number;
   ref: string;
   commit: string;
   createdAt: string;
   entryId?: string;
+  /** Capture for this turn failed; restore must refuse and diffs must say so. */
+  failed?: true;
+  /** Per-repository commits. Restore must use these, never `commit` alone. */
+  repos?: CheckpointRepoRef[];
 }
 
 export interface CheckpointList {
@@ -150,15 +188,25 @@ export interface RestoreRepoPreview {
 export interface RestorePreview {
   turn: number;
   restore: RestoreTarget;
-  /** Options that would do nothing — hidden, not disabled. */
+  /** Options that would do nothing — hidden, not disabled. Always the full set, not filtered to the requested target. */
   hidden: RestoreTarget[];
   repos: RestoreRepoPreview[];
   conversation?: { entryId: string; turn: number };
+  /** A single add -A tree cannot record staged vs unstaged, so restore never writes the index. */
+  staging?: "not_restored";
+  /** Person-facing sentence for the confirmation. */
+  detail?: string;
+}
+
+export interface RestoreRepoResult {
+  repo: string;
+  restored: boolean;
+  detail?: string;
 }
 
 export interface RestoreResult {
   preview: RestorePreview;
-  restored?: { files: boolean; conversation: boolean };
+  restored?: { files: boolean; conversation: boolean; repos?: RestoreRepoResult[] };
 }
 
 export interface ProjectChangesParams {
@@ -204,6 +252,8 @@ export interface ProjectFileSourceParams {
    */
   ref?: string;
   workdir?: string;
+  /** Agent-scope source: the run whose worktree `repo` was listed from. */
+  runId?: string;
   offset?: number;
   limit?: number;
 }
@@ -221,4 +271,9 @@ export interface ProjectRestoreParams {
   /** Without this, only the confirmation payload is returned. */
   confirm?: boolean;
   workdir?: string;
+}
+
+export interface CheckpointRetentionSetParams {
+  cwd: string;
+  retention: CheckpointRetention;
 }

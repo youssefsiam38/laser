@@ -2,79 +2,49 @@
  * Delete a session's checkpoint refs from every repository its working
  * directory belongs to. Best-effort: a missing git or a directory that is not
  * a repository is not a reason to refuse deleting the transcript.
- *
- * TODO(M18-T1): replace the repository walk with the shared workspace resolver
  */
 import { CHECKPOINT_REF_NAMESPACE } from "@lasercode/protocol";
-import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { readdir } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { checkpointSessionKey } from "@lasercode/protocol/checkpoint-key";
+import { runGit } from "@lasercode/protocol/git-run";
+import { createWorkspaceResolver } from "../workspace.js";
 
-function sessionKey(sessionPath: string): string {
-  return createHash("sha256").update(sessionPath).digest("hex").slice(0, 32);
-}
-
-function git(cwd: string, args: readonly string[]): Promise<{ stdout: string; exitCode: number }> {
-  return new Promise((resolveResult) => {
-    const env: NodeJS.ProcessEnv = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" };
-    delete env.GIT_INDEX_FILE;
-    execFile(
-      "git",
-      [...args],
-      {
-        cwd,
-        timeout: 8000,
-        maxBuffer: 4 * 1024 * 1024,
-        env,
-      },
-      (error, stdout) => {
-        const out = typeof stdout === "string" ? stdout : String(stdout ?? "");
-        if (!error) {
-          resolveResult({ stdout: out, exitCode: 0 });
-          return;
-        }
-        const errno = error as NodeJS.ErrnoException & { status?: unknown };
-        const status = typeof errno.status === "number" ? errno.status : 1;
-        resolveResult({ stdout: out, exitCode: status });
-      },
-    );
-  });
-}
+const resolver = createWorkspaceResolver();
 
 async function repoRoots(cwd: string): Promise<string[]> {
-  const root = resolve(cwd);
-  const top = await git(root, ["rev-parse", "--show-toplevel"]);
-  if (top.exitCode === 0 && top.stdout.trim()) return [resolve(top.stdout.trim())];
-  // TODO(M18-T1): replace this body with the shared workspace resolver
-  let names: string[];
-  try {
-    names = await readdir(root);
-  } catch {
-    return [];
+  const shape = await resolver.resolve(cwd, { rescan: true }).catch(() => undefined);
+  if (!shape) return [];
+  return shape.repositories.map((row) => row.root);
+}
+
+async function deleteRefs(repo: string, prefix: string): Promise<number> {
+  const listed = await runGit({ cwd: repo, args: ["for-each-ref", "--format=%(refname)", prefix], timeoutMs: 8000 }).catch(
+    () => undefined,
+  );
+  if (!listed || listed.exitCode !== 0 || listed.timedOut || listed.overflow) return 0;
+  const refs = listed.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  let removed = 0;
+  for (const ref of refs) {
+    const deleted = await runGit({ cwd: repo, args: ["update-ref", "-d", ref], timeoutMs: 8000 }).catch(() => undefined);
+    if (deleted && deleted.exitCode === 0) removed += 1;
   }
-  const found: string[] = [];
-  for (const name of names.slice(0, 256)) {
-    if (name === "node_modules" || name === "dist" || name.startsWith(".")) continue;
-    const child = await git(join(root, name), ["rev-parse", "--show-toplevel"]);
-    if (child.exitCode === 0 && child.stdout.trim()) found.push(resolve(child.stdout.trim()));
-    if (found.length >= 64) break;
+  if (refs.length > 0) {
+    await runGit({ cwd: repo, args: ["pack-refs", `--include=${CHECKPOINT_REF_NAMESPACE}/**`], timeoutMs: 15_000 }).catch(
+      () => undefined,
+    );
   }
-  return found;
+  return removed;
 }
 
 export async function deleteSessionCheckpoints(cwd: string, sessionPath: string): Promise<number> {
-  const prefix = `${CHECKPOINT_REF_NAMESPACE}/${sessionKey(sessionPath)}`;
+  const prefix = `${CHECKPOINT_REF_NAMESPACE}/${checkpointSessionKey(sessionPath)}`;
   let removed = 0;
-  for (const repo of await repoRoots(cwd)) {
-    const listed = await git(repo, ["for-each-ref", "--format=%(refname)", prefix]);
-    if (listed.exitCode !== 0) continue;
-    const refs = listed.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
-    for (const ref of refs) {
-      const deleted = await git(repo, ["update-ref", "-d", ref]);
-      if (deleted.exitCode === 0) removed += 1;
-    }
-    if (refs.length > 0) await git(repo, ["pack-refs", `--include=${CHECKPOINT_REF_NAMESPACE}/**`]);
-  }
+  for (const repo of await repoRoots(cwd)) removed += await deleteRefs(repo, prefix);
+  return removed;
+}
+
+/** Retention Off: drop every checkpoint ref in this project's repositories now. */
+export async function deleteAllCheckpoints(cwd: string): Promise<number> {
+  let removed = 0;
+  for (const repo of await repoRoots(cwd)) removed += await deleteRefs(repo, CHECKPOINT_REF_NAMESPACE);
   return removed;
 }

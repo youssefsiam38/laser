@@ -113,3 +113,63 @@ No `pnpm verify`.
 8. Restore preview names repos/lost work; confirm restores files+staging; refused while streaming — restore suite.
 9. Types, schemas, policy, round-trip samples, router coverage — protocol + host tests.
 10. No browser run.
+
+## Corrections
+
+Branch: `agents/l2-checkpoint-corrections-21256537`
+Rejected milestone: multi-repository restore destroyed untracked files in every repository after the first and reported success; `git clean` ran after any `ls-files` failure.
+
+### Blockers
+
+- **B1** — Restore and preview resolve the checkpoint **per repository** (`listSessionCheckpoints` / `CheckpointInfo.repos`). A foreign OID is never applied. Multi-repo fixture uses genuinely different trees (`alpha-one` vs `beta-one`). After deleting beta's ref, alpha restores and beta keeps its untracked file; `restored.repos` records the refusal.
+- **B2** — `rev-parse <commit>^{commit}` and `ls-files` exit 0 are required **before** any worktree write or delete. Two-phase: validate every repository, then mutate. Failures are per-repo sentences, not a mid-loop `ProtocolError`. Clean/delete only after a successful `git restore --worktree`.
+
+### Should-fix
+
+- **S1** — `changes()` runs repositories concurrently. Isolated snapshots reuse one durable index `<gitDir>/<PRODUCT_NAME>-checkpoint-index` (mutex per gitDir; UUID leftovers swept). Uncommitted uses `git diff HEAD` plus `git status --porcelain` (no write-tree).
+- **S2** — A pruned session scope with `oldestTurn` returns the partial range **and** the pruned marker. Empty files only when there is no surviving start.
+- **S3** — See decision below.
+- **S4** — `file_diff` / `file_source` resolve repositories through `reposFor` (honours `runId` worktrees). Test uses a child path that is not the parent repo.
+- **S5** — Restore ignores caller `workdir` unless it is this session's own directory; otherwise refuses with a sentence. Reads still accept an explicit workdir.
+- **S6** — See decision below.
+- **S7** — Turn numbers increment on every attempt (`nextTurn`). A failed capture publishes a failed-trailer marker from the previous tree when possible, so the next turn does not borrow the neighbour's range. `scope: turn` on a failed turn says it was not captured.
+- **S8** — `scope: "turn"` with `turn: 0` is refused: the open-time baseline is not a conversation turn.
+- **S9** — At most one pending after-turn capture per session (latest wins). A pending baseline is not dropped.
+- **S10** — Session key lives in `@lasercode/protocol/checkpoint-key` (node subpath: the barrel is browser-bundled). Shared `runGit` in `@lasercode/protocol/git-run` (timeout vs overflow vs git exit). `GIT_EMPTY_TREE` / `gitLooksBinary` in protocol `source-control.ts`. Host cleanup uses the workspace resolver. `ClientRequests` points at the param interfaces in `source-control.ts`.
+
+`worker/src/git.ts` still has its own `looksBinary` / `EMPTY_TREE` copies — that file is outside this batch's write set (composer git line, different runner).
+
+### Nits
+
+- Durable index (S1) replaces UUID files; leftovers are swept.
+- `hidden` lists every no-op option, not only the requested target.
+- Entry ids are git trailers (`Entry:`), so whitespace-bearing ids are not truncated. Legacy `entry=` subjects still parse.
+- Timeout and `maxBuffer` overflow are distinct from git exit 1; diffs throw instead of returning "no changes".
+
+### Retention setting
+
+`pi/project/checkpoint/retention/set` (`settings` scope). Host registry + `<project>/<PROJECT_DIR_NAME>/source-control.json` so a live worker reads it on the next capture. **Off** deletes every checkpoint ref in the project's repositories immediately. Settings → Projects segmented control, tokens only.
+
+### S3 decision — staging is not restored
+
+A checkpoint is one isolated `add -A` tree. That tree cannot record the person's staged/unstaged split, so `--staged` was fabricating an index: everything that differed from HEAD appeared staged after undo.
+
+**Choice:** restore the worktree only (`git restore --source … --worktree`). Files not in the checkpoint (untracked and tracked) are removed from disk after a successful restore; ignored files stay. The confirmation carries `staging: "not_restored"` and a sentence. Capturing a second index tree would honour E.4's wording but would write the person's index on undo, and mixing that index with `git clean` is how untracked checkpoint files get deleted. Honesty over a fake split.
+
+### S6 decision — restore is `work_control`
+
+Followed the orchestrator. `restore: "files"` rewrites the working tree and deletes uncommitted work; it does not change the conversation. Precedent: `agents/worktree/remove` is `work_control`. Conversation restore still goes through `pi/session/navigate` (`session_write`) when `restore` includes conversation. UI capability plumbing is method-keyed (`useCapability("pi/project/restore")`), so the policy table is enough.
+
+### Validation
+
+| Command | Result |
+| --- | --- |
+| `pnpm install --frozen-lockfile` | lockfile up to date |
+| `pnpm -F @lasercode/protocol test` | 433 passed |
+| `pnpm -F @lasercode/worker test` | 1120 passed, 4 skipped |
+| `pnpm -F @lasercode/host test` (launch env scrubbed) | 967 passed |
+| `pnpm -F @lasercode/ui test` | 2680 passed, 1 skipped |
+| `pnpm -r typecheck` | passed |
+| `pnpm identity:check` | passed |
+
+No browser, no Playwright, no `pnpm verify`.

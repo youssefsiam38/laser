@@ -230,7 +230,6 @@ export const METHOD_POLICY = {
   "pi/session/clear_queue": { scope: "session_write", reach: "any" },
   "pi/session/fork": { scope: "session_write", reach: "any" },
   "pi/session/navigate": { scope: "session_write", reach: "any" },
-  "pi/project/restore": { scope: "session_write", reach: "any" },
   "pi/session/rename": { scope: "session_write", reach: "any" },
   "pi/session/delete": { scope: "session_write", reach: "any" },
   "pi/session/move": { scope: "session_write", reach: "any" },
@@ -256,6 +255,9 @@ export const METHOD_POLICY = {
   "pi/task/stop": { scope: "work_control", reach: "any" },
   "agents/runs/stop": { scope: "work_control", reach: "any" },
   "agents/worktree/remove": { scope: "work_control", reach: "any" },
+  // Rewrites the working tree and deletes uncommitted files. Precedent:
+  // destroying a checkout is `work_control`, not a conversation act.
+  "pi/project/restore": { scope: "work_control", reach: "any" },
 
   // ----------------------------------------------------------- settings ---
   "pi/settings/set": { scope: "settings", reach: "any" },
@@ -266,6 +268,7 @@ export const METHOD_POLICY = {
   "pi/project/reorder": { scope: "settings", reach: "any" },
   "pi/project/trust": { scope: "settings", reach: "any" },
   "pi/project/isolation/set": { scope: "settings", reach: "any" },
+  "pi/project/checkpoint/retention/set": { scope: "settings", reach: "any" },
   // ---------------------------------------------------------- execution ---
   // Running something this machine can execute. `mcp/call` runs a configured
   // server's tool; the project environment helpers run the command a project

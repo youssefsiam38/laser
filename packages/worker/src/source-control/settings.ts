@@ -1,22 +1,26 @@
 /**
  * Per-project checkpoint retention, stored beside other project files under
- * `<cwd>/.…/source-control.json`. The Settings control is owned by another
- * milestone; this module is the storage and the default.
+ * `<cwd>/<PROJECT_DIR_NAME>/source-control.json`.
  */
-import { CHECKPOINT_RETENTION_DEFAULT, PROJECT_DIR_NAME, isCheckpointRetention, type CheckpointRetention } from "@lasercode/protocol";
+import {
+  CHECKPOINT_RETENTION_DEFAULT,
+  PROJECT_DIR_NAME,
+  SOURCE_CONTROL_SETTINGS_FILE,
+  checkpointRetentionFromSettingsJson,
+  mergeSourceControlSettingsJson,
+  type CheckpointRetention,
+} from "@lasercode/protocol";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-const FILE = "source-control.json";
-
 export function sourceControlSettingsPath(projectCwd: string): string {
-  return join(resolve(projectCwd), PROJECT_DIR_NAME, FILE);
+  return join(resolve(projectCwd), PROJECT_DIR_NAME, SOURCE_CONTROL_SETTINGS_FILE);
 }
 
 export function readCheckpointRetention(projectCwd: string): CheckpointRetention {
   try {
-    const parsed = JSON.parse(readFileSync(sourceControlSettingsPath(projectCwd), "utf8")) as { checkpointRetention?: unknown };
-    if (isCheckpointRetention(parsed.checkpointRetention)) return parsed.checkpointRetention;
+    const parsed = checkpointRetentionFromSettingsJson(readFileSync(sourceControlSettingsPath(projectCwd), "utf8"));
+    if (parsed) return parsed;
   } catch {
     // Absent or unreadable: the default stands.
   }
@@ -33,5 +37,5 @@ export function writeCheckpointRetention(projectCwd: string, retention: Checkpoi
   } catch {
     existing = {};
   }
-  writeFileSync(file, `${JSON.stringify({ ...existing, checkpointRetention: retention }, null, 2)}\n`);
+  writeFileSync(file, mergeSourceControlSettingsJson(existing, retention));
 }

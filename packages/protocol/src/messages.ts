@@ -25,11 +25,16 @@ import type { BodyComponent, BodyRegion, ElidedEntry, EntryRegionsResult, ImageP
 import type { SessionTelemetry, SessionTelemetryParams } from "./telemetry.js";
 import type {
   CheckpointList,
+  CheckpointListParams,
+  CheckpointRetention,
+  CheckpointRetentionSetParams,
   FileSlice,
   ProjectChanges,
+  ProjectChangesParams,
+  ProjectFileDiffParams,
+  ProjectFileSourceParams,
+  ProjectRestoreParams,
   RestoreResult,
-  RestoreTarget,
-  ChangeScope,
 } from "./source-control.js";
 import type {
   GitBranchParams,
@@ -252,6 +257,11 @@ export interface ProjectInfo {
    * Absent from older stored projects; readers treat missing as `decide`.
    */
   agentIsolation?: AgentIsolationDefault;
+  /**
+   * How many turn checkpoints this project keeps. Absent from older stored
+   * projects; readers treat missing as the last 200 turns (D-316).
+   */
+  checkpointRetention?: CheckpointRetention;
 }
 
 /**
@@ -1548,54 +1558,22 @@ export interface ClientRequests {
    * actually touched; an untouched repository in the same workspace is omitted.
    */
   "pi/project/changes": {
-    params: {
-      cwd: string;
-      path: string;
-      scope: ChangeScope;
-      workdir?: string;
-      turn?: number;
-      fromRef?: string;
-      toRef?: string;
-      runId?: string;
-    };
+    params: ProjectChangesParams;
     result: ProjectChanges;
   };
   /** One file's patch for a scope. Large patches are paged, never sent whole. */
   "pi/project/file_diff": {
-    params: {
-      cwd: string;
-      path: string;
-      scope: ChangeScope;
-      repo: string;
-      file: string;
-      workdir?: string;
-      turn?: number;
-      fromRef?: string;
-      toRef?: string;
-      runId?: string;
-      context?: number;
-      offset?: number;
-      limit?: number;
-    };
+    params: ProjectFileDiffParams;
     result: FileSlice;
   };
   /** One file's bytes at a ref (or the working tree). Paged like `file_diff`. */
   "pi/project/file_source": {
-    params: {
-      cwd: string;
-      path: string;
-      repo: string;
-      file: string;
-      ref?: string;
-      workdir?: string;
-      offset?: number;
-      limit?: number;
-    };
+    params: ProjectFileSourceParams;
     result: FileSlice;
   };
   /** The session's captured checkpoints, oldest first. */
   "pi/project/checkpoint/list": {
-    params: { cwd: string; path: string };
+    params: CheckpointListParams;
     result: CheckpointList;
   };
   /**
@@ -1604,15 +1582,15 @@ export interface ClientRequests {
    * refused with a sentence while a turn is running.
    */
   "pi/project/restore": {
-    params: {
-      cwd: string;
-      path: string;
-      turn: number;
-      restore: RestoreTarget;
-      confirm?: boolean;
-      workdir?: string;
-    };
+    params: ProjectRestoreParams;
     result: RestoreResult;
+  };
+  /**
+   * Per-project checkpoint retention (D-316). Off removes existing refs now.
+   */
+  "pi/project/checkpoint/retention/set": {
+    params: CheckpointRetentionSetParams;
+    result: { project: ProjectInfo };
   };
   /**
    * The workspace shape of `cwd` and the repositories in it. Answered by the
