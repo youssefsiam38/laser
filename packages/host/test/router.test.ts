@@ -13,7 +13,7 @@ import { ErrorCodes, PRODUCT_NAME } from "@lasercode/protocol";
 import { BROWSER_ACCESS, LOCAL_ACCESS, testAccess } from "./actors.js";
 import { describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AgentRun, SessionState, SessionSummary } from "@lasercode/protocol";
@@ -1083,4 +1083,60 @@ it("routes explorer opt-in without opening workers and keeps legacy browse shape
     expect((above as { result: { error?: string } }).result.error).toBeUndefined();
     expect(h.workerRequests).toHaveLength(0);
   } finally { h.cleanup(); rmSync(root, { recursive: true, force: true }); }
+});
+
+describe("Router · workspace shape and isolation", () => {
+  const gitEnv = { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@x", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@x" };
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv }).toString().trim();
+
+  it("answers pi/project/workspace from the host without starting a worker", async () => {
+    const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-workspace-`));
+    const h = harness();
+    try {
+      mkdirSync(join(root, "plain"));
+      writeFileSync(join(root, "plain", "f.txt"), "x\n");
+      const none = await rpc(h.router, "pi/project/workspace", { cwd: join(root, "plain") });
+      expect(none).toMatchObject({ result: { kind: "no-git", repositories: [] } });
+
+      const repo = join(root, "repo");
+      mkdirSync(repo);
+      git(repo, "init", "-q", "-b", "main");
+      writeFileSync(join(repo, "README"), "ok\n");
+      git(repo, "add", "README");
+      git(repo, "commit", "-q", "-m", "init");
+      const one = await rpc(h.router, "pi/project/workspace", { cwd: repo });
+      expect(one).toMatchObject({ result: { kind: "repo", repositories: [{ projectRoot: true }] } });
+
+      const ws = join(root, "ws");
+      mkdirSync(ws);
+      for (const name of ["a", "b"]) {
+        const child = join(ws, name);
+        mkdirSync(child);
+        git(child, "init", "-q", "-b", "main");
+        writeFileSync(join(child, "README"), "ok\n");
+        git(child, "add", "README");
+        git(child, "commit", "-q", "-m", "init");
+      }
+      const many = await rpc(h.router, "pi/project/workspace", { cwd: ws });
+      expect(many).toMatchObject({ result: { kind: "workspace-of-repos" } });
+      expect((many as { result: { repositories: unknown[] } }).result.repositories).toHaveLength(2);
+      expect(h.workerRequests).toHaveLength(0);
+    } finally {
+      h.cleanup();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("persists the per-project isolation default and does not need a worker", async () => {
+    const h = harness();
+    try {
+      h.projects.add(CWD_A);
+      const saved = await rpc(h.router, "pi/project/isolation/set", { cwd: CWD_A, isolation: "share" });
+      expect(saved).toMatchObject({ result: { project: { cwd: CWD_A, agentIsolation: "share" } } });
+      expect(h.projects.agentIsolationOf(CWD_A)).toBe("share");
+      expect(h.workerRequests).toHaveLength(0);
+    } finally {
+      h.cleanup();
+    }
+  });
 });

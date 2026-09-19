@@ -79,6 +79,21 @@ describe("ProjectRegistry", () => {
     expect(reloaded.list().map((p) => [p.name, p.pinned])).toEqual([["seen", false]]);
   });
 
+  it("persists the per-project agent isolation default and treats missing as decide", () => {
+    const store = join(base, "projects.json");
+    const added = project("added");
+    const { reg } = registry({ storePath: store });
+    reg.add(added);
+    expect(reg.agentIsolationOf(added)).toBe("decide");
+    expect(reg.list()[0]?.agentIsolation).toBe("decide");
+    expect(reg.setAgentIsolation(added, "isolate").agentIsolation).toBe("isolate");
+    const { reg: reloaded } = registry({ storePath: store });
+    expect(reloaded.agentIsolationOf(added)).toBe("isolate");
+    expect(reloaded.setAgentIsolation(added, "decide").agentIsolation).toBe("decide");
+    const { reg: again } = registry({ storePath: store });
+    expect(again.agentIsolationOf(added)).toBe("decide");
+  });
+
   it("persists project priority and keeps entries omitted by a stale client", () => {
     const store = join(base, "projects.json");
     const alpha = project("alpha");
