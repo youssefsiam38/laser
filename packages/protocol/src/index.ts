@@ -17,6 +17,7 @@ export * from "./fallback.js";
 export * from "./mcp.js";
 export * from "./jsonrpc.js";
 export * from "./messages.js";
+export * from "./source-control.js";
 export * from "./environment.js";
 export * from "./method-policy.js";
 export * from "./environment-policy.js";

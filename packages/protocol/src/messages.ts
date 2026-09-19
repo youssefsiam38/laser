@@ -21,6 +21,14 @@ import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js
 // cycle exists in the type graph and never in the emitted modules.
 import type { PendingMessage } from "./pending.js";
 import type { BodyComponent, BodyRegion, ElidedEntry, EntryRegionsResult, ImagePartReference, PersistedBodyIdentity } from "./body-range.js";
+import type {
+  CheckpointList,
+  FileSlice,
+  ProjectChanges,
+  RestoreResult,
+  RestoreTarget,
+  ChangeScope,
+} from "./source-control.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
 
@@ -1491,6 +1499,77 @@ export interface ClientRequests {
    * worker uses the baseline of the first session it opened.
    */
   "pi/project/git": { params: { cwd: string; path?: string }; result: ProjectGitStatus };
+  /**
+   * Numstat file list for one change scope. Only repositories this session
+   * actually touched; an untouched repository in the same workspace is omitted.
+   */
+  "pi/project/changes": {
+    params: {
+      cwd: string;
+      path: string;
+      scope: ChangeScope;
+      workdir?: string;
+      turn?: number;
+      fromRef?: string;
+      toRef?: string;
+      runId?: string;
+    };
+    result: ProjectChanges;
+  };
+  /** One file's patch for a scope. Large patches are paged, never sent whole. */
+  "pi/project/file_diff": {
+    params: {
+      cwd: string;
+      path: string;
+      scope: ChangeScope;
+      repo: string;
+      file: string;
+      workdir?: string;
+      turn?: number;
+      fromRef?: string;
+      toRef?: string;
+      runId?: string;
+      context?: number;
+      offset?: number;
+      limit?: number;
+    };
+    result: FileSlice;
+  };
+  /** One file's bytes at a ref (or the working tree). Paged like `file_diff`. */
+  "pi/project/file_source": {
+    params: {
+      cwd: string;
+      path: string;
+      repo: string;
+      file: string;
+      ref?: string;
+      workdir?: string;
+      offset?: number;
+      limit?: number;
+    };
+    result: FileSlice;
+  };
+  /** The session's captured checkpoints, oldest first. */
+  "pi/project/checkpoint/list": {
+    params: { cwd: string; path: string };
+    result: CheckpointList;
+  };
+  /**
+   * Restore files and/or the conversation to a turn's checkpoint.
+   * Without `confirm`, only the confirmation payload is returned. Restore is
+   * refused with a sentence while a turn is running.
+   */
+  "pi/project/restore": {
+    params: {
+      cwd: string;
+      path: string;
+      turn: number;
+      restore: RestoreTarget;
+      confirm?: boolean;
+      workdir?: string;
+    };
+    result: RestoreResult;
+  };
   /**
    * Subdirectories of `path` (the home directory when omitted), for picking a
    * project without typing a path (M10-T6). Directories only, hidden ones

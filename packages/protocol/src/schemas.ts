@@ -36,6 +36,7 @@ import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX, TASK_LOG_SEGMENTS_MAX } from "./tasks.js";
 import { ENVIRONMENT_KEY_PATTERN, SESSION_REVISION_PATTERN } from "./session-revision.js";
 import { BODY_COMPONENT_KINDS, BODY_REGION_MAX_ITEMS, ENTRY_RANGE_MAX_BYTES } from "./body-range.js";
+import { CHANGE_SCOPES, FILE_DIFF_MAX_BYTES, RESTORE_TARGETS } from "./source-control.js";
 import { HISTORY_PAGE_BYTE_LIMIT, HISTORY_PAGE_TURN_MAX } from "./history-window.js";
 
 /** Opt-in browse replies must not silently reinterpret legacy folders as files. */
@@ -817,6 +818,50 @@ export const clientParamsSchemas = {
     .object({ cwd: z.string().min(1), trusted: z.boolean(), remember: z.boolean().optional() })
     .strict(),
   "pi/project/git": z.object({ cwd: z.string().min(1), path: sessionPath.optional() }).strict(),
+  "pi/project/changes": z.object({
+    cwd: z.string().min(1),
+    path: sessionPath,
+    scope: z.enum(CHANGE_SCOPES),
+    workdir: z.string().min(1).max(4096).optional(),
+    turn: z.number().int().min(0).max(1_000_000).optional(),
+    fromRef: z.string().min(1).max(512).optional(),
+    toRef: z.string().min(1).max(512).optional(),
+    runId: z.string().min(1).max(256).optional(),
+  }).strict(),
+  "pi/project/file_diff": z.object({
+    cwd: z.string().min(1),
+    path: sessionPath,
+    scope: z.enum(CHANGE_SCOPES),
+    repo: z.string().min(1).max(4096),
+    file: z.string().min(1).max(4096),
+    workdir: z.string().min(1).max(4096).optional(),
+    turn: z.number().int().min(0).max(1_000_000).optional(),
+    fromRef: z.string().min(1).max(512).optional(),
+    toRef: z.string().min(1).max(512).optional(),
+    runId: z.string().min(1).max(256).optional(),
+    context: z.number().int().min(0).max(100).optional(),
+    offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    limit: z.number().int().min(4).max(FILE_DIFF_MAX_BYTES).optional(),
+  }).strict(),
+  "pi/project/file_source": z.object({
+    cwd: z.string().min(1),
+    path: sessionPath,
+    repo: z.string().min(1).max(4096),
+    file: z.string().min(1).max(4096),
+    ref: z.string().min(1).max(512).optional(),
+    workdir: z.string().min(1).max(4096).optional(),
+    offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+    limit: z.number().int().min(4).max(FILE_DIFF_MAX_BYTES).optional(),
+  }).strict(),
+  "pi/project/checkpoint/list": z.object({ cwd: z.string().min(1), path: sessionPath }).strict(),
+  "pi/project/restore": z.object({
+    cwd: z.string().min(1),
+    path: sessionPath,
+    turn: z.number().int().min(0).max(1_000_000),
+    restore: z.enum(RESTORE_TARGETS),
+    confirm: z.boolean().optional(),
+    workdir: z.string().min(1).max(4096).optional(),
+  }).strict(),
   "pi/project/browse": z.object({
     path: z.string().min(1).max(4096).optional(),
     explorer: z.object({

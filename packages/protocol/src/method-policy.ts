@@ -161,6 +161,10 @@ export const METHOD_POLICY = {
   "pi/account-usage/refresh": { scope: "read", reach: "any" },
   "pi/project/list": { scope: "read", reach: "any" },
   "pi/project/git": { scope: "read", reach: "any" },
+  "pi/project/changes": { scope: "read", reach: "any" },
+  "pi/project/file_diff": { scope: "read", reach: "any" },
+  "pi/project/file_source": { scope: "read", reach: "any" },
+  "pi/project/checkpoint/list": { scope: "read", reach: "any" },
   "pi/project/browse": { scope: "read", reach: "any" },
   "pi/project/files": { scope: "read", reach: "any" },
   // Machine-wide file preview, deliberately available to a paired device:
@@ -214,6 +218,7 @@ export const METHOD_POLICY = {
   "pi/session/clear_queue": { scope: "session_write", reach: "any" },
   "pi/session/fork": { scope: "session_write", reach: "any" },
   "pi/session/navigate": { scope: "session_write", reach: "any" },
+  "pi/project/restore": { scope: "session_write", reach: "any" },
   "pi/session/rename": { scope: "session_write", reach: "any" },
   "pi/session/delete": { scope: "session_write", reach: "any" },
   "pi/session/move": { scope: "session_write", reach: "any" },
