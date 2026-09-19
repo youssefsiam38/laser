@@ -4,6 +4,7 @@ import {
   ProtocolError,
   checkpointRetentionKeep,
   type AgentRun,
+  type AgentScopeFacts,
   type CheckpointList,
   type FileSlice,
   type ProjectChanges,
@@ -17,7 +18,9 @@ import {
 import { resolve } from "node:path";
 import { captureCheckpoint, publishFailedCheckpoint } from "./capture.js";
 import {
+  branchExists,
   filterTouched,
+  headsRef,
   loadCheckpoints,
   repoChanges,
   resolveScopeRange,
@@ -84,16 +87,15 @@ export class SourceControlService {
 
   async changes(params: ProjectChangesParams): Promise<ProjectChanges> {
     const workdir = this.workdir(params.path, params.workdir);
-    const repos = await this.reposFor(workdir, params);
-    const checkpoints = await loadCheckpoints(repos, params.path);
-    const query = this.scopeQuery(params, checkpoints);
+    const resolved = await this.resolveScope(workdir, params);
+    const out: ProjectChanges = { scope: params.scope, repos: [], ...(resolved.agent ? { agent: resolved.agent } : {}) };
+    if (resolved.agent?.branchGone) return out;
     const rows = await Promise.all(
-      repos.map(async (repo) => {
-        const range = await resolveScopeRange(repo, query, await listSessionCheckpoints(repo, params.path));
+      resolved.repos.map(async (repo) => {
+        const range = await resolveScopeRange(repo, resolved.query, await listSessionCheckpoints(repo, params.path));
         return { range, changes: await repoChanges(repo, range) };
       }),
     );
-    const out: ProjectChanges = { scope: params.scope, repos: [] };
     let pruned = undefined as ProjectChanges["pruned"];
     for (const row of rows) {
       if (row.range.pruned) pruned = row.range.pruned;
@@ -104,15 +106,33 @@ export class SourceControlService {
   }
 
   async fileDiff(params: ProjectFileDiffParams): Promise<FileSlice> {
-    const repo = await this.repoNamed(params);
+    const workdir = this.workdir(params.path, params.workdir);
+    const resolved = await this.resolveScope(workdir, params);
+    if (resolved.agent?.branchGone) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "That agent's branch is gone, so its changes cannot be shown.");
+    }
+    const repo = resolved.repos.find((row) => row.path === params.repo);
+    if (!repo) throw new ProtocolError(ErrorCodes.InvalidParams, "That repository is not part of this session.");
     const checkpoints = await listSessionCheckpoints(repo, params.path);
-    const range = await resolveScopeRange(repo, this.scopeQuery(params, checkpoints), checkpoints);
+    const range = await resolveScopeRange(repo, resolved.query, checkpoints);
     return fileDiff(repo, range, params.file, params.context ?? 3, params.offset ?? 0, params.limit ?? FILE_DIFF_MAX_BYTES);
   }
 
   async fileSource(params: ProjectFileSourceParams): Promise<FileSlice> {
-    const repo = await this.repoNamed(params);
-    return fileSource(repo, params.file, params.ref, params.offset ?? 0, params.limit ?? FILE_DIFF_MAX_BYTES);
+    const workdir = this.workdir(params.path, params.workdir);
+    const resolved = await this.resolveScope(workdir, { ...params, scope: params.runId ? "agent" : "session" });
+    if (resolved.agent?.branchGone) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "That agent's branch is gone, so its changes cannot be shown.");
+    }
+    const repo = resolved.repos.find((row) => row.path === params.repo);
+    if (!repo) throw new ProtocolError(ErrorCodes.InvalidParams, "That repository is not part of this session.");
+    let ref = params.ref;
+    if ((!ref || ref === "worktree") && resolved.agent?.worktreeRemoved && !resolved.agent.branchGone) {
+      const run = params.runId ? this.deps.agentRun(params.runId) : undefined;
+      const heads = run?.worktree ? headsRef(run.worktree.branch) : undefined;
+      if (heads) ref = heads;
+    }
+    return fileSource(repo, params.file, ref, params.offset ?? 0, params.limit ?? FILE_DIFF_MAX_BYTES);
   }
 
   async list(path: string, cwd: string): Promise<CheckpointList> {
@@ -244,46 +264,88 @@ export class SourceControlService {
     else this.lastError.delete(sessionPath);
   }
 
-  private scopeQuery(params: ProjectChangesParams | ProjectFileDiffParams, checkpoints: { turn: number }[]): ScopeQuery {
+  private baseScopeQuery(
+    params: Pick<ProjectChangesParams, "scope" | "path" | "turn" | "fromRef" | "toRef">,
+    checkpoints: { turn: number }[],
+  ): ScopeQuery {
     const query: ScopeQuery = { scope: params.scope, sessionPath: params.path };
     if (params.turn !== undefined) query.turn = params.turn;
     else if (params.scope === "turn" && checkpoints.length > 0) query.turn = checkpoints[checkpoints.length - 1]!.turn;
     if (params.fromRef) query.fromRef = params.fromRef;
     if (params.toRef) query.toRef = params.toRef;
-    if (params.runId) {
-      const run = this.deps.agentRun(params.runId);
-      if (!run) throw new ProtocolError(ErrorCodes.InvalidParams, "That agent run is not known.");
-      if (!run.worktree) {
-        query.scope = "session";
-      } else if (run.worktree.removedAt) {
-        throw new ProtocolError(ErrorCodes.InvalidParams, "That agent's worktree is gone, so its changes cannot be shown.");
-      } else {
-        query.baseCommit = run.worktree.baseCommit;
-      }
-    }
     return query;
   }
 
-  private async reposFor(workdir: string, params: { scope?: string; runId?: string }): Promise<RepoRef[]> {
-    if (params.runId) {
-      const run = this.deps.agentRun(params.runId);
-      if (run?.worktree && !run.worktree.removedAt && (params.scope === "agent" || params.scope === undefined)) {
-        const repos = await sessionRepositories(run.worktree.path);
-        if (repos.length === 0) {
-          throw new ProtocolError(ErrorCodes.InvalidParams, "That agent's worktree is gone, so its changes cannot be shown.");
-        }
-        return repos;
-      }
+  private async resolveScope(
+    workdir: string,
+    params: {
+      path: string;
+      scope?: ProjectChangesParams["scope"];
+      runId?: string;
+      turn?: number;
+      fromRef?: string;
+      toRef?: string;
+    },
+  ): Promise<{ repos: RepoRef[]; query: ScopeQuery; agent?: AgentScopeFacts }> {
+    if (params.runId && (params.scope === "agent" || params.scope === undefined)) {
+      return this.resolveAgentScope(workdir, params.path, params.runId);
     }
-    return sessionRepositories(workdir);
+    const repos = await sessionRepositories(workdir);
+    const checkpoints = await loadCheckpoints(repos, params.path);
+    const scope = params.scope ?? "session";
+    return { repos, query: this.baseScopeQuery({ ...params, scope, path: params.path }, checkpoints) };
   }
 
-  private async repoNamed(params: { cwd: string; path: string; repo: string; workdir?: string; runId?: string; scope?: string }): Promise<RepoRef> {
-    const workdir = this.workdir(params.path, params.workdir);
-    const repos = await this.reposFor(workdir, params);
-    const match = repos.find((repo) => repo.path === params.repo);
-    if (!match) throw new ProtocolError(ErrorCodes.InvalidParams, "That repository is not part of this session.");
-    return match;
+  private async resolveAgentScope(
+    workdir: string,
+    sessionPath: string,
+    runId: string,
+  ): Promise<{ repos: RepoRef[]; query: ScopeQuery; agent: AgentScopeFacts }> {
+    const run = this.deps.agentRun(runId);
+    if (!run) throw new ProtocolError(ErrorCodes.InvalidParams, "That agent run is not known.");
+    const agent: AgentScopeFacts = { runId };
+    if (!run.worktree) {
+      const repos = await sessionRepositories(workdir);
+      const checkpoints = await loadCheckpoints(repos, sessionPath);
+      return {
+        repos,
+        query: this.baseScopeQuery({ scope: "session", path: sessionPath }, checkpoints),
+        agent,
+      };
+    }
+    if (!run.worktree.removedAt) {
+      const live = await sessionRepositories(run.worktree.path);
+      if (live.length > 0) {
+        return {
+          repos: live,
+          query: { scope: "agent", sessionPath, baseCommit: run.worktree.baseCommit },
+          agent,
+        };
+      }
+    }
+    agent.worktreeRemoved = true;
+    const parent = run.worktree.environment?.parentCheckout ?? run.projectCwd ?? workdir;
+    const repos = await sessionRepositories(parent);
+    const heads = headsRef(run.worktree.branch);
+    const exists = Boolean(heads) && repos.length > 0 && (await branchExists(repos[0]!, run.worktree.branch));
+    if (!heads || !exists) {
+      agent.branchGone = true;
+      return {
+        repos: [],
+        query: { scope: "agent", sessionPath, baseCommit: run.worktree.baseCommit },
+        agent,
+      };
+    }
+    return {
+      repos,
+      query: {
+        scope: "agent",
+        sessionPath,
+        baseCommit: run.worktree.baseCommit,
+        toRef: heads,
+      },
+      agent,
+    };
   }
 
   private async kick(sessionPath: string): Promise<void> {

@@ -896,10 +896,12 @@ export const clientParamsSchemas = {
   "pi/project/git/hosts": z.object({
     cwd: z.string().min(1),
     repos: z.array(z.string().min(1).max(4096)).max(256).optional(),
+    runId: z.string().min(1).max(256).optional(),
   }).strict(),
   "pi/project/git/commit": z.object({
     cwd: z.string().min(1),
     repo: z.string().min(1).max(4096).optional(),
+    runId: z.string().min(1).max(256).optional(),
     paths: z.array(z.string().min(1).max(4096)).min(1).max(500),
     message: z.string().min(1).max(64 * 1024),
     confirm: z.boolean().optional(),
@@ -908,6 +910,7 @@ export const clientParamsSchemas = {
   "pi/project/git/push": z.object({
     cwd: z.string().min(1),
     repo: z.string().min(1).max(4096).optional(),
+    runId: z.string().min(1).max(256).optional(),
     remote: z.string().min(1).max(255),
     branch: z.string().min(1).max(255),
     confirm: z.boolean().optional(),
@@ -916,6 +919,7 @@ export const clientParamsSchemas = {
   "pi/project/git/branch": z.object({
     cwd: z.string().min(1),
     repo: z.string().min(1).max(4096).optional(),
+    runId: z.string().min(1).max(256).optional(),
     name: z.string().min(1).max(255),
     base: z.string().min(1).max(255),
     checkout: z.boolean().optional(),
@@ -926,6 +930,7 @@ export const clientParamsSchemas = {
     cwd: z.string().min(1),
     path: sessionPath,
     repo: z.string().min(1).max(4096).optional(),
+    runId: z.string().min(1).max(256).optional(),
     kind: z.enum(GIT_PROSE_KINDS),
     files: z.array(z.string().min(1).max(4096)).min(1).max(500),
     summary: z.string().max(16 * 1024).optional(),
@@ -933,6 +938,7 @@ export const clientParamsSchemas = {
   "pi/project/pr/create": z.object({
     cwd: z.string().min(1),
     repo: z.string().min(1).max(4096).optional(),
+    runId: z.string().min(1).max(256).optional(),
     title: z.string().min(1).max(256),
     body: z.string().max(64 * 1024),
     base: z.string().min(1).max(255),
@@ -943,11 +949,13 @@ export const clientParamsSchemas = {
   "pi/project/pr/read": z.object({
     cwd: z.string().min(1),
     repo: z.string().min(1).max(4096).optional(),
+    runId: z.string().min(1).max(256).optional(),
     number: z.number().int().positive().max(1_000_000_000),
   }).strict(),
   "pi/project/pr/checkout": z.object({
     cwd: z.string().min(1),
     repo: z.string().min(1).max(4096).optional(),
+    runId: z.string().min(1).max(256).optional(),
     number: z.number().int().positive().max(1_000_000_000),
     confirm: z.boolean().optional(),
     expect: gitActionExpect.optional(),
@@ -955,6 +963,7 @@ export const clientParamsSchemas = {
   "pi/project/pr/merge": z.object({
     cwd: z.string().min(1),
     repo: z.string().min(1).max(4096).optional(),
+    runId: z.string().min(1).max(256).optional(),
     number: z.number().int().positive().max(1_000_000_000),
     method: z.enum(GIT_PR_MERGE_METHODS),
     confirm: z.boolean().optional(),
@@ -963,6 +972,7 @@ export const clientParamsSchemas = {
   "pi/project/pr/viewed": z.object({
     cwd: z.string().min(1),
     repo: z.string().min(1).max(4096).optional(),
+    runId: z.string().min(1).max(256).optional(),
     number: z.number().int().positive().max(1_000_000_000),
     path: z.string().min(1).max(4096),
     viewed: z.boolean(),

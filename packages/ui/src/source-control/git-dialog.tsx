@@ -62,7 +62,7 @@ import {
   withConfirm,
   type GitActionKind,
 } from "./git-model.js";
-import { clearGitAction, peekChangesUi, setChangesScope, useChangesUi } from "./store.js";
+import { attachOverlayPullRequest, clearGitAction, peekChangesUi, setChangesScope, useChangesUi } from "./store.js";
 
 function refreshChanges(): void {
   const ui = peekChangesUi();
@@ -894,7 +894,15 @@ function PrReadBody({ repo }: { repo: string }) {
         return;
       }
       setPullRequest(next.pullRequest);
-      if (!next.pullRequest) setError(next.message ?? GIT_PR_READ_FAILED);
+      if (next.pullRequest) {
+        attachOverlayPullRequest({
+          repo,
+          number: next.pullRequest.number,
+          viewedPaths: (next.pullRequest.files ?? []).filter((file) => file.viewed).map((file) => file.path),
+        });
+      } else {
+        setError(next.message ?? GIT_PR_READ_FAILED);
+      }
     } catch (failure) {
       setError(personFacingChangesError(failure, GIT_PR_READ_FAILED));
     } finally {

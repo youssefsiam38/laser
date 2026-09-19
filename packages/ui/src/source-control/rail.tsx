@@ -15,12 +15,17 @@ export function ChangesRail({
   repos,
   active,
   viewed,
+  pullRequest,
+  viewedNote,
   onOpen,
   onToggleViewed,
 }: {
   repos: readonly ChangedRepo[];
   active: OpenFile | undefined;
   viewed: ReadonlySet<string>;
+  /** When set, ticks call the host; otherwise they stay on this device. */
+  pullRequest: { repo: string; number: number } | null;
+  viewedNote: string | null;
   onOpen: (repo: string, file: ChangedFile) => void;
   onToggleViewed: (repo: string, file: ChangedFile) => void;
 }) {
@@ -33,12 +38,19 @@ export function ChangesRail({
   return (
     <nav data-slot="changes-rail" aria-label="Changed files" className="flex h-full min-h-0 min-w-0 flex-col">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-3 py-2">
-        <p className="text-xs text-ink-2">
-          <span className="tnum text-ink">{viewedTotal}</span>
-          <span> of </span>
-          <span className="tnum text-ink">{files.length}</span>
-          <span> viewed</span>
-        </p>
+        <div className="min-w-0">
+          <p className="text-xs text-ink-2">
+            <span className="tnum text-ink">{viewedTotal}</span>
+            <span> of </span>
+            <span className="tnum text-ink">{files.length}</span>
+            <span> viewed</span>
+          </p>
+          {pullRequest ? (
+            viewedNote ? <p className="text-xs text-ink-3">{viewedNote}</p> : null
+          ) : (
+            <p className="text-xs text-ink-3">Viewed on this device.</p>
+          )}
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {repos.map((repo) => (
@@ -47,6 +59,7 @@ export function ChangesRail({
             repo={repo}
             active={active}
             viewed={viewed}
+            pullRequest={pullRequest}
             onOpen={onOpen}
             onToggleViewed={onToggleViewed}
           />
@@ -60,12 +73,14 @@ function RepoGroup({
   repo,
   active,
   viewed,
+  pullRequest,
   onOpen,
   onToggleViewed,
 }: {
   repo: ChangedRepo;
   active: OpenFile | undefined;
   viewed: ReadonlySet<string>;
+  pullRequest: { repo: string; number: number } | null;
   onOpen: (repo: string, file: ChangedFile) => void;
   onToggleViewed: (repo: string, file: ChangedFile) => void;
 }) {
@@ -131,7 +146,13 @@ function RepoGroup({
                   <button
                     type="button"
                     aria-pressed={tick}
-                    aria-label={tick ? `Mark ${fileName(file.path)} as unread` : `Mark ${fileName(file.path)} as viewed`}
+                    aria-label={
+                      tick
+                        ? `Mark ${fileName(file.path)} as unread`
+                        : pullRequest
+                          ? `Mark ${fileName(file.path)} as viewed`
+                          : `Mark ${fileName(file.path)} as viewed on this device`
+                    }
                     onClick={() => onToggleViewed(repo.repo, file)}
                     className={cn(
                       "flex size-8 shrink-0 items-center justify-center text-ink-3 outline-none",

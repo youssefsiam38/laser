@@ -7,6 +7,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import {
   classifyDiffPage,
   codeSizeFromTheme,
+  fileKey,
   fileLineCount,
   listTotals,
   overlayChromeLayout,
@@ -54,6 +55,7 @@ import {
   setRepoFilter,
   setTreeOpen,
   setUnifiedFallback,
+  setViewedNote,
   toggleViewed,
   useChangesUi,
   type OpenFile,
@@ -255,7 +257,7 @@ function ChangesOverlay() {
   const lineCount = activeFile ? fileLineCount(activeFile) : 0;
   const large = Boolean(active && activeFile && shouldBoundExpansion(lineCount) && !isLargeRevealed(active.repo, active.path, ui.revealedLarge));
   const effectiveStyle = ui.unifiedFallback || ui.diffStyle === "unified" ? "unified" : "split";
-  const gone = agent?.branchGone === true;
+  const gone = agent?.branchGone === true || list?.agent?.branchGone === true;
   const bodyState = changesBodyState({
     gone,
     listLoading,
@@ -271,6 +273,21 @@ function ChangesOverlay() {
     lineCount,
   });
 
+  const markFileViewed = (repo: string, path: string) => {
+    const next = !ui.viewed.has(fileKey(repo, path));
+    toggleViewed(repo, path);
+    const pr = ui.pullRequest;
+    if (!pr || !adapter.gitPrViewed) return;
+    void adapter.gitPrViewed({ repo: pr.repo, number: pr.number, path, viewed: next }).then(
+      (result) => {
+        if (result.message) setViewedNote(result.message);
+      },
+      () => {
+        setViewedNote("The mark is local-only until it syncs.");
+      },
+    );
+  };
+
   const runAction = (action: ReturnType<typeof overlayKeyAction>) => {
     if (!action) return false;
     if (action === "close") {
@@ -285,7 +302,7 @@ function ChangesOverlay() {
     else if (action === "next-tab") cycleTab(1);
     else if (action === "prev-tab") cycleTab(-1);
     else if (action === "close-tab" && active) closeTab(active.repo, active.path);
-    else if (action === "toggle-viewed" && active) toggleViewed(active.repo, active.path);
+    else if (action === "toggle-viewed" && active) markFileViewed(active.repo, active.path);
     else if (action === "toggle-unified" && !ui.unifiedFallback) setDiffStyle(ui.diffStyle === "split" ? "unified" : "split");
     else if (action === "toggle-tree") setTreeOpen(!ui.treeOpen);
     else if (action === "next-hunk" && bodyRef.current) stepHunk(bodyRef.current, 1);
@@ -382,8 +399,10 @@ function ChangesOverlay() {
       repos={visibleRepos}
       active={active}
       viewed={ui.viewed}
+      pullRequest={ui.pullRequest}
+      viewedNote={ui.viewedNote}
       onOpen={openFile}
-      onToggleViewed={(repo, file) => toggleViewed(repo, file.path)}
+      onToggleViewed={(repo, file) => markFileViewed(repo, file.path)}
     />
   );
 

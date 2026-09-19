@@ -15,6 +15,7 @@ import type {
   GitProseKind,
   GitProseResult,
   GitPrReadResult,
+  GitPrViewedResult,
   GitPushResult,
 } from "@lasercode/protocol";
 
@@ -79,6 +80,12 @@ export type ChangesDataAdapter = {
     confirm?: boolean;
     expect?: GitActionExpect;
   }): Promise<GitPrMergeResult>;
+  gitPrViewed?(params: {
+    repo?: string;
+    number: number;
+    path: string;
+    viewed: boolean;
+  }): Promise<GitPrViewedResult>;
 };
 
 export type ChangesAdapterSource = "none" | "host" | "custom";

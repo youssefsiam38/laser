@@ -383,6 +383,19 @@ export function createMockAdapter(): ChangesDataAdapter {
       if (params.confirm !== true) return { ...mockPreview(confirmation, ["gh", "pr", "checkout", String(params.number)]) };
       return { outcome: "done", confirmation, checkedOut: { branch: "feature" } };
     },
+    async gitPrViewed(params) {
+      return {
+        outcome: "done" as const,
+        confirmation: {
+          repo: params.repo ?? "app",
+          branch: "",
+          files: [params.path],
+          summary: params.viewed ? `Mark ${params.path} viewed.` : `Mark ${params.path} unviewed.`,
+        },
+        path: params.path,
+        viewed: params.viewed,
+      };
+    },
     async gitPrMerge(params) {
       const confirmation: GitActionConfirmation = {
         repo: params.repo ?? "app",

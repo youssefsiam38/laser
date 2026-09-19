@@ -1451,6 +1451,7 @@ export class WorkerServer {
         this.options.gitActions?.viewedFile ??
         join(this.options.stateDir ?? join(this.options.agentDir ?? this.options.cwd, "..", "state"), "git-viewed.json"),
       proseRuntime: this.options.gitActions?.proseRuntime ?? (() => this.modelCatalog().modelRuntime()),
+      agentRun: (runId) => this.harness.runs().find((run) => run.runId === runId),
       sessionContext: async (path) => {
         if (!this.runtimes.has(path)) {
           throw new GitActionError("Open the conversation first so the current model can write this.");

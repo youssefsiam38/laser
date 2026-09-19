@@ -693,6 +693,43 @@ describe("S3 one gh auth probe", () => {
   });
 });
 
+describe("agent-scope git cwd", () => {
+  it("commits in the run's worktree and refuses a removed worktree instead of the parent", async () => {
+    const parent = temp("action-parent");
+    gitInit(parent);
+    writeFileSync(join(parent, "a.ts"), "parent\n");
+    execFileSync("git", ["add", "a.ts"], { cwd: parent });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: parent });
+    const child = join(parent, ".worktrees", "review");
+    mkdirSync(join(parent, ".worktrees"), { recursive: true });
+    execFileSync("git", ["worktree", "add", "-b", "agents/review", child], { cwd: parent });
+    writeFileSync(join(child, "child.ts"), "export const n = 1;\n");
+    const run = {
+      runId: "run_1",
+      worktree: { path: child, branch: "agents/review", baseCommit: "abc" },
+    };
+    const service = new GitActionsService({
+      projectCwd: parent,
+      agentRun: (id) => (id === run.runId ? run : undefined),
+    });
+    const done = await service.commit({
+      cwd: parent,
+      runId: run.runId,
+      paths: ["child.ts"],
+      message: "Child work",
+      confirm: true,
+    });
+    expect(done.outcome).toBe("done");
+    expect(execFileSync("git", ["log", "-1", "--format=%s"], { cwd: child }).toString().trim()).toBe("Child work");
+    expect(execFileSync("git", ["log", "-1", "--format=%s"], { cwd: parent }).toString().trim()).toBe("init");
+
+    run.worktree = { ...run.worktree, removedAt: "2026-09-20T00:00:00.000Z" };
+    await expect(
+      service.commit({ cwd: parent, runId: run.runId, repo: parent, paths: ["a.ts"], message: "Nope", confirm: true }),
+    ).rejects.toThrow(/worktree is gone/);
+  });
+});
+
 describe("S1 inherited GIT_DIR", () => {
   it("does not let an inherited GIT_DIR redirect a commit", async () => {
     const dir = temp("gitdir");

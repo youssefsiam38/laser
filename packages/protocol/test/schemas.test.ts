@@ -164,7 +164,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/workspace": { cwd: "/p", rescan: true },
   "pi/project/isolation/set": { cwd: "/p", isolation: "decide" },
   "pi/project/git/hosts": { cwd: "/p", repos: ["/p", "/p/connecting"] },
-  "pi/project/git/commit": { cwd: "/p", repo: "/p", paths: ["src/a.ts"], message: "Fix the overlay toolbar", confirm: true },
+  "pi/project/git/commit": { cwd: "/p", repo: "/p", runId: "run_1", paths: ["src/a.ts"], message: "Fix the overlay toolbar", confirm: true },
   "pi/project/git/push": { cwd: "/p", remote: "origin", branch: "main", confirm: true },
   "pi/project/git/branch": { cwd: "/p", name: "feature/overlay", base: "main", checkout: true, confirm: true },
   "pi/project/git/prose": { cwd: "/p", path: "/s.jsonl", kind: "commit", files: ["src/a.ts"], summary: "src/a.ts\t+12\t-3" },

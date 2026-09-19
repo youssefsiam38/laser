@@ -130,10 +130,23 @@ export interface PrunedScope {
   detail: string;
 }
 
+export interface AgentScopeFacts {
+  runId: string;
+  /** The run's worktree directory is no longer on disk. */
+  worktreeRemoved?: boolean;
+  /**
+   * `refs/heads/<branch>` does not resolve in the project's repository.
+   * Computed from git at query time, never inferred from an error string.
+   */
+  branchGone?: boolean;
+}
+
 export interface ProjectChanges {
   scope: ChangeScope;
   repos: RepoChanges[];
   pruned?: PrunedScope;
+  /** Present for `scope: "agent"`. Computed at query time so a host restart still answers honestly. */
+  agent?: AgentScopeFacts;
 }
 
 /** One repository's object for a session turn. The ref name is the same in every repository; the commit is not. */

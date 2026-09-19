@@ -58,6 +58,25 @@ it("maps an isolated run and a shared checkout", () => {
   expect(mapAgentRunContext(shared).checkout).toBe("shared");
 });
 
+it("maps computed branchGone from the changes result, never from removedAt", () => {
+  const result: ProjectChanges = {
+    scope: "agent",
+    repos: [],
+    agent: { runId: "run_gone", worktreeRemoved: true, branchGone: true },
+  };
+  expect(mapProjectChanges(result, { kind: "agent", runId: "run_gone" }).agent).toEqual({
+    runId: "run_gone",
+    worktreeRemoved: true,
+    branchGone: true,
+  });
+  const removed = {
+    runId: "run_gone",
+    worktree: { path: "/w", branch: "agents/a", baseCommit: "abc", removedAt: "2026-09-20T00:00:00.000Z" },
+  } as AgentRun;
+  expect(mapAgentRunContext(removed).branchGone).toBeUndefined();
+  expect(mapAgentRunContext(removed, result.agent).branchGone).toBe(true);
+});
+
 it("maps a removed worktree as surviving-branch, never as branchGone", () => {
   const removed = {
     runId: "run_3",
@@ -171,6 +190,26 @@ it("calls the protocol methods with the session context", async () => {
   const page = await adapter.getFileDiff({ kind: "session" }, "/p", "a.ts");
   expect(page.truncated).toBe(false);
   expect(calls.map((call) => call.method)).toEqual(["pi/project/changes", "pi/project/file_diff"]);
+});
+
+it("sends runId on git actions when the overlay is an agent scope", async () => {
+  const calls: Array<{ method: string; params: unknown }> = [];
+  const adapter = createHostChangesAdapter({
+    request: (async (method, params) => {
+      calls.push({ method, params });
+      if (method === "pi/project/git/commit") {
+        return {
+          outcome: "preview",
+          confirmation: { repo: "/wt", branch: "agents/a", files: ["a.ts"], summary: "Commit a.ts." },
+        };
+      }
+      return {};
+    }) as never,
+    session: () => ({ cwd: "/p", path: "/s.jsonl" }),
+    scope: () => ({ kind: "agent", runId: "run_1" }),
+  });
+  await adapter.gitCommit?.({ paths: ["a.ts"], message: "Fix it.", repo: "/wt" });
+  expect(calls[0]?.params).toMatchObject({ cwd: "/p", runId: "run_1", repo: "/wt" });
 });
 
 it("omits confirm on a git preview and round-trips expect on the write", async () => {

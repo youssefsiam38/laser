@@ -135,6 +135,13 @@ export interface GitPullRequest {
   files?: GitPullRequestFile[];
 }
 
+/**
+ * Overlay agent scope: the engine resolves this run's worktree as the git cwd.
+ * Absent on a session or uncommitted overlay. A gone worktree is refused, never
+ * rewritten to the parent's checkout.
+ */
+export type GitActionRunId = string;
+
 export interface GitHostsParams {
   cwd: string;
   /**
@@ -142,6 +149,7 @@ export interface GitHostsParams {
    * the workspace resolver found. Paths still have to sit inside the project.
    */
   repos?: string[];
+  runId?: GitActionRunId;
 }
 export interface GitHostsResult {
   hosts: GitHostStatus[];
@@ -150,6 +158,7 @@ export interface GitHostsResult {
 export interface GitCommitParams {
   cwd: string;
   repo?: string;
+  runId?: GitActionRunId;
   paths: string[];
   message: string;
   /** Must be set `true` to write the commit. Omitted is a preview. */
@@ -163,6 +172,7 @@ export interface GitCommitResult extends GitActionResult {
 export interface GitPushParams {
   cwd: string;
   repo?: string;
+  runId?: GitActionRunId;
   remote: string;
   branch: string;
   confirm?: boolean;
@@ -175,6 +185,7 @@ export interface GitPushResult extends GitActionResult {
 export interface GitBranchParams {
   cwd: string;
   repo?: string;
+  runId?: GitActionRunId;
   name: string;
   base: string;
   /** Switch to the new branch after creating it. Still requires `confirm`. */
@@ -191,6 +202,7 @@ export interface GitProseParams {
   /** The open session whose current model writes the text. */
   path: string;
   repo?: string;
+  runId?: GitActionRunId;
   kind: GitProseKind;
   files: string[];
   /** Optional numstat-style summary the overlay already has. */
@@ -206,6 +218,7 @@ export interface GitProseResult {
 export interface GitPrCreateParams {
   cwd: string;
   repo?: string;
+  runId?: GitActionRunId;
   title: string;
   body: string;
   base: string;
@@ -220,6 +233,7 @@ export interface GitPrCreateResult extends GitActionResult {
 export interface GitPrReadParams {
   cwd: string;
   repo?: string;
+  runId?: GitActionRunId;
   number: number;
 }
 export interface GitPrReadResult extends GitActionResult {
@@ -229,6 +243,7 @@ export interface GitPrReadResult extends GitActionResult {
 export interface GitPrCheckoutParams {
   cwd: string;
   repo?: string;
+  runId?: GitActionRunId;
   number: number;
   confirm?: boolean;
   expect?: GitActionExpect;
@@ -240,6 +255,7 @@ export interface GitPrCheckoutResult extends GitActionResult {
 export interface GitPrMergeParams {
   cwd: string;
   repo?: string;
+  runId?: GitActionRunId;
   number: number;
   method: GitPrMergeMethod;
   confirm?: boolean;
@@ -252,6 +268,7 @@ export interface GitPrMergeResult extends GitActionResult {
 export interface GitPrViewedParams {
   cwd: string;
   repo?: string;
+  runId?: GitActionRunId;
   number: number;
   path: string;
   viewed: boolean;
