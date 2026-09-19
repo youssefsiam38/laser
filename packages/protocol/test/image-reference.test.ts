@@ -242,14 +242,18 @@ describe("pricing a record a planner has not read", () => {
   it("hashes nothing to price a page, and leaves an ordinary record alone", () => {
     const plain = { id: "u", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text: "hello" }] } };
     expect(servedEntryWireBytes(plain)).toBe(bytesOf(plain));
-    // Pricing twelve 2.4 MB screenshots is a projection, not twelve hashes: it
-    // stays far below the time hashing them would take.
+    // Pricing twelve 2.4 MB screenshots is a projection, not twelve hashes.
+    // Proved by what it does, not by how long it takes: a wall clock measures
+    // the machine's load as much as this function, and a page's price must be
+    // the same answer on a busy machine as on an idle one.
     const heavy = { id: "many", parentId: null, type: "message", message: { role: "user", content: Array.from({ length: 12 }, () => imagePart(screenshot)) } };
-    const started = performance.now();
-    const priced = servedEntryWireBytes(heavy);
-    const elapsed = performance.now() - started;
+    let measured = "";
+    const priced = servedEntryWireBytes(heavy, text => { measured = text; return text.length; });
     expect(priced).toBeLessThan(8 * 1024);
-    expect(elapsed).toBeLessThan(200);
+    // The text a price is taken from carries no picture: twelve references and
+    // a placeholder digest, never a payload to hash.
+    expect(measured).not.toContain(screenshot.slice(0, 64));
+    expect(measured.split("\"ref\":").length - 1).toBe(12);
   });
 });
 

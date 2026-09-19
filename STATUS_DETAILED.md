@@ -2400,7 +2400,7 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M16-T90 | A page is a number of turns, not a number of bytes | done | worker `01a0b96b-3d56-7105-b0ab-d26cf85764ea` | 4cb31c81, a6ff1ad7; the person's 27 MB session: 22 pages / 3,150 entries / root reached in 0.9 s | see notes |
 | M16-T91 | The list keeps the reader's position | done | worker `01a0b96b-fb4a-7105-b0ab-d2744316cf7f` | 2ffb7e20 (`56b4214f`); `@legendapp/list@3.3.5` patched, `@tanstack/react-virtual` removed; UI 2,631 passed | see notes |
 | M16-T93 | A prompt behind 200 marker rows stays reachable | todo | — | — | review N2, /tmp/review-turn-paging.md |
-| M16-T94 | Load-only test flakes wait for state | todo | — | — | 4 suites timed out at load average 26; release gate |
+| M16-T94 | Load-only test flakes wait for state | done | parent | six tests: a clock assertion replaced by a work assertion, five explicit timeouts; 0.9.5 attempt one abandoned on the first of them | see notes |
 | M16-T92 | The client reads an image reference | done | worker `01a0b96b-fb4a-7105-b0ab-d2744316cf7f` | 2ffb7e20 (`9a69a23f`); `projected-page.test.tsx` renders a real projected page | see notes |
 | M16-T67 | Why a goal paused itself overnight | done | worker goal-pause-forensics `01a0b137-f012-771e-a9f0-3648759cdeee` | `8c44b20e` · `docs/incidents/goal-pause-investigation.md`; proven from session `2026-09-14T13-52-32-557Z…` lines 9574-9586 | see notes; added by D-281 |
 | M16-T69 | The live edge actually follows | done | worker autofollow-implementation + autofollow-review-fixes `01a0b1bb-2023-771e-a9f0-36e4f80eff45` | merged `76fe9e5c` (`4c635548`) and `73eec455`; 42 focused, 16 live-edge/batched cases + 2 negative-control matrices, clean-env verify 156.4 s | see notes; design settled by D-287, review fixes applied |
@@ -5552,6 +5552,7 @@ Supersedes: none; refines D-271 and RP-11.
 - 2026-09-19 raised from review N2: more than 200 non-message rows before a prompt (a long goal run) make a page unservable and unshrinkable at `packages/protocol/src/history-window.ts:268-269`. Same "unreachable for ever" class as M16-T88; predates M16-T90.
 
 #### M16-T94 notes
+- 2026-09-19 fixed: `image-reference.test.ts` asserted `performance.now()` under 200 ms and measured 214.7 ms inside the release's own verify — replaced by asserting what pricing *does* (the text a price is taken from carries twelve references and no payload). `tool-diff`, `identity`, `entry-range.live`, `mcp/authorization` and two `host.e2e` cases now declare explicit timeouts with the reason, since each is bounded work on an unbounded machine. No assertion weakened.
 - 2026-09-19 raised after a merge gate at load average 26 failed 12 tests that all pass alone: protocol `shared diff reuse > measures repeated disclosure/search computation` (no timing assertion, burns 472 ms of a 5 s timeout) and `the repository > agrees with product.json everywhere` (shells out to a whole-repo scan), worker `a body read from the owning worker > reassembles…` and `MCP authorization identities and durable generations > fences another process`, two host end-to-end startup checks. Repo rule: wait for state, never weaken the assertion. A release attempt abandons on any of them.
 
 #### M16-T91 notes

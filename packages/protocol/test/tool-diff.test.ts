@@ -80,7 +80,10 @@ describe("shared diff reuse", () => {
     args.path = "b.ts";
     expect(diffViewForTool("edit", args, details)?.path).toBe("b.ts");
   });
-  it("measures repeated disclosure/search computation separately from cache misses", () => {
+  // Twenty diffs of a 2,000-line edit is real work, and a loaded machine can
+  // take far longer than the 5 s default without anything being wrong: this
+  // test reports numbers, it does not assert a duration (M16-T94).
+  it("measures repeated disclosure/search computation separately from cache misses", { timeout: 60_000 }, () => {
     const oldText = lines(1_998, "row").join("\n");
     const args = { edits: [{ oldText, newText: oldText.replace("row 999\n", "changed\n") }] };
     const miss: number[] = [], hit: number[] = [];

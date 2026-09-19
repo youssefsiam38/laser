@@ -72,7 +72,9 @@ describe("a body read from the owning worker", () => {
     expect(answer.result.text.includes("\uFFFD")).toBe(false);
   });
 
-  it("reassembles to the same bytes a durable read would produce", () => {
+  // Hashing a multi-megabyte body in slices is bounded work on an unbounded
+  // machine: it is given room rather than a stopwatch (M16-T94).
+  it("reassembles to the same bytes a durable read would produce", { timeout: 60_000 }, () => {
     const tracker = new SessionRevisionTracker(ENVIRONMENT);
     const { revision } = tracker.compute(header, [prompt, reply], "e1");
     let offset: number | undefined = 0;

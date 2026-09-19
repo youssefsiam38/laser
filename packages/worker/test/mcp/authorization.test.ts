@@ -151,7 +151,9 @@ describe("MCP authorization identities and durable generations", () => {
     expect(Object.keys(persisted).sort()).toEqual(["generation", "identity", "updatedAt"]);
   });
 
-  it("fences another process before token persistence settles and refuses a stale refresh transaction", async () => {
+  // Two processes racing a lock file, each waiting for the other's state: the
+  // waits are on state, but the whole dance is slow on a loaded machine.
+  it("fences another process before token persistence settles and refuses a stale refresh transaction", { timeout: 90_000 }, async () => {
     const registry = new McpAuthorizationRegistry(root);
     const id = await mcpAuthorizationIdentity("global", root, server);
     const snapshot = await registry.establish(id);

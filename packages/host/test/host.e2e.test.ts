@@ -122,7 +122,9 @@ afterEach(async () => {
 });
 
 describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
-  it("prepares only known trusted projects without questions, sessions, status noise or model calls", async () => {
+  // A real host process start: bounded work, but a loaded machine takes its
+  // time and a timeout here says nothing about trust or startup (M16-T94).
+  it("prepares only known trusted projects without questions, sessions, status noise or model calls", { timeout: 120_000 }, async () => {
     const client = new Client();
     await client.connect((await host.listen()).url);
     const cwd = join(base, "project");
@@ -163,7 +165,7 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("host end to end", () => {
       expect(host.pool.workerInfo(cwd)?.pid).toBe(pid);
     } finally { client.close(); }
   });
-  it("starts safe mode with no optional Features without changing desired preferences", async () => {
+  it("starts safe mode with no optional Features without changing desired preferences", { timeout: 120_000 }, async () => {
     await host.close();
     const stateDir = join(base, "state");
     const prefsPath = join(stateDir, "prefs.json");

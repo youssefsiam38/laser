@@ -92,7 +92,9 @@ describe("derived names", () => {
 });
 
 describe("the repository", () => {
-  it("agrees with product.json everywhere", () => {
+  // A whole-repository scan, spawned: the work is bounded but the machine may
+  // not be idle, and a timeout here says nothing about product identity.
+  it("agrees with product.json everywhere", { timeout: 60_000 }, () => {
     // Throws with the offending file and line when it does not.
     execFileSync(process.execPath, ["scripts/identity/check.mjs"], { cwd: repoRoot, encoding: "utf8" });
   });
