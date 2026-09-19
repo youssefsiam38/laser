@@ -33,7 +33,10 @@ describe("host Node launches", () => {
     const entry = join(root, "signal.mjs");
     const ready = join(root, "ready");
     const stopped = join(root, "stopped");
-    writeFileSync(entry, `import { writeFileSync } from "node:fs";\nwriteFileSync(process.env.READY, "ready");\nfor (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { writeFileSync(process.env.STOPPED, signal); process.exit(0); });\nsetInterval(() => {}, 1000);\n`);
+    // The handlers go on before the readiness file: a signal that arrives in
+    // between would kill this child by default, which is the fixture racing the
+    // test, not the launcher failing to forward.
+    writeFileSync(entry, `import { writeFileSync } from "node:fs";\nfor (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { writeFileSync(process.env.STOPPED, signal); process.exit(0); });\nwriteFileSync(process.env.READY, "ready");\nsetInterval(() => {}, 1000);\n`);
     const signals = new EventEmitter();
     try {
       const running = runForegroundHost(paths(root), {
