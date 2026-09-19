@@ -304,7 +304,7 @@ to, the worker captures a checkpoint:
   person's own work; nothing is staged, stashed, reset or cleaned, ever;
 - everything git would commit: tracked files **and** untracked files that are
   not ignored, so a file the agent creates is in the checkpoint from the turn
-  it appears (§7.5);
+  it appears (§7.2a);
 - captured for `worktreePath ?? projectRoot`, so a child agent's worktree
   checkpoints itself.
 
@@ -316,7 +316,17 @@ deletes its checkpoint refs — stated in the delete dialog, not asked as a
 second question. Refs are packed so thousands do not slow `for-each-ref`, and
 turning retention off removes that session's existing refs too.
 
-### E.5 What counts as a change
+### E.2 Scopes
+
+| Scope | Range | Default for |
+| --- | --- | --- |
+| **This session** | first checkpoint → now | the telemetry Files section |
+| **This turn** | checkpoint(N−1) → checkpoint(N) | a turn's own control in the transcript |
+| **Uncommitted** | HEAD → working tree | the overlay's "what would I commit" |
+| **Commit range** | any two refs the person picks | the overlay's picker |
+| **This agent** | the run's `baseCommit` → its worktree's HEAD and working tree | a fleet row's "Changes" (§F.5) |
+
+### E.2a What counts as a change
 
 Three kinds of file, three different answers, because "untracked" is a git word
 and not what a person means:
@@ -338,16 +348,6 @@ addition with its bytes from disk.
 
 Checkpoints stay on the machine. They are never pushed, and no git action in
 §9 can push a ref under `refs/laser/`.
-
-### E.2 Scopes
-
-| Scope | Range | Default for |
-| --- | --- | --- |
-| **This session** | first checkpoint → now | the telemetry Files section |
-| **This turn** | checkpoint(N−1) → checkpoint(N) | a turn's own control in the transcript |
-| **Uncommitted** | HEAD → working tree | the overlay's "what would I commit" |
-| **Commit range** | any two refs the person picks | the overlay's picker |
-| **This agent** | the run's `baseCommit` → its worktree's HEAD and working tree | a fleet row's "Changes" (§F.5) |
 
 ### E.3 Methods
 
@@ -591,7 +591,7 @@ a parent-built sandbox before any release (the working agreement since 0.9.2).
 - Cloning and publishing repositories.
 - Linked pull requests, stacks, auto-merge, auto-settle.
 - GitLab, Gitea, Forgejo, Azure DevOps.
-- Ignored files (never captured, never shown — §7.5); submodules; bare
+- Ignored files (never captured, never shown — §7.2a); submodules; bare
   repositories.
 - Any Pi-side change: this leap touches the worker, host, protocol and UI only,
   and imports no engine API beyond what the worker already uses.
