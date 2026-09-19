@@ -41,6 +41,7 @@ export * from "./tool-label.js";
 export * from "./human-label.js";
 export * from "./goal-presentation.js";
 export * from "./history-window.js";
+export * from "./telemetry.js";
 export * from "./body-range.js";
 export * from "./reasoning-segments.js";
 // Pure and browser-safe. The Node hash lives behind `./revision-node`, so the

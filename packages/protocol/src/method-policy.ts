@@ -153,6 +153,7 @@ export const METHOD_POLICY = {
   "pi/session/list": { scope: "read", reach: "any" },
   "pi/session/inbox": { scope: "read", reach: "any" },
   "pi/session/entries": { scope: "read", reach: "any" },
+  "pi/session/telemetry": { scope: "read", reach: "any" },
   // Reading a session is what marks it seen; a viewer that cannot acknowledge
   // would leave every conversation permanently unread.
   "pi/session/seen": { scope: "read", reach: "any" },

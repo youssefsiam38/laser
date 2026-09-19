@@ -140,6 +140,7 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/session/rename": { path: "/s.jsonl", name: "feature" },
   "pi/session/delete": { path: "/s.jsonl", worktree: "delete" },
   "pi/session/entries": { path: "/s.jsonl", window: { beforeEntry: "entry-40", limit: 40 }, baseRevision: "r1.test" },
+  "pi/session/telemetry": { path: "/s.jsonl", scope: "session", include: ["spend", "work", "history"], environmentKey: "e1.AAAAAAAAAAAAAAAAAAAAAA", revision: "r1.AAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBB" },
   "pi/session/detach": { path: "/s.jsonl" },
   "pi/session/move": { path: "/s.jsonl", cwd: "/p" },
   "pi/session/close": { path: "/s.jsonl" },
