@@ -34,6 +34,7 @@ import {
   boundedBodyText,
   clientMethods,
   entryBodyMetadata,
+  entryWithImageReferences,
   resetBodyProjectionWork,
   clientParamsSchemas,
   elideOversizedEntries,
@@ -48,6 +49,18 @@ import {
 } from "../src/index.js";
 
 const digest = (text: string): string => `d${utf8ByteLength(text)}`;
+
+/** One record exactly as a page serves it: images as references (M16-T89). */
+const referenced = (entry: unknown): unknown => entryWithImageReferences(entry, digest);
+
+/** The references a served record carries, in content order. */
+function imageRefsOf(entry: unknown): unknown[] {
+  const value = entry as { content?: unknown[]; message?: { content?: unknown[] } };
+  return (value.message?.content ?? value.content ?? []).flatMap(part => {
+    const row = part as { ref?: unknown };
+    return row.ref ? [row.ref] : [];
+  });
+}
 
 const assistant = {
   id: "e1", parentId: "e0", type: "message",
@@ -144,7 +157,9 @@ describe("leaving an oversized record out of a page", () => {
   it("lists it with its identity and body metadata, and rewrites nothing", () => {
     const big = { id: "e3", parentId: "e2", type: "message", message: { role: "toolResult", toolCallId: "c1", content: [{ type: "text", text: "y".repeat(50_000) }] } };
     const page = elideOversizedEntries([prompt, assistant, big], 1024, digest);
-    expect(page.entries).toEqual([prompt, assistant]);
+    // The prompt's picture travels as a reference (M16-T89); nothing else about
+    // either kept record is touched.
+    expect(page.entries).toEqual([referenced(prompt), assistant]);
     expect(page.elided).toEqual([{
       id: "e3", parentId: "e2", type: "message", role: "toolResult", toolCallId: "c1",
       bodies: [
@@ -154,17 +169,35 @@ describe("leaving an oversized record out of a page", () => {
     }]);
   });
 
-  it("keeps a fitting prompt body beside an oversized image", () => {
+  it("keeps the prompt and its picture's reference rather than eliding either", () => {
     const text = "Image prompt text is 28 B!!!";
     const image = "A".repeat(20_000);
     const entry = { id: "image-prompt", parentId: null, type: "message", message: { role: "user", content: [
       { type: "text", text },
       { type: "image", mimeType: "image/png", data: image },
     ] } };
+    // 20 KB of picture past a 16 KB body limit used to elide the whole record.
+    // It is a reference now, so the record itself fits and travels (M16-T89).
+    const page = elideOversizedEntries([entry], 16 * 1024, digest);
+    expect(page.elided).toEqual([]);
+    expect(page.entries).toEqual([referenced(entry)]);
+    expect(imageRefsOf(page.entries[0])).toEqual([{
+      entryId: "image-prompt", component: { kind: "image", index: 0 },
+      mimeType: "image/png", totalBytes: 20_000, contentDigest: "d20000",
+    }]);
+  });
+
+  it("still names an image body of a record elided for some other reason", () => {
+    const entry = { id: "image-prompt", parentId: null, type: "message", message: { role: "user", content: [
+      { type: "text", text: "p".repeat(20_000) },
+      { type: "image", mimeType: "image/png", data: "A".repeat(20_000) },
+    ] } };
     const page = elideOversizedEntries([entry], 16 * 1024, digest);
     expect(page.entries).toEqual([]);
+    // The image row publishes the bytes `session/entry_range` will answer with,
+    // not the nothing the served record would have held.
     expect(page.elided[0]!.bodies).toEqual([
-      { component: { kind: "user_text" }, totalBytes: 28, contentDigest: "d28", text },
+      { component: { kind: "user_text" }, totalBytes: 20_000, contentDigest: "d20000" },
       { component: { kind: "image", index: 0 }, totalBytes: 20_000, contentDigest: "d20000" },
     ]);
   });
@@ -176,7 +209,8 @@ describe("leaving an oversized record out of a page", () => {
       { type: "text", text },
       { type: "image", mimeType: "image/png", data: "A".repeat(20_000) },
     ] } };
-    const page = elideOversizedEntries([entry], 16 * 1024, digestOfText);
+    // The record is elided by the record ceiling, not by its picture.
+    const page = elideOversizedEntries([entry], 16 * 1024, digestOfText, 64);
     const prose = page.elided[0]!.bodies.find(body => body.component.kind === "user_text")!;
     expect(prose.text).toBe(text);
     expect(prose.regions).toBeUndefined();

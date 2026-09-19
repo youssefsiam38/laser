@@ -377,7 +377,8 @@ export function historyWindowFits(
  * body — or one too large for any page at all, whatever kind of record it is
  * (M16-T88) — is left out of the page and listed in `window.elided` with its
  * identity and body metadata, so a conversation with one enormous turn is
- * still readable a page at a time. No record is ever rewritten.
+ * still readable a page at a time. A record that travels is the stored record
+ * with its images as references (M16-T89) and is otherwise never rewritten.
  *
  * With a digest in hand this **cannot** refuse a bounded page for size: a
  * record that cannot travel is elided, so a single-record page always fits.

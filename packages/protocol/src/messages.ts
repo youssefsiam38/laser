@@ -20,7 +20,7 @@ import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js
 // Type-only, and erased: `pending.ts` augments the interfaces below, so the
 // cycle exists in the type graph and never in the emitted modules.
 import type { PendingMessage } from "./pending.js";
-import type { BodyComponent, BodyRegion, ElidedEntry, EntryRegionsResult, PersistedBodyIdentity } from "./body-range.js";
+import type { BodyComponent, BodyRegion, ElidedEntry, EntryRegionsResult, ImagePartReference, PersistedBodyIdentity } from "./body-range.js";
 
 // ---------- Shared value types (no Pi types allowed here) ----------
 
@@ -89,8 +89,16 @@ export interface HistoryWindow {
 export interface ImageContent {
   type: "image";
   mimeType: string;
-  /** base64 */
+  /** base64. Empty in a part a page served as a reference; see `ref`. */
   data: string;
+  /**
+   * Where the bytes are, when this part is one a page served (M16-T89).
+   *
+   * Every `image` part a projection serves carries this and carries no bytes,
+   * at every size and in every role: the payload is read back with
+   * `session/entry_range`, exactly as an elided body is.
+   */
+  ref?: ImagePartReference;
 }
 
 export interface TextContent {
@@ -1400,8 +1408,13 @@ export interface ClientRequests {
        * record, in exact UTF-8 bytes. A record carrying a larger body is left
        * out of `entries` and listed in `window.elided` with its identity and
        * the exact size and digest of every body it has, so the caller can read
-       * what it needs with `session/entry_range`. No record is ever rewritten:
-       * an entry is delivered whole or not delivered at all.
+       * what it needs with `session/entry_range`. Nothing else about a record
+       * is rewritten: it is delivered whole or not delivered at all.
+       *
+       * It bounds prose, structure and whatever else a record carries; it says
+       * nothing about pictures. An `image` part never travels inside a page at
+       * all, whatever this is set to: it is served as an
+       * {@link ImagePartReference} and read back the same way (M16-T89).
        */
       bodyLimit?: number;
     };
