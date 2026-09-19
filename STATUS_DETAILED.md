@@ -2395,13 +2395,13 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M16-T85 | Reading upwards never pushes the reader back | in-progress | worker `01a0b776-bb78-70e8-89b4-2245172ec5ea` | parent traces: 0.9.4 pushes the reader down on every page (292→7810, 1347→1930); WIP 9fb90a61 leaves 1 push in 14 notches | see notes |
 | M16-T86 | A chosen file mention is finished | in-progress | worker `01a0b77a-91ab-70e8-89b4-224ae742f35b` | cause read in `project-path.ts:73-81`: the matcher scans to the last `@` and only refuses a query ending in whitespace | see notes |
 | M16-T87 | Transcript scrolling rebuilt on a proven virtualizer | in-progress | worker (assigned) | person's report on 044dfb09: rows appear/disappear, a row arrives early, rows above never arrive | see notes |
-| M16-T88 | A page is never refused because one record is too large | in-progress | parent | 63330a5f, d4731f18, 434f249a; sandbox probe: 56 pages / 2948 entries / root reached on the person's 27 MB session | see notes |
-| M16-T89 | Bytes never travel inside a message | in-progress | worker `01a0b96b-3d56-7105-b0ab-d26cf85764ea` | merged 27cac1cd + 87dc345a; failing page 6,439,755 B → 3,735 B live / 4,167 B durable | see notes |
-| M16-T90 | A page is a number of turns, not a number of bytes | in-progress | worker `01a0b96b-3d56-7105-b0ab-d26cf85764ea` | — | docs/transcript-parity.md §2 |
-| M16-T91 | The list keeps the reader's position | in-progress | worker `01a0b96b-fb4a-7105-b0ab-d2744316cf7f` | — | docs/transcript-parity.md §3 |
+| M16-T88 | A page is never refused because one record is too large | done | parent | 63330a5f, d4731f18, 434f249a; sandbox probe: 56 pages / 2948 entries / root reached on the person's 27 MB session | see notes |
+| M16-T89 | Bytes never travel inside a message | done | worker `01a0b96b-3d56-7105-b0ab-d26cf85764ea` | 27cac1cd, a6ff1ad7, 9afdce6a; failing page 6,439,755 B → 3,735 B; 35 references served across the person's session | see notes |
+| M16-T90 | A page is a number of turns, not a number of bytes | done | worker `01a0b96b-3d56-7105-b0ab-d26cf85764ea` | 4cb31c81, a6ff1ad7; the person's 27 MB session: 22 pages / 3,150 entries / root reached in 0.9 s | see notes |
+| M16-T91 | The list keeps the reader's position | done | worker `01a0b96b-fb4a-7105-b0ab-d2744316cf7f` | 2ffb7e20 (`56b4214f`); `@legendapp/list@3.3.5` patched, `@tanstack/react-virtual` removed; UI 2,631 passed | see notes |
 | M16-T93 | A prompt behind 200 marker rows stays reachable | todo | — | — | review N2, /tmp/review-turn-paging.md |
 | M16-T94 | Load-only test flakes wait for state | todo | — | — | 4 suites timed out at load average 26; release gate |
-| M16-T92 | The client reads an image reference | todo | worker `01a0b96b-fb4a-7105-b0ab-d2744316cf7f` (queued) | — | review blockers B1–B3, /tmp/review-image-references.md |
+| M16-T92 | The client reads an image reference | done | worker `01a0b96b-fb4a-7105-b0ab-d2744316cf7f` | 2ffb7e20 (`9a69a23f`); `projected-page.test.tsx` renders a real projected page | see notes |
 | M16-T67 | Why a goal paused itself overnight | done | worker goal-pause-forensics `01a0b137-f012-771e-a9f0-3648759cdeee` | `8c44b20e` · `docs/incidents/goal-pause-investigation.md`; proven from session `2026-09-14T13-52-32-557Z…` lines 9574-9586 | see notes; added by D-281 |
 | M16-T69 | The live edge actually follows | done | worker autofollow-implementation + autofollow-review-fixes `01a0b1bb-2023-771e-a9f0-36e4f80eff45` | merged `76fe9e5c` (`4c635548`) and `73eec455`; 42 focused, 16 live-edge/batched cases + 2 negative-control matrices, clean-env verify 156.4 s | see notes; design settled by D-287, review fixes applied |
 | M16-T68 | Only the agent stops autonomous work | done | worker goal-abort-pause-fix `01a0b14a-6004-771e-a9f0-36720d5a3bea` | merged `bc5531a2`; red/green incident regression, pi-goal 11 + worker goal 27 + pi-extension 8 + UI 5, worker suite 1053, `SANDBOX_GOAL=1` real-engine pass, frozen install + identity green | see notes; added by D-283; final gate runs at release prep |
@@ -5554,6 +5554,19 @@ Supersedes: none; refines D-271 and RP-11.
 #### M16-T94 notes
 - 2026-09-19 raised after a merge gate at load average 26 failed 12 tests that all pass alone: protocol `shared diff reuse > measures repeated disclosure/search computation` (no timing assertion, burns 472 ms of a 5 s timeout) and `the repository > agrees with product.json everywhere` (shells out to a whole-repo scan), worker `a body read from the owning worker > reassembles…` and `MCP authorization identities and durable generations > fences another process`, two host end-to-end startup checks. Repo rule: wait for state, never weaken the assertion. A release attempt abandons on any of them.
 
+#### M16-T91 notes
+- 2026-09-19 worker `56b4214f`: the transcript is one `@legendapp/list` 3.3.5 (MIT, exact-pinned, pnpm patch carrying the three web hunks); `maintainVisibleContentPosition {data,size,shouldRestorePosition}` refuses to move content above the reader instead of correcting after it; `maintainScrollAtEnd` with `footerLayout: false`; notices, history controls and the placeholder are `ListHeaderComponent`; `ThreadPrimitive.Viewport` removed (two scrollers were two authorities). Deleted the head item, `measureRow`, `observeElementRect`, `writeScroll`, `scrollMargin`, `rangeExtractor` and `@tanstack/react-virtual`. Evidence `/tmp/t91-legend-list-evidence.md`.
+- 2026-09-19 trade recorded and pinned by a named test: growth *below* the reading line inside the row being read still moves the view by that much (the list restores the row whose top is on screen). It is the mirror of D-303's trade and the better half, since growth *above* the line happens continuously while reading upwards.
+
+#### M16-T92 notes
+- 2026-09-19 worker `9a69a23f`: `boundUserContent` branches on `image.ref`, `retainEntries` no longer lets an image decide retention, `McpToolRow` draws a referenced picture as the transcript's own tile, and the duplicated header parser in `view-measure.ts` delegates to the protocol's.
+- 2026-09-19 the fixture that closes the hole: `packages/ui/test/thread/projected-page.test.tsx` runs records through the real `elideOversizedEntries` and renders that page, which is what 2,619 hand-built image fixtures could not catch.
+- 2026-09-19 parent `9afdce6a`: the synthetic image fixtures carry a plausible payload, because a declared size its bytes could not encode is refused (M16-T89 C5). Five failures, no defect.
+- 2026-09-19 open: an image whose header declares no size (SVG, truncated) still gets no reserved box.
+
+#### M16-T88 notes
+- 2026-09-19 `63330a5f` images addressable in every role, `d4731f18` a record measured whole (WeakMap-cached), `434f249a` the elision ceiling steps down until a page fits, with a single-record assertion that names elision as the defect if it ever fails. Superseded in practice by M16-T89, which keeps images out of a page in the first place; the ceiling stays as the net.
+
 ### D-305 · 2026-09-19 · The transcript copies a shipping chat client, in detail
 
 Decision: the three answers Laser invented — inline image bytes in a page, a
@@ -5576,3 +5589,19 @@ paging policy.
 
 Supersedes: D-303 (the virtualizer choice and the row-level identity trade it
 accepted).
+
+### D-306 · 2026-09-19 · The list holds the row whose top is on screen
+
+Decision: `@legendapp/list`'s `maintainVisibleContentPosition` restores the row
+whose top is visible, so content growing *below* the reading line inside the row
+a person is halfway through moves the view by that much. Accepted as the mirror
+of D-303's trade and the better half of it.
+
+Why: growth *above* the reading line happens continuously while reading upwards
+(images resolving, reasoning streaming, folds opening) and moved the reader on
+every page; growth below it inside one row is rare, and a fold is held
+explicitly while images reserve their box.
+
+Consequences: pinned by a named test in `packages/ui/test/thread/transcript-position.test.tsx`
+and recorded in `docs/transcript-virtualization.md`. A finer anchor cannot be
+expressed: a ResizeObserver reports a box, not where inside it grew.
