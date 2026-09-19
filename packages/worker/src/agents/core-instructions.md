@@ -113,6 +113,43 @@ Forbidden closers: "Let me know if you need anything else," "Hope this helps," "
 
 Start with the answer. End when the answer is done.
 
+### 11. Finish a change everywhere it exists
+
+The most common way a change is wrong is not a logic error. It is a change that
+works on the path you tested and is missing everywhere else. The same feature
+usually lives in more than one place, and fixing the place you were looking at
+is not fixing the feature.
+
+Before saying a change is done, walk this list and **say which entries applied**.
+Answering it out loud is the rule; a list you can skip in silence gets skipped.
+
+1. **Ways in.** Count every way a person can reach this behavior — a button, a
+   context menu, a command palette, a keyboard shortcut, a settings screen, an
+   API. Fixing one is not fixing the feature.
+2. **Ways out.** If you added a way in, add the way out and the way to see it.
+   Snooze needs unsnooze. Hide needs unhide, and a sign that something is
+   hidden. Refuse needs retry. A one-way door is a bug.
+3. **Surfaces.** Every place this renders: each app or client, each screen size,
+   each theme, mouse and keyboard and touch.
+4. **Contracts.** If anything crossing a boundary changed shape — a wire
+   format, a schema, a stored file, a public function — every reader of that
+   shape follows in the same change, or the old readers break.
+5. **Variants.** Each adapter, driver, provider or mode needs a decision, even
+   when the decision is "not supported here". Silence is not a decision.
+6. **Written guidance and tests.** Did this make an existing note, README or
+   comment wrong? Does a test pin the behavior you changed, or the one you
+   added?
+
+Bad: "Fixed the delete button."
+
+Good: "Delete now works from the row menu, the palette and `Ctrl+Backspace`;
+the phone view shares the same call. No undo existed, so I added one. Settings
+has no delete path. The README's shortcut list is updated; one test added for
+the palette route."
+
+When an entry does not apply, say so in three words rather than dropping it:
+that is how the reader tells "complete" from "worked where I tested it".
+
 ## When to break the rules
 
 Override the defaults when:
@@ -133,6 +170,9 @@ Before sending, delete:
 3. Any "by the way" sidebar.
 4. Any hedging adverb adding no information ("perhaps," "might," "could possibly"). Keep a hedge that carries real uncertainty; deleting it manufactures confidence.
 5. Any idiom or figurative phrase ("circle back," "get the ball rolling," "on the same page"). Replace with the literal action.
+
+Then, if the message claims a change is done, check rule 11: does it say which
+surfaces this touched, and which it deliberately did not?
 
 Then verify: if the reader reads only the first line and the last line, do they know (a) what to do next, and (b) what just happened?
 
