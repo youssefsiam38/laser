@@ -22,8 +22,8 @@ export interface FleetHeadline {
 }
 
 export type FleetWorktreeChip =
-  | { kind: "branch"; branch: string }
-  | { kind: "shared" };
+  | { kind: "branch"; branch: string; reason?: string }
+  | { kind: "shared"; reason?: string };
 
 export interface FleetAgentStrip {
   kind: "agent";
@@ -104,9 +104,17 @@ export function taskHeadline(task: BackgroundTask, terminalReason: string | unde
   return undefined;
 }
 
+function isolationReason(run: AgentRun | undefined): string | undefined {
+  const reason = run?.isolation?.reason?.trim();
+  return reason || undefined;
+}
+
 export function agentStrip(run: AgentRun | undefined, agentName: string): FleetAgentStrip {
   const model = run?.model;
-  const worktree: FleetWorktreeChip = run?.worktree ? { kind: "branch", branch: run.worktree.branch } : { kind: "shared" };
+  const reason = isolationReason(run);
+  const worktree: FleetWorktreeChip = run?.worktree
+    ? { kind: "branch", branch: run.worktree.branch, ...(reason ? { reason } : {}) }
+    : { kind: "shared", ...(reason ? { reason } : {}) };
   return {
     kind: "agent",
     agentName,

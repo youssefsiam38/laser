@@ -318,25 +318,14 @@ function AskingActions({ item }: { item: FleetItem }) {
   const open = () => void actions.openSession(item.sessionPath);
   if (here) {
     return (
-      <div data-slot="fleet-asking-actions" className="flex flex-wrap items-center gap-2 px-3 pb-2">
+      <div data-slot="fleet-asking-actions" className="contents">
         <span data-slot="fleet-here" className="text-xs leading-xs text-ink-3">This is the chat you are reading.</span>
       </div>
     );
   }
   if (!reachable) return null;
   return (
-    <div
-      data-slot="fleet-asking-actions"
-      className="flex flex-wrap items-center gap-2 px-3 pb-2"
-      onKeyDown={(event) => {
-        if (event.key !== "Enter") return;
-        const target = event.target;
-        if (target instanceof HTMLElement && target.dataset.slot === "fleet-answer") {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-      }}
-    >
+    <div data-slot="fleet-asking-actions" className="contents">
       <Button size="xs" variant="outline" data-slot="fleet-open-chat" onClick={open}>
         Open
       </Button>

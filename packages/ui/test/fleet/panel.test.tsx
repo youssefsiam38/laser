@@ -64,6 +64,11 @@ const fixture = vi.hoisted(() => ({
   endAgent: vi.fn(),
   removeWorktree: vi.fn(),
   request: vi.fn(),
+  openChanges: vi.fn(),
+}));
+
+vi.mock("@/source-control/store.js", () => ({
+  openChanges: (...args: unknown[]) => fixture.openChanges(...args),
 }));
 
 vi.mock("@/runtime", async (importActual) => ({
@@ -86,7 +91,7 @@ beforeEach(() => {
   fixture.state.open = { [ROOT]: view({ path: ROOT }) };
   fixture.state.agents.runs = {};
   fixture.state.tasks.tasks = {};
-  for (const spy of [fixture.actions.openSession, fixture.actions.tasks.stop, fixture.actions.tasks.output, fixture.endAgent, fixture.removeWorktree, fixture.request]) spy.mockClear();
+  for (const spy of [fixture.actions.openSession, fixture.actions.tasks.stop, fixture.actions.tasks.output, fixture.endAgent, fixture.removeWorktree, fixture.request, fixture.openChanges]) spy.mockClear();
   store = createStateStore({ ...initialState, environment: testDescriptor() });
   container = document.createElement("div");
   document.body.append(container);
@@ -1286,5 +1291,101 @@ describe("the fleet row (leap §3)", () => {
     await act(async () => root.render(<LaserStoreProvider store={store}><TooltipProvider><FleetPanel variant="panel" /></TooltipProvider></LaserStoreProvider>));
     expect(container.querySelector('[data-slot="fleet-filter-going"]')?.getAttribute("aria-pressed")).toBe("false");
     expect(rowFor("explorer")).toBeUndefined();
+  });
+
+  it("puts Changes on an agent row, not a command, and Enter from the row never opens it", async () => {
+    fixture.state.agents.runs = { r1: child };
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: ROOT }) };
+    await render();
+    const agent = rowFor("explorer");
+    const command = rowFor("pnpm vite dev");
+    const changes = agent.querySelector<HTMLButtonElement>('[data-slot="fleet-changes"]')!;
+    expect(changes.textContent).toContain("Changes");
+    expect(command.querySelector('[data-slot="fleet-changes"]')).toBeNull();
+
+    const expand = agent.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    expand.focus();
+    const rowEnter = await pressKey(expand, "Enter");
+    expect(rowEnter.defaultPrevented).toBe(false);
+    expect(agent.getAttribute("data-expanded")).toBe("true");
+    expect(fixture.openChanges).not.toHaveBeenCalled();
+
+    changes.focus();
+    expect(document.activeElement).toBe(changes);
+    const changesEnter = await pressKey(changes, "Enter");
+    expect(changesEnter.defaultPrevented).toBe(true);
+    expect(fixture.openChanges).not.toHaveBeenCalled();
+    expect(agent.getAttribute("data-expanded")).toBe("true");
+
+    const changesSpace = await pressKey(changes, " ");
+    expect(changesSpace.defaultPrevented).toBe(false);
+    expect(fixture.openChanges).toHaveBeenCalledWith({
+      scope: { kind: "agent", runId: "r1" },
+      sessionKey: CHILD,
+    });
+    fixture.openChanges.mockClear();
+    await act(async () => changes.click());
+    expect(fixture.openChanges).toHaveBeenCalledWith({
+      scope: { kind: "agent", runId: "r1" },
+      sessionKey: CHILD,
+    });
+  });
+
+  it("keeps Changes on a shared-checkout agent so the control is never dead", async () => {
+    fixture.state.agents.runs = {
+      r1: run({ runId: "r1", sessionPath: CHILD, subagentName: "explorer", worktree: null }),
+    };
+    await render();
+    const changes = rowFor("explorer").querySelector<HTMLButtonElement>('[data-slot="fleet-changes"]');
+    expect(changes).not.toBeNull();
+    await act(async () => changes!.click());
+    expect(fixture.openChanges).toHaveBeenCalledWith({
+      scope: { kind: "agent", runId: "r1" },
+      sessionKey: CHILD,
+    });
+  });
+
+  it("shows the isolation reason on the worktree chip, and nothing when the field is absent", async () => {
+    const tooltipText = () =>
+      [...document.querySelectorAll('[data-slot="tooltip-content"]')].map((node) => node.textContent).join(" ");
+    const reason = "This workspace holds 41 repositories, so an agent cannot be isolated from all of them; sharing your checkout.";
+    fixture.state.agents.runs = {
+      r1: run({
+        runId: "r1",
+        sessionPath: CHILD,
+        subagentName: "explorer",
+        worktree: null,
+        isolation: { mode: "shared", shape: "workspace-of-repos", reason },
+      }),
+    };
+    await render();
+    const row = rowFor("explorer");
+    const expand = row.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    expect(expand.querySelector('[data-slot="hint"]')).toBeNull();
+    const hint = row.querySelector<HTMLElement>('[data-slot="fleet-worktree-chip"] [data-slot="hint"]')!;
+    expect(hint.tabIndex).toBe(0);
+    expect(tooltipText()).not.toContain("41 repositories");
+    await act(async () => hint.focus());
+    expect(tooltipText()).toContain(reason);
+    await act(async () => hint.blur());
+    expect(tooltipText()).not.toContain("41 repositories");
+    await act(async () => {
+      hint.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerType: "touch" }));
+      hint.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerType: "touch" }));
+      hint.click();
+    });
+    expect(tooltipText()).toContain(reason);
+
+    fixture.state.agents.runs = {
+      r1: run({ runId: "r1", sessionPath: CHILD, subagentName: "explorer", worktree: null }),
+    };
+    await render();
+    const silent = rowFor("explorer");
+    expect(silent.querySelector('[data-slot="fleet-worktree-chip"] [data-slot="hint"]')).toBeNull();
+    expect(silent.querySelector('[data-slot="fleet-worktree-chip"]')?.textContent).toContain("shared checkout");
+    const silentExpand = silent.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    await act(async () => silentExpand.focus());
+    expect(tooltipText()).not.toContain("41 repositories");
+    expect(tooltipText().trim()).toBe("");
   });
 });
