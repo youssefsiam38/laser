@@ -82,10 +82,12 @@ it("is a large modal on top of the window, and full-bleed only on a phone width"
   // The app is still there behind it: a scrim, not a replacement.
   expect(document.querySelector('[data-slot="dialog-overlay"]')).toBeTruthy();
   const classes = surface.className;
-  // Inset and capped: it never touches the edge of a wide display.
-  expect(classes).toContain("h-[92dvh]");
-  expect(classes).toContain("w-[94vw]");
-  expect(classes).toContain("md:max-w-[calc(var(--measure-thread)+var(--space-unit)*96)]");
+  // Nine tenths of the window: big, and still a modal with the app around it.
+  expect(classes).toContain("h-[90dvh]");
+  expect(classes).toContain("w-[90vw]");
+  expect(classes).toContain("max-w-[90vw]");
+  // No content cap: a diff is as wide as the window allows it to be.
+  expect(classes).not.toContain("md:max-w-[calc(var(--measure-thread)");
   // The card is the shared dialog's: its radius, hairline and elevation
   // survive on the element, and the overlay restates none of them — it only
   // takes them off below `md`, where a gutter would cost more than it gives.

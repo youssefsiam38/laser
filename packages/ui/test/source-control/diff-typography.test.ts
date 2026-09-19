@@ -37,6 +37,16 @@ function withCoreSheet(root: ShadowRoot): CSSStyleSheet {
   return core;
 }
 
+it("wraps a line at its spaces, and leaves an unbreakable line to scroll", () => {
+  // A long line should fold inside the column instead of running off the side,
+  // but a line with nowhere to break — a minified bundle, a base64 blob — must
+  // not be chopped mid-token: it scrolls.
+  expect(DIFF_TYPOGRAPHY_CSS).toMatch(/\[data-line\] span \{[^}]*white-space: pre-wrap/);
+  expect(DIFF_TYPOGRAPHY_CSS).toMatch(/\[data-line\] span \{[^}]*overflow-wrap: normal/);
+  expect(DIFF_TYPOGRAPHY_CSS).toMatch(/\[data-line\] span \{[^}]*word-break: normal/);
+  expect(DIFF_TYPOGRAPHY_CSS).toMatch(/\[data-code\] \{[^}]*overflow-x: auto/);
+});
+
 it("carries our mono face and the code size into the shadow root", () => {
   expect(DIFF_TYPOGRAPHY_CSS).toContain("--diffs-font-family: var(--font-mono)");
   expect(DIFF_TYPOGRAPHY_CSS).toContain("--diffs-font-size: var(--text-code)");

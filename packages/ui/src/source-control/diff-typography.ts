@@ -85,6 +85,28 @@ pre, code, [data-line] {
   line-height: var(--text-code--line-height);
 }
 
+/* A line wraps rather than running off the side.
+
+   Pierre draws every line as pre inside a horizontally scrolling column, so
+   reading a long line meant scrolling one column while the other stayed put.
+   pre-wrap keeps every space and indent exactly as the file has them and
+   breaks only where the line already has a space; overflow-wrap and word-break
+   stay normal on purpose, so a line with nowhere to break (a minified bundle,
+   a base64 blob, a long URL) is not chopped mid-token but scrolls, which is
+   the only honest thing to do with it. */
+[data-content],
+[data-line],
+[data-line] span {
+  white-space: pre-wrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+/* The column still scrolls, for the line that genuinely cannot wrap. */
+[data-code] {
+  overflow-x: auto;
+}
+
 /* Digits that line up down the gutter, and a line number that reads as
    reference rather than content. */
 [data-column-number],

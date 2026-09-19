@@ -492,12 +492,11 @@ function ChangesOverlay() {
          */
         className={cn(
           "flex flex-col gap-0 overflow-hidden bg-bg p-0",
-          // Big, but a modal: the window stays visible around it. The card
-          // itself — radius, hairline, elevation — is the dialog's own and is
-          // never restated here; the cap is the conversation's measure plus
-          // the file column beside it.
-          "top-1/2 h-[92dvh] max-h-[92dvh] w-[94vw] max-w-full -translate-y-1/2 sm:max-w-full",
-          "md:max-w-[calc(var(--measure-thread)+var(--space-unit)*96)]",
+          // Big, but a modal: nine tenths of the window, so the app stays
+          // visible around it on every side. The card itself — radius,
+          // hairline, elevation — is the dialog's own and is never restated
+          // here. No content cap: a diff is as wide as the window allows.
+          "top-1/2 h-[90dvh] max-h-[90dvh] w-[90vw] max-w-[90vw] -translate-y-1/2 sm:max-w-[90vw]",
           // Below `md` the card comes off and it fills the screen.
           "max-md:top-0 max-md:h-dvh max-md:max-h-dvh max-md:w-full max-md:translate-y-0",
           "max-md:rounded-none max-md:border-0 max-md:shadow-none",
