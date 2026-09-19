@@ -1,6 +1,14 @@
 import { expect, it } from "vitest";
-import { appendPatchPage, loadedDiffFiles } from "../../src/source-control/diff-files.js";
-import type { FileDiffPage } from "../../src/source-control/contract.js";
+import { appendPatchPage, expandableSides } from "../../src/source-control/diff-files.js";
+import type { FileDiffPage, FileSource } from "../../src/source-control/contract.js";
+
+const source = (extra: Partial<FileSource> = {}): FileSource => ({
+  repo: "app",
+  path: "a.ts",
+  ref: "new",
+  contents: "one\ntwo\n",
+  ...extra,
+});
 
 const page = (patch: string, extra: Partial<FileDiffPage> = {}): FileDiffPage => ({
   repo: "app",
@@ -22,19 +30,23 @@ it("appends a later patch page and keeps the truncated flag from the latest page
   });
 });
 
-it("maps old and new sources for Pierre hydration", () => {
-  expect(loadedDiffFiles(null, null, { path: "a.ts" })).toEqual({
-    oldFile: null,
-    newFile: { name: "a.ts", contents: "" },
-  });
-  expect(
-    loadedDiffFiles(
-      { repo: "app", path: "old.ts", ref: "old", contents: "a" },
-      { repo: "app", path: "a.ts", ref: "new", contents: "b" },
-      { path: "a.ts", oldPath: "old.ts" },
-    ),
-  ).toEqual({
-    oldFile: { name: "old.ts", contents: "a" },
-    newFile: { name: "a.ts", contents: "b" },
-  });
+it("opens context only for a two-sided change with both whole sides", () => {
+  expect(expandableSides("change", { old: source({ ref: "old" }), next: source() })).toBe("ready");
+  expect(expandableSides("rename-changed", { old: source({ ref: "old" }), next: source() })).toBe("ready");
+});
+
+it("never hydrates from a file the authority could only send in part", () => {
+  // A prefix would renumber every line past the cut. Refusing is the
+  // bounded-expansion rule at its source.
+  expect(expandableSides("change", { old: source({ ref: "old", truncated: true }), next: source() })).toBe("too-large");
+  expect(expandableSides("change", { old: source({ ref: "old" }), next: source({ truncated: true }) })).toBe("too-large");
+});
+
+it("separates waiting, refusal and a file that never had surrounding lines", () => {
+  expect(expandableSides("change", undefined)).toBe("loading");
+  expect(expandableSides("change", { old: null, next: source() })).toBe("unavailable");
+  expect(expandableSides("new", undefined)).toBe("unsupported");
+  expect(expandableSides("deleted", undefined)).toBe("unsupported");
+  expect(expandableSides("rename-pure", undefined)).toBe("unsupported");
+  expect(expandableSides(undefined, undefined)).toBe("unsupported");
 });

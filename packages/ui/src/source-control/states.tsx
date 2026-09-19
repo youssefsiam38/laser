@@ -250,9 +250,9 @@ export function PickFileState() {
 
 export function UnifiedFallbackNotice({ onDismiss }: { onDismiss: () => void }) {
   return (
-    <div data-slot="changes-unified-notice" className="flex items-center gap-3 hairline-b bg-surface-2 px-4 py-1.5 text-xs text-ink-2">
+    <div data-slot="changes-unified-notice" className="flex items-center gap-3 hairline-b bg-surface-2 px-4 py-1.5 text-sm leading-sm text-ink-2">
       <p className="min-w-0 flex-1">Split needs two columns of code, so this view is unified.</p>
-      <Button variant="ghost" size="xs" onClick={onDismiss}>
+      <Button variant="ghost" size="sm" onClick={onDismiss}>
         Dismiss
       </Button>
     </div>
@@ -262,8 +262,8 @@ export function UnifiedFallbackNotice({ onDismiss }: { onDismiss: () => void }) 
 export function TruncatedPatchState({ onMore, loading }: { onMore: () => void; loading: boolean }) {
   return (
     <div data-slot="changes-truncated" className="flex shrink-0 items-center gap-3 hairline-t bg-surface-2 px-4 py-1.5">
-      <p className="min-w-0 flex-1 text-xs text-ink-2">This patch is large, so only part of it is shown.</p>
-      <Button variant="outline" size="sm" onClick={onMore} disabled={loading}>
+      <p className="min-w-0 flex-1 text-sm leading-sm text-ink-2">This patch is large, so only part of it is shown.</p>
+      <Button variant="outline" onClick={onMore} disabled={loading}>
         {loading ? "Loading" : "Show more"}
       </Button>
     </div>
