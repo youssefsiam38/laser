@@ -5,6 +5,17 @@ leap (`docs/source-control-leap.md`). Agents did all the programming and all
 the programmatic tests; **every visual and manual judgement is yours** (spec
 §13.1). Nothing is released until you say it is good (§13.5).
 
+## It is already running
+
+**<http://127.0.0.1:41477>** — built from the reviewed source, gated with a full
+`pnpm verify`, seeded, and left open for you. Its four directories live under
+`/tmp/laser-sandbox-cH0eHZ/` (`project`, `monorepo`, `workspace-of-repos`,
+`no-git`) and its private `HOME` under `/tmp/leap-sandbox-home`. The session
+**“Please change the greeter…”** already has two turns of real work, three
+checkpoints and a live background command.
+
+If it is gone by the time you read this, start it again as below.
+
 ## Starting the sandbox
 
 ```bash
@@ -112,6 +123,33 @@ Editing files in the overlay; a commit control in the transcript or beside the
 composer; changes outside the project's workspace; filesystem watchers; cloning
 and publishing; linked pull requests, stacks and auto-merge; GitLab, Gitea,
 Forgejo and Azure DevOps; ignored files; submodules and bare repositories.
+
+## What changed after I looked at it myself
+
+Every one of these was found by running the built app and measuring, not by
+reading code:
+
+- Opening a file **crashed the whole window** (`Tooltip` outside its provider);
+  then a second crash on the same file from a hydration mismatch. Both fixed,
+  and the diff body now has its own error boundary, so a renderer failure shows
+  a sentence inside the modal instead of taking the conversation down.
+- The diff drew in **`SF Mono`**, a font this machine does not have. It now
+  draws in the theme's mono at the code size, so it reads as ours.
+- **“More unchanged context may be available”** was a dead sentence. Expansion is
+  real: both file sides are fetched for the scope's own two ends, and the
+  expanders are keyboard-reachable.
+- The surface was edge-to-edge and read as a second application. It is now a
+  **large modal** (D-326), full-bleed only at phone width.
+- The fleet's filter row **overflowed by 53 px** and sliced a chip; the command
+  tile spent 40 px before the first character. Both fixed and pinned by a width
+  test.
+- Dialogs **never left the screen** with reduced motion (a 0 ms exit animation
+  Radix waits on forever). Fixed for every dialog, sheet, popover, menu and
+  tooltip in the app.
+- The **first turn's work could vanish** from the session and turn scopes,
+  because the open-time checkpoint raced it. The first prompt now waits for it.
+- The fleet appeared to flicker: the sandbox was publishing one command id under
+  two sessions (D-328). The sandbox is fixed and the fleet keeps the guards.
 
 ## Known and recorded
 
