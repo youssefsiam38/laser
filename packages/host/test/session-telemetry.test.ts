@@ -1,11 +1,13 @@
-import { ErrorCodes, PRODUCT_NAME, TelemetryFold, sessionTelemetryOf } from "@lasercode/protocol";
+import { ErrorCodes, PRODUCT_NAME, TelemetryFold, sessionTelemetryOf, type AgentRun, type SessionTelemetry } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AgentRunRegistry } from "../src/agents/runs.js";
 import { SessionIndexCache } from "../src/session-index.js";
 import { SessionRevisions } from "../src/session-revision.js";
 import { SessionTelemetryReader } from "../src/session-telemetry.js";
+import { childSources, computeLiveTelemetry } from "../../worker/src/telemetry.js";
 
 const ENVIRONMENT = "11111111-2222-3333-4444-555555555555";
 const CWD = "/project";
@@ -162,6 +164,105 @@ describe("durable telemetry", () => {
       expect(answer.result.model).toBeUndefined();
       expect("files" in answer.result).toBe(false);
     } finally {
+      cleanup();
+    }
+  });
+});
+
+function stripLiveOnly(snapshot: SessionTelemetry) {
+  const { authority: _a, context: _c, spend, ...rest } = snapshot;
+  if (!spend) return rest;
+  const { account: _account, ...spendRest } = spend;
+  return { ...rest, spend: spendRest };
+}
+
+function childFile(dir: string, name: string, cost: number): string {
+  const path = join(dir, name);
+  writeFileSync(path, [
+    JSON.stringify({ type: "session", version: 3, id: name, timestamp: "2026-01-01T00:00:00.000Z", cwd: CWD }),
+    JSON.stringify({ type: "message", id: "u", parentId: null, timestamp: "2026-01-01T00:00:01.000Z", message: { role: "user", content: "child" } }),
+    JSON.stringify({
+      type: "message",
+      id: "a",
+      parentId: "u",
+      timestamp: "2026-01-01T00:00:02.000Z",
+      message: {
+        role: "assistant",
+        provider: "anthropic",
+        model: "claude",
+        content: [{ type: "text", text: "ok" }],
+        usage: { input: 8, output: 2, totalTokens: 10, cost: { total: cost } },
+      },
+    }),
+  ].join("\n") + "\n");
+  return path;
+}
+
+function runAt(sessionPath: string, root: string, runId: string): AgentRun {
+  return {
+    agentName: "worker",
+    subagentName: runId,
+    sessionId: runId,
+    runId,
+    sessionPath,
+    projectCwd: CWD,
+    rootSessionPath: root,
+    depth: 1,
+    parent: { sessionPath: root, sessionId: "session-1" },
+    worktree: null,
+    origin: "agent",
+    status: "completed",
+    task: "child",
+    model: { provider: "anthropic", id: "claude" },
+    startedAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+describe("live and durable authorities", () => {
+  it("agree on a compacted parent with two child runs", async () => {
+    const { dir, cleanup } = workspace();
+    const registry = new AgentRunRegistry({ now: () => new Date("2026-01-02T00:00:00.000Z") });
+    try {
+      const parent = join(dir, "parent.jsonl");
+      writeFileSync(parent, [
+        header,
+        user("u1", null, 1),
+        assistant("a1", "u1", 1),
+        JSON.stringify({
+          type: "compaction",
+          id: "c1",
+          parentId: "a1",
+          timestamp: "2026-01-01T00:01:00.000Z",
+          summary: "so far",
+          usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 0.001 } },
+        }),
+      ].join("\n") + "\n");
+      const childA = childFile(dir, "child-a.jsonl", 0.2);
+      const childB = childFile(dir, "child-b.jsonl", 0.3);
+      registry.upsert(runAt(childA, parent, "run-a"));
+      registry.upsert(runAt(childB, parent, "run-b"));
+
+      const index = new SessionIndexCache();
+      const revisions = new SessionRevisions({ index, environmentId: ENVIRONMENT });
+      const reader = new SessionTelemetryReader({ index, revisions, runs: registry });
+      const durable = await reader.read(parent, { path: parent });
+      expect(durable.kind).toBe("answer");
+      if (durable.kind !== "answer") return;
+
+      const fold = TelemetryFold.create();
+      const live = computeLiveTelemetry(fold, entriesOf(parent), "c1", {
+        revision: durable.result.revision,
+        environmentKey: durable.result.environmentKey,
+      }, {
+        overlay: {},
+        children: childSources(parent, registry.list(parent), (path) => entriesOf(path)),
+      });
+      expect(stripLiveOnly(live)).toEqual(stripLiveOnly(durable.result));
+      expect(durable.result.history?.compactions).toBe(1);
+      expect(durable.result.spend?.api?.totals.cost).toBeCloseTo(0.01 + 0.001 + 0.2 + 0.3);
+    } finally {
+      registry.close();
       cleanup();
     }
   });

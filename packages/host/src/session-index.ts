@@ -9,6 +9,7 @@ import { closeSync, fstatSync, openSync, readSync, statSync, type Stats } from "
 import {
   RevisionFold,
   TelemetryFold,
+  cloneTelemetryFoldState,
   entryBodyMetadata,
   historyWindowNode,
   servedEntryWireBytes,
@@ -473,7 +474,7 @@ export class SessionIndexCache {
         }
         durable.bytes += checkpointBytes(checkpoint);
       }
-      if (durable.bytes > this.limits.indexBytes) return failure("too-large", "index");
+      if (durable.bytes + durable.telemetry.accountedBytes > this.limits.indexBytes) return failure("too-large", "index");
       return undefined;
     };
 
@@ -559,7 +560,7 @@ function copyIndex(index: SessionIndex): SessionIndex {
     leafId: index.leafId,
     state: { ...index.state },
     checkpoints: index.checkpoints.map((checkpoint) => ({ ...checkpoint })),
-    telemetry: TelemetryFold.resume(index.telemetry).state,
+    telemetry: cloneTelemetryFoldState(index.telemetry),
     identity: { ...index.identity },
   };
 }

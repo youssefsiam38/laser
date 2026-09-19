@@ -9,7 +9,7 @@ import {
   WORKER_PIPE_SOFT_BYTES,
   type ProviderCaptureLink,
 } from "@lasercode/protocol";
-import { chunkBody, countUtf8Chunks, encodeCapture, providerLogModule, summarize, utf8Chunks } from "../src/modules/provider-log.js";
+import { chunkBody, countUtf8Chunks, encodeCapture, estimateRequestComposition, providerLogModule, summarize, utf8Chunks } from "../src/modules/provider-log.js";
 import { CaptureReservations } from "../../worker/src/capture-reservations.js";
 
 const ctx = {
@@ -73,7 +73,7 @@ it("chunks a large capture and proves it with a digest over the redacted bytes",
   expect(end.bytes).toBe(begin.bytes);
   expect(createHash("sha256").update(body).digest("hex")).toBe(begin.sha256);
   expect(JSON.parse(body)).toEqual(payload);
-  expect(begin.summary).toEqual({ model: "test", messages: 1, tools: 1, stream: true });
+  expect(begin.summary).toMatchObject({ model: "test", messages: 1, tools: 1, stream: true });
   expect(begin.context.promptEntryId).toBe("current");
 });
 
@@ -463,6 +463,31 @@ it("measures the stored representation, not the original payload", () => {
 });
 
 it("summarizes without a body", () => {
-  expect(summarize({ model: "m", contents: [{}, {}], tools: [], reasoning_effort: "high" })).toEqual({ model: "m", messages: 2, tools: 0, thinking: true });
+  expect(summarize({ model: "m", contents: [{}, {}], tools: [], reasoning_effort: "high" })).toMatchObject({ model: "m", messages: 2, tools: 0, thinking: true, composition: { tools: 0, chat: 2, thinking: 1, system: 0 } });
   expect(summarize(null)).toEqual({});
+});
+
+it("estimates tools / chat / thinking / system from the assembled request", () => {
+  const payload = {
+    model: "test",
+    system: "You are a coding agent that writes careful patches.",
+    messages: [
+      { role: "user", content: "Please inspect the telemetry fold and name every wrong number." },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "The live authority is merging every run in the project." },
+          { type: "text", text: "Three numbers on screen are wrong." },
+        ],
+      },
+    ],
+    tools: [{ name: "bash", description: "Run a shell command in the project", input_schema: { type: "object" } }],
+    thinking: { type: "enabled", budget_tokens: 8000 },
+  };
+  const composition = estimateRequestComposition(payload);
+  expect(composition).toEqual(summarize(payload).composition);
+  expect(composition!.tools).toBeGreaterThan(0);
+  expect(composition!.chat).toBeGreaterThan(0);
+  expect(composition!.thinking).toBeGreaterThan(0);
+  expect(composition!.system).toBeGreaterThan(0);
 });

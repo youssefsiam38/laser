@@ -10,13 +10,11 @@ import {
   ErrorCodes,
   ProtocolError,
   TelemetryFold,
+  runsBeneathSession,
   sessionTelemetryOf,
   turnEntryIndices,
   type ClientRequests,
-  type SessionTelemetry,
   type TelemetryChildSource,
-  type TelemetryLiveOverlay,
-  type TelemetrySection,
 } from "@lasercode/protocol";
 import type { AgentRunRegistry } from "./agents/runs.js";
 import type { FileIdentity, IndexedEntry, SessionIndex, SessionIndexCache, SessionIndexFailure } from "./session-index.js";
@@ -99,12 +97,12 @@ export class SessionTelemetryReader {
     };
   }
 
-  private async childSources(rootPath: string): Promise<TelemetryChildSource[]> {
-    const runs = this.options.runs?.list(rootPath) ?? [];
+  private async childSources(sessionPath: string): Promise<TelemetryChildSource[]> {
+    const runs = runsBeneathSession(sessionPath, this.options.runs?.list(sessionPath) ?? []);
     const seen = new Set<string>();
     const children: TelemetryChildSource[] = [];
     for (const run of runs) {
-      if (run.sessionPath === rootPath || seen.has(run.sessionPath)) continue;
+      if (seen.has(run.sessionPath)) continue;
       seen.add(run.sessionPath);
       const model = run.model ? `${run.model.provider}/${run.model.id}` : undefined;
       const indexed = await this.options.index.read(run.sessionPath);
@@ -117,21 +115,6 @@ export class SessionTelemetryReader {
     }
     return children;
   }
-}
-
-/** Shared with the live worker so a test can compare both authorities. */
-export function telemetryFromEntries(
-  entries: readonly unknown[],
-  fence: { revision: string; environmentKey: string; authority: "live" | "durable" },
-  options: {
-    include?: readonly TelemetrySection[];
-    children?: readonly TelemetryChildSource[];
-    overlay?: TelemetryLiveOverlay;
-  } = {},
-): SessionTelemetry {
-  const fold = TelemetryFold.create();
-  fold.ingest(entries);
-  return sessionTelemetryOf(fold.state, fence, options);
 }
 
 type RecordRead = { kind: "ok"; values: unknown[] } | { kind: "changed" } | { kind: "unreadable" };

@@ -24,7 +24,7 @@ export interface TelemetryPanelProps {
 
 export { HistorySection };
 
-function useSessionTelemetry(): SessionTelemetry | undefined {
+export function useSessionTelemetry(): SessionTelemetry | undefined {
   const { client } = useLaserStable();
   const path = useLaserState((s) => s.current);
   const [telemetry, setTelemetry] = useState<SessionTelemetry | undefined>();

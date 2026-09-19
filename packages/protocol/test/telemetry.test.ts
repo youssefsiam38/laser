@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  TELEMETRY_SERIES_MAX,
   TELEMETRY_TOOL_HISTOGRAM_TOP,
   TelemetryFold,
+  downsampleSeries,
+  runsBeneathSession,
   sessionTelemetryOf,
   turnEntryIndices,
   type TelemetryFoldState,
@@ -174,6 +177,55 @@ describe("telemetry fold", () => {
     });
     expect(flagOnly.spend?.billing).toBe("mixed");
     expect(flagOnly.spend?.api).toBeUndefined();
+  });
+
+  it("an account-only session plus a compaction stays account-billed with no API spend", () => {
+    const entries = [
+      user("u1", null),
+      assistant("a1", "u1", { provider: "openai-codex", model: "gpt-5", cost: 4 }),
+      {
+        type: "compaction",
+        id: "c1",
+        parentId: "a1",
+        timestamp: "2026-01-01T00:00:03.000Z",
+        summary: "so far",
+        usage: { input: 80, output: 40, totalTokens: 120, cost: { total: 0.6147 } },
+      },
+    ];
+    const snapshot = sessionTelemetryOf(fold(entries), fence, { include: ["spend"] });
+    expect(snapshot.spend).toEqual({ billing: "account" });
+    expect(snapshot.spend?.api).toBeUndefined();
+  });
+
+  it("caps sparkline series so a long session stays bounded", () => {
+    const entries: unknown[] = [];
+    let parent: string | null = null;
+    for (let i = 0; i < TELEMETRY_SERIES_MAX + 40; i++) {
+      const u = `u${i}`;
+      const a = `a${i}`;
+      entries.push(user(u, parent, `turn ${i}`), assistant(a, u, { input: 2, output: 1, cost: 0.001 }));
+      parent = a;
+    }
+    const snapshot = sessionTelemetryOf(fold(entries), fence, { include: ["spend", "model"] });
+    expect(snapshot.spend?.api?.series).toHaveLength(TELEMETRY_SERIES_MAX);
+    expect(snapshot.model?.tokenSeries).toHaveLength(TELEMETRY_SERIES_MAX);
+    expect(downsampleSeries([1, 2, 3], 8)).toEqual([1, 2, 3]);
+  });
+
+  it("selects children beneath the requested session, never a sibling or another root", () => {
+    const runs = [
+      { sessionPath: "/a-child.jsonl", rootSessionPath: "/a.jsonl", parent: { sessionPath: "/a.jsonl" } },
+      { sessionPath: "/a-grand.jsonl", rootSessionPath: "/a.jsonl", parent: { sessionPath: "/a-child.jsonl" } },
+      { sessionPath: "/a-sib.jsonl", rootSessionPath: "/a.jsonl", parent: { sessionPath: "/a.jsonl" } },
+      { sessionPath: "/b-child.jsonl", rootSessionPath: "/b.jsonl", parent: { sessionPath: "/b.jsonl" } },
+    ];
+    expect(runsBeneathSession("/a.jsonl", runs).map((run) => run.sessionPath)).toEqual([
+      "/a-child.jsonl",
+      "/a-grand.jsonl",
+      "/a-sib.jsonl",
+    ]);
+    expect(runsBeneathSession("/a-child.jsonl", runs).map((run) => run.sessionPath)).toEqual(["/a-grand.jsonl"]);
+    expect(runsBeneathSession("/b.jsonl", runs).map((run) => run.sessionPath)).toEqual(["/b-child.jsonl"]);
   });
 
   it("selects one user-anchored turn on the rendered branch", () => {

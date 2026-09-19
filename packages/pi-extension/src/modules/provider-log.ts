@@ -43,6 +43,74 @@ const PREVIEW_CHARS = 240;
 
 
 
+/**
+ * Pi's `estimateTokens` heuristic: ceil(chars / 4). Applied to sections of the
+ * assembled provider payload — that payload is not an `AgentMessage`, so the
+ * function itself cannot be called on it.
+ */
+const CHARS_PER_TOKEN = 4;
+
+function estimateText(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+
+function estimateValue(value: unknown): number {
+  if (value == null) return 0;
+  if (Array.isArray(value) && value.length === 0) return 0;
+  if (typeof value === "string") return estimateText(value);
+  try {
+    const json = JSON.stringify(value);
+    return json ? estimateText(json) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function estimateMessages(messages: unknown[]): { chat: number; thinking: number } {
+  let chat = 0;
+  let thinking = 0;
+  for (const raw of messages) {
+    if (!raw || typeof raw !== "object") {
+      chat += estimateValue(raw);
+      continue;
+    }
+    const msg = raw as Record<string, unknown>;
+    const content = msg.content ?? msg.parts;
+    if (!Array.isArray(content)) {
+      chat += estimateValue(msg);
+      continue;
+    }
+    const rest: unknown[] = [];
+    for (const part of content) {
+      if (part && typeof part === "object" && (part as { type?: unknown }).type === "thinking") {
+        const block = part as { thinking?: unknown; text?: unknown };
+        thinking += estimateValue(block.thinking ?? block.text ?? "");
+      } else {
+        rest.push(part);
+      }
+    }
+    chat += estimateValue({ ...msg, content: rest });
+  }
+  return { chat, thinking };
+}
+
+/** Per-section token estimates for the live assembled request (spec C.4). */
+export function estimateRequestComposition(payload: unknown): { tools: number; chat: number; thinking: number; system: number } | undefined {
+  const body = payload as Record<string, unknown> | null;
+  if (!body || typeof body !== "object") return undefined;
+  const messages = body.messages ?? body.input ?? body.contents;
+  const tools = body.tools ?? body.tool_config ?? body.toolConfig;
+  const system = body.system ?? body.instructions ?? body.systemPrompt ?? body.systemInstruction ?? body.system_instruction;
+  const thinking = body.thinking ?? body.reasoning ?? body.reasoning_effort;
+  const fromMessages = Array.isArray(messages) ? estimateMessages(messages) : { chat: estimateValue(messages), thinking: 0 };
+  return {
+    tools: estimateValue(tools),
+    chat: fromMessages.chat,
+    thinking: fromMessages.thinking + estimateValue(thinking),
+    system: estimateValue(system),
+  };
+}
+
 /** The row's line, without the app parsing a body it was handed whole. */
 export function summarize(payload: unknown): ProviderCaptureSummary {
   const body = payload as Record<string, unknown> | null;
@@ -50,12 +118,14 @@ export function summarize(payload: unknown): ProviderCaptureSummary {
   const messages = body["messages"] ?? body["input"] ?? body["contents"];
   const tools = body["tools"];
   const thinking = body["thinking"] ?? body["reasoning"] ?? body["reasoning_effort"];
+  const composition = estimateRequestComposition(payload);
   return {
     ...(typeof body["model"] === "string" ? { model: body["model"] } : {}),
     ...(Array.isArray(messages) ? { messages: messages.length } : {}),
     ...(Array.isArray(tools) ? { tools: tools.length } : {}),
     ...(body["stream"] === true ? { stream: true } : {}),
     ...(thinking !== undefined && thinking !== null ? { thinking: true } : {}),
+    ...(composition ? { composition } : {}),
   };
 }
 
@@ -297,7 +367,7 @@ export const providerLogModule: LaserModule = {
       if (encoded.bytes <= CAPTURE_CHUNKED_ABOVE_BYTES) {
         // The ordinary path, unchanged in shape: one message carrying the
         // payload the app redacts and stores exactly as it always has.
-        send({ type: "lasercode/provider/request", at, payload: event.payload, ...(Object.keys(context).length > 0 ? { context } : {}) });
+        send({ type: "lasercode/provider/request", at, payload: event.payload, summary: summarize(event.payload), ...(Object.keys(context).length > 0 ? { context } : {}) });
         return undefined;
       }
 

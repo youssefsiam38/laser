@@ -8,7 +8,7 @@
 import type { SessionGoal } from "./features.js";
 import { PRODUCT_DISPLAY_NAME } from "./identity.js";
 import type { MemoryPressureDirectiveLevel } from "./memory-pressure.js";
-import type { ProviderCaptureMeta, ProviderCaptureOmission } from "./provider-capture.js";
+import type { ProviderCaptureMeta, ProviderCaptureOmission, ProviderCaptureSummary } from "./provider-capture.js";
 import type { RuntimeFailure, RuntimeModuleName } from "./runtime-recovery.js";
 import type { BackgroundTaskUpdate } from "./tasks.js";
 import type { McpRuntimeSnapshot } from "./mcp.js";
@@ -56,6 +56,8 @@ export interface ProviderRequestRecord {
   context?: ProviderRequestContext;
   /** The complete serialized provider payload, as Pi built it. */
   payload: unknown;
+  /** Engine-neutral row line, including live-request composition estimates. */
+  summary?: ProviderCaptureSummary;
 }
 
 /** Engine-neutral identity captured alongside the serialized request body. */

@@ -6,15 +6,17 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
   TelemetryFold,
+  runsBeneathSession,
   sessionTelemetryOf,
   turnEntryIndices,
+  type AgentRun,
   type SessionState,
   type SessionTelemetry,
   type TelemetryChildSource,
+  type TelemetryContext,
   type TelemetryLiveOverlay,
   type TelemetrySection,
 } from "@lasercode/protocol";
-import type { AgentRun } from "@lasercode/protocol";
 
 const TELEMETRY_UPDATE_KINDS = new Set([
   "message_end",
@@ -25,12 +27,21 @@ const TELEMETRY_UPDATE_KINDS = new Set([
   "entry_appended",
 ]);
 
+const DEFAULT_RESERVE_TOKENS = 16_384;
+
 export function telemetryUpdateKind(kind: string): boolean {
   return TELEMETRY_UPDATE_KINDS.has(kind);
 }
 
-export function liveOverlay(state: SessionState): TelemetryLiveOverlay {
+export function liveOverlay(
+  state: SessionState,
+  extras: {
+    composition?: TelemetryContext["composition"];
+    reserveTokens?: number;
+  } = {},
+): TelemetryLiveOverlay {
   const usage = state.contextUsage;
+  const reserve = extras.reserveTokens ?? DEFAULT_RESERVE_TOKENS;
   return {
     ...(usage
       ? {
@@ -38,8 +49,10 @@ export function liveOverlay(state: SessionState): TelemetryLiveOverlay {
             tokens: usage.tokens,
             contextWindow: usage.contextWindow,
             percent: usage.percent,
+            ...(extras.composition ? { composition: extras.composition } : {}),
             autoCompact: {
               enabled: state.autoCompactionEnabled,
+              thresholdTokens: Math.max(0, usage.contextWindow - reserve),
               state: state.isCompacting ? "compacting" : state.autoCompactionEnabled ? "idle" : "off",
             },
           },
@@ -59,23 +72,68 @@ export function liveOverlay(state: SessionState): TelemetryLiveOverlay {
   };
 }
 
-export function childSources(rootPath: string, runs: readonly AgentRun[], liveEntries: (path: string) => unknown[] | undefined): TelemetryChildSource[] {
-  const seen = new Set<string>();
-  const children: TelemetryChildSource[] = [];
-  for (const run of runs) {
-    if (run.sessionPath === rootPath || seen.has(run.sessionPath)) continue;
-    seen.add(run.sessionPath);
-    const model = run.model ? `${run.model.provider}/${run.model.id}` : undefined;
-    const entries = liveEntries(run.sessionPath) ?? readSessionEntries(run.sessionPath);
-    if (!entries) {
-      children.push(model ? { model } : {});
-      continue;
+/**
+ * Incremental fold per child session path. A parent with several children
+ * must not re-read each finished child's whole JSONL on every tool result.
+ */
+export class ChildTelemetryCache {
+  private readonly folds = new Map<string, TelemetryFold>();
+
+  sources(
+    sessionPath: string,
+    runs: readonly AgentRun[],
+    liveEntries: (path: string) => unknown[] | undefined,
+  ): TelemetryChildSource[] {
+    const livePaths = new Set(runs.map((run) => run.sessionPath));
+    for (const path of this.folds.keys()) {
+      if (!livePaths.has(path)) this.folds.delete(path);
     }
-    const fold = TelemetryFold.create();
-    fold.ingest(entries);
-    children.push({ ...(model ? { model } : {}), fold: fold.state });
+    const seen = new Set<string>();
+    const children: TelemetryChildSource[] = [];
+    for (const run of runsBeneathSession(sessionPath, runs)) {
+      if (seen.has(run.sessionPath)) continue;
+      seen.add(run.sessionPath);
+      const model = run.model ? `${run.model.provider}/${run.model.id}` : undefined;
+      const entries = liveEntries(run.sessionPath);
+      if (entries) {
+        const fold = this.foldOf(run.sessionPath);
+        fold.ingest(entries);
+        children.push({ ...(model ? { model } : {}), fold: fold.state });
+        continue;
+      }
+      const cached = this.folds.get(run.sessionPath);
+      if (cached) {
+        children.push({ ...(model ? { model } : {}), fold: cached.state });
+        continue;
+      }
+      const stored = readSessionEntries(run.sessionPath);
+      if (!stored) {
+        children.push(model ? { model } : {});
+        continue;
+      }
+      const fold = this.foldOf(run.sessionPath);
+      fold.ingest(stored);
+      children.push({ ...(model ? { model } : {}), fold: fold.state });
+    }
+    return children;
   }
-  return children;
+
+  private foldOf(path: string): TelemetryFold {
+    const existing = this.folds.get(path);
+    if (existing) return existing;
+    const created = TelemetryFold.create();
+    this.folds.set(path, created);
+    return created;
+  }
+}
+
+export function childSources(
+  sessionPath: string,
+  runs: readonly AgentRun[],
+  liveEntries: (path: string) => unknown[] | undefined,
+  cache?: ChildTelemetryCache,
+): TelemetryChildSource[] {
+  return (cache ?? new ChildTelemetryCache()).sources(sessionPath, runs, liveEntries);
 }
 
 export function computeLiveTelemetry(
@@ -103,7 +161,6 @@ export function computeLiveTelemetry(
       ...(options.include ? { include: options.include } : {}),
       scope: "turn",
       turnId,
-      overlay: options.overlay,
     });
   }
   fold.ingest(entries);

@@ -39,6 +39,8 @@ describe("telemetry format", () => {
     expect(historyHeader(history, 10)).toBe("10 of 100");
     expect(historyHeader(history, 100)).toBe("100");
     expect(historyHeader(undefined, 12)).toBe("12 loaded");
+    expect(historyHeader(history, 100, 45)).toBe("100");
+    expect(historyHeader(history, 50, 45)).toBe("45 of 100");
   });
 
   it("names a missing context composition on that figure", () => {

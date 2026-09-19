@@ -88,12 +88,14 @@ export function filesHeader(totals: FileTotals): string {
 }
 
 /**
- * History header. When this client holds fewer records than the session,
+ * History header. When this client holds fewer **records** than the session,
  * the qualification lives on this figure (`N of M`), never as a blanket line.
+ * `held` is `entries.length` (records this client has), not the navigable
+ * `historyRows` count. `navigable` is the figure shown while qualifying.
  */
-export function historyHeader(history: TelemetryHistory | undefined, held: number): string {
-  if (!history) return held > 0 ? `${count(held)} loaded` : "—";
-  if (held < history.records) return `${count(held)} of ${count(history.records)}`;
+export function historyHeader(history: TelemetryHistory | undefined, held: number, navigable = held): string {
+  if (!history) return navigable > 0 ? `${count(navigable)} loaded` : "—";
+  if (held < history.records) return `${count(navigable)} of ${count(history.records)}`;
   return count(history.records);
 }
 

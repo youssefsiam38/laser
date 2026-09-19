@@ -35,7 +35,7 @@ export function HistorySection({ history }: { history?: TelemetryHistory | undef
     }
     return cached;
   }, [entries]);
-  const held = rows.length;
+  const recordsHeld = entries?.length ?? 0;
 
   const refresh = useRef(actions.refreshEntries);
   refresh.current = actions.refreshEntries;
@@ -50,7 +50,7 @@ export function HistorySection({ history }: { history?: TelemetryHistory | undef
       id="history"
       title="History"
       icon={History}
-      number={historyHeader(history, held)}
+      number={historyHeader(history, recordsHeld, rows.length)}
       open={shell.historyOpen}
       onOpenChange={shell.setHistoryOpen}
       padded={false}
@@ -72,13 +72,13 @@ export function HistorySection({ history }: { history?: TelemetryHistory | undef
         <Count label="Prompts" value={history ? count(history.prompts) : "—"} />
         <Count
           label="Records"
-          value={historyHeader(history, held)}
-          note={history && held < history.records ? "this client" : undefined}
+          value={historyHeader(history, recordsHeld, rows.length)}
+          note={history && recordsHeld < history.records ? "this client" : undefined}
         />
         <Count label="Compactions" value={history ? count(history.compactions) : "—"} />
         <Count label="Branches" value={history ? count(history.branches) : "—"} />
       </dl>
-      {partial && !history ? <p className="mb-3 px-4 text-xs leading-4 text-ink-2">{count(held)} loaded</p> : null}
+      {partial && !history ? <p className="mb-3 px-4 text-xs leading-4 text-ink-2">{count(rows.length)} loaded</p> : null}
       {wholeTranscript.paused && (
         <p data-slot="history-refresh-paused" className="mb-3 px-4 text-sm text-ink-2">
           {wholeTranscript.explanation}
