@@ -7,10 +7,10 @@
  */
 import { closeSync, fstatSync, openSync, readSync, statSync, type Stats } from "node:fs";
 import {
-  IMAGE_REFERENCE_MAX_BYTES,
   RevisionFold,
-  entryImageParts,
+  entryBodyMetadata,
   historyWindowNode,
+  servedEntryWireBytes,
   sessionRevisionOf,
   type RevisionHasher,
   type RevisionState,
@@ -65,16 +65,30 @@ export interface IndexedEntry {
   length: number;
   /**
    * What this row costs on the wire **as a page serves it**, for
-   * authority-neutral wire bounds: its exact length after JSON
-   * parse/stringify, less the image payloads a page never sends, plus the
-   * declared ceiling of the references that replace them (M16-T89).
+   * authority-neutral wire bounds (M16-T89).
    *
-   * Base64 needs no JSON escaping, so the subtraction is exact and the only
-   * approximation is the reference allowance, which is deliberately generous:
-   * this number is never smaller than what will actually be sent, and the exact
-   * materialized page check stays final regardless.
+   * The exact length of the projected record — the same projection the page
+   * itself uses, with a placeholder digest so a cold scan hashes nothing. It is
+   * not an allowance: an entry id and a media type are copied verbatim out of an
+   * untrusted record and have no declared length, and a flat one pretended
+   * otherwise. A planner that under-prices a row admits a page the exact check
+   * then refuses, which is the failure this milestone deletes.
    */
   servedLength: number;
+  /**
+   * The largest body of this row that is not an image, in exact UTF-8 bytes —
+   * the one number that decides whether a page will **elide** it (M16-T90).
+   *
+   * Without it a planner has to guess, and the guess decides between two wildly
+   * different costs: a record that travels whole costs its own length, and one
+   * elided costs identity and body metadata. Guessing "elided" for a record that
+   * is large in aggregate but whose every body is small — a long reply, long
+   * reasoning and a few tool calls, the ordinary heavy shape — under-priced it
+   * five-fold, and the durable authority then refused pages it used to serve.
+   * Sizes only: `entryBodyMetadata` measures where the bodies already are and
+   * builds none of them.
+   */
+  largestBodyBytes: number;
 }
 
 export interface SessionIndex {
@@ -551,19 +565,23 @@ function parseHeader(line: string): SessionRevisionHeader | undefined {
   };
 }
 
+/** Node's own counter: this runs once per line of a cold scan. */
+const utf8Bytes = (text: string): number => Buffer.byteLength(text, "utf8");
+
 /**
- * The wire cost of one parsed row as a page serves it (M16-T89).
+ * The largest non-image body of one parsed row (M16-T90).
  *
- * Digest-free on purpose: a cold scan of a long conversation must not hash
- * every screenshot in it to price the pages it has not been asked for yet.
+ * An image is never weighed against a body limit — it travels as a reference at
+ * any size (M16-T89) — so it cannot make a record elidable and is left out here,
+ * exactly as `elideOversizedEntries` leaves it out.
  */
-function servedLengthOf(parsed: unknown): number {
-  const serialized = Buffer.byteLength(JSON.stringify(parsed), "utf8");
-  const images = entryImageParts(parsed);
-  if (images.length === 0) return serialized;
-  let bytes = serialized + images.length * IMAGE_REFERENCE_MAX_BYTES;
-  for (const image of images) bytes -= image.totalBytes;
-  return Math.max(0, bytes);
+function largestBodyOf(parsed: unknown): number {
+  let largest = 0;
+  for (const body of entryBodyMetadata(parsed)) {
+    if (body.component.kind === "image") continue;
+    largest = Math.max(largest, body.totalBytes);
+  }
+  return largest;
 }
 
 function parseEntry(line: string, offset: number, length: number): { value: unknown; identity: IndexedEntry } | undefined {
@@ -578,6 +596,15 @@ function parseEntry(line: string, offset: number, length: number): { value: unkn
   if (entry?.type === "session") return undefined;
   return {
     value: parsed,
-    identity: { ...historyWindowNode(parsed), offset, length, servedLength: servedLengthOf(parsed) },
+    // Priced by the one projection that will actually serve this row, so the
+    // two can never disagree about what it costs (M16-T89), and measured for the
+    // one body that decides whether it will be elided (M16-T90).
+    identity: {
+      ...historyWindowNode(parsed),
+      offset,
+      length,
+      servedLength: servedEntryWireBytes(parsed, utf8Bytes),
+      largestBodyBytes: largestBodyOf(parsed),
+    },
   };
 }
