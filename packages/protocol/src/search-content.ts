@@ -1,4 +1,5 @@
 import { humanizeLabel } from "./human-label.js";
+import { imagePartReference, type ImagePartReference } from "./image-reference.js";
 import { diffViewForTool } from "./tool-diff.js";
 import { toolCallLabel, withoutToolLabel } from "./tool-label.js";
 
@@ -64,7 +65,8 @@ export const mcpGatewayNamespace = (name: string): string | undefined =>
  */
 export type McpContentBlock =
   | { kind: "text"; text: string }
-  | { kind: "image"; data: string; mimeType: string }
+  /** `data` is empty when the page served this image as a `ref` (M16-T89). */
+  | { kind: "image"; data: string; mimeType: string; ref?: ImagePartReference }
   | { kind: "audio"; data: string; mimeType: string }
   | { kind: "resource"; uri: string; mimeType?: string; text?: string; name?: string };
 
@@ -88,7 +90,15 @@ function contentBlock(raw: unknown): McpContentBlock | undefined {
   if (type === "image" || type === "audio") {
     const data = text(part["data"]);
     const mimeType = text(part["mimeType"]);
-    if (data === undefined || mimeType === undefined || !MIME_RE.test(mimeType) || !BASE64_RE.test(data)) return undefined;
+    if (mimeType === undefined || !MIME_RE.test(mimeType)) return undefined;
+    // A picture a page served as a reference carries no bytes at all (M16-T89).
+    // It is still an image block: dropping it for failing to look like base64
+    // is how a screenshot disappeared from a tool result without a trace.
+    if (type === "image" && data === undefined) {
+      const ref = imagePartReference(part);
+      return ref ? { kind: "image", data: "", mimeType, ref } : undefined;
+    }
+    if (data === undefined || !BASE64_RE.test(data)) return undefined;
     return { kind: type, data, mimeType };
   }
   if (type === "resource" || type === "resource_link") {

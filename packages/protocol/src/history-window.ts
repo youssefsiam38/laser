@@ -2,7 +2,7 @@ import type { HistoryLiveSnapshot, HistoryWindow, HistoryWindowRequest } from ".
 import { goalPromptId } from "./goal-presentation.js";
 import { ErrorCodes } from "./jsonrpc.js";
 import { ProtocolError } from "./schemas.js";
-import { ELIDED_RECORD_LIMITS, ELIDED_RECORD_MAX_BYTES, elideOversizedEntries } from "./body-range.js";
+import { ELIDED_RECORD_LIMITS, ELIDED_RECORD_MAX_BYTES, createImageReferenceCache, elideOversizedEntries, type ImageReferenceCache } from "./body-range.js";
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
 const changed = (): never => { throw new ProtocolError(ErrorCodes.InvalidParams, "This history changed. Reload the conversation and try again."); };
@@ -452,8 +452,12 @@ export function boundedHistoryWindow(
   bodies?: { limit?: number; digest: (text: string) => string },
 ): { entries: unknown[]; leafId: string | null; window: HistoryWindow } | undefined {
   const nodes = snapshot.entries.map(historyWindowNode);
+  // One cache for this one page: the search below projects the same rows several
+  // times, and a picture must be hashed once, not once per attempt. It dies with
+  // this synchronous call, so no record can change underneath it (M16-T89).
+  const cache = createImageReferenceCache();
   const elide = (indices: readonly number[], recordLimit: number): { entries: unknown[]; elided: unknown[] } =>
-    elideOversizedEntries(indices.map(index => snapshot.entries[index]), bodies!.limit, bodies!.digest, recordLimit);
+    elideOversizedEntries(indices.map(index => snapshot.entries[index]), bodies!.limit, bodies!.digest, recordLimit, cache);
   const fitsAt = (recordLimit: number) => (candidate: HistoryWindowPlan): boolean => {
     if (!bodies) return historyWindowFits(snapshot, candidate);
     const page = elide(candidate.entryIndices, recordLimit);
@@ -499,7 +503,7 @@ export function boundedHistoryWindow(
     return undefined;
   }
   const materialized = materializeHistoryWindow(snapshot, plan);
-  return bodies ? withElidedBodies(materialized, bodies.limit, bodies.digest, recordLimit) : materialized;
+  return bodies ? withElidedBodies(materialized, bodies.limit, bodies.digest, recordLimit, cache) : materialized;
 }
 
 /** Apply RP-5b's per-body limit to an already materialized page. */
@@ -508,9 +512,11 @@ export function withElidedBodies(
   bodyLimit: number | undefined,
   digest: (text: string) => string,
   recordLimit = ELIDED_RECORD_MAX_BYTES,
+  /** The page being served; a fresh one per call, and it dies with the call. */
+  cache: ImageReferenceCache = createImageReferenceCache(),
 ): { entries: unknown[]; leafId: string | null; window: HistoryWindow } {
-  const selected = elideOversizedEntries(page.entries, bodyLimit, digest, recordLimit);
-  const context = elideOversizedEntries(page.window.context, bodyLimit, digest, recordLimit);
+  const selected = elideOversizedEntries(page.entries, bodyLimit, digest, recordLimit, cache);
+  const context = elideOversizedEntries(page.window.context, bodyLimit, digest, recordLimit, cache);
   const elided = [...selected.elided, ...context.elided];
   return {
     entries: selected.entries,

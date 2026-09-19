@@ -16,16 +16,20 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   HISTORY_PAGE_BYTE_LIMIT,
-  IMAGE_REFERENCE_MAX_BYTES,
+  REFERENCE_DIGEST_HEX_LENGTH,
   bodyRangeSlice,
   boundedHistoryWindow,
+  createImageReferenceCache,
   elideOversizedEntries,
+  entryBodies,
   entryBody,
+  entryBodyIdentities,
   entryBodyMetadata,
-  entryImageParts,
   entryWithImageReferences,
   historyContentSerializedBytes,
   imageHeaderSize,
+  mcpContentBlocks,
+  servedEntryWireBytes,
   toolSearchContent,
   utf8ByteLength,
   type HistoryWindowScope,
@@ -35,8 +39,18 @@ import {
 const sha256 = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
 const bytesOf = (value: unknown): number => utf8ByteLength(JSON.stringify(value) ?? "");
 
+/**
+ * A payload large enough for the pixels its header declares.
+ *
+ * The parser refuses a size its own payload could not carry, so a fixture that
+ * claims a megapixel in forty bytes is refused — correctly. Real images are
+ * nowhere near this compressible; a byte per five hundred pixels is still far
+ * more compressed than anything a person screenshots.
+ */
+const plausibleBytes = (width: number, height: number): number => Math.max(64, Math.ceil((width * height) / 500));
+
 /** A PNG of `width × height`, with a valid header and nothing else real in it. */
-function png(width: number, height: number, payloadBytes: number): string {
+function png(width: number, height: number, payloadBytes = plausibleBytes(width, height)): string {
   const bytes = Buffer.alloc(Math.max(32, payloadBytes), 0x7a);
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes, 0);
   bytes.writeUInt32BE(13, 8);
@@ -46,32 +60,36 @@ function png(width: number, height: number, payloadBytes: number): string {
   return bytes.toString("base64");
 }
 
-function jpeg(width: number, height: number): string {
-  const bytes = Buffer.alloc(32, 0x00);
+function jpeg(width: number, height: number, payloadBytes = plausibleBytes(width, height)): string {
+  const bytes = Buffer.alloc(Math.max(32, payloadBytes), 0x11);
   Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08]).copy(bytes, 0);
   bytes.writeUInt16BE(height, 7);
   bytes.writeUInt16BE(width, 9);
   return bytes.toString("base64");
 }
 
-function gif(width: number, height: number): string {
-  const bytes = Buffer.alloc(32, 0x00);
+function gif(width: number, height: number, payloadBytes = plausibleBytes(width, height)): string {
+  const bytes = Buffer.alloc(Math.max(32, payloadBytes), 0x00);
   bytes.write("GIF89a", 0, "ascii");
   bytes.writeUInt16LE(width, 6);
   bytes.writeUInt16LE(height, 8);
   return bytes.toString("base64");
 }
 
-function webp(width: number, height: number): string {
-  const bytes = Buffer.alloc(40, 0x00);
+function webp(width: number, height: number, payloadBytes = plausibleBytes(width, height)): string {
+  const bytes = Buffer.alloc(Math.max(40, payloadBytes), 0x00);
   bytes.write("RIFF", 0, "ascii");
-  bytes.writeUInt32LE(32, 4);
+  bytes.writeUInt32LE(bytes.length - 8, 4);
   bytes.write("WEBP", 8, "ascii");
   bytes.write("VP8X", 12, "ascii");
   bytes.writeUIntLE(width - 1, 24, 3);
   bytes.writeUIntLE(height - 1, 27, 3);
   return bytes.toString("base64");
 }
+
+/** The same payload, written in wrapped lines as a mail-safe encoder writes it. */
+const wrapped = (base64: string, columns = 76): string =>
+  (base64.match(new RegExp(`.{1,${columns}}`, "g")) ?? []).join("\r\n");
 
 const imagePart = (data: string, mimeType = "image/png") => ({ type: "image", mimeType, data });
 
@@ -106,6 +124,7 @@ const dataOf = (entry: unknown): unknown[] => {
 describe("an image is served as a reference, at every size and in every role", () => {
   it("references a few hundred bytes of picture exactly as it references a screenshot", () => {
     const tiny = png(16, 16, 300);
+    expect(utf8ByteLength(tiny)).toBeGreaterThan(300);
     const screenshot = png(2560, 1440, 2_400_000);
     expect(utf8ByteLength(tiny)).toBeLessThan(600);
     expect(utf8ByteLength(screenshot)).toBeGreaterThan(2_400_000);
@@ -144,7 +163,6 @@ describe("an image is served as a reference, at every size and in every role", (
     const served = entryWithImageReferences(entry, sha256);
     expect(refsOf(served).map(ref => [ref.component, ref.mimeType, ref.width, ref.height]))
       .toEqual([[{ kind: "image", index: 0 }, "image/png", 10, 20], [{ kind: "image", index: 1 }, "image/gif", 30, 40]]);
-    expect(entryImageParts(entry).map(part => part.totalBytes)).toEqual([utf8ByteLength(first), utf8ByteLength(second)]);
     // The same components the body projection names, in the same order.
     expect(entryBodyMetadata(entry).filter(row => row.component.kind === "image"))
       .toEqual([{ component: { kind: "image", index: 0 }, totalBytes: utf8ByteLength(first) }, { component: { kind: "image", index: 1 }, totalBytes: utf8ByteLength(second) }]);
@@ -165,16 +183,73 @@ describe("an image is served as a reference, at every size and in every role", (
     expect(refsOf(entryWithImageReferences(once, sha256))).toEqual(refsOf(once));
   });
 
-  it("costs less on the wire than the declared ceiling a planner prices it at", () => {
-    const data = png(2560, 1440, 2_400_000);
-    const entry = toolResultWith("t", data);
-    const served = entryWithImageReferences(entry, sha256);
-    // Base64 needs no JSON escaping, so the record without its payload is
-    // exactly the stored record less that payload: what the reference adds on
-    // top of it is what the host's index prices at IMAGE_REFERENCE_MAX_BYTES.
-    const reference = bytesOf(served) - (bytesOf(entry) - utf8ByteLength(data));
-    expect(reference).toBeGreaterThan(0);
-    expect(reference).toBeLessThan(IMAGE_REFERENCE_MAX_BYTES);
+  it("never serves a record from a projection of what it used to hold", () => {
+    // A page's own cache lives for exactly one synchronous page build; nothing
+    // caches a projection between them, because a record can change in between
+    // — a module-level memo returned the previous content of a mutated record.
+    const entry = promptWith("u", png(8, 8, 300)) as { message: { content: unknown[] } };
+    const second = png(16, 16, 400);
+    expect(refsOf(entryWithImageReferences(entry, sha256))).toHaveLength(1);
+    entry.message.content.push(imagePart(second));
+    const again = entryWithImageReferences(entry, sha256);
+    expect(refsOf(again).map(ref => ref.totalBytes)).toEqual([utf8ByteLength(png(8, 8, 300)), utf8ByteLength(second)]);
+    // Inside one page build the projection is reused rather than rehashed.
+    const cache = createImageReferenceCache();
+    const once = entryWithImageReferences(entry, sha256, cache);
+    expect(entryWithImageReferences(entry, sha256, cache)).toBe(once);
+  });
+});
+
+describe("pricing a record a planner has not read", () => {
+  const screenshot = png(2560, 1440, 2_400_000);
+
+  /** What a page will actually send for this record, with the real digest. */
+  const actual = (entry: unknown): number => bytesOf(entryWithImageReferences(entry, sha256));
+
+  it("prices a reference exactly, whatever the record's own strings are", () => {
+    // The digest is the only field a placeholder stands in for, and it is the
+    // one field with a fixed width. Everything else is copied from the record.
+    expect(sha256("anything")).toHaveLength(REFERENCE_DIGEST_HEX_LENGTH);
+    const cases: Array<[string, unknown]> = [
+      ["uuid id", toolResultWith("f47ac10b-58cc-4372-a567-0e02b2c3d479", screenshot)],
+      ["400-character id", toolResultWith("i".repeat(400), screenshot)],
+      ["400-character media type", {
+        id: "t", parentId: null, type: "message",
+        message: { role: "toolResult", toolCallId: "c1", content: [imagePart(screenshot, `image/${"x".repeat(394)}`)] },
+      }],
+      ["many images", {
+        id: "many", parentId: null, type: "message",
+        message: { role: "user", content: Array.from({ length: 12 }, () => imagePart(screenshot)) },
+      }],
+      ["no dimensions", promptWith("u", Buffer.from("<svg></svg>").toString("base64"))],
+      ["custom message", { id: "c", parentId: null, type: "custom_message", content: [imagePart(screenshot)] }],
+    ];
+    for (const [name, entry] of cases) {
+      expect(servedEntryWireBytes(entry), name).toBe(actual(entry));
+    }
+  });
+
+  it("prices a record whose images cannot be referenced with the bytes it will send", () => {
+    // No `id`, so the projection leaves the payload in place. A price that
+    // assumed a reference here was three megabytes short, and the exact check
+    // then refused the page — the failure this milestone deletes.
+    const anonymous = { parentId: null, type: "message", message: { role: "user", content: [imagePart(screenshot)] } };
+    expect(servedEntryWireBytes(anonymous)).toBe(bytesOf(anonymous));
+    expect(servedEntryWireBytes(anonymous)).toBeGreaterThan(3_000_000);
+    expect(servedEntryWireBytes(anonymous)).toBe(actual(anonymous));
+  });
+
+  it("hashes nothing to price a page, and leaves an ordinary record alone", () => {
+    const plain = { id: "u", parentId: null, type: "message", message: { role: "user", content: [{ type: "text", text: "hello" }] } };
+    expect(servedEntryWireBytes(plain)).toBe(bytesOf(plain));
+    // Pricing twelve 2.4 MB screenshots is a projection, not twelve hashes: it
+    // stays far below the time hashing them would take.
+    const heavy = { id: "many", parentId: null, type: "message", message: { role: "user", content: Array.from({ length: 12 }, () => imagePart(screenshot)) } };
+    const started = performance.now();
+    const priced = servedEntryWireBytes(heavy);
+    const elapsed = performance.now() - started;
+    expect(priced).toBeLessThan(8 * 1024);
+    expect(elapsed).toBeLessThan(200);
   });
 });
 
@@ -308,6 +383,80 @@ describe("intrinsic size comes from the image's own header, or from nowhere", ()
     ]) expect(imageHeaderSize(unknown)).toBeUndefined();
   });
 
+  it("reads a payload written in wrapped lines exactly as a browser does", () => {
+    // `atob` treats ASCII whitespace as absent, so a mail-safe encoder's line
+    // breaks are not data. One implementation, one answer: a line-wrapped
+    // screenshot measured in the browser and not in the reference an authority
+    // published, which is two authorities for one set of bytes.
+    const payload = png(1512, 982, 8_000);
+    expect(imageHeaderSize(wrapped(payload))).toEqual({ width: 1512, height: 982 });
+    expect(imageHeaderSize(wrapped(payload, 4))).toEqual({ width: 1512, height: 982 });
+    expect(imageHeaderSize(payload.replace(/^(.{8})/, "$1\n  \t"))).toEqual({ width: 1512, height: 982 });
+    // And the reference an authority publishes carries it too.
+    const served = entryWithImageReferences(promptWith("u", wrapped(payload)), sha256);
+    expect(refsOf(served)[0]).toMatchObject({ width: 1512, height: 982, totalBytes: utf8ByteLength(wrapped(payload)) });
+  });
+
+  it("refuses a size the payload could not possibly carry", () => {
+    // A three-hundred-byte header declaring 65,536 × 65,536 is a claim, not a
+    // measurement; a reader that believed it would reserve a 17 GB surface.
+    expect(imageHeaderSize(png(65_536, 65_536, 300))).toBeUndefined();
+    expect(imageHeaderSize(png(20_000, 20_000, 1_000))).toBeUndefined();
+    expect(imageHeaderSize(gif(60_000, 60_000, 64))).toBeUndefined();
+    // A real screenshot is nowhere near the bound, in either format.
+    expect(imageHeaderSize(png(2560, 1440, 2_405_990))).toEqual({ width: 2560, height: 1440 });
+    expect(imageHeaderSize(png(3840, 2160, 400_000))).toEqual({ width: 3840, height: 2160 });
+    expect(imageHeaderSize(jpeg(4032, 3024, 900_000))).toEqual({ width: 4032, height: 3024 });
+    // The lie never reaches the wire: the reference simply omits the size.
+    const served = entryWithImageReferences(promptWith("u", png(65_536, 65_536, 300)), sha256);
+    expect(refsOf(served)[0]!.width).toBeUndefined();
+    expect(refsOf(served)[0]!.height).toBeUndefined();
+  });
+
+  it("answers nothing, and never throws, on hostile or truncated input", () => {
+    const truncate = (base64: string, chars: number): string => base64.slice(0, chars);
+    const jpegWithoutFrame = (() => {
+      const bytes = Buffer.alloc(600, 0x00);
+      Buffer.from([0xff, 0xd8]).copy(bytes, 0);
+      // Twenty APP0 segments and no start of frame: the probe gives up.
+      for (let at = 2, segment = 0; segment < 20 && at + 20 < bytes.length; segment++, at += 22) {
+        bytes[at] = 0xff;
+        bytes[at + 1] = 0xe0;
+        bytes.writeUInt16BE(20, at + 2);
+      }
+      return bytes.toString("base64");
+    })();
+    const zeroLengthSegment = (() => {
+      const bytes = Buffer.alloc(64, 0x00);
+      Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x00]).copy(bytes, 0);
+      return bytes.toString("base64");
+    })();
+    const unknownWebpTag = (() => {
+      const bytes = Buffer.alloc(64, 0x00);
+      bytes.write("RIFF", 0, "ascii");
+      bytes.write("WEBP", 8, "ascii");
+      bytes.write("VP9?", 12, "ascii");
+      return bytes.toString("base64");
+    })();
+    for (const [name, payload] of [
+      ["truncated PNG signature", truncate(png(100, 100), 8)],
+      ["PNG header cut inside IHDR", truncate(png(100, 100), 24)],
+      ["JPEG with no frame header", jpegWithoutFrame],
+      ["JPEG with a zero-length segment", zeroLengthSegment],
+      ["WebP with an unknown tag", unknownWebpTag],
+      ["whitespace only", "   \n\t  "],
+      ["padding only", "===="],
+      ["one character", "A"],
+      ["100 KB of one letter", "A".repeat(100_000)],
+    ] as const) {
+      expect(() => imageHeaderSize(payload), name).not.toThrow();
+      expect(imageHeaderSize(payload), name).toBeUndefined();
+    }
+    // URL-safe base64 is the same bytes and the same answer.
+    const safe = png(640, 480, 4_000).replaceAll("+", "-").replaceAll("/", "_");
+    expect(imageHeaderSize(safe)).toEqual({ width: 640, height: 480 });
+  });
+
   it("omits the size in the reference of a format it does not know", () => {
     const data = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>').toString("base64");
     const served = entryWithImageReferences(promptWith("u", data), sha256);
@@ -317,12 +466,81 @@ describe("intrinsic size comes from the image's own header, or from nowhere", ()
     });
   });
 
-  it("looks at the header only, however large the picture is", () => {
-    // A valid header followed by two megabytes of anything still measures, and
-    // a payload whose header is broken is unknown however long it is.
+  it("looks at the header only, whatever follows it and however large it is", () => {
     const large = png(3840, 2160, 2_000_000);
     expect(imageHeaderSize(large)).toEqual({ width: 3840, height: 2160 });
-    const broken = `${"A".repeat(8)}${large.slice(8)}`;
-    expect(imageHeaderSize(broken)).toBeUndefined();
+    // Proof that nothing past the probe window is read: everything after the
+    // first four kilobytes is not base64 at all, and the answer is unchanged.
+    const probeOnly = `${large.slice(0, 4 * 1024)}${"*".repeat(64)}`;
+    expect(imageHeaderSize(probeOnly, utf8ByteLength(large))).toEqual({ width: 3840, height: 2160 });
+    // A broken header stays unknown however long the payload is.
+    expect(imageHeaderSize(`${"A".repeat(8)}${large.slice(8)}`)).toBeUndefined();
+    // And the cost does not follow the payload: measuring a 4 MB picture a
+    // hundred times stays inside a fraction of what decoding one would take.
+    const huge = png(3840, 2160, 3_000_000);
+    const started = performance.now();
+    for (let round = 0; round < 100; round++) expect(imageHeaderSize(huge)).toEqual({ width: 3840, height: 2160 });
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+});
+
+describe("a served record cannot be mistaken for the conversation", () => {
+  const data = png(1512, 982, 200_000);
+  const stored = toolResultWith("t", data);
+  const image = { kind: "image", index: 0 } as const;
+
+  it("refuses to read an image body from a record that does not hold it", () => {
+    const served = entryWithImageReferences(stored, sha256);
+    // The stored record answers for its own bytes, in full.
+    expect(entryBody(stored, image)).toBe(data);
+    expect(entryBodies(stored).map(row => row.component.kind)).toContain("image");
+    // The served record holds a reference, not bytes: asking it for the body is
+    // refused, rather than answered with zero bytes and the digest of nothing,
+    // which would fail a client's `total-changed` fence with no diagnosable
+    // cause.
+    expect(entryBody(served, image)).toBeUndefined();
+    expect(entryBodies(served).map(row => row.component.kind)).not.toContain("image");
+    const refused = bodyRangeSlice(served, { entryId: "t", component: image, offset: 0 }, "r1", "durable", sha256);
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.refusal.reason).toBe("unknown-component");
+    expect(!refused.ok && refused.refusal.reason === "unknown-component" && refused.refusal.available).not.toContain("image");
+  });
+
+  it("publishes no identity it cannot stand behind, and still says how large the picture is", () => {
+    const served = entryWithImageReferences(stored, sha256);
+    const hasher = () => { const hash = createHash("sha256"); return { update: (chunk: string) => { hash.update(chunk, "utf8"); }, digest: () => hash.digest("hex") }; };
+    const identities = entryBodyIdentities(served, hasher).bodies;
+    expect(identities.map(row => row.component.kind)).not.toContain("image");
+    expect(identities.some(row => row.totalBytes === 0)).toBe(false);
+    // The stored record's identity for that image is the one an authority signs.
+    expect(entryBodyIdentities(stored, hasher).bodies.find(row => row.component.kind === "image"))
+      .toEqual({ component: image, totalBytes: utf8ByteLength(data), contentDigest: sha256(data) });
+    // A client reading the served record still learns the real size: that is
+    // what it needs in order to go and read the bytes.
+    expect(entryBodyMetadata(served).find(row => row.component.kind === "image"))
+      .toEqual({ component: image, totalBytes: utf8ByteLength(data) });
+  });
+});
+
+describe("a served image part is still an image to every projection that reads one", () => {
+  const data = png(1512, 982, 120_000);
+  const stored = toolResultWith("t", data);
+  const served = entryWithImageReferences(stored, sha256) as { message: { content: unknown[] } };
+
+  it("keeps the picture in an MCP result's blocks, with its reference", () => {
+    // Dropping a part for failing to look like base64 is how a screenshot
+    // vanished from a tool result without a trace (M16-T89).
+    const blocks = mcpContentBlocks(served.message);
+    expect(blocks.map(block => block.kind)).toEqual(["text", "image"]);
+    const block = blocks[1]!;
+    if (block.kind !== "image") throw new Error("expected the image block");
+    expect(block.data).toBe("");
+    expect(block.mimeType).toBe("image/png");
+    expect(block.ref).toMatchObject({ entryId: "t", totalBytes: utf8ByteLength(data), width: 1512, height: 982 });
+    // A stored result still carries its bytes in the same position.
+    expect(mcpContentBlocks((stored as { message: unknown }).message).map(b => b.kind)).toEqual(["text", "image"]);
+    // An image part that is neither bytes nor a reference is still dropped.
+    expect(mcpContentBlocks({ content: [{ type: "image", mimeType: "image/png", data: "" }] })).toEqual([]);
+    expect(mcpContentBlocks({ content: [{ type: "image", mimeType: "image/png", data: "not base64 ***" }] })).toEqual([]);
   });
 });

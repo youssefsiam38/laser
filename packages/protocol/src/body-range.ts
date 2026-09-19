@@ -21,11 +21,12 @@
 import { safeOffset, sliceUtf8Range, sliceUtf8RangeFrom, utf8ByteLength, type CursoredSlice, type Utf8Cursor, type Utf8Slice } from "./body-utf8.js";
 import { bodyPartSeparator, meaningfulSegments } from "./reasoning-segments.js";
 import { attachmentRegions, type AttachmentRegion, type AttachmentRegions } from "./body-attachments.js";
-import { imageHeaderSize } from "./image-header.js";
+import { bodyImageContent, entryWithImageReferences, imageParts, type ImageReferenceCache } from "./image-reference.js";
 
 export * from "./body-utf8.js";
 export * from "./body-attachments.js";
 export * from "./image-header.js";
+export * from "./image-reference.js";
 
 /** Every body a client may address. Closed: an unknown name is refused. */
 export const BODY_COMPONENT_KINDS = [
@@ -458,208 +459,6 @@ const record = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 
 /**
- * One image, as every page serves it (M16-T89).
- *
- * The bytes of a picture never travel inside a message. Whatever its size,
- * whatever its role, an `image` part is served with its payload removed and
- * this beside it: who it belongs to, the component `session/entry_range`
- * accepts for it, how many bytes there are, what they hash to, and — when the
- * bytes themselves declare it — how large the picture is, so a reader can
- * reserve its space before the first byte arrives.
- *
- * Additive by construction: the part keeps its `type` and `mimeType`, so a
- * reader that has never heard of this still draws a picture-shaped row.
- */
-export interface ImagePartReference {
-  /** The entry the bytes belong to; a range request echoes it. */
-  entryId: string;
-  /** Which body of that entry: `{ kind: "image", index }`. */
-  component: BodyComponent;
-  mimeType: string;
-  /** Exact UTF-8 size of the base64 payload the component serves. */
-  totalBytes: number;
-  /** The producer's own digest of that whole payload. */
-  contentDigest: string;
-  /** Intrinsic size from the image's own header, when it declares one. */
-  width?: number;
-  height?: number;
-}
-
-/**
- * A declared ceiling on one reference's wire cost.
- *
- * For a planner that has to price a record it has not read — the host's index,
- * which knows a stored line's length and its images' sizes but hashes nothing.
- * An entry id, a component, a media type, a size, a 64-character digest and two
- * sides come to about 250 bytes; this is twice that, and the exact materialized
- * page check stays final either way.
- */
-export const IMAGE_REFERENCE_MAX_BYTES = 512;
-
-/** The reference a served image part carries, when it is one. */
-function imagePartReference(part: Record<string, unknown>): ImagePartReference | undefined {
-  const value = part.ref;
-  if (value === null || typeof value !== "object") return undefined;
-  const row = value as Record<string, unknown>;
-  return typeof row.entryId === "string" && typeof row.totalBytes === "number" && Number.isSafeInteger(row.totalBytes)
-    && record(row.component).kind === "image" && typeof row.mimeType === "string" && typeof row.contentDigest === "string"
-    ? (value as ImagePartReference)
-    : undefined;
-}
-
-/** One record at a time, so a page's own binary search hashes a picture once. */
-const referencedEntries = new WeakMap<object, { digest: (text: string) => string; served: unknown }>();
-
-/**
- * One record as a page serves it: every `image` part turned into its
- * {@link ImagePartReference} (M16-T89).
- *
- * One rule and no threshold. A 4 KB avatar and a 2.4 MB screenshot take the
- * same path, in every role and at every position, so a page's size stops
- * depending on what a person screenshotted — which is how a 27 MB conversation
- * stopped paging at all, with two toolResult screenshots no page could carry.
- * M16-T88's record ceiling stays behind this as a net for a record that is
- * large for some other reason.
- *
- * Two records are left exactly as they are: one with no identity, because
- * nothing could read its bytes back, and one whose images are already
- * references, so projecting a page twice cannot lose what the first pass said.
- * Pure apart from the caller's digest, and memoized against the record itself.
- */
-export function entryWithImageReferences(entry: unknown, digest: (text: string) => string): unknown {
-  if (entry === null || typeof entry !== "object") return entry;
-  const cached = referencedEntries.get(entry);
-  if (cached && cached.digest === digest) return cached.served;
-  const served = referencedRecord(entry as Record<string, unknown>, digest);
-  referencedEntries.set(entry, { digest, served });
-  return served;
-}
-
-function referencedRecord(value: Record<string, unknown>, digest: (text: string) => string): unknown {
-  // Without an entry id nothing could address the bytes, so they stay in the
-  // record rather than becoming a reference nobody can read (RP-5b).
-  const entryId = typeof value.id === "string" ? value.id : undefined;
-  if (entryId === undefined) return value;
-  if (value.type === "custom_message") {
-    const content = referencedContent(value.content, entryId, digest);
-    return content ? { ...value, content } : value;
-  }
-  if (value.type !== "message") return value;
-  const message = record(value.message);
-  const content = referencedContent(message.content, entryId, digest);
-  return content ? { ...value, message: { ...message, content } } : value;
-}
-
-/** The same content array with its images referenced, or undefined when it has none to move. */
-function referencedContent(content: unknown, entryId: string, digest: (text: string) => string): unknown[] | undefined {
-  if (!Array.isArray(content)) return undefined;
-  let index = 0;
-  let moved = false;
-  const rows = content.map((part) => {
-    const row = record(part);
-    if (row.type !== "image" || typeof row.data !== "string") return part;
-    const component: BodyComponent = { kind: "image", index: index++ };
-    if (imagePartReference(row)) return part;
-    moved = true;
-    const size = imageHeaderSize(row.data);
-    const ref: ImagePartReference = {
-      entryId,
-      component,
-      mimeType: typeof row.mimeType === "string" ? row.mimeType : "",
-      totalBytes: utf8ByteLength(row.data),
-      contentDigest: digest(row.data),
-      ...(size ? { width: size.width, height: size.height } : {}),
-    };
-    return { ...row, data: "", ref };
-  });
-  return moved ? rows : undefined;
-}
-
-/**
- * The images one message carries, in its own content order — **whatever its
- * role**. A picture a tool answered with is as addressable as one a person
- * attached: it is the same kind of body, in the same component space, and a
- * page never carries its bytes at all, so the client reads them back through
- * `session/entry_range` (M16-T88, M16-T89).
- *
- * A part of some other type carrying bytes (a file, audio, something this
- * version has never seen) has no component of its own; it stays inside the
- * structured component that holds it — `tool_result` or `custom_details` —
- * which is addressable in exactly the same way. Nothing is ever unreachable
- * because of the part type it arrived as.
- *
- * A part a page has already turned into a reference carries no bytes and says
- * how many there are, so this reads the same size from a stored record and
- * from the record a page served for it (M16-T89).
- */
-function imageParts(content: unknown): Array<{ component: BodyComponent; value: string; mimeType: string; totalBytes: number }> {
-  if (!Array.isArray(content)) return [];
-  const rows: Array<{ component: BodyComponent; value: string; mimeType: string; totalBytes: number }> = [];
-  let index = 0;
-  for (const part of content) {
-    const row = record(part);
-    if (row.type !== "image" || typeof row.data !== "string") continue;
-    const reference = imagePartReference(row);
-    rows.push({
-      component: { kind: "image", index: index++ },
-      value: row.data,
-      mimeType: reference?.mimeType ?? (typeof row.mimeType === "string" ? row.mimeType : ""),
-      totalBytes: reference?.totalBytes ?? utf8ByteLength(row.data),
-    });
-  }
-  return rows;
-}
-
-/** The content array an entry's image parts live in, whatever its role. */
-function entryImageContent(entry: unknown): unknown {
-  const value = record(entry);
-  if (value.type === "custom_message") return value.content;
-  return value.type === "message" ? record(value.message).content : undefined;
-}
-
-/**
- * Every image part of one entry: what it is and how large, never its bytes.
- *
- * Digest-free on purpose, so a reader that only has to *size* a record — the
- * host's index, planning a page it has not read — never hashes a picture to
- * find out what serving it will cost.
- */
-export function entryImageParts(entry: unknown): Array<{ component: BodyComponent; mimeType: string; totalBytes: number }> {
-  return imageParts(entryImageContent(entry)).map(({ component, mimeType, totalBytes }) => ({ component, mimeType, totalBytes }));
-}
-
-/**
- * An image part as a **body** carries it: its type and its media type, never
- * its bytes and never the reference around them (M16-T89).
- *
- * Idempotent, and that is the point. A structured `tool_result` holds the
- * result's own content parts, images included, so the text an authority serves
- * for that component and the text a client derives from the record it was
- * *given* have to be the same string — and one of those records holds the bytes
- * while the other holds a reference to them. Normalizing both to this form is
- * what keeps a range reply's `totalBytes` from contradicting the page that
- * named it.
- */
-function bodyImagePart(part: Record<string, unknown>): Record<string, unknown> {
-  const { data: _data, ref: _reference, ...rest } = part;
-  // `data` last, whatever order it arrived in: the canonical text of this part
-  // must not depend on how the record that carried it was written.
-  return { ...rest, data: "" };
-}
-
-/** One content array with every image part in its body form; identity when it has none. */
-function bodyContent(content: readonly unknown[]): unknown[] {
-  let images = false;
-  const rows = content.map((part) => {
-    const row = record(part);
-    if (row.type !== "image" || typeof row.data !== "string") return part;
-    images = true;
-    return bodyImagePart(row);
-  });
-  return images ? rows : (content as unknown[]);
-}
-
-/**
  * What a tool result is stored and shown as. Mirrors the transcript's own rule:
  * a text-only result is its text; anything carrying structure keeps it — with
  * its images as the references they are served as, never as bytes (M16-T89).
@@ -672,7 +471,7 @@ export function toolResultValue(message: unknown): unknown {
   const hasNonText = Array.isArray(content) &&
     content.some((part) => typeof part === "object" && part !== null && (part as { type?: unknown }).type !== "text");
   if (!hasDetails && !hasNonText) return textPartsOf(content, "text", "text");
-  return { content: Array.isArray(content) ? bodyContent(content) : [{ type: "text", text: textPartsOf(content, "text", "text") }], ...(hasDetails ? { details } : {}) };
+  return { content: Array.isArray(content) ? bodyImageContent(content) : [{ type: "text", text: textPartsOf(content, "text", "text") }], ...(hasDetails ? { details } : {}) };
 }
 
 /** A tool result's output as text: its text parts, joined. Never structured. */
@@ -683,6 +482,22 @@ export function toolOutputBody(message: unknown): string {
 export interface EntryBody {
   component: BodyComponent;
   text: string;
+}
+
+/**
+ * The image bodies an entry can actually be **read** from.
+ *
+ * A part a page served as a reference holds no bytes, so the record in hand
+ * cannot answer for it: it is left out here, and an authority handed a served
+ * record by mistake refuses with `unknown-component` rather than confidently
+ * answering with zero bytes and the digest of an empty string (M16-T89). The
+ * size of such a part is still published by {@link entryBodyMetadata} — that is
+ * what a client needs in order to go and read it from the conversation.
+ */
+function imageBodySources(content: unknown): Array<{ component: BodyComponent; value: unknown }> {
+  return imageParts(content)
+    .filter((image) => !image.referenced)
+    .map((image) => ({ component: image.component, value: image.value }));
 }
 
 /**
@@ -698,7 +513,7 @@ export function entryBodySources(entry: unknown): Array<{ component: BodyCompone
     const text = textPartsOf(value.content, "text", "text");
     if (text) rows.push({ component: { kind: "custom_details" }, value: text });
     if (value.details !== undefined) rows.push({ component: { kind: "custom_details", index: 1 }, value: value.details });
-    rows.push(...imageParts(value.content));
+    rows.push(...imageBodySources(value.content));
     return rows;
   }
   if (type !== "message") return rows;
@@ -707,7 +522,7 @@ export function entryBodySources(entry: unknown): Array<{ component: BodyCompone
   const content = Array.isArray(message.content) ? message.content : [];
   if (role === "user") {
     rows.push({ component: { kind: "user_text" }, value: textPartsOf(message.content, "text", "text") });
-    rows.push(...imageParts(message.content));
+    rows.push(...imageBodySources(message.content));
     return rows;
   }
   if (role === "assistant") {
@@ -719,19 +534,19 @@ export function entryBodySources(entry: unknown): Array<{ component: BodyCompone
       const row = record(part);
       if (row.type === "toolCall") rows.push({ component: { kind: "tool_args", index: call++ }, value: row.arguments });
     }
-    rows.push(...imageParts(message.content));
+    rows.push(...imageBodySources(message.content));
     return rows;
   }
   if (role === "toolResult") {
     rows.push({ component: { kind: "tool_result" }, value: toolResultValue(message) });
     rows.push({ component: { kind: "tool_output" }, value: toolOutputBody(message) });
-    rows.push(...imageParts(message.content));
+    rows.push(...imageBodySources(message.content));
     return rows;
   }
   if (role === "custom") {
     rows.push({ component: { kind: "custom_details" }, value: textPartsOf(message.content, "text", "text") });
     if (message.details !== undefined) rows.push({ component: { kind: "custom_details", index: 1 }, value: message.details });
-    rows.push(...imageParts(message.content));
+    rows.push(...imageBodySources(message.content));
   }
   return rows;
 }
@@ -1289,12 +1104,18 @@ export function entryRecordBytes(entry: unknown): number {
  * none, and then only a record too large for any page is elided — a page is
  * never refused because one record is too large, whatever the caller asked
  * for.
+ *
+ * `cache` belongs to one page: a page is planned by binary search, so the same
+ * rows are projected several times and a picture would otherwise be hashed once
+ * per attempt. It must not outlive the synchronous call that made it — that is
+ * what keeps a mutated record from being served from a stale projection.
  */
 export function elideOversizedEntries(
   entries: readonly unknown[],
   bodyLimit: number | undefined,
   digest: (text: string) => string,
   recordLimit = ELIDED_RECORD_MAX_BYTES,
+  cache?: ImageReferenceCache,
 ): { entries: unknown[]; elided: ElidedEntry[] } {
   const kept: unknown[] = [];
   const elided: ElidedEntry[] = [];
@@ -1306,7 +1127,7 @@ export function elideOversizedEntries(
     // Every image becomes a reference before anything is measured: a picture
     // never decides whether a record can travel, at any size, in any role
     // (M16-T89). What is measured is therefore what will actually be sent.
-    const served = entryWithImageReferences(entry, digest);
+    const served = entryWithImageReferences(entry, digest, cache);
     const oversized = entryRecordBytes(served) > recordLimit
       || (bodyLimit !== undefined && entryBodyMetadata(served)
         .some((body) => body.component.kind !== "image" && body.totalBytes > bodyLimit));

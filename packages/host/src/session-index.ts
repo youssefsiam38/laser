@@ -7,10 +7,9 @@
  */
 import { closeSync, fstatSync, openSync, readSync, statSync, type Stats } from "node:fs";
 import {
-  IMAGE_REFERENCE_MAX_BYTES,
   RevisionFold,
-  entryImageParts,
   historyWindowNode,
+  servedEntryWireBytes,
   sessionRevisionOf,
   type RevisionHasher,
   type RevisionState,
@@ -65,14 +64,14 @@ export interface IndexedEntry {
   length: number;
   /**
    * What this row costs on the wire **as a page serves it**, for
-   * authority-neutral wire bounds: its exact length after JSON
-   * parse/stringify, less the image payloads a page never sends, plus the
-   * declared ceiling of the references that replace them (M16-T89).
+   * authority-neutral wire bounds (M16-T89).
    *
-   * Base64 needs no JSON escaping, so the subtraction is exact and the only
-   * approximation is the reference allowance, which is deliberately generous:
-   * this number is never smaller than what will actually be sent, and the exact
-   * materialized page check stays final regardless.
+   * The exact length of the projected record — the same projection the page
+   * itself uses, with a placeholder digest so a cold scan hashes nothing. It is
+   * not an allowance: an entry id and a media type are copied verbatim out of an
+   * untrusted record and have no declared length, and a flat one pretended
+   * otherwise. A planner that under-prices a row admits a page the exact check
+   * then refuses, which is the failure this milestone deletes.
    */
   servedLength: number;
 }
@@ -551,20 +550,8 @@ function parseHeader(line: string): SessionRevisionHeader | undefined {
   };
 }
 
-/**
- * The wire cost of one parsed row as a page serves it (M16-T89).
- *
- * Digest-free on purpose: a cold scan of a long conversation must not hash
- * every screenshot in it to price the pages it has not been asked for yet.
- */
-function servedLengthOf(parsed: unknown): number {
-  const serialized = Buffer.byteLength(JSON.stringify(parsed), "utf8");
-  const images = entryImageParts(parsed);
-  if (images.length === 0) return serialized;
-  let bytes = serialized + images.length * IMAGE_REFERENCE_MAX_BYTES;
-  for (const image of images) bytes -= image.totalBytes;
-  return Math.max(0, bytes);
-}
+/** Node's own counter: this runs once per line of a cold scan. */
+const utf8Bytes = (text: string): number => Buffer.byteLength(text, "utf8");
 
 function parseEntry(line: string, offset: number, length: number): { value: unknown; identity: IndexedEntry } | undefined {
   if (!line.trim()) return undefined;
@@ -578,6 +565,8 @@ function parseEntry(line: string, offset: number, length: number): { value: unkn
   if (entry?.type === "session") return undefined;
   return {
     value: parsed,
-    identity: { ...historyWindowNode(parsed), offset, length, servedLength: servedLengthOf(parsed) },
+    // Priced by the one projection that will actually serve this row, so the
+    // two can never disagree about what it costs (M16-T89).
+    identity: { ...historyWindowNode(parsed), offset, length, servedLength: servedEntryWireBytes(parsed, utf8Bytes) },
   };
 }

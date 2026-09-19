@@ -2,7 +2,7 @@ import { appendFileSync, closeSync, mkdtempSync, openSync, readFileSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { ErrorCodes, HISTORY_PAGE_BYTE_LIMIT, PRODUCT_NAME, boundedHistoryWindow, historyContentSerializedBytes, historyWindow, type HistoryWindowRequest } from "@lasercode/protocol";
+import { ErrorCodes, HISTORY_PAGE_BYTE_LIMIT, PRODUCT_NAME, boundedHistoryWindow, entryWithImageReferences, historyContentSerializedBytes, historyWindow, type HistoryWindowRequest } from "@lasercode/protocol";
 import { sha256Hex } from "../src/session-body-range.js";
 import { SessionIndexCache } from "../src/session-index.js";
 import { SessionProjection } from "../src/session-projection.js";
@@ -504,6 +504,44 @@ describe("worker-free session projection", () => {
     }
     return entries;
   }
+
+  it("prices a reference exactly, so a long id or media type cannot make a page refuse itself (M16-T89)", async () => {
+    // The index prices rows it has not read. A flat allowance over an entry id
+    // and a media type — both copied verbatim out of an untrusted record — was
+    // optimistic by about a hundred bytes for a 400-character media type or a
+    // 400-character id, and the exact materialized check then answered
+    // RevisionUnavailable: the precise failure M16-T89 exists to delete. The
+    // error comes from those two strings, not from the payload, so the fixture
+    // keeps its screenshots small.
+    const shot = png(1512, 982, 64 * 1024);
+    const entries = [
+      message("e0", null, 0),
+      { type: "message", id: "f47ac10b-58cc-4372-a567-0e02b2c3d479", parentId: "e0", timestamp: "2026-01-01T00:00:01.000Z",
+        message: { role: "toolResult", toolCallId: "c1", content: [{ type: "image", mimeType: "image/png", data: shot }] } },
+      { type: "message", id: "long-media-type", parentId: "f47ac10b-58cc-4372-a567-0e02b2c3d479", timestamp: "2026-01-01T00:00:02.000Z",
+        message: { role: "toolResult", toolCallId: "c2", content: [{ type: "image", mimeType: `image/${"x".repeat(394)}`, data: shot }] } },
+      { type: "message", id: "i".repeat(400), parentId: "long-media-type", timestamp: "2026-01-01T00:00:03.000Z",
+        message: { role: "toolResult", toolCallId: "c3", content: [{ type: "image", mimeType: "image/png", data: shot }] } },
+    ];
+    const f = fixture(entries);
+    try {
+      const service = services();
+      const indexed = await service.index.read(f.path);
+      if (!indexed.ok) throw new Error("expected an index");
+      // Every row is priced at exactly what the projection will send for it.
+      indexed.index.entries.forEach((row, at) => {
+        const actual = Buffer.byteLength(JSON.stringify(entryWithImageReferences(entries[at], sha256Hex)), "utf8");
+        expect(row.servedLength, `row ${at}`).toBe(actual);
+      });
+      // And the page is served rather than refused.
+      const page = await project(service.projection, f.path, { tail: 40 }, undefined, 16 * 1024);
+      expect(page.entries).toHaveLength(entries.length);
+      expect(page.window?.elided ?? []).toEqual([]);
+      expect(historyContentSerializedBytes(page.entries, page.window?.context ?? [])).toBeLessThan(HISTORY_PAGE_BYTE_LIMIT / 8);
+    } finally {
+      f.cleanup();
+    }
+  });
 
   it("pages a stored conversation in user-anchored turns, identically to the live authority (M16-T90)", async () => {
     const entries = turnEntries(200);
