@@ -51,6 +51,18 @@ source as `docs/transcript-parity.md` and D-305.
 
 ---
 
+## 0a · The standing instruction on compatibility
+
+**Breaking things is allowed when it removes code.** This leap may change
+protocol shapes, delete client-side aggregation, retire an old window form and
+move a surface, rather than carry a compatibility path beside the new one. A
+shim that exists only to keep an old caller alive is worse than the edit that
+updates the caller. Two rules bound it: the change updates every caller in the
+same commit (Rule 11's contracts entry), and nothing silently changes meaning —
+a removed shape is removed, not quietly reinterpreted.
+
+---
+
 ## 1 · Evidence
 
 **Fleet.** `packages/ui/src/fleet/model.ts` already carries everything a row
@@ -251,8 +263,13 @@ on a filesystem change or an explicit rescan.
 
 ### D.2 What changes in the harness
 
-1. **`start_agent` never fails because of workspace shape.** It returns the
-   identities, and the result says where the child is working and why:
+1. **`start_agent` never fails because of workspace shape, and the parent is
+   always told which way it went.** The choice — isolated worktree or shared
+   checkout — is part of the run's identity, not a footnote: it is in
+   `start_agent`'s result, on the `AgentRun` record, in the fleet row's
+   developer strip, and in `inspect_agent`. A parent that does not know whether
+   its child is writing in its own checkout cannot supervise it. The result
+   says where the child is working and why:
    "No repository here, so this agent shares your checkout", or "This workspace
    holds 41 repositories, so an agent cannot be isolated from all of them;
    sharing your checkout." The wasted turn disappears.
@@ -567,7 +584,10 @@ never saw the conversation that produced it.
 | **The executing agent (and its workers)** | All programming, all *programmatic* tests: unit, integration, protocol round-trips, router coverage, typechecks, builds, `pnpm identity:check`, the runtime inventory, and the integrated `pnpm verify`. |
 | **The person** | **All browser and manual acceptance.** The person opens the sandbox and judges it. |
 
-**Agents do not run browser acceptance matrices for this leap.** No
+**Agents do not run browser acceptance matrices for this leap.** The one
+exception is a *spike*: proving a library's mechanics (L0) is an automated
+test, not a judgement about the product, and it is written down as evidence
+rather than shown as a screenshot. No
 `scripts/browser-check` matrix runs, no Playwright sweeps, no "I looked at it
 and it is fine". Interaction behaviour is proved by tests that run in jsdom or
 by a test the person can re-run; everything visual is the person's call on the
@@ -590,7 +610,11 @@ built by the executing agent:
 - the URL, what to try, in what order, and what is deliberately not finished
   yet.
 
-### 13.3 The loop per milestone
+### 13.3 One shot, not a relay
+
+**The whole leap is executed without stopping between milestones.** The person
+is not asked to review, accept or authorize anything in the middle. Each
+milestone still runs its own loop:
 
 1. Brief a worker with a self-contained task (the worker sees none of the
    conversation that produced this spec).
@@ -598,9 +622,18 @@ built by the executing agent:
    `pnpm verify` — the integrated gate belongs to the parent.
 3. The parent inspects the diff, then commissions **one independent review**.
 4. **One** correction batch, verified by the parent.
-5. The parent merges, runs the integrated gate, builds the sandbox, and hands
-   the person the URL.
-6. The person accepts or sends it back. Only then is the milestone `done`.
+5. The parent merges and runs the integrated gate, then starts the next
+   milestone immediately.
+
+Work proceeds in parallel wherever ownership is disjoint; there is no cap on
+how many workers run at once beyond what the parent can review.
+
+The person is interrupted only for: a decision in §0 that turns out to be
+wrong, something destructive, or a genuine blocker. Everything else — a failed
+spike, a review that rejects a design, a milestone that needs re-planning — the
+parent resolves and records.
+
+At the end: one sandbox, one message, everything in it.
 
 ### 13.4 Ledger and evidence
 
@@ -613,10 +646,11 @@ that supersedes it, never by quiet drift.
 
 ### 13.5 Releasing
 
-A milestone may be released on its own once the person has accepted it — L1 is
-worth shipping before L5 exists. Releases follow `AGENTS.md` §5a exactly: the
-reviewed orchestrator, notes written for people who install it, and the
-person's explicit authorization before `--publish`.
+**Nothing is released until the person has done their acceptance testing and
+said it is good.** Not a milestone, not a partial. The leap is built, merged,
+gated and put in a sandbox; the person tests; only then, and only with their
+explicit authorization, does `AGENTS.md` §5a's release orchestrator run with
+notes written for the people who install it.
 
 ---
 
