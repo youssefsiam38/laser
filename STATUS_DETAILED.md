@@ -2396,9 +2396,10 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M16-T86 | A chosen file mention is finished | in-progress | worker `01a0b77a-91ab-70e8-89b4-224ae742f35b` | cause read in `project-path.ts:73-81`: the matcher scans to the last `@` and only refuses a query ending in whitespace | see notes |
 | M16-T87 | Transcript scrolling rebuilt on a proven virtualizer | in-progress | worker (assigned) | person's report on 044dfb09: rows appear/disappear, a row arrives early, rows above never arrive | see notes |
 | M16-T88 | A page is never refused because one record is too large | in-progress | parent | 63330a5f, d4731f18, 434f249a; sandbox probe: 56 pages / 2948 entries / root reached on the person's 27 MB session | see notes |
-| M16-T89 | Bytes never travel inside a message | todo | — | — | docs/transcript-parity.md §1 |
-| M16-T90 | A page is a number of turns, not a number of bytes | todo | — | — | docs/transcript-parity.md §2 |
-| M16-T91 | The list keeps the reader's position | todo | — | — | docs/transcript-parity.md §3 |
+| M16-T89 | Bytes never travel inside a message | in-progress | worker `01a0b96b-3d56-7105-b0ab-d26cf85764ea` | merged 27cac1cd + 87dc345a; failing page 6,439,755 B → 3,735 B live / 4,167 B durable | see notes |
+| M16-T90 | A page is a number of turns, not a number of bytes | in-progress | worker `01a0b96b-3d56-7105-b0ab-d26cf85764ea` | — | docs/transcript-parity.md §2 |
+| M16-T91 | The list keeps the reader's position | in-progress | worker `01a0b96b-fb4a-7105-b0ab-d2744316cf7f` | — | docs/transcript-parity.md §3 |
+| M16-T92 | The client reads an image reference | todo | worker `01a0b96b-fb4a-7105-b0ab-d2744316cf7f` (queued) | — | review blockers B1–B3, /tmp/review-image-references.md |
 | M16-T67 | Why a goal paused itself overnight | done | worker goal-pause-forensics `01a0b137-f012-771e-a9f0-3648759cdeee` | `8c44b20e` · `docs/incidents/goal-pause-investigation.md`; proven from session `2026-09-14T13-52-32-557Z…` lines 9574-9586 | see notes; added by D-281 |
 | M16-T69 | The live edge actually follows | done | worker autofollow-implementation + autofollow-review-fixes `01a0b1bb-2023-771e-a9f0-36e4f80eff45` | merged `76fe9e5c` (`4c635548`) and `73eec455`; 42 focused, 16 live-edge/batched cases + 2 negative-control matrices, clean-env verify 156.4 s | see notes; design settled by D-287, review fixes applied |
 | M16-T68 | Only the agent stops autonomous work | done | worker goal-abort-pause-fix `01a0b14a-6004-771e-a9f0-36720d5a3bea` | merged `bc5531a2`; red/green incident regression, pi-goal 11 + worker goal 27 + pi-extension 8 + UI 5, worker suite 1053, `SANDBOX_GOAL=1` real-engine pass, frozen install + identity green | see notes; added by D-283; final gate runs at release prep |
@@ -5532,6 +5533,13 @@ Supersedes: none; refines D-271 and RP-11.
 **Decision.** Agents uses the existing Global/Project/Effective authority. Global owns builtin configuration, default-agent and harness-policy writes; Project offers exact project definitions and explicit overrides of readonly Global sources; Effective is readonly. Promote the existing discriminated file-location shape to protocol `AgentLocation`; `agents/delete` requires `{name, location}` and performs exact lookup without Global-first or unique-project fallback. Preserve already exact save/rename and reference/default protections.
 **Why.** The host owns definitions by location plus name, but name-only deletion and ambient UI cwd can target another definition. A second scope picker or another identity system would reproduce the ambiguity.
 **Consequences.** Stage three follows integrated Settings services. Editor/deep-link identity includes exact source location, one owning-screen guard protects drafts, and Global services use the neutral route. No harness redesign, file move, new agent ID or broader permission is added. Parent-approved execution contract: `/tmp/agents-scope-approved-plan.md`; acceptance includes real same-name Global/A/B mutations and persisted after-states.
+
+#### M16-T89 notes
+- 2026-09-19 claimed by the parent as a delegated milestone; contract `docs/transcript-parity.md` §1, decision D-305.
+- 2026-09-19 worker `1fd5548f` merged as `27cac1cd`; one shared helper `entryWithImageReferences` applied before measurement, `image-header.ts` parses PNG/JPEG/GIF/WebP, host index prices rows by `servedLength`. Evidence `/tmp/t89-image-reference-evidence.md`.
+- 2026-09-19 parent follow-up `87dc345a`: the `large-body.test.tsx` fixture now elides by record size, since an image alone no longer makes a record oversized.
+- 2026-09-19 review `run_2d62f39f` (`/tmp/review-image-references.md`): protocol half correct and threshold-free (verified by running the built projection); three blockers, all in consumers that still read `data` inline. Producer corrections queued to the same worker (C1 exact `servedLength` pricing, C2 one header parser, C3 identities on a served record, C4 memoization, C5 hostile dimensions, C6 `BASE64_RE`, C7 tests, C8 structure); client corrections are M16-T92.
+- 2026-09-19 open: main regresses images ≤ 16 KiB on reload until M16-T92 lands. Not shippable to a person before then.
 
 ### D-305 · 2026-09-19 · The transcript copies a shipping chat client, in detail
 
