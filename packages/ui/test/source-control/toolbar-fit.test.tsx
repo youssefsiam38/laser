@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import {
   OVERLAY_TOOLBAR_MIN_PX,
+  overlayChromeLayout,
   overlayToolbarCost,
   overlayToolbarPlan,
   type OverlayToolbarPlan,
@@ -190,4 +191,11 @@ it("puts the toolbar's plan in one place, so the header cannot disagree with it"
   expect(plans.map((plan) => plan.totals)).toEqual(["second-row", "row", "row", "row"]);
   // The tree control exists exactly while the tree is a sheet.
   expect(plans.map((plan) => plan.tree)).toEqual(["icon", "label", "hidden", "hidden"]);
+  // … and "while the tree is a sheet" means the same width the layout means.
+  for (const width of [288, 480, 639, 640, 1024]) {
+    expect({
+      width,
+      control: overlayToolbarPlan(width, ROOT_FONT).tree !== "hidden",
+    }).toEqual({ width, control: overlayChromeLayout(width, ROOT_FONT) === "phone" });
+  }
 });

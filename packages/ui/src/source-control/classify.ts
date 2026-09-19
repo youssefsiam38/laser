@@ -284,7 +284,10 @@ export type OverlayToolbarPlan = {
 };
 
 const TOOLBAR_COMPACT_MIN_REM = 30;
-const TOOLBAR_MEDIUM_MIN_REM = 40;
+/** The same threshold as the chrome: the tree is a sheet below it, so the
+ *  toolbar carries the control that opens it and the header cannot disagree
+ *  with the layout about which width it is on. */
+const TOOLBAR_MEDIUM_MIN_REM = OVERLAY_PHONE_MAX_REM;
 const TOOLBAR_WIDE_MIN_REM = 64;
 
 /**
