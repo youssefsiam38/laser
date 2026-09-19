@@ -45,9 +45,38 @@ export interface MobileComposerProps extends Omit<ComponentProps<"div">, "childr
   placeholder?: string | undefined;
   disabled?: boolean | undefined;
   onInputKeyDown?: ComponentProps<typeof ComposerPrimitive.Input>["onKeyDown"];
+  /**
+   * Render the text field. The pill owns its typography and its place in the
+   * row and hands both over; a caller that draws something behind the text —
+   * the session composer's finished mentions — wraps the field in
+   * `wrapperClassName` and keeps every other prop. Absent, the pill renders
+   * the plain composer input, which is what it always was.
+   */
+  renderInput?: ((props: ComposerFieldProps) => ReactNode) | undefined;
 }
 
-export function MobileComposer({ above, leading, inline, trailing, placeholder, disabled, onInputKeyDown, className, ...props }: MobileComposerProps) {
+/** What the pill hands a caller that renders the field itself. */
+export type ComposerFieldProps = ComponentProps<typeof ComposerPrimitive.Input> & { wrapperClassName: string };
+
+export function MobileComposer({ above, leading, inline, trailing, placeholder, disabled, onInputKeyDown, renderInput, className, ...props }: MobileComposerProps) {
+  const textClass = "min-h-8 w-full resize-none self-center bg-transparent py-1 text-base leading-base text-ink outline-none placeholder:text-ink-3 disabled:cursor-not-allowed";
+  const input = {
+    className: textClass,
+    wrapperClassName: "flex-1 self-center",
+    dir: "auto" as const,
+    rows: 1,
+    maxRows: 6,
+    "aria-label": "Message",
+    placeholder: placeholder ?? "Message",
+    spellCheck: true,
+    autoCorrect: "on",
+    autoCapitalize: "sentences",
+    submitMode: "enter" as const,
+    cancelOnEscape: false,
+    unstable_insertNewlineOnTouchEnter: true,
+    disabled,
+    onKeyDown: onInputKeyDown,
+  };
   return (
     <div data-slot="mobile-composer" className={cn("flex flex-col gap-2", className)} {...props}>
       {above && <div className="flex min-h-8 items-center gap-1 overflow-x-auto px-1 scrollbar-none">{above}</div>}
@@ -55,28 +84,18 @@ export function MobileComposer({ above, leading, inline, trailing, placeholder, 
       <div className="flex items-end gap-2">
       {leading}
       <div className={cn(field, "flex min-h-11 min-w-0 flex-1 items-end gap-1 rounded-full py-1.5 ps-4 pe-1.5")}>
-        <ComposerPrimitive.Input
-          dir="auto"
-          rows={1}
-          maxRows={6}
-          aria-label="Message"
-          placeholder={placeholder ?? "Message"}
-          spellCheck
-          autoCorrect="on"
-          autoCapitalize="sentences"
-          submitMode="enter"
-          cancelOnEscape={false}
-          unstable_insertNewlineOnTouchEnter
-          disabled={disabled}
-          onKeyDown={onInputKeyDown}
-          className="min-h-8 w-full resize-none self-center bg-transparent py-1 text-base leading-base text-ink outline-none placeholder:text-ink-3 disabled:cursor-not-allowed"
-        />
+        {renderInput ? renderInput(input) : <ComposerPrimitive.Input {...fieldInput(input)} />}
         {inline}
       </div>
       {trailing}
       </div>
     </div>
   );
+}
+
+/** The plain field: everything the pill hands over, minus the wrapper it does not need. */
+function fieldInput({ wrapperClassName: _wrapper, ...input }: ComposerFieldProps): ComponentProps<typeof ComposerPrimitive.Input> {
+  return input;
 }
 
 /** A 44px round control for either end of the pill. */

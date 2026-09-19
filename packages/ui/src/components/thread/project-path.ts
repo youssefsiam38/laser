@@ -38,6 +38,50 @@ export function isBareProjectMentionPath(path: string): boolean {
   return BARE_MENTION_PATH.test(path) || BARE_WINDOWS_PATH.test(path);
 }
 
+/**
+ * A mention opens a word: it is at the start of the text, or whitespace is in
+ * front of its `@`. One spelling of the rule, read by the matcher, by the
+ * scanner and by the composer's record of finished mentions — otherwise a
+ * draft can show a tag over something the transcript renders as prose
+ * (`hi@./server/index.ts`).
+ */
+export function opensProjectMention(text: string, start: number): boolean {
+  return start === 0 || /\s/u.test(text[start - 1]!);
+}
+
+/**
+ * …and it closes one: the token runs to whitespace or to the end of the text,
+ * with only sentence punctuation (which the scanner trims) allowed in between.
+ * `@./a.ts@./b.ts` closes neither.
+ */
+export function closesProjectMention(text: string, end: number): boolean {
+  let at = end;
+  while (at < text.length && TRAILING_SENTENCE_PUNCTUATION.test(text[at]!)) at += 1;
+  return at === text.length || /\s/u.test(text[at]!);
+}
+
+/**
+ * Where a bare `@token` that opens at `start` ends: at whitespace or the end of
+ * the text, minus the sentence punctuation that belongs to the sentence rather
+ * than to the name.
+ */
+export function bareMentionEnd(text: string, start: number): number {
+  let end = start + 1;
+  while (end < text.length && !/\s/u.test(text[end]!)) end += 1;
+  while (end > start + 1 && TRAILING_SENTENCE_PUNCTUATION.test(text[end - 1]!)) end -= 1;
+  return end;
+}
+
+/**
+ * A handle as the picker writes one: a bare word, never a path. D-284 keeps
+ * handles out of the transcript's chips, so `projectMentionSpans` never yields
+ * one; a draft that arrives whole still carries them, and the composer has to
+ * know that `@audit` in it is a mention someone already chose.
+ */
+export function isBareMentionHandle(token: string): boolean {
+  return isBareProjectMentionPath(token) && !/[/\\:~]/u.test(token) && !token.startsWith(".");
+}
+
 function hasPathAnchor(path: string): boolean {
   return path.startsWith("./") || path.startsWith("../") || path.startsWith("/") || path.startsWith("~/") || WINDOWS_ABSOLUTE.test(path);
 }
@@ -70,10 +114,17 @@ function parseQuotedPath(raw: string): string | undefined {
   }
 }
 
+/**
+ * The `@` query at the caret, if one is in flight. This reads text alone, so
+ * it cannot tell a chosen mention from a path still being typed — a folder
+ * name with a space looks exactly like a choice followed by prose. Which `@`
+ * is already finished is decided beside the composer's draft, by the record in
+ * `finished-mentions.ts`, and the composer uses that matcher, not this one.
+ */
 export const matchProjectMention: Unstable_TriggerMatcher = (text, char, caret) => {
   const before = text.slice(0, caret);
   const offset = before.lastIndexOf(char);
-  if (offset < 0 || (offset > 0 && !/\s/u.test(before[offset - 1]!))) return null;
+  if (offset < 0 || !opensProjectMention(before, offset)) return null;
   const query = before.slice(offset + char.length);
   // Quoting is a completed insertion form, never an in-flight picker query.
   if (query.startsWith('"') || /\s$/u.test(query) || /[\n\r\t\0\u007f]/u.test(query)) return null;
@@ -91,11 +142,25 @@ function projectMentionIdentity(path: string): string {
   return path.startsWith("./") ? path.slice(2) : path;
 }
 
-function parseReadableProjectMentions(text: string): Segment[] {
-  const segments: Segment[] = [];
-  let textStart = 0;
+/**
+ * Where each readable picker token sits in a string, in one scan.
+ *
+ * The renderer needs segments and the composer needs ranges; both read this,
+ * so a mention can never be a chip in the transcript and ordinary text in the
+ * draft that produced it.
+ */
+export type ProjectMentionSpan = {
+  readonly start: number;
+  readonly end: number;
+  readonly type: "file" | "directory";
+  readonly id: string;
+  readonly label: string;
+};
+
+export function projectMentionSpans(text: string): ProjectMentionSpan[] {
+  const spans: ProjectMentionSpan[] = [];
   for (let index = 0; index < text.length; index += 1) {
-    if (text[index] !== "@" || (index > 0 && !/\s/u.test(text[index - 1]!))) continue;
+    if (text[index] !== "@" || !opensProjectMention(text, index)) continue;
     let end = index + 1;
     let path: string | undefined;
     if (text[end] === '"') {
@@ -106,21 +171,29 @@ function parseReadableProjectMentions(text: string): Segment[] {
         if (!escaped && char === "\\") escaped = true;
         else escaped = false;
       }
-      if (text[end - 1] !== '"' || (end < text.length && !/\s/u.test(text[end]!) && !TRAILING_SENTENCE_PUNCTUATION.test(text[end]!))) continue;
+      if (text[end - 1] !== '"' || !closesProjectMention(text, end)) continue;
       path = parseQuotedPath(text.slice(index + 1, end));
     } else {
-      while (end < text.length && !/\s/u.test(text[end]!)) end += 1;
-      while (end > index + 1 && TRAILING_SENTENCE_PUNCTUATION.test(text[end - 1]!)) end -= 1;
+      end = bareMentionEnd(text, index);
       const candidate = text.slice(index + 1, end);
       if (isBareProjectMentionPath(candidate)) path = candidate;
     }
     if (path === undefined || !hasPathAnchor(path)) continue;
     const identity = projectMentionIdentity(path);
     if (!identity) continue;
-    if (textStart < index) segments.push({ kind: "text", text: text.slice(textStart, index) });
-    segments.push({ kind: "mention", type: identity.endsWith("/") ? "directory" : "file", id: identity, label: identity });
-    textStart = end;
+    spans.push({ start: index, end, type: identity.endsWith("/") ? "directory" : "file", id: identity, label: identity });
     index = end - 1;
+  }
+  return spans;
+}
+
+function parseReadableProjectMentions(text: string): Segment[] {
+  const segments: Segment[] = [];
+  let textStart = 0;
+  for (const span of projectMentionSpans(text)) {
+    if (textStart < span.start) segments.push({ kind: "text", text: text.slice(textStart, span.start) });
+    segments.push({ kind: "mention", type: span.type, id: span.id, label: span.label });
+    textStart = span.end;
   }
   if (textStart < text.length) segments.push({ kind: "text", text: text.slice(textStart) });
   return segments.length ? segments : [{ kind: "text", text }];

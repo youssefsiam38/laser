@@ -1,7 +1,7 @@
-import { ComposerPrimitive, useAui, useAuiState, unstable_useMentionAdapter, unstable_useSlashCommandAdapter } from "@assistant-ui/react";
+import { ComposerPrimitive, useAui, useAuiState, unstable_useMentionAdapter, unstable_useSlashCommandAdapter, type Unstable_TriggerItem } from "@assistant-ui/react";
 import type { CommandInfo } from "@lasercode/protocol";
 import { AtSign, Bot, ChevronLeft, ChevronRight, FileText, FolderOpen, GitFork, History, ListX, Pencil, Plus, Shrink, SlashSquare, Sparkles } from "lucide-react";
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { SessionAgentSelector } from "@/components/assistant-ui/elements/agent-selector";
 import {
@@ -35,7 +35,8 @@ import { StatusLine } from "./StatusLine.js";
 import { LAST_PROMPT_MESSAGES, lastPromptEntry, lastPromptMessage } from "./last-prompt.js";
 import { SessionPreparationProvider, useSessionPreparation } from "./session-preparation.js";
 import { useDirectoryPage } from "./use-directory-page.js";
-import { matchProjectMention } from "./project-path.js";
+import { ComposerMentionField } from "./composer-mention-tags.js";
+import { createFinishedMentions, type FinishedMentions } from "./finished-mentions.js";
 import { explorerItems, explorerNavigation, explorerPageItem, mentionFormatter, mentionItemId } from "./project-explorer-model.js";
 import { useTranscriptViewport } from "./transcript-viewport.js";
 
@@ -117,6 +118,7 @@ function ComposerBody() {
             onInputKeyDown={onInputKeyDown}
             disabled={inert}
             placeholder={placeholder}
+            renderInput={(field) => <ComposerMentionField mentions={mention.mentions} {...field} />}
           />
         ) : (
           <ComposerPrimitive.AttachmentDropzone asChild>
@@ -124,7 +126,7 @@ function ComposerBody() {
               <StagedAttachments />
               {/* Quoted transcript text rides above the input until it is sent (the `quote` element). */}
               <ComposerQuotePreview />
-              <ComposerInput />
+              <ComposerInput mentions={mention.mentions} />
               <ComposerToolbar>
                 <ComposerAttachButton />
                 {/* Keep this one mounted control in the same flex item while it
@@ -145,7 +147,7 @@ function ComposerBody() {
         )}
         {/* `/` runs a laser command; `@` addresses a running subagent by handle. */}
         <ComposerTriggerPopover char="/" title="Commands & skills" matcher={matchLeadingSlash} adapter={slash.adapter} action={slash.action} onComplete={completeSlashDraft} {...(slash.iconMap ? { iconMap: slash.iconMap } : {})} fallbackIcon={SlashSquare} />
-        <ComposerTriggerPopover char="@" title="Files & agents" matcher={matchProjectMention} adapter={mention.adapter} directive={mention.directive} navigation={mention.navigation} iconMap={MENTION_ICONS} fallbackIcon={AtSign} emptyItemsLabel="This folder is empty." unavailableLabel={mention.issue ? mention.issue.kind === 'refusal' ? 'Update the path to continue.' : 'Retry to load this folder.' : undefined} loadingLabel="Reading this folder…" isLoading={mention.loading} onQueryChange={mention.setQuery} onOpenChange={mention.setOpen} notice={mention.issue ? <>{mention.issue.message}{mention.retry && <button type="button" className="min-h-11 rounded-md px-2 underline underline-offset-2 focus-visible:outline focus-visible:outline-live" onClick={mention.retry}>Try again</button>}</> : <span className="block truncate" dir="ltr">{mention.directory ?? 'Choose a conversation to browse files.'}</span>} />
+        <ComposerTriggerPopover char="@" title="Files & agents" matcher={mention.mentions.matcher} adapter={mention.adapter} directive={mention.directive} navigation={mention.navigation} iconMap={MENTION_ICONS} fallbackIcon={AtSign} emptyItemsLabel="This folder is empty." unavailableLabel={mention.issue ? mention.issue.kind === 'refusal' ? 'Update the path to continue.' : 'Retry to load this folder.' : undefined} loadingLabel="Reading this folder…" isLoading={mention.loading} onQueryChange={mention.setQuery} onOpenChange={mention.setOpen} notice={mention.issue ? <>{mention.issue.message}{mention.retry && <button type="button" className="min-h-11 rounded-md px-2 underline underline-offset-2 focus-visible:outline focus-visible:outline-live" onClick={mention.retry}>Try again</button>}</> : <span className="block truncate" dir="ltr">{mention.directory ?? 'Choose a conversation to browse files.'}</span>} />
         </>}
       </ComposerPrimitive.Root>
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
@@ -310,7 +312,7 @@ function foldQuote(aui: ReturnType<typeof useAui>): void {
   composer.setQuote(undefined);
 }
 
-function ComposerInput() {
+function ComposerInput({ mentions }: { mentions: FinishedMentions }) {
   const onKeyDown = useComposerKeys();
   // Both hooks run unconditionally: `||` short-circuits, and a hook behind a
   // short circuit is a hook that sometimes does not run.
@@ -320,7 +322,8 @@ function ComposerInput() {
   const disabled = threadDisabled || noDestination !== undefined;
   const placeholder = usePlaceholder();
   return (
-    <ComposerPrimitive.Input
+    <ComposerMentionField
+      mentions={mentions}
       dir="auto"
       rows={1}
       maxRows={8}
@@ -403,6 +406,9 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
 // agent's command is written out for its arguments, and one of laser's own
 // runs, because choosing it is what asking for it looks like.
 // ---------------------------------------------------------------------------
+
+/** The `@` picker's rows: what each kind of result looks like in the list. */
+const MENTION_ICONS = { agent: Bot, file: FileText, directory: FolderOpen, next: ChevronRight, previous: ChevronLeft } as const;
 
 const SLASH_ICONS = {
   compact: Shrink,
@@ -529,9 +535,12 @@ function useSlashCommands() {
 // click inserts files/folders; `/` alone descends into the highlighted folder.
 // ---------------------------------------------------------------------------
 
-const MENTION_ICONS = { agent: Bot, file: FileText, directory: FolderOpen, next: ChevronRight, previous: ChevronLeft } as const;
-
 function useHandleMentions() {
+  // One record per composer: Beam's bubble and the session's own composer each
+  // hold their own draft, so neither can finish the other's mention.
+  const mentionsRef = useRef<FinishedMentions>(undefined);
+  mentionsRef.current ??= createFinishedMentions();
+  const mentions = mentionsRef.current;
   const path = useLaserState(s => (s.current ? s.open[s.current]?.path : undefined));
   const sessionCwd = useLaserState(s => (s.current ? s.open[s.current]?.state.cwd : undefined));
   const { currentProject } = useLaserStable();
@@ -565,7 +574,13 @@ function useHandleMentions() {
     },
   }), [mention.adapter, query, page.entries, cwd, page.navigation.next, page.navigation.previous]);
   const navigation = explorerNavigation(page.navigation);
-  return { adapter, directive: { ...mention.directive, formatter: mentionFormatter }, navigation, loading: page.loading,
+  // The insertion is the moment the choice is made, and the only place that
+  // knows the exact range it wrote; everything after it is ordinary typing.
+  const directive = useMemo(
+    () => ({ ...mention.directive, formatter: mentionFormatter, onInserted: (item: Unstable_TriggerItem) => mentions.noteInsertion(item) }),
+    [mention.directive, mentions],
+  );
+  return { adapter, directive, mentions, navigation, loading: page.loading,
     issue: page.issue, retry: page.retry, directory: page.directory, setQuery, setOpen };
 }
 
