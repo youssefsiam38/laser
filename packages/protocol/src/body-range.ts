@@ -1045,19 +1045,34 @@ export function entryToolCalls(entry: unknown): Array<{ id: string; name: string
  */
 export const ELIDED_RECORD_MAX_BYTES = 1024 * 1024 - 64 * 1024;
 
+const recordBytes = new WeakMap<object, number>();
+
 /**
- * The canonical size of a whole record, counted rather than built (RP-5b
- * §3.2). A value this projection cannot predict is measured exactly, once,
- * because the producer would otherwise have to serialize it anyway.
+ * The size of a whole record on the wire — every field of it, not the bodies
+ * this module knows how to name. A body projection cannot answer this: a
+ * compaction's summary, an unknown part type, a record shape a later version
+ * introduces are all invisible to it, and a record it under-counts is a record
+ * no page can carry and nobody elides, which is how the older half of a
+ * conversation became unreachable (M16-T88).
+ *
+ * Serialization is the only honest answer, so it is done once per record and
+ * remembered against the record itself; a page is planned by binary search and
+ * would otherwise pay for the same rows many times over.
  */
 export function entryRecordBytes(entry: unknown): number {
-  const counted = boundedBodyText(entry, 0).totalBytes;
-  if (counted !== undefined) return counted;
-  try {
-    return utf8ByteLength(JSON.stringify(entry) ?? "");
-  } catch {
-    return Number.MAX_SAFE_INTEGER;
+  if (entry === null || typeof entry !== "object") {
+    try { return utf8ByteLength(JSON.stringify(entry) ?? ""); } catch { return Number.MAX_SAFE_INTEGER; }
   }
+  const cached = recordBytes.get(entry);
+  if (cached !== undefined) return cached;
+  let bytes: number;
+  try {
+    bytes = utf8ByteLength(JSON.stringify(entry) ?? "");
+  } catch {
+    bytes = Number.MAX_SAFE_INTEGER;
+  }
+  recordBytes.set(entry, bytes);
+  return bytes;
 }
 
 /**
