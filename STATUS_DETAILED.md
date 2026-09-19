@@ -2395,6 +2395,10 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M16-T85 | Reading upwards never pushes the reader back | in-progress | worker `01a0b776-bb78-70e8-89b4-2245172ec5ea` | parent traces: 0.9.4 pushes the reader down on every page (292→7810, 1347→1930); WIP 9fb90a61 leaves 1 push in 14 notches | see notes |
 | M16-T86 | A chosen file mention is finished | in-progress | worker `01a0b77a-91ab-70e8-89b4-224ae742f35b` | cause read in `project-path.ts:73-81`: the matcher scans to the last `@` and only refuses a query ending in whitespace | see notes |
 | M16-T87 | Transcript scrolling rebuilt on a proven virtualizer | in-progress | worker (assigned) | person's report on 044dfb09: rows appear/disappear, a row arrives early, rows above never arrive | see notes |
+| M16-T88 | A page is never refused because one record is too large | in-progress | parent | 63330a5f, d4731f18, 434f249a; sandbox probe: 56 pages / 2948 entries / root reached on the person's 27 MB session | see notes |
+| M16-T89 | Bytes never travel inside a message | todo | — | — | docs/transcript-parity.md §1 |
+| M16-T90 | A page is a number of turns, not a number of bytes | todo | — | — | docs/transcript-parity.md §2 |
+| M16-T91 | The list keeps the reader's position | todo | — | — | docs/transcript-parity.md §3 |
 | M16-T67 | Why a goal paused itself overnight | done | worker goal-pause-forensics `01a0b137-f012-771e-a9f0-3648759cdeee` | `8c44b20e` · `docs/incidents/goal-pause-investigation.md`; proven from session `2026-09-14T13-52-32-557Z…` lines 9574-9586 | see notes; added by D-281 |
 | M16-T69 | The live edge actually follows | done | worker autofollow-implementation + autofollow-review-fixes `01a0b1bb-2023-771e-a9f0-36e4f80eff45` | merged `76fe9e5c` (`4c635548`) and `73eec455`; 42 focused, 16 live-edge/batched cases + 2 negative-control matrices, clean-env verify 156.4 s | see notes; design settled by D-287, review fixes applied |
 | M16-T68 | Only the agent stops autonomous work | done | worker goal-abort-pause-fix `01a0b14a-6004-771e-a9f0-36720d5a3bea` | merged `bc5531a2`; red/green incident regression, pi-goal 11 + worker goal 27 + pi-extension 8 + UI 5, worker suite 1053, `SANDBOX_GOAL=1` real-engine pass, frozen install + identity green | see notes; added by D-283; final gate runs at release prep |
@@ -5528,3 +5532,26 @@ Supersedes: none; refines D-271 and RP-11.
 **Decision.** Agents uses the existing Global/Project/Effective authority. Global owns builtin configuration, default-agent and harness-policy writes; Project offers exact project definitions and explicit overrides of readonly Global sources; Effective is readonly. Promote the existing discriminated file-location shape to protocol `AgentLocation`; `agents/delete` requires `{name, location}` and performs exact lookup without Global-first or unique-project fallback. Preserve already exact save/rename and reference/default protections.
 **Why.** The host owns definitions by location plus name, but name-only deletion and ambient UI cwd can target another definition. A second scope picker or another identity system would reproduce the ambiguity.
 **Consequences.** Stage three follows integrated Settings services. Editor/deep-link identity includes exact source location, one owning-screen guard protects drafts, and Global services use the neutral route. No harness redesign, file move, new agent ID or broader permission is added. Parent-approved execution contract: `/tmp/agents-scope-approved-plan.md`; acceptance includes real same-name Global/A/B mutations and persisted after-states.
+
+### D-305 · 2026-09-19 · The transcript copies a shipping chat client, in detail
+
+Decision: the three answers Laser invented — inline image bytes in a page, a
+byte-budgeted page, and our own scroll geometry — are replaced by the ones
+`pingdotgg/t3code` proves in production: images are references at the
+projection boundary (M16-T89), a page is a count of user-anchored turns
+(M16-T90), and `@legendapp/list` owns the reader's position with
+`maintainVisibleContentPosition: { data: true, size: true }` (M16-T91). The
+contract is `docs/transcript-parity.md`.
+
+Why: the person's 27 MB session stopped paging at page 22 and every older
+message was unreachable for ever; reading upwards still moved text. Each of
+our three answers was a cause. Nothing of theirs is vendored — the design is
+copied, the code is not.
+
+Consequences: `@legendapp/list` is pinned exactly with a pnpm patch carrying
+their three web-entry corrections; `@tanstack/react-virtual` leaves the
+transcript; the byte ceiling from M16-T88 becomes a safety net rather than the
+paging policy.
+
+Supersedes: D-303 (the virtualizer choice and the row-level identity trade it
+accepted).
