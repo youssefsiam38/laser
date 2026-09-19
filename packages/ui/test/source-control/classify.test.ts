@@ -5,6 +5,7 @@ import {
   fileLineCount,
   listTotals,
   modeWords,
+  codeSizeFromTheme,
   overlayChromeLayout,
   patchValueMatches,
   shouldBoundExpansion,
@@ -32,6 +33,8 @@ it("falls back to unified when two code columns do not fit, and keeps split when
   expect(overlayChromeLayout(320, 16)).toBe("phone");
   expect(overlayChromeLayout(1280, 16)).toBe("desktop");
   expect(overlayChromeLayout(0, 16)).toBe("desktop");
+  expect(codeSizeFromTheme(12, 16)).toBe(12);
+  expect(codeSizeFromTheme(Number.NaN, 16)).toBe(16);
 });
 
 it("bounds expansion on files over the stated line count", () => {

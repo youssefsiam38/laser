@@ -1,6 +1,9 @@
-import { Check, ChevronRight } from "lucide-react";
+import { useMemo } from "react";
+import { Check, ChevronRight, File, Folder } from "lucide-react";
 
 import { DiffStat } from "@/components/assistant-ui/elements/code-diff.js";
+import { fileTreeFromChanges } from "@/components/assistant-ui/elements/file-tree.js";
+import { mono } from "@/components/assistant-ui/elements/surfaces.js";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
@@ -67,6 +70,11 @@ function RepoGroup({
   onToggleViewed: (repo: string, file: ChangedFile) => void;
 }) {
   const totals = repoTotals(repo);
+  const nodes = useMemo(
+    () => fileTreeFromChanges(repo.files.map((file) => ({ path: file.path, additions: file.added, deletions: file.removed }))),
+    [repo.files],
+  );
+  const byPath = useMemo(() => new Map(repo.files.map((file) => [file.path, file])), [repo.files]);
   return (
     <Collapsible defaultOpen className="border-b border-line">
       <CollapsibleTrigger className="flex w-full min-h-8 items-center gap-2 px-3 py-2 text-start outline-none hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live [@media(pointer:coarse)]:min-h-11">
@@ -79,18 +87,35 @@ function RepoGroup({
         {repo.error ? (
           <p className="px-3 py-2 text-sm text-danger">{repo.error}</p>
         ) : (
-          <ul className="flex flex-col pb-2">
-            {repo.files.map((file) => {
+          <ul role="tree" className="flex flex-col pb-2">
+            {nodes.map((node) => {
+              if (node.kind === "folder") {
+                return (
+                  <li key={`folder:${node.path}`} role="treeitem" aria-level={node.depth + 1}>
+                    <div
+                      className="flex min-h-8 w-full min-w-0 items-center gap-2 px-3 py-1 text-sm text-ink-2"
+                      style={{ paddingInlineStart: `calc(var(--spacing) * ${3 + node.depth * 4})` }}
+                      title={node.path}
+                    >
+                      <Folder aria-hidden="true" className="size-3.5 shrink-0 text-ink-3" />
+                      <span className={cn(mono, "min-w-0 truncate")}>{node.name}</span>
+                    </div>
+                  </li>
+                );
+              }
+              const file = byPath.get(node.path);
+              if (!file) return null;
               const selected = active?.repo === repo.repo && active.path === file.path;
               const tick = viewed.has(fileKey(repo.repo, file.path));
               return (
-                <li key={file.path} className="flex min-w-0 items-stretch">
+                <li key={file.path} role="treeitem" aria-level={node.depth + 1} aria-selected={selected} className="flex min-w-0 items-stretch">
                   <button
                     type="button"
                     onClick={() => onOpen(repo.repo, file)}
                     title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+                    style={{ paddingInlineStart: `calc(var(--spacing) * ${3 + node.depth * 4})` }}
                     className={cn(
-                      "flex min-h-8 min-w-0 flex-1 items-center gap-2 px-3 py-1 text-start outline-none",
+                      "flex min-h-8 min-w-0 flex-1 items-center gap-2 py-1 pe-3 text-start outline-none",
                       "[@media(pointer:coarse)]:min-h-11",
                       "hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
                       selected && "bg-surface-2",
@@ -99,7 +124,8 @@ function RepoGroup({
                     <span className="typed w-3 shrink-0 text-xs text-ink-3" title={statusLabel(file.status)}>
                       {statusMark(file.status)}
                     </span>
-                    <span className="typed min-w-0 flex-1 truncate text-xs text-ink">{fileName(file.path)}</span>
+                    <File aria-hidden="true" className="size-3.5 shrink-0 text-ink-3" />
+                    <span className={cn(mono, "min-w-0 flex-1 truncate text-ink")}>{node.name}</span>
                     <DiffStat added={file.added} removed={file.removed} />
                   </button>
                   <button

@@ -4,8 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Skeleton, SkeletonText } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
+import { formatBytes } from "@/format";
+
 import type { EmptyBody } from "./classify.js";
-import { formatBytes, modeWords } from "./classify.js";
+import { modeWords } from "./classify.js";
 import type { AgentChangesContext } from "./contract.js";
 
 export function ChangesNotice({
@@ -161,7 +163,7 @@ export function LargeFileState({
       }
     >
       <p>
-        <span className="typed text-ink">{path}</span> is {lines.toLocaleString("en-US").replace(/,/g, "\u00a0")} lines.
+        <span className="typed text-ink">{path}</span> is {lines.toLocaleString().replace(/,/g, "\u00a0")} lines.
         It opens collapsed so the reader stays light. Expansion is by hunk.
       </p>
     </ChangesNotice>
@@ -206,10 +208,24 @@ export function PickFileState() {
   );
 }
 
-export function UnifiedFallbackNotice() {
+export function UnifiedFallbackNotice({ onDismiss }: { onDismiss: () => void }) {
   return (
-    <p data-slot="changes-unified-notice" className="border-b border-line bg-surface-2 px-4 py-2 text-xs text-ink-2">
-      Split needs two columns of code, so this view is unified.
-    </p>
+    <div data-slot="changes-unified-notice" className="flex items-center gap-3 border-b border-line bg-surface-2 px-4 py-2 text-xs text-ink-2">
+      <p className="min-w-0 flex-1">Split needs two columns of code, so this view is unified.</p>
+      <Button variant="ghost" size="xs" onClick={onDismiss}>
+        Dismiss
+      </Button>
+    </div>
+  );
+}
+
+export function TruncatedPatchState({ onMore, loading }: { onMore: () => void; loading: boolean }) {
+  return (
+    <div data-slot="changes-truncated" className="flex shrink-0 items-center gap-3 border-t border-line bg-surface-2 px-4 py-2">
+      <p className="min-w-0 flex-1 text-xs text-ink-2">This patch is large, so only part of it is shown.</p>
+      <Button variant="outline" size="sm" onClick={onMore} disabled={loading}>
+        {loading ? "Loading" : "Show more"}
+      </Button>
+    </div>
   );
 }

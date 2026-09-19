@@ -104,7 +104,8 @@ value regions with `data-search-content`, and that attribute is not present in
 open shadow roots are collected, one constructed highlight stylesheet is
 **appended** to each root's `adoptedStyleSheets` (never replaced), and text is
 concatenated per `[data-line]`. Gutters, separators and file headers are
-skipped. Collapsed context and virtualized-offscreen lines are not in the tree;
-the overlay also searches the file's patch model for counts and says when
-matches sit in collapsed context. Find inside the overlay is this machinery,
-not a second implementation.
+skipped. Split view paints each context line twice; overlay find dedupes by
+excerpt so a match is counted and stepped once. Collapsed context and
+virtualized-offscreen lines are not in the tree; the overlay also searches the
+file's patch model for counts and says when matches sit in collapsed context.
+Find inside the overlay is this machinery, not a second implementation.

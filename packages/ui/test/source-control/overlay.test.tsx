@@ -9,7 +9,9 @@ import {
   openChanges,
   resetChangesAdapter,
   resetChangesUi,
+  setChangesAdapter,
 } from "../../src/source-control/index.js";
+import { createMockAdapter } from "../../src/source-control/mock.js";
 
 vi.mock("../../src/source-control/diff-body.js", () => ({
   DiffBody: ({ page }: { page: { path: string } }) => <div data-slot="diff-body">{page.path}</div>,
@@ -22,6 +24,7 @@ beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   resetChangesUi();
   resetChangesAdapter();
+  setChangesAdapter(createMockAdapter());
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -157,6 +160,13 @@ it("says when an agent is a worktree or a shared checkout, and when a removed wo
     await Promise.resolve();
   });
   expect(overlay().textContent).toMatch(/worktree was removed/);
+});
+
+it("selects a file without hiding the other repositories", async () => {
+  await mount();
+  await open({ scope: { kind: "session" }, repo: "connecting", path: "lib/client.ts" });
+  expect(overlay().textContent).toContain("client.ts");
+  expect(overlay().textContent).toContain("body-range.ts");
 });
 
 it("opens find with Ctrl+F and leaves a git-action slot for a later milestone", async () => {

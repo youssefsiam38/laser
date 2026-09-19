@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { ChevronDown, Columns2, Rows2, X } from "lucide-react";
 
 import { DiffStat } from "@/components/assistant-ui/elements/code-diff.js";
@@ -35,6 +36,7 @@ export function ChangesToolbar({
   runId,
   chrome,
   diffStyle,
+  unifiedFallback,
   onScope,
   onRepoFilter,
   onRange,
@@ -55,6 +57,7 @@ export function ChangesToolbar({
   runId?: string;
   chrome: "phone" | "desktop";
   diffStyle: DiffStylePref;
+  unifiedFallback: boolean;
   onScope: (scope: ChangesScope) => void;
   onRepoFilter: (repo: string | null) => void;
   onRange: (from: string, to: string) => void;
@@ -125,8 +128,9 @@ export function ChangesToolbar({
         <DiffStat added={totals.added} removed={totals.removed} className="ms-1 hidden sm:inline-flex" />
         <div className="ms-auto flex min-w-0 items-center gap-1">
           <TooltipIconButton
-            tooltip={diffStyle === "split" ? "Unified view" : "Split view"}
-            shortcut="U"
+            tooltip={unifiedFallback ? "Split needs two columns of code" : diffStyle === "split" ? "Unified view" : "Split view"}
+            {...(unifiedFallback ? {} : { shortcut: "U" })}
+            disabled={unifiedFallback}
             onClick={() => onDiffStyle(diffStyle === "split" ? "unified" : "split")}
           >
             {diffStyle === "split" ? <Rows2 /> : <Columns2 />}
@@ -140,31 +144,83 @@ export function ChangesToolbar({
         </div>
       </div>
       {scope.kind === "range" ? (
-        <div className="flex flex-wrap items-center gap-2 px-2 pb-1">
-          <label className="flex items-center gap-1 text-xs text-ink-2">
-            From
-            <Input
-              value={rangeFrom}
-              onChange={(event) => onRange(event.target.value, rangeTo)}
-              className="h-7 w-40 typed"
-              aria-label="Range start"
-            />
-          </label>
-          <label className="flex items-center gap-1 text-xs text-ink-2">
-            To
-            <Input
-              value={rangeTo}
-              onChange={(event) => onRange(rangeFrom, event.target.value)}
-              className="h-7 w-40 typed"
-              aria-label="Range end"
-            />
-          </label>
-        </div>
+        <RangeFields from={rangeFrom} to={rangeTo} onCommit={onRange} />
       ) : null}
       {agent ? <div className="px-2"><AgentCheckoutLine context={agent} /></div> : null}
       <p className={cn("px-2 text-xs text-ink-3", totals.added || totals.removed ? "sm:hidden" : "hidden")}>
         <DiffStat added={totals.added} removed={totals.removed} />
       </p>
     </header>
+  );
+}
+
+export function committedRange(
+  draftFrom: string,
+  draftTo: string,
+  from: string,
+  to: string,
+): { from: string; to: string } | null {
+  const nextFrom = draftFrom.trim();
+  const nextTo = draftTo.trim();
+  if (!nextFrom || !nextTo) return null;
+  if (nextFrom === from && nextTo === to) return null;
+  return { from: nextFrom, to: nextTo };
+}
+
+export function RangeFields({
+  from,
+  to,
+  onCommit,
+}: {
+  from: string;
+  to: string;
+  onCommit: (from: string, to: string) => void;
+}) {
+  const [draftFrom, setDraftFrom] = useState(from);
+  const [draftTo, setDraftTo] = useState(to);
+  useEffect(() => {
+    setDraftFrom(from);
+    setDraftTo(to);
+  }, [from, to]);
+  const commit = () => {
+    const next = committedRange(draftFrom, draftTo, from, to);
+    if (!next) return;
+    onCommit(next.from, next.to);
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-2 px-2 pb-1">
+      <label className="flex items-center gap-1 text-xs text-ink-2">
+        From
+        <Input
+          value={draftFrom}
+          onChange={(event) => setDraftFrom(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commit();
+            }
+          }}
+          className="h-7 w-40 text-sm [@media(pointer:coarse)]:text-base"
+          aria-label="Range start"
+        />
+      </label>
+      <label className="flex items-center gap-1 text-xs text-ink-2">
+        To
+        <Input
+          value={draftTo}
+          onChange={(event) => setDraftTo(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commit();
+            }
+          }}
+          className="h-7 w-40 text-sm [@media(pointer:coarse)]:text-base"
+          aria-label="Range end"
+        />
+      </label>
+    </div>
   );
 }

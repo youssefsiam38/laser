@@ -1,7 +1,7 @@
 /**
- * The full-screen changes overlay. Mount `ChangesOverlayHost` once in the
- * shell; call `openChanges` from a file row. Telemetry Files and the fleet
- * Changes control are owned elsewhere — see docs/leap/l5-report.md.
+ * The full-screen changes overlay. `App` mounts `ChangesOverlayHost` once;
+ * call `openChanges` from a file row. Telemetry Files and the fleet Changes
+ * control are owned elsewhere — see docs/leap/l5-report.md.
  */
 export { openChanges, closeChanges, useChangesUi, resetChangesUi } from "./store.js";
 export { ChangesOverlayHost } from "./overlay.js";
