@@ -28,6 +28,10 @@ const mocks = vi.hoisted(() => ({
   clearQueue: vi.fn(),
   takeEditorText: vi.fn(),
   fork: vi.fn(),
+  mention: undefined as undefined | {
+    matcher: (text: string, char: string, caret: number) => { query: string; offset: number } | null;
+    directive: { onInserted?: (item: { id: string; type: string; label: string }) => void };
+  },
 }));
 
 vi.mock("@/hooks/use-mobile", () => ({
@@ -49,7 +53,12 @@ vi.mock("@/components/assistant-ui/elements/context-display", () => ({
 vi.mock("@/components/assistant-ui/elements/draft-restore", () => ({ ComposerDraftRestore: () => null }));
 vi.mock("@/components/assistant-ui/elements/message-queue", () => ({ ComposerQueue: () => null }));
 vi.mock("@/components/assistant-ui/elements/quote.aui", () => ({ ComposerQuotePreview: () => null, quoteAsMarkdown: (text: string) => text }));
-vi.mock("@/components/assistant-ui/elements/composer-trigger-popover.aui", () => ({ ComposerTriggerPopover: ({ char, adapter }: { char: string; adapter: { search?: (query: string) => Array<{ label?: string }> } }) => char === "/" ? <div data-slot="slash-items">{adapter.search?.("").map((item) => item.label).join(" ")}</div> : null }));
+vi.mock("@/components/assistant-ui/elements/composer-trigger-popover.aui", () => ({ ComposerTriggerPopover: (props: { char: string; adapter: { search?: (query: string) => Array<{ label?: string }> } }) => {
+  // The `@` picker's own surface has its own tests; what this fixture needs is
+  // the wiring the real composer hands it.
+  if (props.char === "@") { mocks.mention = props as unknown as typeof mocks.mention; return null; }
+  return <div data-slot="slash-items">{props.adapter.search?.("").map((item) => item.label).join(" ")}</div>;
+} }));
 vi.mock("@/components/thread/StatusLine.js", () => ({ StatusLine: () => null }));
 vi.mock("@/components/thread/session-preparation.js", () => ({
   SessionPreparationProvider: ({ children }: { children: ReactNode }) => children,
@@ -262,6 +271,41 @@ describe("the production composer layout", () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
     });
     expect(mocks.client.request.mock.calls.filter(([method]) => method === "session/prompt" || String(method).startsWith("pi/transcribe/"))).toHaveLength(0);
+  });
+
+  // M16-T86: the composer, not a fixture, is what has to hand the picker a
+  // matcher and an insertion that share one record of finished mentions.
+  it("finishes a mention the picker inserted and draws it as a tag", async () => {
+    await setDraft("@au");
+    expect(mocks.mention?.matcher("@au", "@", 3)).toMatchObject({ query: "au", offset: 0 });
+    // What the primitive does on Enter: write the token, then say what it was.
+    await setDraft("@audit ");
+    await act(async () => mocks.mention?.directive.onInserted?.({ id: "agent:audit", type: "agent", label: "audit" }));
+    await setDraft("@audit please look");
+    expect(mocks.mention?.matcher("@audit please look", "@", 18)).toBeNull();
+    const tag = container.querySelector<HTMLElement>('[data-slot="composer-mention-tag"]')!;
+    expect(tag.dataset["mentionKind"]).toBe("agent");
+    expect(tag.textContent).toBe("@audit");
+    // The tag is drawn behind the person's own text and says nothing twice.
+    const layer = container.querySelector<HTMLElement>('[data-slot="composer-mention-layer"]')!;
+    expect(layer.getAttribute("aria-hidden")).toBe("true");
+    expect(layer.textContent).toBe("@audit please look\n");
+    expect(input().value).toBe("@audit please look");
+    // A file chosen from the picker reads as a file, and a fresh `@` still asks.
+    await setDraft("@audit please look at @./server/index.ts ");
+    await act(async () => mocks.mention?.directive.onInserted?.({ id: "file:server/index.ts", type: "file", label: "server/index.ts" }));
+    expect([...container.querySelectorAll<HTMLElement>('[data-slot="composer-mention-tag"]')].map((each) => each.dataset["mentionKind"])).toEqual(["agent", "file"]);
+    expect(mocks.mention?.matcher("@audit please look at @./server/index.ts now", "@", 44)).toBeNull();
+    expect(mocks.mention?.matcher("@audit please look at @./server/index.ts now @ser", "@", 49)).toMatchObject({ query: "ser", offset: 45 });
+
+    // The same draft on a phone: tags there too, inside the pill that keeps
+    // its own surface.
+    mocks.mobile = true; mocks.touch = true;
+    await render();
+    const pill = input().closest('[data-slot="composer-mention-field"]')!.parentElement!;
+    expect(pill.classList).toContain("rounded-full");
+    expect(pill.classList).toContain("bg-surface-2");
+    expect([...pill.querySelectorAll<HTMLElement>('[data-slot="composer-mention-tag"]')].map((each) => each.dataset["mentionKind"])).toEqual(["agent", "file"]);
   });
 
   it("removes the /project command when project setup is local-only", async () => {

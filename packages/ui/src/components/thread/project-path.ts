@@ -70,6 +70,13 @@ function parseQuotedPath(raw: string): string | undefined {
   }
 }
 
+/**
+ * The `@` query at the caret, if one is in flight. This reads text alone, so
+ * it cannot tell a chosen mention from a path still being typed — a folder
+ * name with a space looks exactly like a choice followed by prose. Which `@`
+ * is already finished is decided beside the composer's draft, by the record in
+ * `finished-mentions.ts`, and the composer uses that matcher, not this one.
+ */
 export const matchProjectMention: Unstable_TriggerMatcher = (text, char, caret) => {
   const before = text.slice(0, caret);
   const offset = before.lastIndexOf(char);
@@ -91,9 +98,23 @@ function projectMentionIdentity(path: string): string {
   return path.startsWith("./") ? path.slice(2) : path;
 }
 
-function parseReadableProjectMentions(text: string): Segment[] {
-  const segments: Segment[] = [];
-  let textStart = 0;
+/**
+ * Where each readable picker token sits in a string, in one scan.
+ *
+ * The renderer needs segments and the composer needs ranges; both read this,
+ * so a mention can never be a chip in the transcript and ordinary text in the
+ * draft that produced it.
+ */
+export type ProjectMentionSpan = {
+  readonly start: number;
+  readonly end: number;
+  readonly type: "file" | "directory";
+  readonly id: string;
+  readonly label: string;
+};
+
+export function projectMentionSpans(text: string): ProjectMentionSpan[] {
+  const spans: ProjectMentionSpan[] = [];
   for (let index = 0; index < text.length; index += 1) {
     if (text[index] !== "@" || (index > 0 && !/\s/u.test(text[index - 1]!))) continue;
     let end = index + 1;
@@ -117,10 +138,19 @@ function parseReadableProjectMentions(text: string): Segment[] {
     if (path === undefined || !hasPathAnchor(path)) continue;
     const identity = projectMentionIdentity(path);
     if (!identity) continue;
-    if (textStart < index) segments.push({ kind: "text", text: text.slice(textStart, index) });
-    segments.push({ kind: "mention", type: identity.endsWith("/") ? "directory" : "file", id: identity, label: identity });
-    textStart = end;
+    spans.push({ start: index, end, type: identity.endsWith("/") ? "directory" : "file", id: identity, label: identity });
     index = end - 1;
+  }
+  return spans;
+}
+
+function parseReadableProjectMentions(text: string): Segment[] {
+  const segments: Segment[] = [];
+  let textStart = 0;
+  for (const span of projectMentionSpans(text)) {
+    if (textStart < span.start) segments.push({ kind: "text", text: text.slice(textStart, span.start) });
+    segments.push({ kind: "mention", type: span.type, id: span.id, label: span.label });
+    textStart = span.end;
   }
   if (textStart < text.length) segments.push({ kind: "text", text: text.slice(textStart) });
   return segments.length ? segments : [{ kind: "text", text }];
