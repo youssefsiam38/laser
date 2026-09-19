@@ -5810,3 +5810,43 @@ containment and instant conversations" — two milestones sharing an ID makes
 Consequences: commits and reports written during the leap name `M18-T*`; that
 history stands, and this mapping is the record. The original M18's rows and
 notes are untouched.
+
+### D-326 · 2026-09-19 · The changes overlay is a large modal, not a second window
+Decision: the changes surface is a **modal** — inset on every side, over the
+scrim, with the app visible behind it and the project's own dialog geometry —
+rather than the edge-to-edge surface §8.1 of `docs/source-control-leap.md`
+describes. It stays effectively full-bleed only at phone width.
+Why: the person, looking at the built surface: *"the overlay should be a modal!
+it's okay to be a big modal, but at the end it is just a modal, not a new UI."*
+Edge-to-edge with its own top bar read as a second application.
+Consequences: supersedes §8.1's "full-screen" wording; Escape and the close
+control still return the person to exactly where they were with the
+conversation's scroll and draft intact, and the renderer, virtualization,
+expansion and typography are unchanged.
+
+### D-327 · 2026-09-19 · The diff keeps Pierre's rendering and takes our type
+Decision: the overlay renders with `@pierre/diffs` as adopted (split, word-level
+diffs, gutter, hunk structure, virtualization) and Laser supplies only the
+typography and the controls — `--diffs-font-family`, `--diffs-font-size`,
+`--diffs-line-height` and their siblings resolve to our tokens, on the host and
+through an appended constructed stylesheet in every shadow root.
+Why: the library drew code in `SF Mono`/`system-ui`, which does not exist on
+this machine, so a good renderer looked broken. The person's judgement on the
+direction of convergence: *"our `code-diff.tsx` actually is a basic one!
+Pierre's diff is much better."*
+Consequences: the transcript's own diff rises to this renderer later rather than
+the overlay falling back to the simpler element; §8.3's last paragraph is
+answered in that direction.
+
+### D-328 · 2026-09-19 · One background command belongs to one session
+Decision: a `BackgroundTask` id identifies one command in one session, and no
+producer may publish the same id under two session paths.
+Why: the fleet appeared to flicker — a row removed and re-added about every
+1.2 seconds. Wire capture showed the only traffic was `tasks/update`, and the
+payloads alternated the same id between two sessions; the client keys tasks by
+id, so the row moved between its agent's list and the session's own. The
+producer was this repository's sandbox, which seeded one id into every open
+session (`scripts/sandbox.mjs`).
+Consequences: the sandbox gives every session its own ids. The fleet keeps the
+guards written while chasing this — row identity independent of the section, and
+live work holding its row when a snapshot thins — because both are real hazards.
