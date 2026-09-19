@@ -29,12 +29,18 @@ const base64 = (bytes: number[]): string => {
 };
 
 /** A real PNG header: signature, IHDR, then the size the transcript reads. */
+// The payload carries body bytes as well as a header: a declared size that its
+// own payload could not possibly encode is refused as a claim rather than
+// reserved for (M16-T89), and a real picture of these dimensions is far larger
+// than its header. One byte per 1,024 pixels is comfortably inside that bound.
 const png = (width: number, height: number): string => {
   const be = (value: number): number[] => [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
+  const body = Math.ceil((width * height) / 1024);
   return `data:image/png;base64,${base64([
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
     ...be(13), 0x49, 0x48, 0x44, 0x52,
     ...be(width), ...be(height),
+    ...Array.from({ length: body }, (_, index) => index % 251),
   ])}`;
 };
 

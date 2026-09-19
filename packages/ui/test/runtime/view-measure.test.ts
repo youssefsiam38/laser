@@ -96,7 +96,10 @@ describe("exact bytes", () => {
 
 describe("image size", () => {
   it("reads PNG, GIF, JPEG and WebP dimensions from their own headers", () => {
-    expect(imageDimensions(png(2048, 1024))).toEqual({ width: 2048, height: 1024 });
+    // The fixtures carry padding because a declared size its payload could not
+    // possibly encode is refused as a claim (M16-T89): 2048×1024 needs at least
+    // 256 encoded bytes at the most generous real compression ratio.
+    expect(imageDimensions(png(2048, 1024, 512))).toEqual({ width: 2048, height: 1024 });
     expect(imageDimensions(gif(320, 200))).toEqual({ width: 320, height: 200 });
     expect(imageDimensions(jpeg(640, 480))).toEqual({ width: 640, height: 480 });
     expect(imageDimensions(webpLossy(300, 150))).toEqual({ width: 300, height: 150 });
@@ -106,7 +109,7 @@ describe("image size", () => {
     // The transcript reserves a picture's box from this before it decodes, so
     // a wrong answer is a layout that moves under a reader and a missing one
     // is only the old behaviour (M16-T87).
-    expect(dataUriImageDimensions(`data:image/png;base64,${png(2048, 1024)}`)).toEqual({ width: 2048, height: 1024 });
+    expect(dataUriImageDimensions(`data:image/png;base64,${png(2048, 1024, 512)}`)).toEqual({ width: 2048, height: 1024 });
     expect(dataUriImageDimensions(`data:image/jpeg;base64,${jpeg(640, 480)}`)).toEqual({ width: 640, height: 480 });
     // Not inline bytes at all: a remote picture, or one this window is holding
     // as a blob. Honestly unknown.
