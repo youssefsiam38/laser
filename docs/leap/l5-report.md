@@ -169,3 +169,100 @@ Removed dead `keyboard` no-op, `isViewed`, `insideShadow`. Range inputs use
 with `aria-controls` on `#changes-diff-panel`. Shortcuts listen on `document`
 so they work while the phone file sheet has focus.
 
+
+---
+
+## Crash and chrome
+
+Second pass over the overlay after the first live run against a sandbox host:
+one release blocker, then the chrome judged against `packages/ui/DESIGN.md`
+and `docs/ux-theme.md`. Files touched: `packages/ui/src/source-control/**`,
+`packages/ui/test/source-control/**`. Nothing outside that tree changed.
+
+### The blocker: opening a file took the window into the error boundary
+
+`App.tsx` mounts `ChangesOverlayHost` as a **sibling** of `Shell`, and `Shell`
+is where the app's one `TooltipProvider` lives. Every tooltip the overlay
+draws — the toolbar's icon buttons, the find bar's stepper, and now the tab
+and rail hints — therefore rendered with no provider above them, and Radix
+threw `` `Tooltip` must be used within `TooltipProvider` `` during the render
+that opened the dialog. React context does reach a portal, so the portal was
+never the cause; the mount point was. Every existing jsdom test mounted the
+host inside its own provider, so nothing caught it.
+
+Fix: `ChangesOverlaySurface` wraps the overlay and the git dialog in the
+project's own `TooltipProvider` (`packages/ui/src/source-control/overlay.tsx`).
+The overlay is a window of its own and now carries its own tooltip context
+wherever it is mounted; nesting one provider inside another is harmless, so
+this stays correct if the host is ever moved inside `Shell`.
+`components/ui/tooltip.tsx` was **not** touched: the provider is generic and
+correct, and the defect was entirely in this tree's mounting assumption.
+
+Audit of every tooltip under `src/source-control/**`: `toolbar.tsx`
+(three `TooltipIconButton`s), `overlay-find.tsx` → `ConversationSearch`
+(three more), and the hints added in this pass (`tabs.tsx`, `rail.tsx`,
+`git-toolbar.tsx`, `states.tsx`) — all inside the provider added above.
+`git-dialog.tsx` had no tooltip and now has none.
+
+Regression test: `test/source-control/overlay-chrome.test.tsx` mounts
+`<ChangesOverlayHost />` **alone**, exactly as `App.tsx` does, with no ambient
+provider, and asserts toolbar, tab strip, rail and body render. Mutation
+evidence: deleting the `TooltipProvider` wrapper from `ChangesOverlaySurface`
+turns all six tests in that file red with the production error
+`` `Tooltip` must be used within `TooltipProvider` ``; restoring it turns them
+green again.
+
+### Chrome
+
+| Change | Reason |
+| --- | --- |
+| Toolbar degrades through a planned tier (`overlayToolbarPlan`/`overlayToolbarCost` in `classify.ts`), rendered by `data-tier` | "Fits 288px" is now arithmetic that a test holds, not a hope. Labels go first ("This session" → "Session", "Git ⌄" → the icon, "Files" → the panel icon), then secondary controls (Commit into the menu, the split toggle where the body cannot hold two columns anyway), then the totals take their own line. Type size is never part of the answer. |
+| `ChangeTotals` (`totals.tsx`) replaces `DiffStat` in the toolbar and rail | `+1 204 −318`: grouped with a no-break space, mono at the 12px floor, tabular, `--ok`/`--danger` for the two directions. |
+| Git host status left the toolbar row | It was a sentence clipped to `max-w-48` with a native `title`. One `useGitToolbarState` hook now feeds both the controls and a full-width `GitHostStatusLine` under the row, in `--attention` with the whole sentence in a hint. |
+| Tab strip rebuilt | Mono name that truncates in its **middle** (`truncatableParts`, keeps `.tsx`), the status mark plus an `sr-only` status word, selected state = the body's ground plus one hairline (no filled pill), and a real close **button** that appears on hover/focus, is in the tab order, and is 44px on a coarse pointer. The old close affordance was a `role="presentation"` span: unreachable by keyboard and invisible to AT. |
+| Rail is a tree | Depth is drawn with one hairline rail per level instead of blank padding; the file name keeps its extension when it truncates; the per-file icon went (the status mark already says what the row is); `+/−` tabular and at the end; the viewed tick is invisible until it is on, focused, hovered, or on touch. Repo rows show the leaf name with the full path and branch in a hint. |
+| Body states have a shape | `ChangesNotice` is start-aligned at the body's own rhythm (`px-4`), title in `--text-md` 600, then **what happened** and **what it means or what to do**, then the act. Every designed state — binary, mode, rename, deleted, large, no-changes, no-git, untouched, unsupported, repo failed, diff failed, agent branch gone, and both loading states — now has both lines, and a test asserts each renders at least two sentences. |
+| No card inside a card | The git dialog's file list and PR comment list were bordered rounded boxes inside a dialog that is already a card; both are hairline-separated lists now. The overlay's own chrome carries no `border …-line` at all: `hairline-b/e/t` only. |
+| Icons | Loose icons (tab close, rail folder, rail tick, rail chevron) are `size-4` (16px). Icons **inside** `Button`/`TooltipIconButton` keep the size their variant sets (`sm` → 14px), which is the design system saying otherwise; overriding them would have made this one toolbar disagree with every other toolbar in the app. No icon sits in a decorative circle. |
+| Misc | `[@media(pointer:coarse)]:` → the `pointer-coarse:` variant throughout; `max-w-[40%]` → `max-w-2/5`; the phone sheet's title is a real header on a hairline. |
+
+### Mitigations, unchanged
+
+Renderer still lazy: `pnpm -F @lasercode/ui build` puts `@pierre/diffs` in
+`dist/assets/diff-body-ODMF5fC1.js` (310.16 kB / 80.31 kB gzip). The startup
+chunk `dist/assets/index-cdqguqD5.js` (2,428.44 kB / 733.28 kB gzip) contains
+no library code from it — the only `pierre` substring in it is our own
+`pierreType` field in `classify.ts`.
+
+Measured against this branch's base (`e2ebfcb7`, the same tree with this
+leap's `src/source-control` and `test/source-control` checked out and the new
+files removed):
+
+| chunk | before | after |
+| --- | --- | --- |
+| startup `index-*.js` | 2,423.81 kB / 731.56 kB gzip | 2,428.44 kB / 733.28 kB gzip |
+| renderer `diff-body-*.js` | 310.16 kB / 80.31 kB gzip | 310.16 kB / 80.31 kB gzip |
+
+— `+4.63 kB` raw, `+1.72 kB` gzip in the startup chunk for the toolbar plan,
+the totals component, the hints and the longer state copy; the renderer chunk
+is byte-identical and still nowhere near startup.
+`test/source-control/diff-body-guard.test.ts` still pins the split. Our own
+empty states, the 320px unified fallback, bounded expansion and
+`disableWorkerPool` are untouched.
+
+### Validation
+
+```
+pnpm install --frozen-lockfile    # lockfile up to date
+pnpm -F @lasercode/ui test        # 307 files, 2815 passed, 1 skipped
+pnpm -F @lasercode/ui typecheck   # clean
+pnpm -F @lasercode/ui build       # chunks above
+pnpm identity:check               # after git add: clean
+```
+
+Source-control tests alone: 21 files, 91 passed. New: `overlay-chrome.test.tsx`
+(6, mount-shaped, pointer and keyboard), `toolbar-fit.test.tsx` (4, the 288px
+plan and the header that obeys it), `chrome-tokens.test.ts` (3, no literal
+colour, no raw type size, no arbitrary spacing step, no card in a card).
+No Playwright, no browser matrix, no `pnpm verify`: the visual review is the
+orchestrator's.
