@@ -5,6 +5,7 @@ import type {
   ClientMethod,
   ClientRequests,
   FileSlice,
+  GitActionExpect,
   ProjectChanges,
   ProjectChangesParams,
 } from "@lasercode/protocol";
@@ -192,5 +193,99 @@ export function createHostChangesAdapter(opts: {
       }
       return mapAgentRunContext(run);
     },
+    async gitHosts(repos) {
+      const session = needSession();
+      return opts.request("pi/project/git/hosts", {
+        cwd: session.cwd,
+        ...(repos && repos.length ? { repos } : {}),
+      });
+    },
+    async gitProse(params) {
+      const session = needSession();
+      return opts.request("pi/project/git/prose", {
+        cwd: session.cwd,
+        path: session.path,
+        kind: params.kind,
+        files: params.files,
+        ...(params.repo ? { repo: params.repo } : {}),
+        ...(params.summary ? { summary: params.summary } : {}),
+      });
+    },
+    async gitCommit(params) {
+      const session = needSession();
+      return opts.request("pi/project/git/commit", {
+        cwd: session.cwd,
+        paths: params.paths,
+        message: params.message,
+        ...gitWriteFields(params),
+      });
+    },
+    async gitPush(params) {
+      const session = needSession();
+      return opts.request("pi/project/git/push", {
+        cwd: session.cwd,
+        remote: params.remote,
+        branch: params.branch,
+        ...gitWriteFields(params),
+      });
+    },
+    async gitBranch(params) {
+      const session = needSession();
+      return opts.request("pi/project/git/branch", {
+        cwd: session.cwd,
+        name: params.name,
+        base: params.base,
+        ...(params.checkout ? { checkout: true } : {}),
+        ...gitWriteFields(params),
+      });
+    },
+    async gitPrCreate(params) {
+      const session = needSession();
+      return opts.request("pi/project/pr/create", {
+        cwd: session.cwd,
+        title: params.title,
+        body: params.body,
+        base: params.base,
+        head: params.head,
+        ...gitWriteFields(params),
+      });
+    },
+    async gitPrRead(params) {
+      const session = needSession();
+      return opts.request("pi/project/pr/read", {
+        cwd: session.cwd,
+        number: params.number,
+        ...(params.repo ? { repo: params.repo } : {}),
+      });
+    },
+    async gitPrCheckout(params) {
+      const session = needSession();
+      return opts.request("pi/project/pr/checkout", {
+        cwd: session.cwd,
+        number: params.number,
+        ...gitWriteFields(params),
+      });
+    },
+    async gitPrMerge(params) {
+      const session = needSession();
+      return opts.request("pi/project/pr/merge", {
+        cwd: session.cwd,
+        number: params.number,
+        method: params.method,
+        ...gitWriteFields(params),
+      });
+    },
+  };
+}
+
+function gitWriteFields(params: { repo?: string; confirm?: boolean; expect?: GitActionExpect }): {
+  repo?: string;
+  confirm?: true;
+  expect?: GitActionExpect;
+} {
+  return {
+    ...(params.repo ? { repo: params.repo } : {}),
+    ...(params.confirm === true ? { confirm: true as const } : {}),
+    ...(params.expect ? { expect: params.expect } : {}),
   };
 }

@@ -4,6 +4,21 @@
  * the sandbox register the mock explicitly.
  */
 import type {
+  GitActionExpect,
+  GitBranchResult,
+  GitCommitResult,
+  GitHostsResult,
+  GitPrCheckoutResult,
+  GitPrCreateResult,
+  GitPrMergeResult,
+  GitPrMergeMethod,
+  GitProseKind,
+  GitProseResult,
+  GitPrReadResult,
+  GitPushResult,
+} from "@lasercode/protocol";
+
+import type {
   AgentChangesContext,
   ChangesList,
   ChangesScope,
@@ -17,6 +32,53 @@ export type ChangesDataAdapter = {
   getFileDiff(scope: ChangesScope, repo: string, path: string, options?: { offset?: number }): Promise<FileDiffPage>;
   getFileSource?(scope: ChangesScope, repo: string, path: string, ref: "old" | "new"): Promise<FileSource | null>;
   getAgentContext?(runId: string): Promise<AgentChangesContext>;
+  gitHosts?(repos?: string[]): Promise<GitHostsResult>;
+  gitProse?(params: { kind: GitProseKind; files: string[]; repo?: string; summary?: string }): Promise<GitProseResult>;
+  gitCommit?(params: {
+    repo?: string;
+    paths: string[];
+    message: string;
+    confirm?: boolean;
+    expect?: GitActionExpect;
+  }): Promise<GitCommitResult>;
+  gitPush?(params: {
+    repo?: string;
+    remote: string;
+    branch: string;
+    confirm?: boolean;
+    expect?: GitActionExpect;
+  }): Promise<GitPushResult>;
+  gitBranch?(params: {
+    repo?: string;
+    name: string;
+    base: string;
+    checkout?: boolean;
+    confirm?: boolean;
+    expect?: GitActionExpect;
+  }): Promise<GitBranchResult>;
+  gitPrCreate?(params: {
+    repo?: string;
+    title: string;
+    body: string;
+    base: string;
+    head: string;
+    confirm?: boolean;
+    expect?: GitActionExpect;
+  }): Promise<GitPrCreateResult>;
+  gitPrRead?(params: { repo?: string; number: number }): Promise<GitPrReadResult>;
+  gitPrCheckout?(params: {
+    repo?: string;
+    number: number;
+    confirm?: boolean;
+    expect?: GitActionExpect;
+  }): Promise<GitPrCheckoutResult>;
+  gitPrMerge?(params: {
+    repo?: string;
+    number: number;
+    method: GitPrMergeMethod;
+    confirm?: boolean;
+    expect?: GitActionExpect;
+  }): Promise<GitPrMergeResult>;
 };
 
 export type ChangesAdapterSource = "none" | "host" | "custom";
