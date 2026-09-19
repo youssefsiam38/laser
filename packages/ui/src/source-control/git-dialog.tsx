@@ -76,7 +76,7 @@ function GitCopyableCommand({ copyable }: { copyable: GitActionCopyable }) {
     <div data-slot="git-action-copyable" className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
         <span className="eyebrow">Command</span>
-        <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" onClick={() => void copy(command)}>
+        <Button variant="ghost" size="sm" className="pointer-coarse:min-h-11" onClick={() => void copy(command)}>
           {copied ? <Check className="text-ok" /> : <Copy />}
           {copied ? "Copied" : "Copy"}
         </Button>
@@ -122,9 +122,11 @@ function GitConfirmation({ confirmation }: { confirmation: GitActionConfirmation
         ) : null}
       </dl>
       {confirmation.files?.length ? (
-        <ul className="max-h-32 overflow-y-auto rounded-lg border border-line bg-surface-2 px-3 py-2">
+        /* One hairline above the list, not a box around it: the dialog is
+           already the card this sits in. */
+        <ul className="max-h-32 overflow-y-auto hairline-t pt-2">
           {confirmation.files.map((file) => (
-            <li key={file} className="typed truncate text-xs text-ink" title={file}>
+            <li key={file} className="typed truncate text-ink-2">
               {file}
             </li>
           ))}
@@ -170,16 +172,16 @@ function GitOutcomeView({
       </p>
       {copyable ? <GitCopyableCommand copyable={copyable} /> : null}
       <DialogFooter>
-        <Button variant="ghost" className="[@media(pointer:coarse)]:min-h-11" onClick={onClose}>
+        <Button variant="ghost" className="pointer-coarse:min-h-11" onClick={onClose}>
           {isDone ? "Close" : "Cancel"}
         </Button>
         {isRefused && onReviewAgain ? (
-          <Button className="[@media(pointer:coarse)]:min-h-11" onClick={onReviewAgain}>
+          <Button className="pointer-coarse:min-h-11" onClick={onReviewAgain}>
             Review again
           </Button>
         ) : null}
         {isDone && kind === "pull-request-create" && prUrlOf(result) ? (
-          <Button asChild className="[@media(pointer:coarse)]:min-h-11">
+          <Button asChild className="pointer-coarse:min-h-11">
             <a href={prUrlOf(result)} target="_blank" rel="noreferrer">
               Open pull request
             </a>
@@ -297,12 +299,12 @@ function FormFooter({
 }) {
   return (
     <DialogFooter>
-      <Button variant="ghost" className="[@media(pointer:coarse)]:min-h-11" onClick={onCancel} disabled={busy}>
+      <Button variant="ghost" className="pointer-coarse:min-h-11" onClick={onCancel} disabled={busy}>
         Cancel
       </Button>
       {extra}
       <Button
-        className="[@media(pointer:coarse)]:min-h-11"
+        className="pointer-coarse:min-h-11"
         onClick={onConfirm}
         disabled={confirmDisabled || busy}
         aria-busy={confirmBusy || undefined}
@@ -432,7 +434,7 @@ function CommitBody({ repo }: { repo: string }) {
           {files.map((file) => (
             <label
               key={file.path}
-              className="flex min-h-8 items-center gap-2 rounded-md px-1 text-sm [@media(pointer:coarse)]:min-h-11"
+              className="flex min-h-8 items-center gap-2 rounded-md px-1 text-sm pointer-coarse:min-h-11"
             >
               <input
                 type="checkbox"
@@ -481,7 +483,7 @@ function CommitBody({ repo }: { repo: string }) {
           !canConfirm && !empty ? (
             <Button
               variant="outline"
-              className="[@media(pointer:coarse)]:min-h-11"
+              className="pointer-coarse:min-h-11"
               disabled={busy !== null || !paths.length || !message.trim()}
               onClick={() => void runPreview()}
             >
@@ -658,7 +660,7 @@ function BranchBody({ repo }: { repo: string }) {
           aria-label="Branch name"
           value={name}
           onChange={(event) => setName(event.target.value)}
-          className="[@media(pointer:coarse)]:min-h-11"
+          className="pointer-coarse:min-h-11"
         />
       </label>
       <label className="flex flex-col gap-1">
@@ -667,10 +669,10 @@ function BranchBody({ repo }: { repo: string }) {
           aria-label="Base revision"
           value={base}
           onChange={(event) => setBase(event.target.value)}
-          className="typed [@media(pointer:coarse)]:min-h-11"
+          className="typed pointer-coarse:min-h-11"
         />
       </label>
-      <label className="flex min-h-8 items-center gap-2 text-sm [@media(pointer:coarse)]:min-h-11">
+      <label className="flex min-h-8 items-center gap-2 text-sm pointer-coarse:min-h-11">
         <input
           type="checkbox"
           className="size-4 accent-[var(--live)]"
@@ -813,7 +815,7 @@ function PrCreateBody({ repo }: { repo: string }) {
           aria-label="Pull request title"
           value={title}
           onChange={(event) => setTitle(event.target.value)}
-          className="[@media(pointer:coarse)]:min-h-11"
+          className="pointer-coarse:min-h-11"
         />
       </label>
       <label className="flex flex-col gap-1">
@@ -980,12 +982,12 @@ function PrReadBody({ repo }: { repo: string }) {
               void runRead();
             }
           }}
-          className="tnum [@media(pointer:coarse)]:min-h-11"
+          className="tnum pointer-coarse:min-h-11"
         />
       </label>
       <Button
         variant="outline"
-        className="self-start [@media(pointer:coarse)]:min-h-11"
+        className="self-start pointer-coarse:min-h-11"
         disabled={busy !== null || number === undefined}
         onClick={() => void runRead()}
       >
@@ -1025,10 +1027,10 @@ function PrReadBody({ repo }: { repo: string }) {
           {pullRequest.comments.length ? (
             <div>
               <p className="eyebrow mb-1">Comments</p>
-              <ul className="flex flex-col gap-2">
+              <ul className="flex flex-col">
                 {pullRequest.comments.map((comment) => (
-                  <li key={comment.id} className="rounded-lg border border-line bg-surface-2 px-3 py-2">
-                    <p className="typed text-xs text-ink-3">{comment.author}</p>
+                  <li key={comment.id} className="flex flex-col gap-0.5 hairline-t py-2 first:border-t-0 first:pt-0">
+                    <p className="typed text-ink-3">{comment.author}</p>
                     <p className="whitespace-pre-wrap text-sm text-ink">{comment.body}</p>
                   </li>
                 ))}
@@ -1047,7 +1049,7 @@ function PrReadBody({ repo }: { repo: string }) {
                     role="radio"
                     aria-checked={method === option}
                     className={cn(
-                      "h-7 rounded-full border px-2.5 text-xs font-medium outline-none [@media(pointer:coarse)]:min-h-11",
+                      "h-7 rounded-full border px-2.5 text-xs font-medium outline-none pointer-coarse:min-h-11",
                       "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
                       method === option
                         ? "border-transparent bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live"
@@ -1072,13 +1074,13 @@ function PrReadBody({ repo }: { repo: string }) {
         </p>
       ) : null}
       <DialogFooter>
-        <Button variant="ghost" className="[@media(pointer:coarse)]:min-h-11" onClick={clearGitAction} disabled={busy !== null}>
+        <Button variant="ghost" className="pointer-coarse:min-h-11" onClick={clearGitAction} disabled={busy !== null}>
           Cancel
         </Button>
         {pullRequest ? (
           <Button
             variant="outline"
-            className="[@media(pointer:coarse)]:min-h-11"
+            className="pointer-coarse:min-h-11"
             disabled={busy !== null}
             onClick={() => void (intent === "checkout" && offersMutation(preview?.outcome) ? runConfirm() : runPreview("checkout"))}
           >
@@ -1093,7 +1095,7 @@ function PrReadBody({ repo }: { repo: string }) {
         ) : null}
         {pullRequest?.state === "open" ? (
           <Button
-            className="[@media(pointer:coarse)]:min-h-11"
+            className="pointer-coarse:min-h-11"
             disabled={busy !== null || !mergeMethodAllowed(host, method)}
             onClick={() => void (intent === "merge" && offersMutation(preview?.outcome) ? runConfirm() : runPreview("merge"))}
           >

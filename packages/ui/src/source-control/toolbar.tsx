@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, Columns2, Rows2, X } from "lucide-react";
+import { ChevronDown, Columns2, PanelLeft, Rows2, X } from "lucide-react";
 
-import { DiffStat } from "@/components/assistant-ui/elements/code-diff.js";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -17,21 +16,26 @@ import { cn } from "@/lib/utils";
 
 import type { WorkspaceRepository } from "@lasercode/protocol";
 
-import { scopeLabel } from "./classify.js";
+import { scopeLabel, scopeShortLabel, type OverlayToolbarPlan } from "./classify.js";
 import type { AgentChangesContext, ChangesScope, ChangesScopeKind, ChangedRepo } from "./contract.js";
-import { ChangesGitActions } from "./git-toolbar.js";
+import { ChangesGitActions, GitHostStatusLine, useGitToolbarState } from "./git-toolbar.js";
 import type { DiffStylePref } from "./prefs.js";
 import { AgentCheckoutLine } from "./states.js";
+import { ChangeTotals } from "./totals.js";
+import { repoLeafName } from "./git-model.js";
 import { shouldShowRepoFilter } from "./workspace-shape.js";
 
 const SCOPES: ChangesScopeKind[] = ["session", "turn", "uncommitted", "range", "agent"];
+
+const ALL_REPOSITORIES = "All repositories";
+const ALL_REPOSITORIES_SHORT = "All repos";
 
 export function ChangesToolbar({
   scope,
   repos,
   workspaceRepos,
   repoFilter,
-  totals,
+  totals: totalCounts,
   agent,
   rangeFrom,
   rangeTo,
@@ -39,7 +43,7 @@ export function ChangesToolbar({
   canAgent,
   turnId,
   runId,
-  chrome,
+  plan,
   diffStyle,
   unifiedFallback,
   onScope,
@@ -62,7 +66,8 @@ export function ChangesToolbar({
   canAgent: boolean;
   turnId?: string;
   runId?: string;
-  chrome: "phone" | "desktop";
+  /** What this width can carry (`overlayToolbarPlan`); never a type size. */
+  plan: OverlayToolbarPlan;
   diffStyle: DiffStylePref;
   unifiedFallback: boolean;
   onScope: (scope: ChangesScope) => void;
@@ -78,6 +83,44 @@ export function ChangesToolbar({
     ? workspaceRepos.map((repo) => ({ value: repo.root, label: repo.name }))
     : namedRepos.map((repo) => ({ value: repo.repo, label: repo.repo }));
   const showRepos = shouldShowRepoFilter(filterEntries.length);
+  const gitState = useGitToolbarState({ repos, repoFilter, ...(activeRepo ? { activeRepo } : {}) });
+  const long = plan.repo === "long";
+  const repoText = repoFilter
+    ? long
+      ? repoFilter
+      : repoLeafName(repoFilter)
+    : long
+      ? ALL_REPOSITORIES
+      : ALL_REPOSITORIES_SHORT;
+  const totals = (
+    <ChangeTotals added={totalCounts.added} removed={totalCounts.removed} empty="no changes" />
+  );
+  const repoPicker = showRepos ? (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          data-slot="changes-repo-filter"
+          aria-label={`Repository filter: ${repoText}`}
+          className={cn("min-w-0 gap-1 pointer-coarse:min-h-11", long ? "max-w-44" : "max-w-28")}
+        >
+          <span className="typed min-w-0 truncate">{repoText}</span>
+          <ChevronDown />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <DropdownMenuRadioGroup value={repoFilter ?? ""} onValueChange={(value) => onRepoFilter(value || null)}>
+          <DropdownMenuRadioItem value="">{ALL_REPOSITORIES}</DropdownMenuRadioItem>
+          {filterEntries.map((repo) => (
+            <DropdownMenuRadioItem key={repo.value} value={repo.value}>
+              <span className="typed">{repo.label}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ) : null;
   const pickScope = (kind: string) => {
     if (kind === "session") onScope({ kind: "session" });
     else if (kind === "uncommitted") onScope({ kind: "uncommitted" });
@@ -87,18 +130,36 @@ export function ChangesToolbar({
   };
 
   return (
-    <header data-slot="changes-toolbar" className="flex shrink-0 flex-col gap-1 border-b border-line px-2 py-1.5 pt-[env(safe-area-inset-top)]">
+    <header
+      data-slot="changes-toolbar"
+      data-tier={plan.tier}
+      className="flex shrink-0 flex-col gap-1 hairline-b px-2 py-1.5 pt-[env(safe-area-inset-top)]"
+    >
       <div className="flex min-w-0 items-center gap-1">
-        {chrome === "phone" ? (
-          <Button variant="ghost" size="sm" onClick={onOpenTree} className="[@media(pointer:coarse)]:min-h-11">
-            Files
-          </Button>
+        {plan.tree !== "hidden" ? (
+          plan.tree === "icon" ? (
+            <TooltipIconButton tooltip="Changed files" shortcut="B" side="bottom" onClick={onOpenTree}>
+              <PanelLeft />
+            </TooltipIconButton>
+          ) : (
+            <Button variant="ghost" size="sm" onClick={onOpenTree} className="gap-1.5 pointer-coarse:min-h-11">
+              <PanelLeft />
+              Files
+            </Button>
+          )
         ) : null}
-        <h1 className="px-2 text-sm font-semibold text-ink">Changes</h1>
+        {plan.title ? <h1 className="px-1 text-sm font-semibold text-ink">Changes</h1> : null}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className="gap-1 [@media(pointer:coarse)]:min-h-11">
-              {scopeLabel(scope.kind)}
+            <Button
+              variant="ghost"
+              size="sm"
+              /* The accessible name carries the visible words verbatim, so the
+                 short label is still what a voice user says. */
+              aria-label={`Scope: ${plan.scope === "long" ? scopeLabel(scope.kind) : scopeShortLabel(scope.kind)}`}
+              className="gap-1 pointer-coarse:min-h-11"
+            >
+              {plan.scope === "long" ? scopeLabel(scope.kind) : scopeShortLabel(scope.kind)}
               <ChevronDown />
             </Button>
           </DropdownMenuTrigger>
@@ -116,55 +177,41 @@ export function ChangesToolbar({
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-        {showRepos ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" data-slot="changes-repo-filter" className="max-w-40 gap-1 [@media(pointer:coarse)]:min-h-11">
-                <span className="typed min-w-0 truncate">{repoFilter ?? "All repositories"}</span>
-                <ChevronDown />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuRadioGroup value={repoFilter ?? ""} onValueChange={(value) => onRepoFilter(value || null)}>
-                <DropdownMenuRadioItem value="">All repositories</DropdownMenuRadioItem>
-                {filterEntries.map((repo) => (
-                  <DropdownMenuRadioItem key={repo.value} value={repo.value}>
-                    <span className="typed">{repo.label}</span>
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        {plan.totals === "row" ? (
+          <>
+            {repoPicker}
+            <span className="ms-1">{totals}</span>
+          </>
         ) : null}
-        <DiffStat added={totals.added} removed={totals.removed} className="ms-1 hidden sm:inline-flex" />
         <div className="ms-auto flex min-w-0 items-center gap-1">
-          <TooltipIconButton
-            tooltip={unifiedFallback ? "Split needs two columns of code" : diffStyle === "split" ? "Unified view" : "Split view"}
-            {...(unifiedFallback ? {} : { shortcut: "U" })}
-            disabled={unifiedFallback}
-            onClick={() => onDiffStyle(diffStyle === "split" ? "unified" : "split")}
-          >
-            {diffStyle === "split" ? <Rows2 /> : <Columns2 />}
-          </TooltipIconButton>
-          <ChangesGitActions
-            repos={repos}
-            repoFilter={repoFilter}
-            chrome={chrome}
-            {...(activeRepo ? { activeRepo } : {})}
-          />
-          <Kbd className="hidden sm:inline-flex">Esc</Kbd>
+          {plan.split ? (
+            <TooltipIconButton
+              tooltip={unifiedFallback ? "Split needs two columns of code" : diffStyle === "split" ? "Unified view" : "Split view"}
+              {...(unifiedFallback ? {} : { shortcut: "U" })}
+              disabled={unifiedFallback}
+              onClick={() => onDiffStyle(diffStyle === "split" ? "unified" : "split")}
+            >
+              {diffStyle === "split" ? <Rows2 /> : <Columns2 />}
+            </TooltipIconButton>
+          ) : null}
+          <ChangesGitActions state={gitState} git={plan.git} commit={plan.commit} />
+          {plan.esc ? <Kbd>Esc</Kbd> : null}
           <TooltipIconButton tooltip="Close" shortcut="Esc" onClick={onClose}>
             <X />
           </TooltipIconButton>
         </div>
       </div>
+      {plan.totals === "second-row" ? (
+        <div className="flex min-w-0 items-center gap-1">
+          {repoPicker}
+          <span className="ms-auto pe-1">{totals}</span>
+        </div>
+      ) : null}
       {scope.kind === "range" ? (
         <RangeFields from={rangeFrom} to={rangeTo} onCommit={onRange} />
       ) : null}
-      {agent ? <div className="px-2"><AgentCheckoutLine context={agent} /></div> : null}
-      <p className={cn("px-2 text-xs text-ink-3", totals.added || totals.removed ? "sm:hidden" : "hidden")}>
-        <DiffStat added={totals.added} removed={totals.removed} />
-      </p>
+      {agent ? <AgentCheckoutLine context={agent} className="px-1" /> : null}
+      <GitHostStatusLine state={gitState} className="px-1" />
     </header>
   );
 }
@@ -203,7 +250,7 @@ export function RangeFields({
     onCommit(next.from, next.to);
   };
   return (
-    <div className="flex flex-wrap items-center gap-2 px-2 pb-1">
+    <div className="flex flex-wrap items-center gap-2 px-1 pb-1">
       <label className="flex items-center gap-1 text-xs text-ink-2">
         From
         <Input
@@ -216,7 +263,7 @@ export function RangeFields({
               commit();
             }
           }}
-          className="h-7 w-40 text-sm [@media(pointer:coarse)]:text-base"
+          className="h-7 w-40 text-sm pointer-coarse:text-base"
           aria-label="Range start"
         />
       </label>
@@ -232,7 +279,7 @@ export function RangeFields({
               commit();
             }
           }}
-          className="h-7 w-40 text-sm [@media(pointer:coarse)]:text-base"
+          className="h-7 w-40 text-sm pointer-coarse:text-base"
           aria-label="Range end"
         />
       </label>

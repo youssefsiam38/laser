@@ -1,7 +1,10 @@
 import { expect, it } from "vitest";
 import {
   LARGE_DIFF_LINE_LIMIT,
+  changeCount,
   classifyEmptyBody,
+  scopeShortLabel,
+  truncatableParts,
   fileLineCount,
   listTotals,
   modeWords,
@@ -53,6 +56,35 @@ it("names a mode change in words and totals a repo list", () => {
     { repo: "broken", branch: "", files: [], error: "missing" },
   ];
   expect(listTotals(repos)).toEqual({ added: 2, removed: 1, files: 1 });
+});
+
+it("keeps the file's name and extension when a label has to truncate", () => {
+  // The head ellipsizes in CSS; the tail is pinned, so `.tsx` always shows.
+  expect(truncatableParts("transcript-viewport.tsx", "file")).toEqual({
+    head: "transcript-viewport",
+    tail: ".tsx",
+  });
+  expect(truncatableParts("packages/ui/src/source-control", "path")).toEqual({
+    head: "packages/ui/src",
+    tail: "/source-control",
+  });
+  // A tail longer than the pin is not worth reserving the row's width for.
+  expect(truncatableParts("src/a-very-long-directory-name", "path")).toEqual({
+    head: "src/a-very-long-directory-name",
+    tail: "",
+  });
+  // A tail nobody could read past an ellipsis is not worth pinning.
+  expect(truncatableParts("Makefile", "file")).toEqual({ head: "Makefile", tail: "" });
+  expect(truncatableParts(".gitignore", "file")).toEqual({ head: ".gitignore", tail: "" });
+  expect(truncatableParts("archive.tar.gz", "file")).toEqual({ head: "archive.tar", tail: ".gz" });
+  expect(truncatableParts("src/lib", "path")).toEqual({ head: "src", tail: "/lib" });
+});
+
+it("groups a total with a space that never wraps, and shortens a scope word", () => {
+  expect(changeCount(1204)).toBe("1\u00a0204");
+  expect(changeCount(318)).toBe("318");
+  expect(scopeShortLabel("session")).toBe("Session");
+  expect(scopeShortLabel("uncommitted")).toBe("Uncommitted");
 });
 
 it("counts patch value matches and skips hunk chrome", () => {
