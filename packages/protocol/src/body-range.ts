@@ -1045,6 +1045,20 @@ export function entryToolCalls(entry: unknown): Array<{ id: string; name: string
  */
 export const ELIDED_RECORD_MAX_BYTES = 1024 * 1024 - 64 * 1024;
 
+/**
+ * The ceilings a page tries in turn when even its smallest plan does not fit.
+ * The smallest plan is not always one record — a tool result travels with the
+ * call it answers — so one record just under the ceiling can still overflow
+ * beside its partner. Each step elides more, the last is small enough that any
+ * group of records fits, and a page is therefore never refused for size.
+ */
+export const ELIDED_RECORD_LIMITS: readonly number[] = [
+  ELIDED_RECORD_MAX_BYTES,
+  256 * 1024,
+  64 * 1024,
+  8 * 1024,
+];
+
 const recordBytes = new WeakMap<object, number>();
 
 /**

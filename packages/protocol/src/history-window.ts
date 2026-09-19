@@ -2,7 +2,7 @@ import type { HistoryLiveSnapshot, HistoryWindow, HistoryWindowRequest } from ".
 import { goalPromptId } from "./goal-presentation.js";
 import { ErrorCodes } from "./jsonrpc.js";
 import { ProtocolError } from "./schemas.js";
-import { elideOversizedEntries } from "./body-range.js";
+import { ELIDED_RECORD_LIMITS, ELIDED_RECORD_MAX_BYTES, elideOversizedEntries } from "./body-range.js";
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
 const changed = (): never => { throw new ProtocolError(ErrorCodes.InvalidParams, "This history changed. Reload the conversation and try again."); };
@@ -391,17 +391,26 @@ export function boundedHistoryWindow(
   bodies?: { limit?: number; digest: (text: string) => string },
 ): { entries: unknown[]; leafId: string | null; window: HistoryWindow } | undefined {
   const nodes = snapshot.entries.map(historyWindowNode);
-  const elide = (indices: readonly number[]): { entries: unknown[]; elided: unknown[] } =>
-    elideOversizedEntries(indices.map(index => snapshot.entries[index]), bodies!.limit, bodies!.digest);
-  const fits = (candidate: HistoryWindowPlan): boolean => {
+  const elide = (indices: readonly number[], recordLimit: number): { entries: unknown[]; elided: unknown[] } =>
+    elideOversizedEntries(indices.map(index => snapshot.entries[index]), bodies!.limit, bodies!.digest, recordLimit);
+  const fitsAt = (recordLimit: number) => (candidate: HistoryWindowPlan): boolean => {
     if (!bodies) return historyWindowFits(snapshot, candidate);
-    const page = elide(candidate.entryIndices);
-    const context = elide(candidate.contextIndices);
+    const page = elide(candidate.entryIndices, recordLimit);
+    const context = elide(candidate.contextIndices, recordLimit);
     if (page.entries.length + page.elided.length > HISTORY_PAGE_ENTRY_LIMIT) return false;
     return historyContentSerializedBytes(page.entries, context.entries)
       + historyContentSerializedBytes(page.elided, context.elided) <= HISTORY_PAGE_BYTE_LIMIT;
   };
-  const plan = fitHistoryWindowPlan(nodes, snapshot.leafId, request, scope, fits);
+  // The first ceiling that lets this page fit. Ordinary pages settle on the
+  // first one and pay a single search; only a page carrying something enormous
+  // beside its neighbour goes further (M16-T88).
+  let plan: HistoryWindowPlan | undefined;
+  let recordLimit = ELIDED_RECORD_LIMITS[0]!;
+  for (const limit of bodies ? ELIDED_RECORD_LIMITS : [ELIDED_RECORD_LIMITS[0]!]) {
+    recordLimit = limit;
+    plan = fitHistoryWindowPlan(nodes, snapshot.leafId, request, scope, fitsAt(limit));
+    if (plan) break;
+  }
   if (!plan) {
     // The terminating floor (M16-T88). An indivisible request is refused as
     // before; a bounded one cannot be, because elision bounds every record it
@@ -418,7 +427,7 @@ export function boundedHistoryWindow(
         scope,
         true,
       );
-      const page = elide(smallest.entryIndices);
+      const page = elide(smallest.entryIndices, ELIDED_RECORD_LIMITS.at(-1)!);
       const records = historyContentSerializedBytes(page.entries, []) + historyContentSerializedBytes(page.elided, []);
       if (records > HISTORY_PAGE_BYTE_LIMIT) {
         throw new Error(`A single-record history page is ${records} bytes after elision: elision did not bound this record.`);
@@ -429,7 +438,7 @@ export function boundedHistoryWindow(
     return undefined;
   }
   const materialized = materializeHistoryWindow(snapshot, plan);
-  return bodies ? withElidedBodies(materialized, bodies.limit, bodies.digest) : materialized;
+  return bodies ? withElidedBodies(materialized, bodies.limit, bodies.digest, recordLimit) : materialized;
 }
 
 /** Apply RP-5b's per-body limit to an already materialized page. */
@@ -437,9 +446,10 @@ export function withElidedBodies(
   page: { entries: unknown[]; leafId: string | null; window: HistoryWindow },
   bodyLimit: number | undefined,
   digest: (text: string) => string,
+  recordLimit = ELIDED_RECORD_MAX_BYTES,
 ): { entries: unknown[]; leafId: string | null; window: HistoryWindow } {
-  const selected = elideOversizedEntries(page.entries, bodyLimit, digest);
-  const context = elideOversizedEntries(page.window.context, bodyLimit, digest);
+  const selected = elideOversizedEntries(page.entries, bodyLimit, digest, recordLimit);
+  const context = elideOversizedEntries(page.window.context, bodyLimit, digest, recordLimit);
   const elided = [...selected.elided, ...context.elided];
   return {
     entries: selected.entries,
