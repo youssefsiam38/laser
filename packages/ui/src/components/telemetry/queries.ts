@@ -2,10 +2,14 @@
  * Session telemetry and git-change reads for the monitor column.
  * Data, not chrome — `TelemetryPanel` only paints.
  */
-import { useEffect, useState } from "react";
-import type { ProjectChanges, SessionTelemetry, SessionUpdateParams } from "@lasercode/protocol";
+import { useEffect, useRef, useState } from "react";
+import type { ProjectChanges, SessionTelemetry, SessionUpdateParams, WorkspaceShape } from "@lasercode/protocol";
 
 import { personFacingChangesError } from "@/source-control/errors.js";
+import {
+  bindWorkspaceShapeRequest,
+  readWorkspaceShape,
+} from "@/source-control/workspace-shape.js";
 import { useLaserStable, useLaserState } from "@/runtime";
 
 import { filesErrorText, type FilesStatus } from "./format.js";
@@ -89,5 +93,55 @@ export function useSessionChanges(
       cancelled = true;
     };
   }, [client, path, cwd, refreshKey]);
+  return state;
+}
+
+export type WorkspaceShapeStatus = "idle" | "loading" | "ready" | "error";
+
+/**
+ * Workspace shape for the current project. Shares the source-control reader
+ * cache with the overlay: one `pi/project/workspace` per cwd, and again only
+ * when `refreshKey` changes.
+ */
+export function useWorkspaceShape(
+  cwd: string | undefined,
+  refreshKey = 0,
+): { status: WorkspaceShapeStatus; shape?: WorkspaceShape } {
+  const stable = useLaserStable() as { client?: { request: (method: "pi/project/workspace", params: { cwd: string; rescan?: boolean }) => Promise<WorkspaceShape> } };
+  const client = stable.client;
+  const [state, setState] = useState<{ status: WorkspaceShapeStatus; shape?: WorkspaceShape }>({
+    status: "idle",
+  });
+  const prevRefresh = useRef(refreshKey);
+
+  useEffect(() => {
+    if (!client) return;
+    bindWorkspaceShapeRequest((params) => client.request("pi/project/workspace", params));
+  }, [client]);
+
+  useEffect(() => {
+    if (!cwd || !client) {
+      setState({ status: "idle" });
+      return;
+    }
+    const rescan = prevRefresh.current !== refreshKey;
+    prevRefresh.current = refreshKey;
+    let cancelled = false;
+    setState((current) => {
+      if (current.shape && !rescan) return current;
+      return current.shape ? { status: "loading", shape: current.shape } : { status: "loading" };
+    });
+    void readWorkspaceShape(cwd, rescan ? { rescan: true } : undefined).then(
+      (shape) => {
+        if (!cancelled) setState({ status: "ready", shape });
+      },
+      () => {
+        if (!cancelled) setState({ status: "error" });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [client, cwd, refreshKey]);
   return state;
 }

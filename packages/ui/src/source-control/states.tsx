@@ -9,6 +9,7 @@ import { formatBytes } from "@/format";
 import type { EmptyBody } from "./classify.js";
 import { modeWords } from "./classify.js";
 import type { AgentChangesContext } from "./contract.js";
+import { overlayWorkspaceEmptyCopy, type WorkspaceEmptyKind } from "./workspace-shape.js";
 
 export function ChangesNotice({
   title,
@@ -34,6 +35,17 @@ export function NoChangesState() {
   return (
     <ChangesNotice title="Nothing changed">
       <p>Nothing changed in this scope. These are the changes inside this workspace.</p>
+    </ChangesNotice>
+  );
+}
+
+export function WorkspaceEmptyState({ kind }: { kind: Exclude<WorkspaceEmptyKind, "empty"> }) {
+  const copy = overlayWorkspaceEmptyCopy(kind);
+  return (
+    <ChangesNotice title={copy.title}>
+      <p data-slot="workspace-empty" data-kind={kind}>
+        {copy.body}
+      </p>
     </ChangesNotice>
   );
 }

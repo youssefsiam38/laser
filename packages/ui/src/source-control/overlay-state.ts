@@ -1,11 +1,15 @@
 import type { EmptyBody } from "./classify.js";
 import type { FileDiffPage } from "./contract.js";
 import type { OpenFile } from "./store.js";
+import type { WorkspaceEmptyKind } from "./workspace-shape.js";
 
 export type ChangesBodyState =
   | { kind: "gone" }
   | { kind: "list-loading" }
   | { kind: "list-error"; message: string }
+  | { kind: "no-git" }
+  | { kind: "untouched" }
+  | { kind: "unsupported" }
   | { kind: "empty" }
   | { kind: "pick" }
   | { kind: "repo-error"; repo: string; message: string }
@@ -21,6 +25,9 @@ export function changesBodyState(input: {
   listLoading: boolean;
   listError: string | null;
   hasContent: boolean;
+  filtered: boolean;
+  shapeLoading: boolean;
+  emptyKind: WorkspaceEmptyKind;
   active: OpenFile | undefined;
   repoError: { repo: string; message: string } | undefined;
   pageLoading: boolean;
@@ -33,7 +40,11 @@ export function changesBodyState(input: {
   if (input.gone) return { kind: "gone" };
   if (input.listLoading) return { kind: "list-loading" };
   if (input.listError) return { kind: "list-error", message: input.listError };
-  if (!input.hasContent) return { kind: "empty" };
+  if (!input.hasContent) {
+    if (input.shapeLoading) return { kind: "list-loading" };
+    if (!input.filtered && input.emptyKind !== "empty") return { kind: input.emptyKind };
+    return { kind: "empty" };
+  }
   if (!input.active) return { kind: "pick" };
   if (input.repoError) return { kind: "repo-error", repo: input.repoError.repo, message: input.repoError.message };
   if (input.pageLoading) return { kind: "page-loading", path: input.active.path };
