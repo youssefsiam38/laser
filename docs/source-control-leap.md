@@ -555,7 +555,72 @@ a parent-built sandbox before any release (the working agreement since 0.9.2).
 
 ---
 
-## 13 · Open questions
+## 13 · How this leap is executed
+
+This section is binding on whoever executes the plan, including an agent that
+never saw the conversation that produced it.
+
+### 13.1 Who does what
+
+| | Does |
+| --- | --- |
+| **The executing agent (and its workers)** | All programming, all *programmatic* tests: unit, integration, protocol round-trips, router coverage, typechecks, builds, `pnpm identity:check`, the runtime inventory, and the integrated `pnpm verify`. |
+| **The person** | **All browser and manual acceptance.** The person opens the sandbox and judges it. |
+
+**Agents do not run browser acceptance matrices for this leap.** No
+`scripts/browser-check` matrix runs, no Playwright sweeps, no "I looked at it
+and it is fine". Interaction behaviour is proved by tests that run in jsdom or
+by a test the person can re-run; everything visual is the person's call on the
+sandbox. A milestone is reported as *ready for acceptance*, never as *done*,
+until the person says so.
+
+### 13.2 The sandbox is part of the deliverable
+
+Every milestone that a person can see ends with a running sandbox and its URL,
+built by the executing agent:
+
+- a fresh coherent build of the exact reviewed source
+  (`pnpm install --frozen-lockfile`, `pnpm -r build`,
+  `node scripts/identity/runtime-inventory.mjs --workspace`);
+- a private `HOME`/XDG/state root, so the person's installed app, host,
+  credentials and sessions are never touched, adopted, restarted or mutated;
+- seeded with data that exercises the milestone — for this leap that means a
+  **single-repo project, a monorepo, a workspace of several repositories, and a
+  directory with no git**, plus a session with real history;
+- the URL, what to try, in what order, and what is deliberately not finished
+  yet.
+
+### 13.3 The loop per milestone
+
+1. Brief a worker with a self-contained task (the worker sees none of the
+   conversation that produced this spec).
+2. The worker implements and runs its focused suites; it never runs
+   `pnpm verify` — the integrated gate belongs to the parent.
+3. The parent inspects the diff, then commissions **one independent review**.
+4. **One** correction batch, verified by the parent.
+5. The parent merges, runs the integrated gate, builds the sandbox, and hands
+   the person the URL.
+6. The person accepts or sends it back. Only then is the milestone `done`.
+
+### 13.4 Ledger and evidence
+
+`PLAN.md`, `STATUS.md` and `STATUS_DETAILED.md` are maintained exactly as
+`AGENTS.md` §3 requires: claim before code, checkpoint at each meaningful
+sub-step, evidence (a commit, a passing command, a path) before `done`, and
+`STATUS.md` regenerated before the session ends. Each milestone's decisions are
+appended as `D-<n>`; a settled decision in §0 is changed only by a new decision
+that supersedes it, never by quiet drift.
+
+### 13.5 Releasing
+
+A milestone may be released on its own once the person has accepted it — L1 is
+worth shipping before L5 exists. Releases follow `AGENTS.md` §5a exactly: the
+reviewed orchestrator, notes written for people who install it, and the
+person's explicit authorization before `--publish`.
+
+---
+
+## 14 · Open questions
 
 One, and it is a spike rather than a question: whether `@pierre/diffs` survives
 L0's seven criteria (§8.3, D-313). The other three are settled: split as the
