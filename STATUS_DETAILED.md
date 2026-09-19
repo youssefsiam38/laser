@@ -5612,16 +5612,125 @@ expressed: a ResizeObserver reports a box, not where inside it grew.
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M18-T0 | Diff-renderer spike | done | worker `01a0ba58-67b7-77ed-9b32-394e67141bdd` | `docs/source-control-spike-evidence.md`; adopt with five mitigations | see notes |
-| M18-T1 | Workspace shapes and the harness | todo | — | — | spec §6 |
-| M18-T2 | Checkpoints, scopes, restore | todo | — | — | spec §7 |
-| M18-T3 | Telemetry query | todo | — | — | spec §5 |
-| M18-T4 | The fleet and telemetry columns | todo | — | — | spec §3, §4 |
-| M18-T5 | The overlay | todo | — | — | spec §8 |
-| M18-T6 | Git actions | todo | — | — | spec §9 |
+| M18-T1 | Workspace shapes and the harness | in-progress | worker `run_4615dcd3` | — | spec §6 |
+| M18-T2 | Checkpoints, scopes, restore | in-progress | worker `run_d0309ce4` | — | spec §7, T1 resolver arrives through a one-function seam |
+| M18-T3 | Telemetry query | in-progress | worker `run_224529b5` | — | spec §5 |
+| M18-T4 | The fleet and telemetry columns | in-progress | fleet half: worker `run_1d022794`; telemetry half waits on T3 | — | spec §3, §4 |
+| M18-T5 | The overlay | in-progress | worker `run_29cb486e` | — | spec §8, T2's methods arrive through a one-file data adapter |
+| M18-T6 | Git actions | in-progress | engine half: worker `run_9beb1415`; toolbar half waits on T5 | — | spec §9 |
 
 #### M18-T0 notes
 - 2026-09-19 spike ran against the real library in `/tmp/pierre-spike`, nothing committed to the checkout. Theming from `var(--syntax-*)` recolours with zero shadow mutations; find paints across 9 open shadow roots (17 matches); copy is clean source. Partial: +449 KB main chunk, empty bodies for binary/mode-only/pure-rename, no auto-unify at 320px, expand-all is 20 000 nodes, worker pool needs an explicit `workerFactory`.
 - 2026-09-19 D-313 confirmed, D-317 added (the overlay loads lazily). The five mitigations are acceptance criteria on M18-T5.
 
+#### M18-T1 notes
+- 2026-09-19 claimed by orchestrator-2026-09-19-leap: one worker in its own worktree (`agents/l1-workspace-shapes-and-harness-4615dcd3`) owns the resolver, `pi/project/workspace`, the harness adaptation, `worktree: "strict"`, the common-dir fix and the per-project isolation setting.
+
+#### M18-T3 notes
+- 2026-09-19 claimed: worker on `agents/l3-telemetry-query-224529b5` owns `pi/session/telemetry` in both authorities and the deletion of every client-side aggregation. The Files section of the result is left to T2, which owns the git-backed change model.
+
+#### M18-T4 notes
+- 2026-09-19 claimed, split by surface so the two halves never write the same file: the fleet column (§3) runs now on `agents/l4-fleet-column-1d022794`; the telemetry column (§4) starts once T3 has landed the query it renders. The fleet half must not depend on T1's new `isolation` field; the orchestrator wires the reason tooltip after both merge.
+
+#### M18-T2 notes
+- 2026-09-19 claimed. Started beside T1 rather than behind it: the only dependency is "which repositories does this session touch", which the worker implements as one function (`sessionRepositories`) marked `TODO(M18-T1)`; the orchestrator swaps its body for the shared resolver at merge.
+
+#### M18-T5 notes
+- 2026-09-19 claimed. Started beside T2 rather than behind it: everything the overlay reads goes through one adapter file with the §7.3 shapes declared locally, so wiring it to `pi/project/changes` / `file_diff` / `file_source` is a single-file change. The two entry points (a telemetry Files row, a fleet row's Changes) belong to T4's files and are the orchestrator's to wire.
+
+#### M18-T6 notes
+- 2026-09-19 claimed for the engine half (hosts, actions, prose, safety). The toolbar half is wired into T5's overlay once both have landed.
+
 #### M18 execution agreement
 - 2026-09-19 the person does **all** browser and manual acceptance; agents do all programming and programmatic tests (spec §13). The leap runs in one shot with no mid-leap stop, and nothing is released until the person has tested the sandbox and authorized it.
+
+### D-307 · 2026-09-19 · A workspace has a shape, and the harness adapts to it
+Decision: `workspaceShape(cwd)` resolves repo, workspace-of-repos, nested repo,
+no-git and bare/submodule, and `start_agent` never fails over shape.
+`worktree: true` means "isolate if this workspace can be isolated", `false` is
+unchanged, and `"strict"` demands isolation and carries D-156's refusal wording.
+Why: in a workspace of many repositories every default `start_agent` failed and
+cost the model a turn discovering it must pass `worktree: false`.
+Consequences: the choice is part of the run's identity — `start_agent`'s result,
+the `AgentRun` record, `inspect_agent` and the fleet row's developer strip all
+say which way it went and why. Source: `docs/source-control-leap.md` §6.
+
+### D-308 · 2026-09-19 · Hidden checkpoint refs through an isolated index
+Decision: after every turn Laser writes a commit object through a temporary
+`GIT_INDEX_FILE` and stores it at a hidden ref under the product's own ref
+namespace, per repository the session touched.
+Why: a truthful model of what a session changed cannot be reconstructed from
+tool calls — a formatter, a codemod, a build or a `git checkout` are invisible
+to them.
+Consequences: the person's index, working tree, branches, `git log` and reflog
+are never touched; ignored files are never captured; refs are packed, pruned by
+retention and deleted with the session. Source: §7.
+
+### D-309 · 2026-09-19 · Telemetry is computed by the authority, never the client
+Decision: `pi/session/telemetry` returns exactly the fields the UI renders,
+computed over the whole session, incrementally, fenced by revision; the client
+aggregates nothing.
+Why: the panel's totals came from the entries this client happened to have
+loaded, so a 27 MB session showed the spend of its last ten turns.
+Consequences: `usageFromEntries`, `usageByModel`, `spendSeries` and
+`historyRows` are deleted or reduced to formatting, and the blanket apology copy
+goes with them. Source: §5.
+
+### D-310 · 2026-09-19 · Changed files come from git, never from tool calls
+Decision: every changed-file list is computed from checkpoints and `git status`,
+not from the thread's `edit`/`write` parts.
+Why: `useSessionFileChanges` missed what a command changed, missed deletions and
+kept claiming a file after a revert.
+Consequences: a new unignored file is shown as added; an ignored file is never
+shown or captured; the `uncommitted` scope is deliberately complete where the
+session and turn scopes stay the agent's own work. Source: §7.2a.
+
+### D-311 · 2026-09-19 · Files open in a read-only full-screen overlay
+Decision: changed files open in a full-screen overlay over the conversation,
+read-only, and git actions live in its toolbar and nowhere else this leap.
+Why: a diff needs the whole window, and the conversation must survive it —
+scroll position and draft intact, Escape returning to exactly where the person
+was. Source: §8, §9.1.
+
+### D-312 · 2026-09-19 · Commit and PR prose comes from the session's model
+Decision: commit messages, PR titles and descriptions are generated by the
+session's current model, never the Namer, with repository conventions in the
+prompt, and are editable before use.
+Why: the Namer is a small model for session titles; it has not seen the code.
+Consequences: generation belongs in the worker, which owns the engine, and
+nothing is committed or pushed without an explicit confirmation. Source: §9.3.
+
+### D-313 · 2026-09-19 · The overlay adopts `@pierre/diffs`
+Decision: the overlay renders with `@pierre/diffs` (Apache-2.0, Shiki `^3 || ^4`
+so one highlighter), themed from Laser's own tokens; its `Virtualizer` is used
+inside the overlay while `@legendapp/list` keeps the transcript.
+Why: the L0 spike proved theming with zero shadow mutations, find across nine
+open shadow roots, and clean copy (`docs/source-control-spike-evidence.md`).
+Consequences: the five mitigations in §8.3a are acceptance criteria on M18-T5;
+the fallback (our own elements plus `parse-git-diff`) is not taken.
+
+### D-314 · 2026-09-19 · A fleet row opens its agent's changes
+Decision: a fleet row for an agent run opens the same overlay scoped from the
+run's `baseCommit`; the reader never merges.
+Why: reviewing a child's branch before merging is the parent's job (D-157), and
+the row is where the run already lives. Source: §8.5.
+
+### D-315 · 2026-09-19 · Split is the default diff view
+Decision: split by default, remembered per person, falling back to unified when
+two columns of code do not fit — and Laser owns that fallback, because the
+library keeps two 159 px scrolling columns at 320 px. Source: §8.2, §8.3a.
+
+### D-316 · 2026-09-19 · Checkpoint retention defaults to the last 200 turns
+Decision: 200 turns per session by default, configurable per project
+(50 · 200 · 1 000 · every turn · off), pruned oldest-first, following the
+session's deletion; turning it off removes that session's existing refs.
+Why: unbounded refs would slow `for-each-ref` and keep work nobody asked to
+keep. Consequences: a scope whose checkpoint was pruned says so rather than
+showing a wrong range. Source: §7.1.
+
+### D-317 · 2026-09-19 · The overlay and its renderer load lazily
+Decision: the overlay is a dynamic import with its own designed loading state.
+Why: the spike measured `@pierre/diffs` at +449 KB on the main chunk, and no
+weight that only a file reader needs may sit in the startup bundle.
+Consequences: the worker pool stays off and the worker URL is never statically
+referenced — the spike measured that tripling the main chunk.
