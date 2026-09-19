@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-19T15:20:00+03:00 · orchestrator-2026-09-19 · HEAD: db4cd12f
-**Current focus:** M16 — the transcript copies a shipping chat client (D-305): images are references (T89 merged), a page is a count of turns (T90 ready), the list owns the reader's position (T91), the client reads a reference (T92).
+**Last updated:** 2026-09-20T01:45:51+03:00 · orchestrator-2026-09-19-leap · HEAD: 82969dcf
+**Current focus:** M20 — the source-control leap, built end to end and gated; the person's acceptance is the only step left (`docs/leap/uat.md`).
 
 | Milestone | State |
 | --- | --- |
@@ -26,12 +26,13 @@
 | M17 Coding experience | todo |
 | M18 Resource containment | done |
 | M19 Runtime recovery/update activation | done |
+| M20 Source-control leap | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** M16-T92 — main regresses images of 16 KiB or less on reload (the client still reads `image.data`, which T89 emptied). Not shippable to a person until it lands. Terminal worker-session resumption stays unreliable; explicit clean transfers preserve progress.
-**In flight:** T90 turn paging ready at `6615d35b` (11 pages to root instead of 20/56); T91 `@legendapp/list` running; producer correction batch C1–C8 and client milestone T92 queued to their owners. Review `run_2d62f39f` on T89: protocol half correct, three consumer blockers.
+**Blockers:** none. Nothing is released until the person accepts the sandbox (spec §13.5).
+**In flight:** M20 awaiting the person's acceptance. M16-T92 (the client still reads `image.data`) remains open behind it.
 **Published:** v0.9.2 from `dc7a8979` — CI 35396133026, release 35396492469, 12 assets, Latest, checkpoint `verified`. Two attempts abandoned first on load-only test flakes (host access.e2e timeout, UI image macrotask wait), both now wait for state.
-**Next up:** merge T90 → review it → land T91 and T92 → rebuild the person's sandbox on all four → acceptance → 0.9.5. Then M16-T76 final poisoned gate and the `auto-follow-live-edge` thumb-drag threshold on an idle machine.
-**Recently done:** T89 images are references (`27cac1cd`, failing page 6,439,755 B → 3,735 B); T88 no page refused for one large record (`63330a5f`, `d4731f18`, `434f249a`, 56 pages to the root of the person's 27 MB session); T87 transcript rebuilt on a virtualizer (`e787e652`); T86 finished mentions (`a8bb8737`); D-304 space ends a mention query (`29ea5361`).
+**Next up:** the person's UAT on the seeded sandbox (four workspace shapes, a session with real turns), then the decisions it produces, then a release only with explicit authorization.
+**Recently done:** M20-T1 workspace shapes and the harness (`acc1b4a6`+`009a49a2`); M20-T2 checkpoints, restore and undo-this-turn (`d7c6d62c`+`85a74e4a`+`90e191f4`, baseline no longer races the first turn); M20-T3 telemetry over the whole session (`69a3fbea`+`6662afd2`); M20-T4 both columns redrawn and the filter row fitted (`82969dcf`); M20-T5 the changes modal on `@pierre/diffs`, crash-free, in our own type (`b3ced7f5`); M20-T6 git actions engine and toolbar (`bc00695b`, `bb786d1c`).
 
 **Published:** v0.9.4 (`6d50a050`) is Latest. Autonomous completion/commits/push authorized; the person performs browser acceptance on a parent-built sandbox before any release. Active history outranks soft cache targets (D-295); MCP forms stay modal (D-296); Agents mutations name their location (D-297); project agent files are trust-gated (D-298); Backspace only deletes (D-299); the mention picker browses the machine (D-300); T82 deferred to 0.9.3 (D-301); the transcript copies a shipping chat client (D-305, superseding D-303).
