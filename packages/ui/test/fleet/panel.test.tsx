@@ -182,7 +182,11 @@ describe("the fleet column", () => {
     expect(context.getAttribute("data-attention")).toBe("finished_unread");
     expect(context.querySelector('[data-slot="status-dot"]')?.getAttribute("aria-label")).toMatch(/below/);
     expect(context.textContent).toContain("context");
-    expect(context.textContent).toContain("Parent of work shown here.");
+    // Quiet: one dimmed line. The sentence that explains it is in the
+    // accessible name, where it costs no height.
+    expect(context.getAttribute("data-quiet")).toBe("true");
+    expect(context.textContent).not.toContain("Parent of work shown here.");
+    expect(context.querySelector("button[aria-expanded]")?.getAttribute("aria-label")).toContain("Parent of work shown here.");
     expect(context.textContent).not.toContain("ready in 412 ms");
     expect(rowIn(finished, "pnpm vite dev").getAttribute("data-context")).toBeNull();
     // The duplicated ancestor is context only: exactly one terminal item is counted.
@@ -959,9 +963,15 @@ describe("the fleet row (leap §3)", () => {
     const command = rowFor("pnpm vite dev").querySelector('[data-slot="fleet-kind-tile"]');
     expect(agent?.getAttribute("data-shape")).toBe("round");
     expect(command?.getAttribute("data-shape")).toBe("square");
-    expect(agent?.className).toContain("rounded-lg");
+    expect(agent?.className).toContain("rounded-md");
     expect(command?.className).toContain("rounded-none");
-    expect(command?.className).toContain("font-mono");
+    // Mono on both, from the `eyebrow` utility that owns the 11px size.
+    expect(command?.className).toContain("eyebrow");
+    expect(agent?.className).toContain("eyebrow");
+    // 20px, and the same 20px for both: an identity mark beside a name, not a
+    // thumbnail that owns the line.
+    expect(agent?.className).toContain("size-5");
+    expect(command?.className).toContain("size-5");
     expect(rowFor("explorer").querySelector('[data-slot="fleet-name"]')?.className).not.toContain("typed");
     expect(rowFor("pnpm vite dev").querySelector('[data-slot="fleet-name"]')?.className).toContain("typed");
   });
@@ -1179,14 +1189,55 @@ describe("the fleet row (leap §3)", () => {
     expect(strip.getAttribute("aria-label")).toContain(branch);
   });
 
-  it("puts command, bytes and clock on a command's developer strip", async () => {
+  it("puts the exit state, the whole byte count and the start time on a command's strip", async () => {
     fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: ROOT, outputBytes: 189_000 }) };
     await render();
-    const strip = rowFor("pnpm vite dev").querySelector('[data-slot="fleet-strip"]');
-    expect(strip?.getAttribute("data-kind")).toBe("task");
-    expect(strip?.textContent).toContain("pnpm vite dev --host");
-    expect(strip?.textContent).toMatch(/KB|MB|B/);
-    expect(strip?.getAttribute("aria-label")).toContain("pnpm vite dev --host");
+    const strip = rowFor("pnpm vite dev").querySelector('[data-slot="fleet-strip"]')!;
+    expect(strip.getAttribute("data-kind")).toBe("task");
+    expect(strip.querySelector('[data-slot="fleet-task-status"]')?.textContent).toBe("running");
+    // The number is whole or it is not printed: `2..` is not a byte count.
+    const bytes = strip.querySelector('[data-slot="fleet-task-bytes"]')!;
+    expect(bytes.textContent).toBe("185 KB");
+    expect(bytes.className).toContain("shrink-0");
+    expect(bytes.className).not.toContain("truncate");
+    expect(strip.querySelector('[data-slot="fleet-task-clock"]')?.textContent).toMatch(/\d/);
+    // Line 1 already says the command, with more room for it than this line
+    // could ever give it.
+    expect(strip.textContent).not.toContain("pnpm vite");
+    expect(strip.getAttribute("aria-label")).not.toContain("pnpm vite");
+    expect(rowFor("pnpm vite dev").querySelector('[data-slot="fleet-name"]')?.textContent).toContain("pnpm vite dev --host");
+  });
+
+  it("turns the status word when a command came back non-zero, and keeps the code", async () => {
+    fixture.state.tasks.tasks = {
+      t1: task({ id: "t1", sessionPath: ROOT, status: "failed", exitCode: 2, endedAt: "2026-09-08T10:01:00.000Z", terminalReason: "exit code 2" }),
+    };
+    await render();
+    await openFinished();
+    const status = rowFor("pnpm vite dev").querySelector('[data-slot="fleet-task-status"]')!;
+    expect(status.textContent).toBe("exit 2");
+    expect(status.className).toContain("text-danger-quiet");
+  });
+
+  // The port is the thing a developer is looking for, and it is at the end.
+  it("middle-truncates a long command on line 1 so its tail survives", async () => {
+    const command = "pnpm vite dev --host --port 5173";
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: ROOT, command, title: command }) };
+    await render();
+    const row = [...rows()].find((candidate) => candidate.getAttribute("data-kind") === "task")!;
+    const name = row.querySelector('[data-slot="fleet-name"]')!;
+    expect(name.textContent).toContain("--port 5173");
+    expect(name.textContent).not.toBe(command);
+    expect(name.textContent).toContain("\u2026");
+    // The whole command is still the accessible name, and the tooltip.
+    const expand = row.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    expect(expand.getAttribute("aria-label")).toContain(command);
+    // The app's tooltip, on the button itself (ControlHint is `asChild`), so
+    // the full command opens on focus as well as on hover.
+    expect(expand.getAttribute("data-state")).toBe("closed");
+    await act(async () => expand.focus());
+    expect([...document.querySelectorAll('[data-slot="tooltip-content"]')].map((node) => node.textContent).join(" ")).toContain(command);
+    await act(async () => expand.blur());
   });
 
   it("groups by session with the project as secondary text and counts on the header", async () => {
@@ -1195,11 +1246,14 @@ describe("the fleet row (leap §3)", () => {
     const header = container.querySelector('[data-slot="fleet-group"] header');
     expect(header?.querySelector("h4")?.textContent).toBe("Root session");
     expect(header?.textContent).toMatch(/p/i);
-    expect(container.querySelector('[data-slot="fleet-group-counts"]')?.textContent?.trim()).toBe("1");
+    expect(container.querySelector('[data-slot="fleet-group-counts"]')?.textContent?.trim()).toBe("1 going");
     expect(container.querySelector('[data-slot="fleet-group-counts"]')?.getAttribute("aria-label")).toBe("1 going");
+    // No filled band: the header sits on the column's own ground.
+    expect(header?.className).toContain("bg-surface");
+    expect(header?.className).not.toMatch(/bg-(bg|surface-2)\b/);
   });
 
-  it("compacts group counts so a mixed header can wrap at the column width", async () => {
+  it("says the group's counts in words, with the zeroes left out", async () => {
     fixture.state.agents.runs = {
       r1: child,
       r2: {
@@ -1221,12 +1275,24 @@ describe("the fleet row (leap §3)", () => {
     };
     await render();
     const header = container.querySelector('[data-slot="fleet-group"] header')!;
-    expect(header.className).toMatch(/flex-wrap/);
-    expect(header.className).toMatch(/overflow-x-hidden/);
     const counts = header.querySelector('[data-slot="fleet-group-counts"]')!;
-    expect(counts.textContent?.trim()).toBe("2 · 1 · 1");
+    expect(counts.textContent?.trim()).toBe("2 going · 1 asking · 1 ended");
     expect(counts.getAttribute("aria-label")).toBe("2 going · 1 asking · 1 ended");
+    // Two lines, in order: the session, then where it lives and how it stands.
     expect(header.querySelector("h4")?.className).toMatch(/truncate/);
+    expect(counts.previousElementSibling?.textContent).toBe("p");
+    expect(header.querySelector("h4")?.nextElementSibling?.contains(counts)).toBe(true);
+  });
+
+  it("middle-truncates a long session title on the group header", async () => {
+    const title = "Please change the greeter so it can shout, and add a feature list";
+    fixture.state.sessions = [summary({ path: ROOT, name: title }), summary({ path: CHILD })];
+    fixture.state.agents.runs = { r1: child };
+    await render();
+    const heading = container.querySelector('[data-slot="fleet-group"] h4')!;
+    expect(heading.textContent).not.toBe(title);
+    expect(heading.textContent).toContain("\u2026");
+    expect(heading.textContent).toContain("feature list");
   });
 
   it("moves kind with arrow keys, Home and End, on one tab stop", async () => {

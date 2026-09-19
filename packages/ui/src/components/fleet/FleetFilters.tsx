@@ -1,11 +1,25 @@
 "use client";
 /**
- * Going · Asking · Ended, plus a kind cut. Counts on the chips come from the
- * unfiltered tree so a chip never zeros itself when pressed.
+ * One row: Going · Asking · Ended, then a hairline, then the kind cut
+ * (All / Agents / Commands).
+ *
+ * One row, and never two. The column's chrome budget (`fleet/chrome.ts`) is
+ * 72px from the top of the panel to the session, and the header takes 48 of
+ * it; a second row of chips took a third of a 320px column to say what the
+ * header already says. So the row does not wrap — it scrolls its own overflow
+ * — and it paints 24px on a mouse, growing to a 44px target on a finger.
+ *
+ * A count is shown only when it is not zero. `Asking 0` is a control that
+ * promises nothing and costs the width of a word; the absence of a number is
+ * the same information, quieter.
+ *
+ * Counts come from the unfiltered tree so a chip never zeros itself when
+ * pressed. Lifecycle chips toggle (a struck label is a cut that is on); the
+ * kind is a single choice with one tab stop and arrow keys.
  */
 import { useRef, type KeyboardEvent } from "react";
 
-import type { FleetFilter, FleetFilterCounts } from "@/fleet";
+import { FLEET_FILTERS_HEIGHT, type FleetFilter, type FleetFilterCounts } from "@/fleet";
 import { useLogicalArrowKeys } from "@/hooks/use-direction";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +28,14 @@ const KIND_OPTIONS = [
   { key: "agent" as const, slot: "fleet-filter-kind-agents", label: "Agents", countKey: "agents" as const },
   { key: "task" as const, slot: "fleet-filter-kind-commands", label: "Commands", countKey: "commands" as const },
 ];
+
+/** One chip's paint. Shared so the six controls are one row, not two designs. */
+const CHIP = cn(
+  "inline-flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs leading-xs outline-none",
+  "transition-colors duration-(--motion-instant) motion-reduce:transition-none",
+  "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
+  "pointer-coarse:h-11",
+);
 
 export function FleetFilters({
   filter,
@@ -29,8 +51,12 @@ export function FleetFilters({
   };
 
   return (
-    <div data-slot="fleet-filters" className="flex flex-col gap-1.5 px-3 py-2">
-      <div role="group" aria-label="Lifecycle" className="flex min-w-0 flex-wrap gap-1">
+    <div
+      data-slot="fleet-filters"
+      data-fleet-chrome="filters"
+      className={cn("flex shrink-0 items-center gap-1 overflow-x-auto overflow-y-hidden scrollbar-none px-3 hairline-b", FLEET_FILTERS_HEIGHT)}
+    >
+      <div role="group" aria-label="Lifecycle" className="flex shrink-0 items-center gap-0.5">
         <FilterChip
           slot="fleet-filter-going"
           label="Going"
@@ -53,6 +79,9 @@ export function FleetFilters({
           onClick={() => toggleLifecycle("ended")}
         />
       </div>
+      {/* A hairline, not a gap: two kinds of control on one row need to read
+          as two groups without a second row to put them on. */}
+      <span aria-hidden="true" className="mx-0.5 h-3 w-px shrink-0 bg-line" />
       <KindGroup filter={filter} counts={counts} onChange={onChange} />
     </div>
   );
@@ -97,7 +126,7 @@ function KindGroup({
       role="radiogroup"
       aria-label="Kind"
       onKeyDown={onKeyDown}
-      className="flex min-w-0 flex-wrap gap-1"
+      className="flex shrink-0 items-center gap-0.5"
     >
       {KIND_OPTIONS.map((option, index) => {
         const selected = filter.kind === option.key;
@@ -111,16 +140,10 @@ function KindGroup({
             aria-checked={selected}
             tabIndex={index === activeIndex ? 0 : -1}
             onClick={() => choose(index)}
-            className={cn(
-              "inline-flex min-h-11 items-center gap-1 rounded-lg px-2 text-xs leading-xs outline-none",
-              "transition-colors duration-(--motion-instant) motion-reduce:transition-none",
-              "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
-              "active:bg-surface-2 active:text-ink",
-              selected ? "bg-surface-2 text-ink" : "text-ink-3 hover:bg-surface-2 hover:text-ink-2",
-            )}
+            className={cn(CHIP, selected ? "bg-surface-2 text-ink" : "text-ink-3 hover:bg-surface-2 hover:text-ink-2")}
           >
             <span>{option.label}</span>
-            {count !== undefined ? <span className="tnum text-ink-3">{count}</span> : null}
+            {count ? <span className="tnum text-ink-3">{count}</span> : null}
           </button>
         );
       })}
@@ -148,15 +171,16 @@ function FilterChip({
       aria-pressed={pressed}
       onClick={onClick}
       className={cn(
-        "inline-flex min-h-11 items-center gap-1 rounded-lg px-2 text-xs leading-xs outline-none",
-        "transition-colors duration-(--motion-instant) motion-reduce:transition-none",
-        "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
-        "active:bg-surface-2 active:text-ink",
-        pressed ? "bg-surface-2 text-ink" : "text-ink-3 hover:bg-surface-2 hover:text-ink-2",
+        CHIP,
+        // On is the resting state, so it carries no ground: three filled chips
+        // would be three pieces of furniture for a list nobody has cut yet.
+        // Off is the change, and it is struck through — colour is not the only
+        // thing carrying it.
+        pressed ? "text-ink hover:bg-surface-2" : "text-ink-3 line-through hover:bg-surface-2 hover:text-ink-2",
       )}
     >
       <span>{label}</span>
-      <span className="tnum text-ink-3">{count}</span>
+      {count ? <span className="tnum text-ink-3">{count}</span> : null}
     </button>
   );
 }

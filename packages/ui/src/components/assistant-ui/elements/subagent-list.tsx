@@ -34,9 +34,11 @@ import { StatusDot } from "@/components/status";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
 import {
+  GROUP_TITLE_BUDGET,
   filterFleetSections,
   fleetFilterCounts,
   fleetFilterIsRestricting,
+  middleTruncate,
   type FleetFilter,
   type FleetGroup,
   type FleetItem,
@@ -94,7 +96,14 @@ export function SubagentList({ sections, surface, expanded, currentKey, onToggle
   return (
     <div data-slot="subagent-list" className={cn("flex flex-col", className)} {...props}>
       {filters && filter && onFilterChange ? <FleetFilters filter={filter} counts={counts} onChange={onFilterChange} /> : null}
-      <FleetSectionHeader label="In progress" count={visible.active.count} />
+      {/*
+        The tree draws no "In progress" band. The panel header already says
+        what is going and what is asking, the filter row already carries the
+        same counts, and a third copy cost 44px of a 320px column to repeat
+        them. The deleted-session line still labels its section, because
+        nothing above it has said any of that (`fleet/chrome.ts`).
+      */}
+      {filters ? null : <FleetSectionHeader label="In progress" count={visible.active.count} />}
       {visible.active.groups.length > 0 ? (
         <FleetGroups
           groups={visible.active.groups}
@@ -107,7 +116,7 @@ export function SubagentList({ sections, surface, expanded, currentKey, onToggle
           renderAskingActions={renderAskingActions}
         />
       ) : (
-        <p className="px-4 py-5 text-sm leading-sm text-ink-3">
+        <p className="px-3 py-5 text-sm leading-sm text-ink-3">
           {filters && filter && fleetFilterIsRestricting(filter) ? "Nothing matches these filters." : "Nothing is in progress."}
         </p>
       )}
@@ -121,7 +130,7 @@ export function SubagentList({ sections, surface, expanded, currentKey, onToggle
             can open, and a Clear when you are finished with it.
           */}
           <div className="flex items-center">
-            <CollapsibleTrigger className="group/finished flex min-h-11 min-w-0 flex-1 items-center gap-2 ps-4 pe-2 py-3 text-start text-ink-3 outline-none transition-colors duration-(--motion-instant) hover:text-ink-2 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset">
+            <CollapsibleTrigger className="group/finished flex min-h-11 min-w-0 flex-1 items-center gap-2 ps-3 pe-2 py-3 text-start text-ink-3 outline-none transition-colors duration-(--motion-instant) hover:text-ink-2 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset">
               <span className="text-xs leading-xs font-medium">Finished</span>
               <span className="tnum text-xs leading-xs">{visible.finished.count}</span>
               <ChevronDown
@@ -160,7 +169,7 @@ export function SubagentList({ sections, surface, expanded, currentKey, onToggle
 
 function FleetSectionHeader({ label, count }: { label: string; count: number }) {
   return (
-    <header data-slot="fleet-section-header" className="flex items-center gap-2 px-4 py-3">
+    <header data-slot="fleet-section-header" className="flex items-center gap-2 px-3 py-2">
       <RadioTower aria-hidden="true" className="size-4 shrink-0 text-live" />
       <h3 className="text-xs leading-xs font-medium text-ink">{label}</h3>
       <span className="tnum text-xs leading-xs text-ink-3">{count}</span>
@@ -168,19 +177,23 @@ function FleetSectionHeader({ label, count }: { label: string; count: number }) 
   );
 }
 
+/**
+ * The group's counts, in words, with zeroes left out: `2 going · 1 asking`.
+ *
+ * They used to read `1 · 2` under an uppercase `PROJECT`, which is a number
+ * nobody can decode without opening the source. Three characters of width is
+ * not worth a line a developer cannot read.
+ */
 function GroupCounts({ group }: { group: FleetGroup }) {
   const parts: { n: number; word: string }[] = [];
   if (group.running > 0) parts.push({ n: group.running, word: "going" });
   if (group.needsYou > 0) parts.push({ n: group.needsYou, word: "asking" });
   if (group.ended > 0) parts.push({ n: group.ended, word: "ended" });
   if (parts.length === 0) return null;
+  const words = parts.map((part) => `${part.n} ${part.word}`).join(" · ");
   return (
-    <span
-      data-slot="fleet-group-counts"
-      className="tnum text-xs leading-xs text-ink-3"
-      aria-label={parts.map((part) => `${part.n} ${part.word}`).join(" · ")}
-    >
-      {parts.map((part) => part.n).join(" · ")}
+    <span data-slot="fleet-group-counts" className="tnum shrink-0 text-xs leading-xs text-ink-3" aria-label={words}>
+      {words}
     </span>
   );
 }
@@ -208,27 +221,36 @@ function FleetGroups({
     const group = projectedGroup.group;
     return (
       <section key={group.path} aria-label={group.title} data-slot="fleet-group" data-section={section} data-deleted={group.deleted || undefined}>
-        {/* Opaque: DESIGN.md keeps glass out of the system, and a blurred
-            header over a scrolling list is exactly the decoration it names. */}
-        <header className="sticky top-0 z-10 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 overflow-x-hidden bg-bg px-4 py-1.5 hairline-b">
-          <h4 className="min-w-0 truncate text-xs leading-xs font-medium text-ink" title={group.deleted ? group.path : undefined}>
-            {group.title}
+        {/*
+          Two lines and no filled band. Opaque, because DESIGN.md keeps glass
+          out of the system — but on the column's own ground, so a sticky
+          header reads as a heading rather than as a bar laid over the list.
+          Line 1 is the session, middle-truncated so the end of a long prompt
+          survives; line 2 is where it lives and how it stands.
+        */}
+        <header className="sticky top-0 z-10 flex min-w-0 flex-col bg-surface px-3 py-1.5 hairline-b">
+          <h4 className="min-w-0 truncate text-sm leading-sm font-medium text-ink" title={group.deleted ? group.path : undefined}>
+            {middleTruncate(group.title, GROUP_TITLE_BUDGET)}
           </h4>
-          {group.cwd ? <span className="eyebrow min-w-0 truncate">{shortCwd(group.cwd)}</span> : null}
-          <GroupCounts group={group} />
-          {group.deleted ? (
-            // Deleted, not closed: there is no session to open, so the header
-            // says what the work lost rather than implying a way back to it.
-            <span className="text-xs leading-xs text-ink-3" title="This session was deleted; its work kept going.">
-              session deleted
-            </span>
-          ) : group.orphaned ? (
-            <span className="text-xs leading-xs text-ink-3" title="This session is closed here; its work kept going.">
-              session closed
-            </span>
-          ) : null}
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            {group.cwd ? <span className="typed min-w-0 truncate text-ink-3">{shortCwd(group.cwd)}</span> : null}
+            <GroupCounts group={group} />
+            {group.deleted ? (
+              // Deleted, not closed: there is no session to open, so the header
+              // says what the work lost rather than implying a way back to it.
+              <span className="shrink-0 text-xs leading-xs text-ink-3" title="This session was deleted; its work kept going.">
+                session deleted
+              </span>
+            ) : group.orphaned ? (
+              <span className="shrink-0 text-xs leading-xs text-ink-3" title="This session is closed here; its work kept going.">
+                session closed
+              </span>
+            ) : null}
+          </span>
         </header>
-        <ul role="list" className="flex flex-col gap-1.5 px-2 py-2">
+        {/* One hairline between siblings, and nothing else: no gaps to make
+            each row an island, no card to put it in. */}
+        <ul role="list" className="flex flex-col divide-y divide-line">
           {projectedGroup.items.map((item) => (
             <FleetBranch
               key={`${section}:${item.item.key}`}
@@ -295,7 +317,7 @@ export function SubagentStrays({ sections, expanded, onToggle, renderDetail, ren
         <div className="flex items-center">
           <CollapsibleTrigger
             data-slot="fleet-strays-toggle"
-            className="group/strays flex min-h-11 min-w-0 flex-1 items-center gap-2.5 ps-4 pe-2 py-3 text-start outline-none transition-colors duration-(--motion-instant) hover:bg-surface-2 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset"
+            className="group/strays flex min-h-11 min-w-0 flex-1 items-center gap-2.5 ps-3 pe-2 py-3 text-start outline-none transition-colors duration-(--motion-instant) hover:bg-surface-2 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset"
           >
             <span className="relative flex size-4 shrink-0 items-center justify-center text-ink-3">
               <FileX aria-hidden="true" className="size-4" />
@@ -370,13 +392,7 @@ function FleetBranch({
   const asking =
     !item.contextOnly && source.state === "needs_input" && renderAskingActions ? renderAskingActions(source) : undefined;
   return (
-    <li
-      data-slot="fleet-branch"
-      className={cn(
-        "relative min-w-0",
-        nested && "before:absolute before:-start-3 before:top-5 before:h-px before:w-3 before:bg-line before:content-['']",
-      )}
-    >
+    <li data-slot="fleet-branch" data-nested={nested || undefined} className="relative min-w-0">
       <FleetWorkRow
         item={item}
         expanded={sameDisclosure(expanded, target)}
@@ -386,7 +402,15 @@ function FleetBranch({
         askingActions={asking}
       />
       {item.children.length > 0 && (
-        <ul role="list" aria-label={`Work ${source.title} started`} className="relative ms-4 mt-1.5 flex flex-col gap-1.5 border-s border-line ps-3">
+        // The rail is a hairline, not a box, and it is the only thing that
+        // says "this belongs to that": no indent inside a border, no card, no
+        // second ground. The rows keep their own padding, so a child's tile
+        // sits one rail's width inside its parent's.
+        <ul
+          role="list"
+          aria-label={`Work ${source.title} started`}
+          className="relative ms-4 flex flex-col divide-y divide-line border-s border-line"
+        >
           {item.children.map((child) => (
             <FleetBranch
               key={`${target.section}:${child.item.key}`}

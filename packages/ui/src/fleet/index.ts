@@ -35,6 +35,11 @@ export {
   type FleetLifecycleFilter,
 } from "./filter.js";
 export {
+  FLEET_CHROME_BUDGET_PX,
+  FLEET_FILTERS_HEIGHT,
+  FLEET_HEADER_HEIGHT,
+} from "./chrome.js";
+export {
   agentHeadline,
   agentInitials,
   agentStrip,
@@ -42,6 +47,7 @@ export {
   headlineText,
   stripText,
   taskHeadline,
+  taskStatusLabel,
   taskStrip,
   worktreeLabel,
   FLEET_AGENT_TINT_COUNT,
@@ -53,6 +59,8 @@ export {
 } from "./row.js";
 export {
   BRANCH_BUDGET,
+  COMMAND_BUDGET,
+  GROUP_TITLE_BUDGET,
   PATH_BUDGET,
   firstSentence,
   isPathShaped,

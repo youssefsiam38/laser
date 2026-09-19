@@ -33,9 +33,19 @@ export interface FleetAgentStrip {
   worktree: FleetWorktreeChip;
 }
 
+/**
+ * A command's developer strip. The command itself is **not** here: line 1
+ * already says it, in more characters than this line could give it, and a
+ * second shorter copy of one string is the opposite of a fact. What a
+ * developer cannot read anywhere else on the row goes here instead — how it
+ * ended (or that it has not), how much it has written, and when it started.
+ */
 export interface FleetTaskStrip {
   kind: "task";
-  command: string;
+  /** `running`, `exit 0`, `exit 1`, `stopped`, `failed`. Never truncated. */
+  status: string;
+  /** Ended other than cleanly: the status word carries the quiet danger hue. */
+  failed: boolean;
   bytes: number | undefined;
   clock: string | undefined;
 }
@@ -59,7 +69,20 @@ export function stripText(strip: FleetStrip): string {
     return parts.join(" · ");
   }
   const byteLabel = strip.bytes === undefined ? undefined : formatBytes(strip.bytes);
-  return [strip.command, byteLabel, strip.clock].filter((part): part is string => Boolean(part)).join(" · ");
+  return [strip.status, byteLabel, strip.clock].filter((part): part is string => Boolean(part)).join(" · ");
+}
+
+/**
+ * How a command stands, in the fewest characters that are still true. An exit
+ * code is the fact a developer wants; `failed` with no code is a command that
+ * could not run or was killed, which has no code to show.
+ */
+export function taskStatusLabel(task: BackgroundTask): string {
+  if (task.status === "running") return "running";
+  if (typeof task.exitCode === "number") return `exit ${task.exitCode}`;
+  if (task.status === "stopped") return "stopped";
+  if (task.status === "completed") return "done";
+  return "failed";
 }
 
 export function agentTintIndex(agentName: string): number {
@@ -127,7 +150,8 @@ export function agentStrip(run: AgentRun | undefined, agentName: string): FleetA
 export function taskStrip(task: BackgroundTask): FleetTaskStrip {
   return {
     kind: "task",
-    command: task.command,
+    status: taskStatusLabel(task),
+    failed: task.status === "failed" || (task.status !== "running" && typeof task.exitCode === "number" && task.exitCode !== 0),
     bytes: task.outputBytes,
     clock: clockTime(task.startedAt) || undefined,
   };
