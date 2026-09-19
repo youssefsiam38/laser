@@ -83,6 +83,10 @@ try {
 // at all. Each one is seeded with work a diff can show — a modified file, a new
 // file, a deleted file, a rename, a binary, and a file `.gitignore` excludes so
 // a person can prove it is never captured and never listed.
+/** 1×1 PNGs, two different colours: the image before a change, and after it. */
+const PNG_BEFORE = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+const PNG_AFTER = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
 const workspaces = [];
 function gitIn(dir, ...args) {
   return execFileSync(
@@ -100,7 +104,9 @@ function seedRepository(dir, { name, dirty = true } = {}) {
   writeFileSync(join(dir, "src", "index.ts"), "export function greet(name: string) {\n  return `hi ${name}`;\n}\n");
   writeFileSync(join(dir, "src", "legacy.ts"), "export const legacy = true;\n");
   writeFileSync(join(dir, "src", "moved.ts"), "export const moved = 1;\n");
-  writeFileSync(join(dir, "logo.png"), Buffer.from("89504e470d0a1a0a0000000d49484452", "hex"));
+  // A real 1×1 PNG, so a person opening it in the changes modal sees a picture
+  // rather than a broken-image glyph. The "after" below is a different one.
+  writeFileSync(join(dir, "logo.png"), Buffer.from(PNG_BEFORE, "base64"));
   // `git init` is idempotent, and the single-repository project already has a
   // commit from the block above, so an empty commit here is not a failure.
   gitIn(dir, "init", "-q", "-b", "main");
@@ -117,7 +123,7 @@ function seedRepository(dir, { name, dirty = true } = {}) {
   writeFileSync(join(dir, "secrets.env"), "TOKEN=this-file-is-ignored-and-must-never-be-captured\n");
   rmSync(join(dir, "src", "legacy.ts"));
   renameSync(join(dir, "src", "moved.ts"), join(dir, "src", "renamed.ts"));
-  writeFileSync(join(dir, "logo.png"), Buffer.from("89504e470d0a1a0a0000000d4948445200000001", "hex"));
+  writeFileSync(join(dir, "logo.png"), Buffer.from(PNG_AFTER, "base64"));
 }
 
 if (process.env.SANDBOX_SOURCE_CONTROL === "1") {
