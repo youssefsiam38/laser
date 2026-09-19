@@ -2,14 +2,13 @@ import { Gauge, Shrink } from "lucide-react";
 import type { TelemetryContext } from "@lasercode/protocol";
 
 import { ContextRingButton } from "@/components/assistant-ui/elements/context-display";
-import { StatusRing } from "@/components/status";
 import { Button } from "@/components/ui/button";
 import { tokens } from "@/format";
 import { cn } from "@/lib/utils";
 import { useSessionMeta } from "@/runtime";
 
 import { autoCompactText, compositionMissingText, contextHeader, contextLiveOnlyText } from "./format.js";
-import { InstrumentCard, TelemetrySection } from "./section.js";
+import { FigureNote, TelemetrySection } from "./section.js";
 
 /** Category fills — live and ink only. Status tones are not categories (DESIGN.md). */
 const COMPOSITION = [
@@ -44,74 +43,70 @@ export function ContextSection({
       open={open}
       onOpenChange={onOpenChange}
       action={
-        <Button size="xs" variant="outline" disabled={busy || !context} onClick={() => onCompact()}>
+        <Button size="xs" variant="ghost" className="text-ink-2" disabled={busy || !context} onClick={() => onCompact()}>
           <Shrink />
           {compacting ? "Compacting…" : "Compact"}
         </Button>
       }
     >
-      <InstrumentCard className="flex items-center gap-4">
+      <div className="flex flex-col gap-2">
         {contextUsage ? (
-          <ContextRingButton size={64} stroke={3} showLabel side="left" />
+          <ContextRingButton variant="meter" side="left" label="Window" />
+        ) : context ? (
+          <p className="flex min-w-0 items-baseline gap-2">
+            <span className="text-xs leading-xs text-ink-2">Window</span>
+            <span className="ms-auto min-w-0 truncate typed text-ink">
+              {context.tokens === null ? "—" : tokens(context.tokens)}
+              <span className="text-ink-3"> / {tokens(context.contextWindow)}</span>
+            </span>
+          </p>
+        ) : null}
+        {context ? (
+          <p data-slot="telemetry-auto-compact" className="text-xs leading-xs text-ink-2">
+            {autoCompactText(context.autoCompact)}
+          </p>
         ) : (
-          <StatusRing status="idle" size={64} thickness={3} label="Context usage unknown" aria-hidden="true">
-            <span className="text-sm text-ink-3">—</span>
-          </StatusRing>
+          <FigureNote slot="telemetry-context-live-only">{contextLiveOnlyText()}</FigureNote>
         )}
-        <div className="min-w-0 flex-1">
-          {context ? (
-            <>
-              <p className="text-xs leading-4 text-ink-3">Window</p>
-              <p className="mt-0.5 font-mono text-sm font-semibold text-ink tnum">
-                {context.tokens === null ? "—" : tokens(context.tokens)}{" "}
-                <span className="font-normal text-ink-3">/ {tokens(context.contextWindow)}</span>
-              </p>
-              <p className="mt-2 text-xs leading-4 text-ink-2">{autoCompactText(context.autoCompact)}</p>
-            </>
-          ) : (
-            <p data-slot="telemetry-context-live-only" className="text-xs leading-4 text-ink-2">
-              {contextLiveOnlyText()}
-            </p>
-          )}
-        </div>
-      </InstrumentCard>
-      <Composition context={context} />
+        <Composition context={context} />
+      </div>
     </TelemetrySection>
   );
 }
 
+/**
+ * The split, once: one bar, one legend. A category at zero is named in the
+ * legend — it does not get a tile of its own (redesign P4).
+ */
 function Composition({ context }: { context: TelemetryContext | undefined }) {
   const parts = context?.composition;
   if (!parts) {
-    return (
-      <p data-slot="telemetry-composition-missing" className="mt-3 text-xs leading-4 text-ink-2">
-        {compositionMissingText()}
-      </p>
-    );
+    return <FigureNote slot="telemetry-composition-missing">{compositionMissingText()}</FigureNote>;
   }
   const measured = COMPOSITION.reduce((sum, part) => sum + parts[part.key], 0);
   return (
-    <InstrumentCard className="mt-3">
-      <p className="text-xs leading-4 text-ink-3">Composition</p>
-      <div className="mt-2 flex h-2 w-full gap-px overflow-hidden rounded-full bg-surface" aria-hidden="true">
+    <div data-slot="telemetry-composition" className="mt-0.5 flex flex-col gap-1.5">
+      <div
+        data-slot="telemetry-composition-bar"
+        className="flex h-1.5 w-full gap-px overflow-hidden rounded-full bg-surface-2"
+        aria-hidden="true"
+      >
         {COMPOSITION.map((part) => {
           const value = parts[part.key];
           const share = measured > 0 ? (value / measured) * 100 : 0;
           if (share === 0) return null;
-          return <span key={part.key} className={cn("h-full", part.tone)} style={{ width: `${share}%` }} />;
+          return <span key={part.key} data-part={part.key} className={cn("h-full", part.tone)} style={{ width: `${share}%` }} />;
         })}
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-1.5">
+      <ul data-slot="telemetry-composition-legend" className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
         {COMPOSITION.map((part) => (
-          <div key={part.key} className="flex min-w-0 items-center gap-2 rounded-lg bg-surface px-2 py-1.5">
-            <span className={cn("size-2 shrink-0 rounded-full", part.tone)} aria-hidden="true" />
-            <div className="min-w-0">
-              <p className="truncate text-xs leading-4 text-ink-3">{part.label}</p>
-              <p className="font-mono text-xs leading-4 text-ink tnum">{tokens(parts[part.key])}</p>
-            </div>
-          </div>
+          <li key={part.key} data-part={part.key} className="flex min-w-0 items-baseline gap-1.5">
+            <span className={cn("size-1.5 shrink-0 self-center rounded-full", part.tone)} aria-hidden="true" />
+            <span className="text-xs leading-xs text-ink-2">{part.label}</span>
+            <span className="typed text-ink">{tokens(parts[part.key])}</span>
+          </li>
         ))}
-      </div>
-    </InstrumentCard>
+      </ul>
+    </div>
   );
 }

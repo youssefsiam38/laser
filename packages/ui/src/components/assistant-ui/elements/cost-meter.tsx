@@ -14,10 +14,16 @@
  *     the rest `--ink-3`.
  *   - "Not measured" is a state: when no usage was recorded the card says
  *     so instead of drawing `$0`: absent is not zero.
+ *   - A model id **middle-truncates and keeps its tail** rather than ending in
+ *     a CSS ellipsis: `anthropic/claude-…-4` still identifies the model,
+ *     `anthropic/claude-sonn…` does not. Its line carries the cost; the token
+ *     split sits under it, so a 288px column never has to choose between the
+ *     id and the numbers.
  */
 import type { ComponentProps } from "react";
 
 import { money, tokens as formatTokens } from "@/format";
+import { middleTruncate } from "@/fleet/truncate.js";
 import { cn } from "@/lib/utils";
 
 import { announced, pct } from "../utils/range.js";
@@ -42,12 +48,15 @@ export interface CostMeterProps extends Omit<ComponentProps<"div">, "children"> 
 
 const SHARE_TONE = ["bg-live", "bg-[color-mix(in_oklab,var(--live)_55%,transparent)]", "bg-ink-3"] as const;
 
+/** A model id at 12px mono in a 288px column, beside its cost. */
+const MODEL_BUDGET = 22;
+
 export function CostMeter({ runCostUsd, sessionCostUsd, lines, turns, className, ...props }: CostMeterProps) {
   const total = lines.reduce((sum, line) => sum + line.costUsd, 0) || sessionCostUsd;
   return (
     <div data-slot="cost-meter" className={cn("flex w-full flex-col gap-3", className)} {...props}>
       <div className="flex items-baseline gap-2">
-        <span className="text-xl leading-xl font-semibold text-ink tnum">{money(sessionCostUsd)}</span>
+        <span className="text-lg leading-lg font-semibold text-ink tnum">{money(sessionCostUsd)}</span>
         <span className={cn(mono, "text-ink-3")}>session</span>
         {runCostUsd !== undefined && (
           <span className={cn(mono, "ms-auto text-ink-2")}>
@@ -77,22 +86,24 @@ export function CostMeter({ runCostUsd, sessionCostUsd, lines, turns, className,
         </div>
       )}
 
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-2">
         {lines.map((line, i) => (
-          <div key={line.model} className="flex items-baseline gap-2">
-            <span aria-hidden="true" className={cn("size-1.5 shrink-0 self-center rounded-full", SHARE_TONE[Math.min(i, 2)])} />
-            <span className="min-w-0 flex-1 truncate typed text-ink" title={line.model}>
-              {line.model}
-            </span>
-            <span className={cn(mono, "shrink-0 text-ink-3")}>
+          <div key={line.model} className="flex min-w-0 flex-col gap-0.5">
+            <div className="flex min-w-0 items-baseline gap-2">
+              <span aria-hidden="true" className={cn("size-1.5 shrink-0 self-center rounded-full", SHARE_TONE[Math.min(i, 2)])} />
+              <span className="min-w-0 flex-1 typed text-ink" title={line.model}>
+                {middleTruncate(line.model, MODEL_BUDGET)}
+              </span>
+              <span className={cn(mono, "shrink-0 text-ink")}>{money(line.costUsd)}</span>
+            </div>
+            <span className={cn(mono, "ps-3.5 text-ink-3")}>
               {formatTokens(line.inputTokens)} in · {formatTokens(line.outputTokens)} out
             </span>
-            <span className={cn(mono, "shrink-0 text-ink-2")}>{money(line.costUsd)}</span>
           </div>
         ))}
-        {turns !== undefined && turns > 0 && (
+        {turns !== undefined && turns > 0 && sessionCostUsd > 0 && (
           <div className="flex items-baseline justify-between">
-            <span className="text-xs leading-5 text-ink-2">Per turn</span>
+            <span className="text-xs leading-xs text-ink-2">Per turn</span>
             <span className={cn(mono, "text-ink")}>{money(sessionCostUsd / turns)}</span>
           </div>
         )}

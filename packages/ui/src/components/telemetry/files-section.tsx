@@ -8,12 +8,21 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useSessionMeta } from "@/runtime";
 import { openChanges } from "@/source-control/store.js";
 import { filesWorkspaceEmptyText, workspaceEmptyKind } from "@/source-control/workspace-shape.js";
-import { PATH_BUDGET, suffixTruncate } from "@/fleet/truncate.js";
+import { suffixTruncate } from "@/fleet/truncate.js";
 import { cn } from "@/lib/utils";
 
-import { count, fileTotals, filesErrorText, filesHeader, filesIdleText, repoLabel, type FilesStatus } from "./format.js";
+import {
+  count,
+  fileTotals,
+  filesErrorText,
+  filesHeader,
+  filesIdleText,
+  pathDisplay,
+  repoLabel,
+  type FilesStatus,
+} from "./format.js";
 import { useWorkspaceShape } from "./queries.js";
-import { InstrumentCard, TelemetrySection } from "./section.js";
+import { FigureNote, TelemetrySection } from "./section.js";
 
 export type { FilesStatus };
 
@@ -68,41 +77,31 @@ export function FilesSection({
       }
     >
       {status === "loading" ? (
-        <p className="text-xs leading-4 text-ink-3">Reading changes…</p>
+        <FigureNote>Reading changes…</FigureNote>
       ) : status === "error" ? (
-        <p data-slot="telemetry-files-error" className="text-xs leading-4 text-ink-2">
-          {message ?? filesErrorText()}
-        </p>
+        <FigureNote slot="telemetry-files-error">{message ?? filesErrorText()}</FigureNote>
       ) : status === "idle" ? (
-        <p data-slot="telemetry-files-idle" className="text-xs leading-4 text-ink-2">
-          {filesIdleText()}
-        </p>
+        <FigureNote slot="telemetry-files-idle">{filesIdleText()}</FigureNote>
       ) : changes?.pruned ? (
-        <p data-slot="telemetry-files-pruned" className="text-xs leading-4 text-ink-2">
-          {changes.pruned.detail}
-        </p>
+        <FigureNote slot="telemetry-files-pruned">{changes.pruned.detail}</FigureNote>
       ) : !changes || totals.files === 0 ? (
         workspace.status === "loading" ? (
-          <p className="text-xs leading-4 text-ink-3">Reading changes…</p>
+          <FigureNote>Reading changes…</FigureNote>
         ) : (
-          <p data-slot="telemetry-files-empty" data-kind={emptyKind} className="text-xs leading-4 text-ink-2">
+          <FigureNote slot="telemetry-files-empty" kind={emptyKind}>
             {filesWorkspaceEmptyText(emptyKind)}
-          </p>
+          </FigureNote>
         )
       ) : (
-        <>
-          <InstrumentCard className="mb-3">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs leading-4 text-ink-3">{totals.files === 1 ? "1 file" : `${count(totals.files)} files`}</p>
-              <DiffStat added={totals.added} removed={totals.removed} />
-            </div>
-          </InstrumentCard>
-          <div className="flex flex-col gap-3">
-            {changes.repos.map((repo) => (
-              <RepoGroup key={repo.repo} repo={repo} sessionKey={sessionKey} />
-            ))}
-          </div>
-        </>
+        <div className="flex flex-col gap-2">
+          <p className="flex items-baseline justify-between gap-3 text-xs leading-xs text-ink-2">
+            {totals.files === 1 ? "1 file" : `${count(totals.files)} files`}
+            <DiffStat added={totals.added} removed={totals.removed} />
+          </p>
+          {changes.repos.map((repo) => (
+            <RepoGroup key={repo.repo} repo={repo} sessionKey={sessionKey} />
+          ))}
+        </div>
       )}
     </TelemetrySection>
   );
@@ -115,11 +114,11 @@ function RepoGroup({ repo, sessionKey }: { repo: RepoChanges; sessionKey: string
   const branch = suffixTruncate(repo.branch);
   return (
     <div data-slot="telemetry-repo" data-repo={repo.repo}>
-      <div className="mb-1 flex min-w-0 items-baseline gap-2">
-        <span className="min-w-0 truncate text-xs font-medium text-ink" title={repo.repo}>
+      <div className="flex min-w-0 items-baseline gap-2 py-1">
+        <span className="min-w-0 truncate text-xs leading-xs font-medium text-ink" title={repo.repo}>
           {name}
         </span>
-        <span className="min-w-0 truncate font-mono text-xs text-ink-3" title={repo.branch}>
+        <span data-slot="telemetry-repo-branch" className="min-w-0 shrink-0 truncate typed text-ink-3" title={repo.branch}>
           {branch}
         </span>
         <span className="ms-auto shrink-0">
@@ -154,16 +153,31 @@ function FileRow({ repo, file, sessionKey }: { repo: string; file: ChangedFile; 
             })
           }
           className={cn(
-            "flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-1 text-start outline-none",
+            "flex min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-1 text-start outline-none",
             "pointer-coarse:min-h-11",
             "hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
           )}
         >
-          <span className="min-w-0 flex-1 font-mono text-xs text-ink">{suffixTruncate(file.path, PATH_BUDGET)}</span>
+          <FilePath path={file.path} />
           <FileChurn file={file} />
         </button>
       </ControlHint>
     </li>
+  );
+}
+
+/**
+ * The name identifies the row, so the name is never what gives way: the
+ * directory middle-truncates around it and the full path stays in the hint
+ * and the accessible name.
+ */
+function FilePath({ path }: { path: string }) {
+  const { dir, name } = pathDisplay(path);
+  return (
+    <span data-slot="telemetry-file-path" className="min-w-0 flex-1 typed">
+      {dir ? <span className="text-ink-3">{dir}</span> : null}
+      <span className="text-ink">{name}</span>
+    </span>
   );
 }
 

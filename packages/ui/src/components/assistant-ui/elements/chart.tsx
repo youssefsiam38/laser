@@ -16,6 +16,10 @@
  *     `--ink-3` bars.
  *   - A nullish resource sample breaks the geometry and is described as
  *     unavailable; it is never plotted at zero or connected across.
+ *   - `density="sparkline"` is a 32px plot with hairline bars and the label
+ *     and value on one line: in the telemetry column the figure is a shape
+ *     beside a number, not a chart with a legend. The full plot stays for
+ *     Advanced resource diagnostics, which has the room.
  */
 import type { ComponentProps } from "react";
 
@@ -50,9 +54,12 @@ export interface ChartProps extends Omit<ComponentProps<"div">, "children"> {
   /** Accessible wording for a missing point. */
   unavailableLabel?: ((index: number) => string) | undefined;
   variant?: ChartVariant | undefined;
+  /** `sparkline` is the 32px form for a narrow column. */
+  density?: "full" | "sparkline" | undefined;
 }
 
-export function Chart({ label, value, delta, points, pointLabel, unavailableLabel, variant = "area", className, ...props }: ChartProps) {
+export function Chart({ label, value, delta, points, pointLabel, unavailableLabel, variant = "area", density = "full", className, ...props }: ChartProps) {
+  const dense = density === "sparkline";
   const y = scale(points);
   const step = points.length > 1 ? (W - PAD * 2) / (points.length - 1) : 0;
   const x = (i: number) => PAD + i * step;
@@ -77,9 +84,9 @@ export function Chart({ label, value, delta, points, pointLabel, unavailableLabe
     .join(", ");
 
   return (
-    <div data-slot="chart" className={cn("flex w-full flex-col gap-2", className)} {...props}>
+    <div data-slot="chart" className={cn("flex w-full flex-col", dense ? "gap-1" : "gap-2", className)} {...props}>
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-xs leading-5 text-ink-2">{label}</span>
+        <span className={cn("min-w-0 truncate text-ink-2", dense ? "text-xs leading-xs" : "text-xs leading-5")}>{label}</span>
         <span className="flex items-baseline gap-2">
           <span className="typed text-ink">{value}</span>
           {delta !== undefined && <span className={cn(mono, "text-ink-3")}>{delta}</span>}
@@ -90,7 +97,7 @@ export function Chart({ label, value, delta, points, pointLabel, unavailableLabe
         viewBox={`0 0 ${W} ${H}`}
         role="img"
         aria-label={`${label}: ${value}. Latest: ${described}`}
-        className="h-18 w-full overflow-visible"
+        className={cn("w-full overflow-visible", dense ? "h-8" : "h-18")}
         preserveAspectRatio="none"
       >
         <line x1="0" x2={W} y1={H - PAD} y2={H - PAD} className="stroke-line" strokeWidth="1" vectorEffect="non-scaling-stroke" />
@@ -98,7 +105,7 @@ export function Chart({ label, value, delta, points, pointLabel, unavailableLabe
           points.map((point, i) => {
             if (typeof point !== "number" || !Number.isFinite(point)) return null;
             const top = y(point);
-            const barWidth = Math.max(2, step * 0.55);
+            const barWidth = dense ? Math.max(1.5, Math.min(8, step * 0.5)) : Math.max(2, step * 0.55);
             return (
               <rect
                 key={i}

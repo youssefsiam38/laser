@@ -10,6 +10,7 @@ import type {
   TelemetryWork,
 } from "@lasercode/protocol";
 import { formatElapsed, money, percent, tokens } from "@/format";
+import { middleTruncate } from "@/fleet/truncate.js";
 
 /** Narrow no-break space so `2 795` does not wrap mid-number. */
 const GROUP = "\u202f";
@@ -41,25 +42,50 @@ export function contextHeader(context: TelemetryContext | undefined): string {
   return percent(context.percent);
 }
 
+/**
+ * Auto-compact, and the threshold it fires at. A threshold the engine did not
+ * report is **not** zero: printing `0` there claimed the session compacts
+ * immediately. An unknown figure says so on itself (redesign P3).
+ */
 export function autoCompactText(auto: TelemetryContext["autoCompact"] | undefined): string {
   if (!auto || !auto.enabled || auto.state === "off") return "Auto-compact off";
   if (auto.state === "compacting") return "Compacting";
-  if (auto.thresholdTokens !== undefined) return `Auto-compact on · ${tokens(auto.thresholdTokens)}`;
-  return "Auto-compact on";
+  if (auto.thresholdTokens !== undefined && auto.thresholdTokens > 0) {
+    return `Auto-compact on · ${tokens(auto.thresholdTokens)}`;
+  }
+  return `Auto-compact on · ${THRESHOLD_UNKNOWN}`;
+}
+
+/** The voice the composition already uses for a figure the snapshot lacks. */
+const THRESHOLD_UNKNOWN = "threshold not reported";
+
+export function autoCompactThresholdUnknownText(): string {
+  return THRESHOLD_UNKNOWN;
 }
 
 /** Spend header while collapsed: the API total, or Account, or None. */
 export function spendHeader(spend: TelemetrySpend | undefined): string {
   if (!spend || spend.billing === "none") return "None";
-  if (spend.api) return money(spend.api.totals.cost);
+  if (hasApiCost(spend)) return money(spend.api.totals.cost);
   if (spend.billing === "account" || spend.billing === "mixed") return "Account";
   return "None";
 }
 
+/**
+ * True only when there is an API cost to show. A settled `$0` is no API cost:
+ * drawing it spends four lines saying zero four times, and the spec asks for
+ * one (leap §4.2, redesign P2).
+ */
 export function hasApiCost(
   spend: TelemetrySpend | undefined,
 ): spend is TelemetrySpend & { api: NonNullable<TelemetrySpend["api"]> } {
-  return spend?.api !== undefined;
+  return spend?.api !== undefined && spend.api.totals.cost > 0;
+}
+
+/** The one line a session with no API cost gets. */
+export function noApiCostText(spend: TelemetrySpend | undefined): string {
+  if (spend?.billing === "account" || spend?.billing === "mixed") return "No API cost — account billed";
+  return "No API cost";
 }
 
 export function workHeader(work: TelemetryWork | undefined): string {
@@ -123,6 +149,22 @@ export function historyHeader(history: TelemetryHistory | undefined, held: numbe
   if (!history) return navigable > 0 ? `${count(navigable)} loaded` : "—";
   if (held < history.records) return `${count(navigable)} of ${count(history.records)}`;
   return count(history.records);
+}
+
+/**
+ * A file path that keeps its **name**. The name is the identity of the row;
+ * the directory is context, so the middle of the path is what gives way
+ * (redesign P: Files). The full path stays in the tooltip and the accessible
+ * name.
+ */
+export function pathDisplay(path: string, max = 30): { dir: string; name: string } {
+  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  const name = cut >= 0 ? path.slice(cut + 1) : path;
+  const dir = cut >= 0 ? path.slice(0, cut + 1) : "";
+  if (!dir) return { dir: "", name: middleTruncate(name, max) };
+  const room = max - name.length;
+  if (room < 4) return { dir: "…/", name: middleTruncate(name, Math.max(8, max - 2)) };
+  return { dir: middleTruncate(dir, room), name };
 }
 
 export function compositionMissingText(): string {
