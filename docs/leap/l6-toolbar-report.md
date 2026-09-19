@@ -82,6 +82,13 @@ No new catalog element. No `@pierre/diffs` import.
   engine/host would need to say so; this half does not guess.
 - `timedOut`/`killed` on `runGit` (already noted in `l6-report.md`). Uncertain
   is rendered when the engine returns it.
+- **`branchGone`.** `AgentRun.worktree` has `removedAt` (directory gone) and
+  always keeps `branch` as history. That maps to the overlay's surviving-branch
+  state (`worktreeRemoved`, show the branch). There is no `branchGone` /
+  `branchExists` on `AgentWorktree`. `AgentWorktreeStatus.unmergedCommits ===
+  null` means "git could not answer (repo moved **or** branch already gone)"
+  and is not a boolean. The designed "this agent's branch is gone" state stays
+  mock-only until protocol carries an explicit flag. Not guessed.
 
 ## Validation
 
