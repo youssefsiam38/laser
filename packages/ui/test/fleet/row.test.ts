@@ -74,7 +74,46 @@ describe("stripText", () => {
       "worker",
     );
     expect(worktreeLabel(strip.worktree)).toBe("shared checkout");
+    expect(strip.worktree.reason).toBeUndefined();
     expect(stripText(strip)).toBe("worker · 12t · shared checkout");
+  });
+  it("attaches isolation.reason to the chip and stays silent when it is absent", () => {
+    const reason = "This workspace holds 41 repositories, so an agent cannot be isolated from all of them; sharing your checkout.";
+    const shared = agentStrip(
+      run({
+        runId: "r1",
+        sessionPath: "/p/a.jsonl",
+        worktree: null,
+        isolation: { mode: "shared", shape: "workspace-of-repos", reason },
+      }),
+      "worker",
+    );
+    expect(shared.worktree).toMatchObject({ kind: "shared", reason });
+    expect(stripText(shared)).toBe("worker · shared checkout");
+    const isolated = agentStrip(
+      run({
+        runId: "r2",
+        sessionPath: "/p/b.jsonl",
+        worktree: { path: "/p/.worktrees/a", branch: "agents/a", baseCommit: "abc" },
+        isolation: { mode: "worktree", shape: "repo", reason: "This agent works in its own worktree, isolated from your checkout." },
+      }),
+      "worker",
+    );
+    expect(isolated.worktree).toMatchObject({
+      kind: "branch",
+      branch: "agents/a",
+      reason: "This agent works in its own worktree, isolated from your checkout.",
+    });
+    const blank = agentStrip(
+      run({
+        runId: "r3",
+        sessionPath: "/p/c.jsonl",
+        worktree: null,
+        isolation: { mode: "shared", shape: "no-git", reason: "   " },
+      }),
+      "worker",
+    );
+    expect(blank.worktree).toEqual({ kind: "shared" });
   });
   it("joins a command strip without inventing a pid", () => {
     const strip = taskStrip(task({ id: "t1", sessionPath: ROOT, outputBytes: 2048 }));

@@ -4,10 +4,12 @@
  * Kind is a shape. Line 2 is never the task brief.
  */
 import { ChevronDown } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 import { STATUS_LABEL, StatusDot } from "@/components/status";
-import { ControlHint } from "@/components/ui/hint";
+import { Button } from "@/components/ui/button";
+import { ControlHint, Hint } from "@/components/ui/hint";
+import { openChanges } from "@/source-control/store.js";
 import {
   FLEET_STATE_LABEL,
   agentTintIndex,
@@ -97,26 +99,53 @@ export function FleetHeadlineLine({ headline, failed }: { headline: FleetHeadlin
   );
 }
 
+function worktreeChipHint(chip: FleetWorktreeChip): string | undefined {
+  const full = worktreeLabel(chip);
+  const visible = chip.kind === "branch" ? suffixTruncate(chip.branch, BRANCH_BUDGET) : full;
+  const truncated = visible !== full ? full : undefined;
+  const reason = chip.reason;
+  return [reason, truncated].filter((part): part is string => Boolean(part)).join("\n") || undefined;
+}
+
 function WorktreeChip({ chip }: { chip: FleetWorktreeChip }) {
   const full = worktreeLabel(chip);
   const visible = chip.kind === "branch" ? suffixTruncate(chip.branch, BRANCH_BUDGET) : full;
-  return (
-    <TruncatedValue
-      full={full}
-      visible={visible}
-      className="typed"
-    />
-  );
+  const label = <TruncatedValue full={full} visible={visible} className="typed" />;
+  const hint = worktreeChipHint(chip);
+  return hint ? <Hint hint={hint}>{label}</Hint> : label;
 }
 
 function stripHint(strip: FleetStrip): string | undefined {
-  if (strip.kind === "agent") {
-    const full = worktreeLabel(strip.worktree);
-    const visible = strip.worktree.kind === "branch" ? suffixTruncate(strip.worktree.branch, BRANCH_BUDGET) : full;
-    return visible !== full ? full : undefined;
-  }
+  if (strip.kind === "agent") return undefined;
   const visible = isPathShaped(strip.command) ? middleTruncate(strip.command, PATH_BUDGET) : strip.command;
   return visible !== strip.command ? strip.command : undefined;
+}
+
+function swallowEnterOnSlot(event: KeyboardEvent<HTMLElement>, slot: string): void {
+  if (event.key !== "Enter") return;
+  const target = event.target;
+  if (target instanceof HTMLElement && target.dataset.slot === slot) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+}
+
+function FleetChangesButton({ runId, sessionKey }: { runId: string; sessionKey: string }) {
+  const open = (): void => {
+    openChanges({ scope: { kind: "agent", runId }, sessionKey });
+  };
+  return (
+    <Button
+      type="button"
+      size="xs"
+      variant="outline"
+      data-slot="fleet-changes"
+      onClick={open}
+      onKeyDown={(event) => swallowEnterOnSlot(event, "fleet-changes")}
+    >
+      Changes
+    </Button>
+  );
 }
 
 function headlineHint(headline: FleetHeadline): string | undefined {
@@ -223,7 +252,7 @@ export function FleetWorkRow({
       aria-label={accessible}
       onClick={onToggle}
       className={cn(
-        "flex min-h-11 min-w-0 flex-1 items-start gap-2 rounded-lg px-0.5 py-0 text-start outline-none",
+        "flex min-h-11 min-w-0 w-full items-start gap-2 rounded-lg px-0.5 py-0 text-start outline-none",
         "transition-colors duration-(--motion-instant) hover:bg-surface-2",
         "active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]",
         "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
@@ -262,7 +291,6 @@ export function FleetWorkRow({
         ) : headline ? (
           <FleetHeadlineLine headline={headline} failed={source.state === "failed"} />
         ) : null}
-        {!item.contextOnly ? <FleetStripLine strip={source.strip} /> : null}
       </span>
       <ChevronDown
         aria-hidden="true"
@@ -273,6 +301,8 @@ export function FleetWorkRow({
       />
     </button>
   );
+
+  const showChanges = !item.contextOnly && source.kind === "agent" && source.run !== undefined;
 
   return (
     <div
@@ -294,9 +324,32 @@ export function FleetWorkRow({
     >
       <div className="flex min-w-0 items-start gap-2 px-2 py-1.5">
         <FleetKindTile item={source} />
-        {hint ? <ControlHint hint={hint}>{toggle}</ControlHint> : toggle}
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          {hint ? <ControlHint hint={hint}>{toggle}</ControlHint> : toggle}
+          {!item.contextOnly ? (
+            <span className="flex min-w-0 items-baseline gap-2 px-0.5">
+              <span className="size-2 shrink-0" aria-hidden="true" />
+              <FleetStripLine strip={source.strip} />
+              <span className="size-4 shrink-0" aria-hidden="true" />
+            </span>
+          ) : null}
+        </div>
       </div>
-      {askingActions}
+      {(showChanges || askingActions) && (
+        <div
+          data-slot="fleet-row-actions"
+          className="flex flex-wrap items-center gap-2 px-3 pb-2"
+          onKeyDown={(event) => {
+            swallowEnterOnSlot(event, "fleet-changes");
+            swallowEnterOnSlot(event, "fleet-answer");
+          }}
+        >
+          {showChanges && source.run ? (
+            <FleetChangesButton runId={source.run.runId} sessionKey={source.sessionPath} />
+          ) : null}
+          {askingActions}
+        </div>
+      )}
       {expanded && <div className="min-w-0 px-3 pb-3 hairline-t pt-3">{renderDetail(source, item.contextOnly)}</div>}
     </div>
   );
