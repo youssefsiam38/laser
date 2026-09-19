@@ -242,6 +242,9 @@ importers:
       '@noble/hashes':
         specifier: 1.8.0
         version: 1.8.0
+      '@pierre/diffs':
+        specifier: 1.4.3
+        version: 1.4.3(@shikijs/themes@4.4.3)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
       '@tailwindcss/vite':
         specifier: 4.3.3
         version: 4.3.3(vite@7.1.5(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.0))
@@ -1418,17 +1421,17 @@ packages:
     resolution: {integrity: sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw==}
 
   '@modelcontextprotocol/client@https://pkg.pr.new/@modelcontextprotocol/client@3b205e7dd2f997b6a87e479e36421f7eaa2058e0':
-    resolution: {integrity: sha512-ZlibxQrqxSzt9L2FWO5PM22zhpdcLOaAdHJCZxHL+3vrZzJrvD49LwsLlt+l7YVt+9S3vYMOZwi9Vc96odBfhw==, tarball: https://pkg.pr.new/@modelcontextprotocol/client@3b205e7dd2f997b6a87e479e36421f7eaa2058e0}
+    resolution: {tarball: https://pkg.pr.new/@modelcontextprotocol/client@3b205e7dd2f997b6a87e479e36421f7eaa2058e0}
     version: 2.0.0
     engines: {node: '>=20'}
 
   '@modelcontextprotocol/core@https://pkg.pr.new/@modelcontextprotocol/core@3b205e7dd2f997b6a87e479e36421f7eaa2058e0':
-    resolution: {integrity: sha512-lJLq7wP4hNwRcckA1Hd1fF1vPyA0QCDUqi+EO6GKzoXlxM10oIlY+f8m2pq+WLQJsG+/VwlJ4GA6Mx3Ei8uXKw==, tarball: https://pkg.pr.new/@modelcontextprotocol/core@3b205e7dd2f997b6a87e479e36421f7eaa2058e0}
+    resolution: {tarball: https://pkg.pr.new/@modelcontextprotocol/core@3b205e7dd2f997b6a87e479e36421f7eaa2058e0}
     version: 2.0.0
     engines: {node: '>=20'}
 
   '@modelcontextprotocol/core@https://pkg.pr.new/modelcontextprotocol/typescript-sdk/@modelcontextprotocol/core@3b205e7':
-    resolution: {integrity: sha512-lJLq7wP4hNwRcckA1Hd1fF1vPyA0QCDUqi+EO6GKzoXlxM10oIlY+f8m2pq+WLQJsG+/VwlJ4GA6Mx3Ei8uXKw==, tarball: https://pkg.pr.new/modelcontextprotocol/typescript-sdk/@modelcontextprotocol/core@3b205e7}
+    resolution: {tarball: https://pkg.pr.new/modelcontextprotocol/typescript-sdk/@modelcontextprotocol/core@3b205e7}
     version: 2.0.0
     engines: {node: '>=20'}
 
@@ -1684,14 +1687,49 @@ packages:
       react: ^18.3.1 || ^19.0.0
       react-dom: ^18.3.1 || ^19.0.0
 
+  '@pierre/diffs@1.4.3':
+    resolution: {integrity: sha512-zJD10amMxjQis5/SYz9AYMTyqdvg1Rbuu6nCYJm67C0phFGHbescoQcxNnxrV2SVQcNSyxtSRwjjf4ND5IJXnA==}
+    peerDependencies:
+      react: ^18.3.1 || ^19.0.0
+      react-dom: ^18.3.1 || ^19.0.0
+    peerDependenciesMeta:
+      react:
+        optional: true
+      react-dom:
+        optional: true
+
   '@pierre/theme@1.1.0':
     resolution: {integrity: sha512-GC2OWTAfTIIWWYhPCygwG8t2EtePQkRfON4MI2rwIkJylmiyqIttJID2dCL8sUD8cNdEvYkEyfEHHKMeCiDLoQ==}
+    engines: {vscode: ^1.0.0}
+
+  '@pierre/theme@2.0.0':
+    resolution: {integrity: sha512-yNDd9GYLQl1mEUJR8AneJ5e4ohLIHQd/wZLWr4fagt78vS2RwwZNW530vVgHqXFAyFVcFlRmGUD5ramXH46OXw==}
     engines: {vscode: ^1.0.0}
 
   '@pierre/theming@0.0.2':
     resolution: {integrity: sha512-QM1M4stXfnzfaE8I8YbjXSApV8c+2dBsXJj8eYg9WTpBR/cTmCZIcfGnN4p13iRrYu2Br/R/OJfEL7uR8Qjctw==}
     peerDependencies:
       '@pierre/theme': ^1.1.0
+      '@shikijs/themes': ^3.0.0 || ^4.0.0
+      react: ^18.3.1 || ^19.0.0
+      react-dom: ^18.3.1 || ^19.0.0
+      shiki: ^3.0.0 || ^4.0.0
+    peerDependenciesMeta:
+      '@pierre/theme':
+        optional: true
+      '@shikijs/themes':
+        optional: true
+      react:
+        optional: true
+      react-dom:
+        optional: true
+      shiki:
+        optional: true
+
+  '@pierre/theming@1.0.1':
+    resolution: {integrity: sha512-WCI5Qd7iprDpISL9fBYOLe8RV53+b7mFNA3bPzl60/2CKCSrsKN8zEcep6Y3BAzvARlmca50zGjDodqPGiTUKA==}
+    peerDependencies:
+      '@pierre/theme': ^1.1.0 || ^2.0.0
       '@shikijs/themes': ^3.0.0 || ^4.0.0
       react: ^18.3.1 || ^19.0.0
       react-dom: ^18.3.1 || ^19.0.0
@@ -8382,11 +8420,36 @@ snapshots:
     transitivePeerDependencies:
       - '@shikijs/themes'
 
+  '@pierre/diffs@1.4.3(@shikijs/themes@4.4.3)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)':
+    dependencies:
+      '@pierre/theme': 2.0.0
+      '@pierre/theming': 1.0.1(@pierre/theme@2.0.0)(@shikijs/themes@4.4.3)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)(shiki@4.4.3)
+      '@shikijs/transformers': 4.4.3
+      diff: 9.0.0
+      hast-util-to-html: 9.0.5
+      lru_map: 0.4.1
+      shiki: 4.4.3
+    optionalDependencies:
+      react: 19.1.1
+      react-dom: 19.1.1(react@19.1.1)
+    transitivePeerDependencies:
+      - '@shikijs/themes'
+
   '@pierre/theme@1.1.0': {}
+
+  '@pierre/theme@2.0.0': {}
 
   '@pierre/theming@0.0.2(@pierre/theme@1.1.0)(@shikijs/themes@4.4.3)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)(shiki@4.4.3)':
     optionalDependencies:
       '@pierre/theme': 1.1.0
+      '@shikijs/themes': 4.4.3
+      react: 19.1.1
+      react-dom: 19.1.1(react@19.1.1)
+      shiki: 4.4.3
+
+  '@pierre/theming@1.0.1(@pierre/theme@2.0.0)(@shikijs/themes@4.4.3)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)(shiki@4.4.3)':
+    optionalDependencies:
+      '@pierre/theme': 2.0.0
       '@shikijs/themes': 4.4.3
       react: 19.1.1
       react-dom: 19.1.1(react@19.1.1)

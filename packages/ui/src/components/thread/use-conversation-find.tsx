@@ -20,7 +20,7 @@ function publishHighlights() {
 // The walker itself lives in `find-ranges.ts`, a leaf module the full-body
 // reader can import without reaching the transcript viewport (M16-T84 S1).
 // Re-exported here because this is where every caller already looks for it.
-export { findTextMatches, findTextRanges } from "./find-ranges.js";
+export { findTextMatches, findTextRanges, collectOpenShadowRoots, findTextMatchesAcrossRoots, findTextMatchesIn, DIFF_LINE_FIND_POLICY } from "./find-ranges.js";
 
 const NO_MESSAGES: readonly ThreadMessage[] = [];
 
@@ -94,7 +94,7 @@ export function useConversationFind({ partial = false, loadAll, refusal, toolLab
   }, [threadId]);
   useEffect(() => {
     const show = (value?: string, source?: SearchSource) => {
-      if (!root.current?.getClientRects().length || document.querySelector('[aria-label="Workbench screens"]')) return;
+      if (!root.current?.getClientRects().length || document.querySelector('[aria-label="Workbench screens"]') || document.querySelector('[data-slot="changes-overlay"]')) return;
       if (!open) restoreFocus.current = document.activeElement as HTMLElement;
       if (value !== undefined) { setQuery(value); setIndex(0); void loadHistory(); }
       preferredSource.current = source;
@@ -103,7 +103,7 @@ export function useConversationFind({ partial = false, loadAll, refusal, toolLab
     };
     const key = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f" && ![...document.querySelectorAll('[role="dialog"]')].some(dialog => !dialog.contains(root.current))) {
-        if (!root.current?.getClientRects().length || document.querySelector('[aria-label="Workbench screens"]')) return;
+        if (!root.current?.getClientRects().length || document.querySelector('[aria-label="Workbench screens"]') || document.querySelector('[data-slot="changes-overlay"]')) return;
         const focusedThread = document.activeElement?.closest('[data-slot="thread"]');
         if (focusedThread && focusedThread !== root.current) return;
         if (!focusedThread && document.activeElement?.closest('[data-slot="beam-bubble"]') !== root.current?.closest('[data-slot="beam-bubble"]')) return;
