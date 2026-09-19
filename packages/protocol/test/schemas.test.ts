@@ -155,6 +155,11 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/remove": { cwd: "/p" },
   "pi/project/trust": { cwd: "/p", trusted: true, remember: true },
   "pi/project/git": { cwd: "/p", path: "/s.jsonl" },
+  "pi/project/changes": { cwd: "/p", path: "/s.jsonl", scope: "session", workdir: "/p" },
+  "pi/project/file_diff": { cwd: "/p", path: "/s.jsonl", scope: "turn", repo: "/p", file: "src/a.ts", turn: 3, context: 5, offset: 0, limit: 65536 },
+  "pi/project/file_source": { cwd: "/p", path: "/s.jsonl", repo: "/p", file: "src/a.ts", ref: "HEAD", offset: 0, limit: 65536 },
+  "pi/project/checkpoint/list": { cwd: "/p", path: "/s.jsonl" },
+  "pi/project/restore": { cwd: "/p", path: "/s.jsonl", turn: 3, restore: "both", confirm: true },
   "pi/project/browse": { path: "~\\code", explorer: { mode: "explorer", cwd: "/home/me/code", prefix: "node", offset: 80, limit: 80 } },
   "pi/project/env/status": { cwd: "/home/me/code/app" },
   "pi/project/env/set": {

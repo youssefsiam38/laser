@@ -1600,7 +1600,7 @@ function DeleteSessionBody({ path, title, onDone }: { path: string | undefined; 
     >
       <DialogHeader>
         <DialogTitle>Delete “{title}”?</DialogTitle>
-        <DialogDescription>This permanently removes the saved transcript from disk. It cannot be recovered here.</DialogDescription>
+        <DialogDescription>This permanently removes the saved transcript from disk, including its checkpoints. It cannot be recovered here.</DialogDescription>
       </DialogHeader>
 
       {loading && (
