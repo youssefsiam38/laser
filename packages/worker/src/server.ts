@@ -74,6 +74,7 @@ import { WorkerLifetime } from "./worker-lifetime.js";
 import { assertFirstTurnAdmission, FirstTurnLock } from "./first-turn.js";
 import { PendingTray } from "./pending.js";
 import { GitService } from "./git.js";
+import { SourceControlService } from "./source-control/index.js";
 import { KeybindingsAdapter } from "./keybindings.js";
 import { ModelsAdapter, PackagesAdapter } from "./packages.js";
 import { SettingsAdapter } from "./settings.js";
@@ -249,6 +250,7 @@ export class WorkerServer {
   private modelsAdapter: ModelsAdapter | undefined;
   /** M2-T6 git line. Built on first use like the adapters above. */
   private gitService: GitService | undefined;
+  private sourceControlService: SourceControlService | undefined;
   /** M4-T7 keybindings, and the `@` popover's file list. Both built on first use. */
   private keybindingsAdapter: KeybindingsAdapter | undefined;
   private filesService: ProjectFilesService | undefined;
@@ -976,6 +978,26 @@ export class WorkerServer {
         if (req.params.path !== undefined && this.runtimes.has(req.params.path)) await git.baseline(req.params.path);
         return (await git.status(req.params.path)) satisfies Result<"pi/project/git">;
       }
+      case "pi/project/changes": {
+        this.assertCwd(req.params.cwd);
+        return (await this.sourceControl().changes(req.params)) satisfies Result<"pi/project/changes">;
+      }
+      case "pi/project/file_diff": {
+        this.assertCwd(req.params.cwd);
+        return (await this.sourceControl().fileDiff(req.params)) satisfies Result<"pi/project/file_diff">;
+      }
+      case "pi/project/file_source": {
+        this.assertCwd(req.params.cwd);
+        return (await this.sourceControl().fileSource(req.params)) satisfies Result<"pi/project/file_source">;
+      }
+      case "pi/project/checkpoint/list": {
+        this.assertCwd(req.params.cwd);
+        return (await this.sourceControl().list(req.params.path, req.params.cwd)) satisfies Result<"pi/project/checkpoint/list">;
+      }
+      case "pi/project/restore": {
+        this.assertCwd(req.params.cwd);
+        return (await this.sourceControl().restore(req.params)) satisfies Result<"pi/project/restore">;
+      }
 
       // ------------------------------------------- M16-T17 project env ---
       case "pi/project/env/status": {
@@ -1317,6 +1339,20 @@ export class WorkerServer {
   private git(): GitService {
     this.gitService ??= new GitService({ cwd: this.options.cwd });
     return this.gitService;
+  }
+
+  private sourceControl(): SourceControlService {
+    this.sourceControlService ??= new SourceControlService({
+      projectCwd: this.options.cwd,
+      sessionWorkdir: (path) => this.runtimes.get(path)?.driver.state().cwd,
+      sessionStreaming: (path) => this.runtimes.get(path)?.driver.state().isStreaming === true,
+      agentRun: (runId) => this.harness.runs().find((run) => run.runId === runId),
+      navigate: async (path, entryId) => {
+        const live = this.live(path);
+        return this.firstTurnLock.run(live.path, () => live.driver.navigateTree(entryId));
+      },
+    });
+    return this.sourceControlService;
   }
 
   private keybindings(): KeybindingsAdapter {
@@ -1739,6 +1775,7 @@ export class WorkerServer {
       // Capture "since the session started" for the git line. Fire and forget:
       // a failure here means the line shows nothing, never that the open fails.
       void this.git().baseline(state.path);
+      void this.sourceControl().captureBaseline(state.path, state.cwd).catch(() => {});
       return live;
     } catch (error) {
       live.unsubscribe();
@@ -2400,6 +2437,12 @@ export class WorkerServer {
         // in the order they wrote it. Fire and forget — a delivery that fails
         // keeps its message and its reason in the tray, and says so there.
         if (update.kind === "agent_settled" && live.pending) void live.pending.drain();
+        if (update.kind === "agent_settled") {
+          const leafId = live.driver.entriesNow?.()?.leafId;
+          void this.sourceControl()
+            .captureAfterTurn(live.path, live.driver.state().cwd, typeof leafId === "string" ? leafId : undefined)
+            .catch(() => {});
+        }
         return;
       }
       case "ui_request": {
