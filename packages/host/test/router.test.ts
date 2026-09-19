@@ -1272,7 +1272,7 @@ describe("Router · git actions", () => {
     const h = harness();
     const calls: Array<[string, Record<string, unknown>]> = [
       ["pi/project/git/hosts", { cwd: CWD_A, repos: [CWD_A] }],
-      ["pi/project/git/commit", { cwd: CWD_A, paths: ["src/a.ts"], message: "Fix", confirm: true }],
+      ["pi/project/git/commit", { cwd: CWD_A, runId: "run_1", paths: ["src/a.ts"], message: "Fix", confirm: true }],
       ["pi/project/git/push", { cwd: CWD_A, remote: "origin", branch: "main", confirm: true }],
       ["pi/project/git/branch", { cwd: CWD_A, name: "feature/x", base: "main", confirm: true }],
       ["pi/project/git/prose", { cwd: CWD_A, path: PATH_A, kind: "commit", files: ["src/a.ts"] }],

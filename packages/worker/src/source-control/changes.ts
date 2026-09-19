@@ -116,6 +116,10 @@ async function resolveScopeRangeInner(repo: RepoRef, query: ScopeQuery, checkpoi
     case "agent": {
       if (!query.baseCommit) throw new ProtocolError(ErrorCodes.InvalidParams, "This agent has no recorded starting commit.");
       const from = await resolveRevision(repo, query.baseCommit);
+      if (query.toRef) {
+        const to = await resolveRevision(repo, query.toRef);
+        return { from, to };
+      }
       return { from };
     }
   }
@@ -246,6 +250,27 @@ export async function resolveRevision(repo: RepoRef, value: string): Promise<str
     throw new ProtocolError(ErrorCodes.InvalidParams, "That revision is not in this repository.");
   }
   return resolved.stdout.trim();
+}
+
+/** Local heads ref for a recorded branch name, or undefined when the name is not usable as one argv element. */
+export function headsRef(branch: string): string | undefined {
+  if (!branch || branch.startsWith("-") || branch.includes("\0") || branch.includes("..") || /[\s:~^?*\\\[]/.test(branch)) {
+    return undefined;
+  }
+  return `refs/heads/${branch}`;
+}
+
+/** True when `refs/heads/<branch>` resolves in this repository. Computed, never guessed from an error string. */
+export async function branchExists(repo: RepoRef, branch: string): Promise<boolean> {
+  const ref = headsRef(branch);
+  if (!ref) return false;
+  const result = await runGit({
+    cwd: repo.path,
+    args: ["show-ref", "--verify", "--quiet", ref],
+    timeoutMs: 4000,
+  });
+  if (result.timedOut || result.overflow) return false;
+  return result.exitCode === 0;
 }
 
 export { GIT_EMPTY_TREE };

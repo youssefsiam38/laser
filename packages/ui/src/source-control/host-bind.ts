@@ -5,7 +5,7 @@ import type { AppState } from "@/store";
 
 import { getChangesAdapterSource, resetChangesAdapter, setChangesAdapter } from "./data.js";
 import { createHostChangesAdapter, resolveChangesSession } from "./host-adapter.js";
-import { useChangesUi } from "./store.js";
+import { peekChangesUi, useChangesUi } from "./store.js";
 
 /** Register the protocol adapter for as long as the overlay host is mounted. */
 export function useBindHostChangesAdapter(): void {
@@ -21,6 +21,7 @@ export function useBindHostChangesAdapter(): void {
         request: (method, params) => client.request(method, params),
         session: () => resolveChangesSession(live.current.app, live.current.sessionKey),
         agentRun: (runId) => live.current.app.agents.runs[runId],
+        scope: () => peekChangesUi().scope,
       }),
       "host",
     );

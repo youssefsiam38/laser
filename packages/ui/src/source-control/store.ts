@@ -9,6 +9,8 @@ export type OpenFile = { repo: string; path: string };
 
 export type GitActionRequest = { kind: GitActionKind; repo: string };
 
+export type OverlayPullRequest = { repo: string; number: number };
+
 export type ChangesUiSnapshot = {
   open: boolean;
   sessionKey: string;
@@ -20,6 +22,10 @@ export type ChangesUiSnapshot = {
   tabs: OpenFile[];
   active: OpenFile | undefined;
   viewed: ReadonlySet<string>;
+  /** Set after a successful `pi/project/pr/read`; ticks then call `pi/project/pr/viewed`. */
+  pullRequest: OverlayPullRequest | null;
+  /** Engine sentence when a viewed mark stayed local. */
+  viewedNote: string | null;
   diffStyle: DiffStylePref;
   unifiedFallback: boolean;
   fallbackSaid: boolean;
@@ -40,6 +46,8 @@ let diffStyle: DiffStylePref = readDiffStylePref();
 let unifiedFallback = false;
 let fallbackSaid = false;
 let gitAction: GitActionRequest | null = null;
+let pullRequest: OverlayPullRequest | null = null;
+let viewedNote: string | null = null;
 
 const tabsBySession = new Map<string, OpenFile[]>();
 const activeBySession = new Map<string, OpenFile>();
@@ -88,6 +96,8 @@ function snapshot(): ChangesUiSnapshot {
     fallbackSaid,
     revealedLarge: revealedOf(sessionKey),
     gitAction,
+    pullRequest,
+    viewedNote,
   };
 }
 
@@ -118,6 +128,8 @@ export function closeChanges(): void {
   fallbackSaid = false;
   unifiedFallback = false;
   gitAction = null;
+  pullRequest = null;
+  viewedNote = null;
   refresh();
 }
 
@@ -204,6 +216,23 @@ export function toggleViewed(repo: string, path: string): void {
   refresh();
 }
 
+/** Remember the pull request whose files the overlay is showing, and seed ticks from its viewed marks. */
+export function attachOverlayPullRequest(next: OverlayPullRequest & { viewedPaths?: readonly string[] }): void {
+  pullRequest = { repo: next.repo, number: next.number };
+  viewedNote = null;
+  if (next.viewedPaths) {
+    const set = viewedOf(sessionKey);
+    for (const path of next.viewedPaths) set.add(fileKey(next.repo, path));
+  }
+  refresh();
+}
+
+export function setViewedNote(next: string | null): void {
+  if (viewedNote === next) return;
+  viewedNote = next;
+  refresh();
+}
+
 export function setDiffStyle(next: DiffStylePref): void {
   diffStyle = next;
   writeDiffStylePref(next);
@@ -247,6 +276,8 @@ export function resetChangesUi(): void {
   viewedBySession.clear();
   revealedLargeBySession.clear();
   gitAction = null;
+  pullRequest = null;
+  viewedNote = null;
   diffStyle = readDiffStylePref();
   refresh();
 }

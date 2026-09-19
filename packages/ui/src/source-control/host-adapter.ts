@@ -65,7 +65,7 @@ export function mapProjectChanges(result: ProjectChanges, scope: ChangesScope): 
     branch: repo.branch,
     files: repo.files.map(mapChangedFile),
   }));
-  return { scope, repos };
+  return { scope, repos, ...(result.agent ? { agent: result.agent } : {}) };
 }
 
 export function mapFileSlice(slice: FileSlice, meta?: ChangedFile): FileDiffPage {
@@ -89,22 +89,21 @@ export function mapFileSlice(slice: FileSlice, meta?: ChangedFile): FileDiffPage
   };
 }
 
-export function mapAgentRunContext(run: AgentRun): AgentChangesContext {
+export function mapAgentRunContext(run: AgentRun, facts?: ProjectChanges["agent"]): AgentChangesContext {
   const tree = run.worktree;
   if (!tree) {
-    return { runId: run.runId, checkout: "shared" };
+    return { runId: run.runId, checkout: "shared", ...(facts?.branchGone ? { branchGone: true } : {}) };
   }
-  // `removedAt` means the directory is gone. The branch name stays on the
-  // record as history (AgentWorktree). That is the surviving-branch overlay
-  // state — not `branchGone`. AgentWorktree has no field for a deleted git
-  // branch, so this mapper never sets `branchGone`.
+  // `removedAt` is the directory. `facts.branchGone` is computed from git on
+  // `pi/project/changes` — never guessed from an error string or from missing counts.
   return {
     runId: run.runId,
     checkout: "worktree",
     worktreePath: tree.path,
     branch: tree.branch,
     baseCommit: tree.baseCommit,
-    ...(tree.removedAt ? { worktreeRemoved: true } : {}),
+    ...(tree.removedAt || facts?.worktreeRemoved ? { worktreeRemoved: true } : {}),
+    ...(facts?.branchGone ? { branchGone: true } : {}),
   };
 }
 
@@ -149,11 +148,20 @@ export function createHostChangesAdapter(opts: {
   request: ChangesHostRequest;
   session: () => ChangesSessionContext | null;
   agentRun?: (runId: string) => AgentRun | undefined;
+  scope?: () => ChangesScope;
 }): ChangesDataAdapter {
   const needSession = (): ChangesSessionContext => {
     const session = opts.session();
     if (!session) throw new Error(CHANGES_NEED_SESSION);
     return session;
+  };
+  const gitTarget = (): { cwd: string; runId?: string } => {
+    const session = needSession();
+    const scope = opts.scope?.();
+    return {
+      cwd: session.cwd,
+      ...(scope?.kind === "agent" ? { runId: scope.runId } : {}),
+    };
   };
 
   return {
@@ -198,16 +206,15 @@ export function createHostChangesAdapter(opts: {
       return mapAgentRunContext(run);
     },
     async gitHosts(repos) {
-      const session = needSession();
       return opts.request("pi/project/git/hosts", {
-        cwd: session.cwd,
+        ...gitTarget(),
         ...(repos && repos.length ? { repos } : {}),
       });
     },
     async gitProse(params) {
       const session = needSession();
       return opts.request("pi/project/git/prose", {
-        cwd: session.cwd,
+        ...gitTarget(),
         path: session.path,
         kind: params.kind,
         files: params.files,
@@ -216,27 +223,24 @@ export function createHostChangesAdapter(opts: {
       });
     },
     async gitCommit(params) {
-      const session = needSession();
       return opts.request("pi/project/git/commit", {
-        cwd: session.cwd,
+        ...gitTarget(),
         paths: params.paths,
         message: params.message,
         ...gitWriteFields(params),
       });
     },
     async gitPush(params) {
-      const session = needSession();
       return opts.request("pi/project/git/push", {
-        cwd: session.cwd,
+        ...gitTarget(),
         remote: params.remote,
         branch: params.branch,
         ...gitWriteFields(params),
       });
     },
     async gitBranch(params) {
-      const session = needSession();
       return opts.request("pi/project/git/branch", {
-        cwd: session.cwd,
+        ...gitTarget(),
         name: params.name,
         base: params.base,
         ...(params.checkout ? { checkout: true } : {}),
@@ -244,9 +248,8 @@ export function createHostChangesAdapter(opts: {
       });
     },
     async gitPrCreate(params) {
-      const session = needSession();
       return opts.request("pi/project/pr/create", {
-        cwd: session.cwd,
+        ...gitTarget(),
         title: params.title,
         body: params.body,
         base: params.base,
@@ -255,28 +258,34 @@ export function createHostChangesAdapter(opts: {
       });
     },
     async gitPrRead(params) {
-      const session = needSession();
       return opts.request("pi/project/pr/read", {
-        cwd: session.cwd,
+        ...gitTarget(),
         number: params.number,
         ...(params.repo ? { repo: params.repo } : {}),
       });
     },
     async gitPrCheckout(params) {
-      const session = needSession();
       return opts.request("pi/project/pr/checkout", {
-        cwd: session.cwd,
+        ...gitTarget(),
         number: params.number,
         ...gitWriteFields(params),
       });
     },
     async gitPrMerge(params) {
-      const session = needSession();
       return opts.request("pi/project/pr/merge", {
-        cwd: session.cwd,
+        ...gitTarget(),
         number: params.number,
         method: params.method,
         ...gitWriteFields(params),
+      });
+    },
+    async gitPrViewed(params) {
+      return opts.request("pi/project/pr/viewed", {
+        ...gitTarget(),
+        number: params.number,
+        path: params.path,
+        viewed: params.viewed,
+        ...(params.repo ? { repo: params.repo } : {}),
       });
     },
   };

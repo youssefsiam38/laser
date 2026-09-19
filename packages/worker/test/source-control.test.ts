@@ -1,7 +1,14 @@
 /**
  * Checkpoints, scopes and restore (M18-T2). Real git fixtures; no browser.
  */
-import { CHECKPOINT_REF_NAMESPACE, ErrorCodes, PRODUCT_NAME, checkpointRef } from "@lasercode/protocol";
+import {
+  CHECKPOINT_REF_NAMESPACE,
+  ErrorCodes,
+  PRODUCT_NAME,
+  WORKTREES_DIR_NAME,
+  checkpointRef,
+  type AgentRun,
+} from "@lasercode/protocol";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -86,6 +93,25 @@ function service(cwd: string, extra: Partial<SourceControlDeps> = {}): SourceCon
 }
 
 const SESSION = "/sessions/demo.jsonl";
+
+function agentRun(over: Partial<AgentRun> & Pick<AgentRun, "runId" | "worktree">): AgentRun {
+  return {
+    agentName: "worker",
+    subagentName: "w",
+    sessionId: "s",
+    sessionPath: SESSION,
+    projectCwd: over.projectCwd ?? "/p",
+    rootSessionPath: SESSION,
+    depth: 1,
+    parent: { sessionPath: SESSION, sessionId: "s" },
+    origin: "agent",
+    status: "completed",
+    task: "t",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...over,
+  };
+}
 
 describe.skipIf(!haveGit)("sessionRepositories", () => {
   it("returns the containing repository, or immediate child repositories", async () => {
@@ -495,4 +521,70 @@ it("derives checkpoint refs from the product name, never a literal", () => {
   const key = checkpointSessionKey(SESSION);
   expect(checkpointRef(key, 3)).toBe(`${CHECKPOINT_REF_NAMESPACE}/${key}/3`);
   expect(checkpointRef(key, 3).startsWith("refs/")).toBe(true);
+});
+
+describe.skipIf(!haveGit)("agent scope §8.5", () => {
+  it("covers a live worktree, a shared checkout, a removed worktree whose branch survives, and a gone branch", async () => {
+    const parent = temp("agent-scope-parent");
+    initRepo(parent, { "root.txt": "root\n" });
+    const base = git(parent, ["rev-parse", "HEAD"]).trim();
+    const child = join(parent, WORKTREES_DIR_NAME, "review");
+    mkdirSync(join(parent, WORKTREES_DIR_NAME), { recursive: true });
+    git(parent, ["worktree", "add", "-b", "agents/review", child]);
+    writeFileSync(join(child, "only-child.ts"), "export const n = 1;\n");
+    git(child, ["add", "only-child.ts"]);
+    git(child, ["commit", "-q", "-m", "child"]);
+
+    const live = agentRun({
+      runId: "run_live",
+      projectCwd: parent,
+      worktree: { path: child, branch: "agents/review", baseCommit: base },
+    });
+    const liveCtl = service(parent, { agentRun: (id) => (id === live.runId ? live : undefined) });
+    const withTree = await liveCtl.changes({ cwd: parent, path: SESSION, scope: "agent", runId: live.runId });
+    expect(withTree.agent).toEqual({ runId: live.runId });
+    expect(withTree.repos.map((row) => row.repo)).toEqual([child]);
+    expect(withTree.repos[0]!.files.some((file) => file.path === "only-child.ts")).toBe(true);
+
+    const sharedDir = temp("agent-scope-shared");
+    initRepo(sharedDir);
+    const sharedCtl = service(sharedDir, {
+      agentRun: (id) => (id === "run_shared" ? agentRun({ runId: "run_shared", projectCwd: sharedDir, worktree: null }) : undefined),
+    });
+    await sharedCtl.captureBaseline(SESSION, sharedDir);
+    writeFileSync(join(sharedDir, "shared.ts"), "export const s = 1;\n");
+    await sharedCtl.captureAfterTurn(SESSION, sharedDir);
+    const shared = await sharedCtl.changes({ cwd: sharedDir, path: SESSION, scope: "agent", runId: "run_shared" });
+    expect(shared.agent).toEqual({ runId: "run_shared" });
+    expect(shared.agent?.worktreeRemoved).toBeUndefined();
+    expect(shared.repos[0]!.files.some((file) => file.path === "shared.ts")).toBe(true);
+
+    git(parent, ["worktree", "remove", child]);
+    const removed = agentRun({
+      runId: "run_removed",
+      projectCwd: parent,
+      worktree: {
+        path: child,
+        branch: "agents/review",
+        baseCommit: base,
+        removedAt: "2026-09-20T00:00:00.000Z",
+      },
+    });
+    const removedCtl = service(parent, { agentRun: (id) => (id === removed.runId ? removed : undefined) });
+    const surviving = await removedCtl.changes({
+      cwd: parent,
+      path: SESSION,
+      scope: "agent",
+      runId: removed.runId,
+    });
+    expect(surviving.agent).toEqual({ runId: removed.runId, worktreeRemoved: true });
+    expect(surviving.agent?.branchGone).toBeUndefined();
+    expect(surviving.repos[0]!.files.some((file) => file.path === "only-child.ts")).toBe(true);
+
+    git(parent, ["branch", "-D", "agents/review"]);
+    const goneCtl = service(parent, { agentRun: (id) => (id === removed.runId ? removed : undefined) });
+    const gone = await goneCtl.changes({ cwd: parent, path: SESSION, scope: "agent", runId: removed.runId });
+    expect(gone.agent).toEqual({ runId: removed.runId, worktreeRemoved: true, branchGone: true });
+    expect(gone.repos).toEqual([]);
+  });
 });

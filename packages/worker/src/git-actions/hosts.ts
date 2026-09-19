@@ -44,14 +44,12 @@ async function repositoryNames(options: HostDiscoveryOptions): Promise<string[]>
   if (!options.repos || options.repos.length === 0) {
     return roots.length > 0 ? roots : [options.projectCwd];
   }
-  if (roots.length === 0) return options.repos;
-  const allowed = new Set(
-    await Promise.all(roots.map((root) => resolveRepoRoot(options.projectCwd, root).catch(() => root))),
-  );
+  // An explicit list is fenced by the project, not by the workspace snapshot:
+  // a child worktree sits inside the project but is not a separate workspace root.
   const names: string[] = [];
   for (const name of options.repos) {
     const resolved = await resolveRepoRoot(options.projectCwd, name).catch(() => "");
-    if (resolved && allowed.has(resolved)) names.push(resolved);
+    if (resolved) names.push(resolved);
   }
   return names;
 }

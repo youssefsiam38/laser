@@ -1,3 +1,5 @@
+import type { AgentScopeFacts } from "@lasercode/protocol";
+
 /**
  * Shapes the overlay consumes. Local until M18-T2 lands the protocol types.
  *
@@ -41,6 +43,7 @@ export type ChangedRepo = {
 export type ChangesList = {
   scope: ChangesScope;
   repos: ChangedRepo[];
+  agent?: AgentScopeFacts;
 };
 
 export type FileDiffPage = {

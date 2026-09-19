@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
+  AgentRun,
   GitActionResult,
   GitBranchParams,
   GitBranchResult,
@@ -70,6 +71,8 @@ export interface GitActionsServiceOptions {
   proseRuntime?: () => Promise<GitProseRuntime>;
   sessionContext?: (path: string) => Promise<GitActionsSessionContext>;
   workspace?: () => Promise<WorkspaceShape>;
+  /** Overlay agent scope: resolve this run's worktree instead of the project root. */
+  agentRun?: (runId: string) => Pick<AgentRun, "runId" | "worktree"> | undefined;
 }
 
 type Located =
@@ -97,6 +100,11 @@ export class GitActionsService {
 
   async hosts(params: GitHostsParams): Promise<GitHostsResult> {
     const shape = await this.workspace().catch(() => undefined);
+    const repos = [...(params.repos ?? [])];
+    if (params.runId) {
+      const worktree = await this.actionRepo({ runId: params.runId });
+      if (!repos.includes(worktree)) repos.unshift(worktree);
+    }
     return {
       hosts: await discoverHosts({
         projectCwd: this.options.projectCwd,
@@ -104,23 +112,23 @@ export class GitActionsService {
         env: this.env(),
         fetch: this.fetch,
         ...(shape ? { workspace: shape } : {}),
-        ...(params.repos ? { repos: params.repos } : {}),
+        ...(repos.length ? { repos } : {}),
       }),
     };
   }
 
   async commit(params: GitCommitParams): Promise<GitCommitResult> {
-    const repo = await resolveRepoRoot(this.options.projectCwd, params.repo);
+    const repo = await this.actionRepo(params);
     return commitPaths(this.run, repo, params.paths, params.message, params.confirm, params.expect);
   }
 
   async push(params: GitPushParams): Promise<GitPushResult> {
-    const repo = await resolveRepoRoot(this.options.projectCwd, params.repo);
+    const repo = await this.actionRepo(params);
     return pushBranch(this.run, repo, params.remote, params.branch, params.confirm, params.expect);
   }
 
   async branch(params: GitBranchParams): Promise<GitBranchResult> {
-    const repo = await resolveRepoRoot(this.options.projectCwd, params.repo);
+    const repo = await this.actionRepo(params);
     return createBranch(this.run, repo, params.name, params.base, params.checkout, params.confirm, params.expect);
   }
 
@@ -128,7 +136,7 @@ export class GitActionsService {
     const runtime = this.options.proseRuntime ? await this.options.proseRuntime() : undefined;
     if (!runtime) throw new GitActionError("The session's model is not available. Pick a model, then try again.");
     const session = this.options.sessionContext ? await this.options.sessionContext(params.path) : { model: null, excerpt: "" };
-    const repo = await resolveRepoRoot(this.options.projectCwd, params.repo);
+    const repo = await this.actionRepo(params);
     return generateProse({
       run: this.run,
       repo,
@@ -143,7 +151,7 @@ export class GitActionsService {
   }
 
   async createPr(params: GitPrCreateParams): Promise<GitPrCreateResult> {
-    const located = await this.locate(params.repo);
+    const located = await this.locate(params.repo, params.runId);
     if (!located.ok) return located.result;
     if (located.host === "github") {
       return createGithubPr(this.run, this.githubCtx(located), params.title, params.body, params.base, params.head, params.confirm, params.expect);
@@ -162,7 +170,7 @@ export class GitActionsService {
   }
 
   async readPr(params: GitPrReadParams): Promise<GitPrReadResult> {
-    const located = await this.locate(params.repo);
+    const located = await this.locate(params.repo, params.runId);
     if (!located.ok) return located.result;
     if (located.host === "github") return readGithubPr(this.run, this.githubCtx(located), params.number);
     const result = await readBitbucketPr(this.fetch, bitbucketAuthFrom(this.env()), this.bitbucketCtx(located), params.number);
@@ -178,7 +186,7 @@ export class GitActionsService {
   }
 
   async checkoutPr(params: GitPrCheckoutParams): Promise<GitPrCheckoutResult> {
-    const located = await this.locate(params.repo);
+    const located = await this.locate(params.repo, params.runId);
     if (!located.ok) return located.result;
     if (located.host === "github") return checkoutGithubPr(this.run, this.githubCtx(located), params.number, params.confirm, params.expect);
     return checkoutBitbucketPr(
@@ -193,7 +201,7 @@ export class GitActionsService {
   }
 
   async mergePr(params: GitPrMergeParams): Promise<GitPrMergeResult> {
-    const located = await this.locate(params.repo);
+    const located = await this.locate(params.repo, params.runId);
     if (!located.ok) return located.result;
     if (located.host === "github") {
       return mergeGithubPr(this.run, this.githubCtx(located), params.number, params.method, params.confirm, params.expect);
@@ -211,7 +219,7 @@ export class GitActionsService {
 
   async viewed(params: GitPrViewedParams): Promise<GitPrViewedResult> {
     assertPathspec(params.path);
-    const located = await this.locate(params.repo);
+    const located = await this.locate(params.repo, params.runId);
     if (!located.ok) return { ...located.result, path: params.path, viewed: params.viewed };
     if (located.host === "github") {
       return setGithubViewed(this.run, this.githubCtx(located), params.number, params.path, params.viewed);
@@ -242,8 +250,32 @@ export class GitActionsService {
     return { repo: located.repo, remote: located.remote, remoteName: located.remoteName };
   }
 
-  private async locate(repoParam: string | undefined): Promise<Located> {
-    const repo = await resolveRepoRoot(this.options.projectCwd, repoParam);
+  private async actionRepo(params: { repo?: string; runId?: string }): Promise<string> {
+    if (params.runId) {
+      const run = this.options.agentRun?.(params.runId);
+      if (!run) throw new GitActionError("That agent run is not known.");
+      if (run.worktree) {
+        if (run.worktree.removedAt) {
+          throw new GitActionError("That agent's worktree is gone, so this action cannot run there.");
+        }
+        try {
+          const repo = await resolveRepoRoot(this.options.projectCwd, run.worktree.path);
+          const inside = await this.run("git", ["rev-parse", "--is-inside-work-tree"], { cwd: repo, timeoutMs: 5_000 });
+          if (inside.code === 0 && inside.stdout.trim() === "true") return repo;
+        } catch (error) {
+          if (error instanceof GitActionError) throw error;
+        }
+        throw new GitActionError("That agent's worktree is gone, so this action cannot run there.");
+      }
+    }
+    return resolveRepoRoot(this.options.projectCwd, params.repo);
+  }
+
+  private async locate(repoParam: string | undefined, runId?: string): Promise<Located> {
+    const repo = await this.actionRepo({
+      ...(repoParam ? { repo: repoParam } : {}),
+      ...(runId ? { runId } : {}),
+    });
     const shape = await this.workspace().catch(() => undefined);
     const hosts = await discoverHosts({
       projectCwd: this.options.projectCwd,
