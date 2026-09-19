@@ -225,3 +225,139 @@ pnpm identity:check               clean
 
 No Playwright and no `scripts/browser-check`, as instructed; the visual review
 is yours.
+
+---
+
+## 6 · The remount (the flicker that survived §0)
+
+**Reported, measured in the running app after §0 shipped:** one *ended* child
+agent drawn as a context row, carrying one *live* command whose `outputBytes`
+move about every 1.2 s. Row membership is stable across a 5 s window, and yet
+8 `<li>` removals and 8 additions land in 8 s, alternating the parent row and
+the nested row, while the `<section>` and the `<ul>` around them survive.
+
+A stable list whose child is replaced can only mean one thing: within that
+`ul`, the child's **key or element type changed**, or the list's **items
+changed**. Those are the only three, and the third is the one that happened.
+
+### 6.1 · What the section in the key can and cannot do
+
+The leading hypothesis was `key={`${section}:${item.item.key}`}` in
+`subagent-list.tsx` — a row that flips between `active` and `finished` would
+get a new key and remount. **Refuted, twice over:**
+
+- *Structurally.* `FleetGroups` is rendered once per (section, group) and is
+  given the section as a literal; every row inside that one `<ul>` therefore
+  carries the same constant prefix. The prefix cannot change while the `<ul>`
+  survives — and the measurement says it survived. A row that really does
+  change section changes `<ul>` as well, and React replaces the node whatever
+  the key says.
+- *Empirically.* For this exact shape the projection's `section + key + nesting`
+  is constant across ten output ticks —
+  `test/fleet/stability.test.tsx` → "gives every row the same section and the
+  same key across ten output ticks". It was green before this change.
+
+The other named candidates are refuted the same way: `FleetBranch`,
+`FleetGroups` and `FleetWorkRow` are module-level (no component is created
+during a render, so no element type changes), the one conditional in
+`SubagentList` swaps the whole list — which would replace the `<ul>` — and
+there is no `Fragment`/`Suspense` boundary in the path. A rendered harness over
+the **real store** (`createStateStore` + `LaserStoreProvider`, real
+`useLaserState`, real `selectFleet`) kept every `li` node across: output-only
+`tasks/update` ticks, whole-map rewrites in the `tasks/loaded` shape, the
+column's 1 s elapsed clock, the child's run leaving and rejoining the registry,
+and the child's catalog row leaving and rejoining.
+
+### 6.2 · The confirmed cause: the command's host follows the snapshot
+
+Only one input change reproduces the measured signature. A command hangs off
+its session while `buildAgentTree` has a **node** for that session, and a node
+exists only if the client holds either a run for it or an *attributed* catalog
+row. Both of those thin out on their own schedule — `agents/runs` replaces the
+registry wholesale, `pi/session/list` returns a bounded page (`size: 7` per
+project plus probes) — under a command that is still writing. When they do:
+
+```
+snapshot knows the child   active /p/root.jsonl agent:/p/child.jsonl (context)
+                           active /p/root.jsonl ·task:t1
+                           finished /p/root.jsonl agent:/p/child.jsonl
+snapshot forgets it        active /p/root.jsonl task:t1
+```
+
+The command leaves its agent's nested `ul` for the group's own: **the parent
+`li` (which carries the nested command row) is removed and a top-level command
+`li` is added**, then back on the next update. That is the reported mutation
+pair, in that order, with the same two pieces of work present throughout — so
+membership, counts and the `Finished` fold (collapsed) all look unchanged.
+§0's R7 rule accepted this: "a node that comes and goes moves the command one
+indent rather than into another list". One indent *is* another list.
+
+Rendered, on `bf450d5a`, the failing assertion is exactly the measurement:
+
+```
+tick 1: expected [ 'task' ] to deeply equal [ 'agent', 'task' ]
+tick 1: expected [ 'active /p/root.jsonl task:t1' ]
+        to deeply equal [ 'active … agent:/p/child.jsonl (context)',
+                          'active … ·task:t1',
+                          'finished … agent:/p/child.jsonl' ]
+```
+
+I could not attach to the person's running app to name *which* of the two
+sources went quiet there; both produce this exact drawing, and the fix closes
+both.
+
+### 6.3 · The fix
+
+Both halves of the brief, because they answer different questions.
+
+**Identity is the work's, not the list's** (`subagent-list.tsx`): rows are
+keyed `agent:<sessionPath>` / `task:<id>`; the section and the context/actual
+role travel as props on `target`. Inert for the measured remount (§6.1), and
+it removes the hazard class permanently.
+
+**Live work never changes parents because the snapshot got thinner**
+(`fleet/model.ts`, `keepLiveCommandsHosted`): the fleet remembers the row a
+running command was drawn under. If the next build has no row for the session
+that started it, the previous build's row is held open — the same row object,
+with this build's children — and the command stays inside it. The rule is
+narrow on purpose:
+
+- only a **command that is still going** (a terminal one is the build's again);
+- only the row of the **session that started it** (`agent:<sessionPath>`), never
+  an ancestor it merely fell back to — that is still R7's answer to a chain
+  with a hole in it;
+- only while that row is **drawn nowhere** in the new build (a command that
+  genuinely moved moves);
+- only inside the **same group** (which root a piece of work belongs to is
+  §0's declared-root rule, unchanged).
+
+The memory is the previous drawing and nothing else. The selector now keeps it
+beside the per-runs cache rather than inside it, because the runs object is
+replaced by the very change that loses a run — which also means item identity
+now survives any run-registry change instead of handing React a fresh object
+for every row.
+
+### 6.4 · Tests
+
+| test | claim |
+| --- | --- |
+| `stability.test.tsx` → "gives every row the same section and the same key across ten output ticks" | the unit-level constancy the hypothesis needed; green before and after |
+| `stability.test.tsx` → "keeps a running command under its agent when the snapshot forgets that session" | **red before**: `[active … task:t1]` instead of the three rows |
+| `stability.test.tsx` → "keeps every row node when the snapshot forgets the session under a running command" | **red before**: rendered rows `['task']` instead of `['agent','task']`; asserts the `ul` survives and both `li` nodes are the same objects for ten ticks |
+| `stability.test.tsx` → "holds a row open for the session that started the command, and for nothing else" | a command that changed session is never re-hosted |
+| `stability.test.tsx` → "lets go the moment the command ends" | the memory is not a ghost row |
+
+### 6.5 · Validation
+
+```
+pnpm install --frozen-lockfile   clean
+pnpm -F @lasercode/ui test       310 files, 2865 passed, 1 skipped
+pnpm -F @lasercode/ui typecheck  clean
+pnpm -F @lasercode/ui build      clean
+pnpm identity:check              clean
+```
+
+Fleet suite alone: 7 files, 144 passed (139 before this change). Two heavy
+log-dialog files time out at 5 s when the machine is under load (load average
+> 45 from other work); they pass on this branch in isolation and fail the same
+way on `bf450d5a`. No Playwright and no `scripts/browser-check`, as instructed.

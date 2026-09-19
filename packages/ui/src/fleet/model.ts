@@ -491,6 +491,132 @@ function reuseItems(previous: readonly FleetItem[] | undefined, next: FleetItem[
   return out.length === previous.length && out.every((item, index) => item === previous[index]) ? (previous as FleetItem[]) : out;
 }
 
+/** Every command in a fleet, with the group and the ancestors it hangs from. */
+function whereEachCommandHangs(groups: readonly FleetGroup[]): Map<string, { groupPath: string; chain: FleetItem[] }> {
+  const out = new Map<string, { groupPath: string; chain: FleetItem[] }>();
+  const walk = (items: readonly FleetItem[], chain: FleetItem[], groupPath: string): void => {
+    for (const item of items) {
+      if (item.kind === "task") out.set(item.key, { groupPath, chain });
+      walk(item.children, [...chain, item], groupPath);
+    }
+  };
+  for (const group of groups) walk(group.items, [], group.path);
+  return out;
+}
+
+/** The same tree without one item, rebuilding only the arrays on its path. */
+function withoutItem(items: readonly FleetItem[], key: string): FleetItem[] {
+  let changed = false;
+  const out: FleetItem[] = [];
+  for (const item of items) {
+    if (item.key === key) {
+      changed = true;
+      continue;
+    }
+    const children = withoutItem(item.children, key);
+    if (children === item.children) out.push(item);
+    else {
+      changed = true;
+      out.push({ ...item, children });
+    }
+  }
+  return changed ? out : (items as FleetItem[]);
+}
+
+/**
+ * Put `leaf` back under `chain` (root-first ancestors), reviving the rows the
+ * new build lost. A revived row is the previous build's own, with this build's
+ * children: nothing is invented, and nothing stale is drawn beneath it.
+ *
+ * A revived row keeps the place it had among its siblings, read from the
+ * previous build, so rescuing one command never reorders the list.
+ */
+function withChain(items: readonly FleetItem[], chain: readonly FleetItem[], leaf: FleetItem, order: readonly FleetItem[]): FleetItem[] {
+  const head = chain[0];
+  if (head === undefined) return [...items, leaf];
+  const at = items.findIndex((item) => item.key === head.key);
+  if (at >= 0) {
+    const host = items[at]!;
+    const children = withChain(host.children, chain.slice(1), leaf, host.children);
+    const out = [...items];
+    out[at] = { ...host, children };
+    return out;
+  }
+  const revived: FleetItem = { ...head, children: withChain([], chain.slice(1), leaf, []) };
+  const was = new Map(order.map((item, index) => [item.key, index]));
+  const mine = was.get(head.key) ?? order.length;
+  const before = items.findIndex((item) => (was.get(item.key) ?? Number.POSITIVE_INFINITY) > mine);
+  const out = [...items];
+  out.splice(before < 0 ? out.length : before, 0, revived);
+  return out;
+}
+
+/**
+ * Live work never changes parents because the snapshot got thinner.
+ *
+ * `buildFleet` hangs a command off the session that started it while the tree
+ * has a node for that session, and off the nearest ancestor it does have
+ * otherwise (R7). That fallback is right for a session this client has never
+ * known and wrong for one it knew a moment ago: the tree's nodes come from the
+ * run registry and the catalog page, and either can thin out under a command
+ * that is still writing — a page that stops listing a child row, a scoped run
+ * reload that does not carry an ended run. The command then leaves its agent's
+ * list for the group's own, which is a row removed from one `ul` and added to
+ * another with nothing about the work having changed. React replaces the node
+ * rather than updating it, and the column blinks at the rate the command
+ * writes. Membership never changes, so nothing above notices.
+ *
+ * So the fleet remembers. A command that was drawn under its agent stays under
+ * it while it runs, wearing the row the last snapshot that knew the session
+ * proved. The memory is the previous drawing and nothing else; it only ever
+ * carries work that is still going; and it lets go the moment the command ends
+ * or the snapshot names that session again — at which point the ordinary build
+ * is authoritative, as it is everywhere else.
+ */
+function keepLiveCommandsHosted(previous: readonly FleetGroup[] | undefined, next: FleetGroup[]): FleetGroup[] {
+  if (!previous || previous.length === 0) return next;
+  const remembered = whereEachCommandHangs(previous);
+  const hangsNow = whereEachCommandHangs(next);
+  const drawn = new Map<string, FleetItem>();
+  for (const group of next) for (const item of flattenFleet(group.items)) drawn.set(item.key, item);
+  const rescues = new Map<string, Array<{ task: FleetItem; chain: FleetItem[] }>>();
+  for (const [key, was] of remembered) {
+    const here = hangsNow.get(key);
+    const host = was.chain.at(-1);
+    const command = drawn.get(key);
+    // Only a command that hung off an agent's row can lose one; only one still
+    // going is worth holding in place; and a command whose group changed is a
+    // different question, answered by the root a piece of work declares.
+    if (here === undefined || command === undefined || command.terminal) continue;
+    if (host === undefined || host.kind !== "agent" || here.groupPath !== was.groupPath) continue;
+    // Only the row of the session that started this command, and only for this
+    // command: an ancestor it merely fell back to is the pinned answer to a
+    // chain with a hole in it (R7), and a command that changed session is not
+    // this command at all.
+    if (host.key !== `agent:${command.sessionPath}`) continue;
+    if (here.chain.at(-1)?.key === host.key) continue;
+    // The agent's row is still drawn: the command genuinely moved, and this
+    // build is the truth. Only a *forgotten* row is held open.
+    if (drawn.has(host.key)) continue;
+    const list = rescues.get(was.groupPath);
+    if (list) list.push({ task: command, chain: was.chain });
+    else rescues.set(was.groupPath, [{ task: command, chain: was.chain }]);
+  }
+  if (rescues.size === 0) return next;
+  const order = new Map(previous.map((group) => [group.path, group.items]));
+  return next.map((group) => {
+    const mine = rescues.get(group.path);
+    if (!mine) return group;
+    let items: readonly FleetItem[] = group.items;
+    for (const rescue of mine) {
+      items = withChain(withoutItem(items, rescue.task.key), rescue.chain, rescue.task, order.get(group.path) ?? []);
+    }
+    const counts = { running: 0, needsYou: 0, ended: 0 };
+    const attention = settle(items, counts);
+    return { ...group, items: items as FleetItem[], running: counts.running, needsYou: counts.needsYou, ended: counts.ended, attention };
+  });
+}
+
 function reuseGroups(previous: readonly FleetGroup[] | undefined, next: FleetGroup[]): FleetGroup[] {
   if (!previous || previous.length === 0) return next;
   const byPath = new Map(previous.map((group) => [group.path, group]));
@@ -508,6 +634,15 @@ function reuseGroups(previous: readonly FleetGroup[] | undefined, next: FleetGro
  */
 export function createFleetSelector(build: typeof buildFleet = buildFleet): typeof buildFleet {
   const cache = new WeakMap<FleetInput["runs"], { input: FleetInput; groups: FleetGroup[]; now: number; clocked: FleetGroup[] }>();
+  /**
+   * What was drawn last, whichever run snapshot it came from. The cache above
+   * is keyed on the runs object, and a run arriving or leaving replaces that
+   * object — which is exactly when the tree can thin under a running command.
+   * A memory that lives and dies with one snapshot could not hold a row open
+   * across the change that loses it, and would hand React a fresh object for
+   * every row of every group each time any run anywhere changed.
+   */
+  let last: FleetGroup[] | undefined;
   const clockItem = (item: FleetItem, now: number): FleetItem => {
     const children = item.children.map((child) => clockItem(child, now));
     const elapsedMs = elapsed(item.startedAt, item.endedAt, !item.terminal, now);
@@ -522,7 +657,8 @@ export function createFleetSelector(build: typeof buildFleet = buildFleet): type
       || !samePresentationViews(old.views, input.views)) {
       // The rebuild is structural; the reconciliation is what keeps identity
       // across it, so a row React could update is never a row it replaces.
-      const groups = reuseGroups(entry?.clocked, build(input));
+      const previous = entry?.clocked ?? last;
+      const groups = reuseGroups(previous, keepLiveCommandsHosted(previous, build(input)));
       entry = { input, groups, now: input.now, clocked: groups };
       cache.set(input.runs, entry);
     }
@@ -533,6 +669,7 @@ export function createFleetSelector(build: typeof buildFleet = buildFleet): type
         return items.every((item, index) => item === group.items[index]) ? group : { ...group, items };
       });
     }
+    last = entry!.clocked;
     return entry!.clocked;
   };
 }

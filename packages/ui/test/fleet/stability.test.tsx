@@ -36,10 +36,10 @@ import type { BackgroundTask } from "@lasercode/protocol";
 
 import { FleetPanel } from "../../src/components/fleet/FleetPanel.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
-import { buildFleet, projectFleetSections, scopeFleet, selectFleet, type FleetGroup, type FleetItem, type FleetProjectedItem } from "../../src/fleet/model.js";
+import { buildFleet, createFleetSelector, projectFleetSections, scopeFleet, selectFleet, type FleetGroup, type FleetItem, type FleetProjectedItem, type FleetSections } from "../../src/fleet/model.js";
 import { resetFleetState } from "../../src/fleet/fleet-state.js";
 import { createStateStore, LaserStoreProvider, type StateStore } from "../../src/runtime/LaserProvider.js";
-import { initialState } from "../../src/store.js";
+import { initialState, type SessionView } from "../../src/store.js";
 import { run, summary, view } from "../agents/fixtures.js";
 import { testDescriptor } from "../runtime/environment-fixture.js";
 
@@ -61,6 +61,12 @@ const task = (over: Partial<BackgroundTask> & Pick<BackgroundTask, "id" | "sessi
 
 const childRow = summary({ path: CHILD, agent: { agentName: "default", kind: "child", subagentName: "explorer", parentPath: ROOT, rootPath: ROOT } });
 const explorer = run({ runId: "r1", sessionPath: CHILD, subagentName: "explorer", status: "completed", endedAt: "2026-09-08T10:02:00.000Z" });
+
+/** The child's own chat, held open: how the client knows the session itself. */
+const childView = (): SessionView => {
+  const held = view({ path: CHILD });
+  return { ...held, state: { ...held.state, agent: { agentName: "default", kind: "child", subagentName: "explorer", parentPath: ROOT, rootPath: ROOT } } };
+};
 
 /** Every key in a group, in draw order, with its nesting. */
 const keyTree = (items: readonly FleetItem[], depth = 0): string[] =>
@@ -236,6 +242,110 @@ describe("a command belongs to the work that started it, not to the snapshot", (
   });
 });
 
+/**
+ * The second flicker, and the one that survived the first fix.
+ *
+ * The shape is the one the column was measured in: an *ended* child agent,
+ * drawn as a context row only because a *running* command of its own hangs
+ * off it. The command's row is nested inside the agent's `li`; the agent's
+ * `li` is a child of the group's `ul`.
+ *
+ * A command hangs off its session while the tree has a node for that session,
+ * and off the nearest ancestor it does have otherwise. The tree's nodes come
+ * from two places that can both go quiet under a command that is still
+ * writing — the run registry (`agents/runs` replaces it wholesale) and the
+ * catalog page (`pi/session/list` returns a bounded page). When they do, the
+ * command leaves its agent's list for the group's own: one `li` removed here,
+ * one added there, back again on the next update, with the same two pieces of
+ * work present the whole time. Nothing above sees a change; React replaces
+ * the row rather than updating it.
+ */
+const sectionKeys = (sections: FleetSections): string[] => [
+  ...sections.active.groups.flatMap((group) => projectedKeys(group.items).map((key) => `active ${group.group.path} ${key}`)),
+  ...sections.finished.groups.flatMap((group) => projectedKeys(group.items).map((key) => `finished ${group.group.path} ${key}`)),
+];
+
+describe("where a row is drawn never moves while a command writes", () => {
+  const fleet = createFleetSelector();
+  const sections = (options: { thin: boolean; bytes: number; now: number }): FleetSections => {
+    const groups = fleet({
+      // The thin snapshot is not a different fleet: it is the same fleet with
+      // the child's run and catalog row momentarily missing.
+      sessions: options.thin ? [summary({ path: ROOT, name: "Root session" })] : [summary({ path: ROOT, name: "Root session" }), childRow],
+      runs: options.thin ? {} : { r1: explorer },
+      tasks: { t1: task({ id: "t1", sessionPath: CHILD, outputBytes: options.bytes, activity: `page reload ${options.bytes}` }) },
+      views: { [ROOT]: view({ path: ROOT }), [CHILD]: childView() },
+      sessionsLoaded: true,
+      currentPath: ROOT,
+      now: options.now,
+    });
+    const scope = scopeFleet(groups, ROOT);
+    return projectFleetSections(scope.tree ? [scope.tree] : []);
+  };
+
+  it("gives every row the same section and the same key across ten output ticks", () => {
+    const first = sectionKeys(sections({ thin: false, bytes: 4096, now: 5_000 }));
+    expect(first).toEqual([
+      `active ${ROOT} agent:${CHILD} (context)`,
+      `active ${ROOT} ·task:t1`,
+      `finished ${ROOT} agent:${CHILD}`,
+    ]);
+    for (let tick = 1; tick <= 10; tick += 1) {
+      expect(sectionKeys(sections({ thin: false, bytes: 4096 * (tick + 1), now: 5_000 + tick * 1_200 }))).toEqual(first);
+    }
+  });
+
+  it("keeps a running command under its agent when the snapshot forgets that session", () => {
+    const first = sectionKeys(sections({ thin: false, bytes: 4096, now: 5_000 }));
+    for (let tick = 1; tick <= 10; tick += 1) {
+      // Every other tick the registry and the catalog both go quiet about the
+      // child, exactly as a scoped reload or a bounded page does.
+      const drawn = sectionKeys(sections({ thin: tick % 2 === 1, bytes: 4096 * (tick + 1), now: 5_000 + tick * 1_200 }));
+      expect(drawn, `tick ${tick}`).toEqual(first);
+    }
+  });
+
+  it("holds a row open for the session that started the command, and for nothing else", () => {
+    const held = createFleetSelector();
+    const of = (input: Parameters<typeof held>[0]): string[] => keyTree(scopeFleet(held(input), ROOT).tree?.items ?? []);
+    expect(of({
+      sessions: [summary({ path: ROOT, name: "Root session" }), childRow],
+      runs: { r1: explorer },
+      tasks: { t1: task({ id: "t1", sessionPath: CHILD }) },
+      views: { [ROOT]: view({ path: ROOT }) },
+      sessionsLoaded: true,
+      currentPath: ROOT,
+      now: 5_000,
+    })).toEqual([`agent:${CHILD}`, "·task:t1"]);
+    // The next snapshot's command runs in the root session. Same id, different
+    // work: nothing may put it back under an agent it never belonged to.
+    expect(of({
+      sessions: [summary({ path: ROOT, name: "Root session" })],
+      runs: {},
+      tasks: { t1: task({ id: "t1", sessionPath: ROOT }) },
+      views: { [ROOT]: view({ path: ROOT }) },
+      sessionsLoaded: true,
+      currentPath: ROOT,
+      now: 6_200,
+    })).toEqual(["task:t1"]);
+  });
+
+  it("lets go the moment the command ends", () => {
+    sections({ thin: false, bytes: 4096, now: 5_000 });
+    const ended = fleet({
+      sessions: [summary({ path: ROOT, name: "Root session" })],
+      runs: {},
+      tasks: { t1: task({ id: "t1", sessionPath: CHILD, status: "completed", exitCode: 0, endedAt: "2026-09-08T10:05:00.000Z", terminalReason: "exit code 0" }) },
+      views: { [ROOT]: view({ path: ROOT }), [CHILD]: childView() },
+      sessionsLoaded: true,
+      currentPath: ROOT,
+      now: 9_000,
+    });
+    // Nothing is held open for work that is over: the build is the truth again.
+    expect(keyTree(scopeFleet(ended, ROOT).tree?.items ?? [])).toEqual(["task:t1"]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The same claim, through the component, where the flicker was seen.
 // ---------------------------------------------------------------------------
@@ -317,6 +427,42 @@ describe("the column itself, across a streaming command", () => {
       expect(container.querySelector('[data-slot="fleet-strays"]')).toBeNull();
     }
     // The row did update, it simply was not replaced to do it.
+    expect(rows()[1]!.textContent).toContain("40 KB");
+  });
+
+  it("keeps every row node when the snapshot forgets the session under a running command", async () => {
+    // The child's chat is held open, so the client still knows which tree the
+    // command belongs to; what it loses is the row and the run behind the
+    // agent's own line.
+    const full = { sessions: [summary({ path: ROOT, name: "Root session" }), childRow], runs: { r1: explorer } };
+    fixture.state.open = { [ROOT]: view({ path: ROOT }), [CHILD]: childView() };
+    await render();
+    const before = rows();
+    const items = [...container.querySelectorAll("li")];
+    const list = container.querySelector("ul");
+    expect(before.map((row) => row.dataset.kind)).toEqual(["agent", "task"]);
+    expect(items).toHaveLength(2);
+
+    for (let tick = 1; tick <= 10; tick += 1) {
+      const thin = tick % 2 === 1;
+      fixture.state.sessions = thin ? [summary({ path: ROOT, name: "Root session" })] : full.sessions;
+      fixture.state.agents.runs = thin ? {} : full.runs;
+      // A whole new map with a whole new record, the way `tasks/loaded` and
+      // `tasks/update` both hand it over.
+      fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: CHILD, outputBytes: tick * 4096, activity: `page reload ${tick}` }) };
+      await render();
+      const now = rows();
+      expect(now.map((row) => row.dataset.kind), `tick ${tick}`).toEqual(["agent", "task"]);
+      // The same nodes: the container survived before this fix too, the rows
+      // did not.
+      expect(container.querySelector("ul"), `tick ${tick}`).toBe(list);
+      expect([...container.querySelectorAll("li")].map((node, index) => node === items[index]), `tick ${tick}`).toEqual([true, true]);
+      expect(now.map((node, index) => node === before[index]), `tick ${tick}`).toEqual([true, true]);
+      // The command stays inside its agent's list, and that agent stays quiet.
+      expect([...container.querySelectorAll("li")][1]!.dataset.nested, `tick ${tick}`).toBe("true");
+      expect(now[0]!.dataset.context, `tick ${tick}`).toBe("true");
+      expect(container.querySelector('[data-slot="fleet-strays"]'), `tick ${tick}`).toBeNull();
+    }
     expect(rows()[1]!.textContent).toContain("40 KB");
   });
 
