@@ -7,11 +7,13 @@ import { ChevronDown } from "lucide-react";
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { STATUS_LABEL, StatusDot } from "@/components/status";
-import { Hint } from "@/components/ui/hint";
+import { ControlHint } from "@/components/ui/hint";
 import {
   FLEET_STATE_LABEL,
   agentTintIndex,
   headlineText,
+  stripText,
+  worktreeLabel,
   type FleetHeadline,
   type FleetItem,
   type FleetProjectedItem,
@@ -72,13 +74,11 @@ function TruncatedValue({
   visible: string;
   className?: string;
 }) {
-  const truncated = visible !== full;
-  const node = (
-    <span className={className} aria-label={full}>
+  return (
+    <span className={className} aria-label={visible !== full ? full : undefined}>
       {visible}
     </span>
   );
-  return truncated ? <Hint hint={full}>{node}</Hint> : node;
 }
 
 export function FleetHeadlineLine({ headline, failed }: { headline: FleetHeadline; failed: boolean }) {
@@ -98,61 +98,73 @@ export function FleetHeadlineLine({ headline, failed }: { headline: FleetHeadlin
 }
 
 function WorktreeChip({ chip }: { chip: FleetWorktreeChip }) {
-  const full = chip.kind === "branch" ? chip.branch : "shared checkout";
-  const visible = chip.kind === "branch" ? suffixTruncate(chip.branch, BRANCH_BUDGET) : "shared checkout";
+  const full = worktreeLabel(chip);
+  const visible = chip.kind === "branch" ? suffixTruncate(chip.branch, BRANCH_BUDGET) : full;
   return (
     <TruncatedValue
       full={full}
       visible={visible}
-      className="typed min-w-0"
+      className="typed"
     />
   );
 }
 
+function stripHint(strip: FleetStrip): string | undefined {
+  if (strip.kind === "agent") {
+    const full = worktreeLabel(strip.worktree);
+    const visible = strip.worktree.kind === "branch" ? suffixTruncate(strip.worktree.branch, BRANCH_BUDGET) : full;
+    return visible !== full ? full : undefined;
+  }
+  const visible = isPathShaped(strip.command) ? middleTruncate(strip.command, PATH_BUDGET) : strip.command;
+  return visible !== strip.command ? strip.command : undefined;
+}
+
+function headlineHint(headline: FleetHeadline): string | undefined {
+  if (!headline.restIsPath) return undefined;
+  const visible = middleTruncate(headline.text, PATH_BUDGET);
+  return visible !== headline.text ? headline.text : undefined;
+}
+
 export function FleetStripLine({ strip }: { strip: FleetStrip }) {
   if (strip.kind === "agent") {
-    const parts: string[] = [strip.agentName];
-    if (strip.model) parts.push(strip.model);
-    if (strip.turns !== undefined) parts.push(`${strip.turns}t`);
-    const worktreeFull = strip.worktree.kind === "branch" ? strip.worktree.branch : "shared checkout";
-    const full = [...parts, worktreeFull].join(" · ");
+    const full = stripText(strip);
     return (
       <span data-slot="fleet-strip" data-kind="agent" className="flex min-w-0 items-baseline gap-1 text-ink-3" aria-label={full}>
         <span className="typed min-w-0 truncate">{strip.agentName}</span>
         {strip.model ? (
           <>
-            <span aria-hidden="true">·</span>
-            <span className="typed shrink-0">{strip.model}</span>
+            <span aria-hidden="true" className="shrink-0">·</span>
+            <span className="typed min-w-0 truncate">{strip.model}</span>
           </>
         ) : null}
         {strip.turns !== undefined ? (
           <>
-            <span aria-hidden="true">·</span>
-            <span className="typed tnum shrink-0">{strip.turns}t</span>
+            <span aria-hidden="true" className="shrink-0">·</span>
+            <span className="typed tnum min-w-0 truncate">{strip.turns}t</span>
           </>
         ) : null}
-        <span aria-hidden="true">·</span>
-        <span data-slot="fleet-worktree-chip" data-mode={strip.worktree.kind} className="min-w-0">
+        <span aria-hidden="true" className="shrink-0">·</span>
+        <span data-slot="fleet-worktree-chip" data-mode={strip.worktree.kind} className="shrink-0">
           <WorktreeChip chip={strip.worktree} />
         </span>
       </span>
     );
   }
-  const byteLabel = strip.bytes === undefined ? undefined : formatBytes(strip.bytes);
-  const full = [strip.command, byteLabel, strip.clock].filter(Boolean).join(" · ");
+  const full = stripText(strip);
   const commandVisible = isPathShaped(strip.command) ? middleTruncate(strip.command, PATH_BUDGET) : strip.command;
+  const byteLabel = strip.bytes === undefined ? undefined : formatBytes(strip.bytes);
   return (
     <span data-slot="fleet-strip" data-kind="task" className="flex min-w-0 items-baseline gap-1 text-ink-3" aria-label={full}>
       <TruncatedValue full={strip.command} visible={commandVisible} className="typed min-w-0 truncate" />
       {byteLabel ? (
         <>
-          <span aria-hidden="true">·</span>
-          <span className="typed tnum shrink-0">{byteLabel}</span>
+          <span aria-hidden="true" className="shrink-0">·</span>
+          <span className="typed tnum min-w-0 truncate">{byteLabel}</span>
         </>
       ) : null}
       {strip.clock ? (
         <>
-          <span aria-hidden="true">·</span>
+          <span aria-hidden="true" className="shrink-0">·</span>
           <span className="typed tnum shrink-0">{strip.clock}</span>
         </>
       ) : null}
@@ -186,13 +198,9 @@ export function FleetWorkRow({
   const dotLabel = rolledUp ? `${STATUS_LABEL[item.attention]} below` : label;
   const headline = item.contextOnly ? undefined : source.headline;
   const elapsed = !item.contextOnly && source.elapsedMs !== undefined ? formatElapsed(source.elapsedMs) : undefined;
-  const stripFull =
-    !item.contextOnly && source.strip.kind === "agent"
-      ? [source.strip.agentName, source.strip.model, source.strip.turns !== undefined ? `${source.strip.turns}t` : undefined, source.strip.worktree.kind === "branch" ? source.strip.worktree.branch : "shared checkout"].filter(Boolean).join(" · ")
-      : !item.contextOnly && source.strip.kind === "task"
-        ? [source.strip.command, source.strip.bytes !== undefined ? formatBytes(source.strip.bytes) : undefined, source.strip.clock].filter(Boolean).join(" · ")
-        : undefined;
+  const stripFull = !item.contextOnly ? stripText(source.strip) : undefined;
   const accessible = [
+    dotLabel,
     source.title,
     item.contextOnly ? "Parent of work shown here." : headline ? headlineText(headline) : undefined,
     stripFull,
@@ -201,6 +209,70 @@ export function FleetWorkRow({
   ]
     .filter(Boolean)
     .join(". ");
+  const hint = [
+    headline ? headlineHint(headline) : undefined,
+    !item.contextOnly ? stripHint(source.strip) : undefined,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join("\n") || undefined;
+
+  const toggle = (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      aria-label={accessible}
+      onClick={onToggle}
+      className={cn(
+        "flex min-h-11 min-w-0 flex-1 items-start gap-2 rounded-lg px-0.5 py-0 text-start outline-none",
+        "transition-colors duration-(--motion-instant) hover:bg-surface-2",
+        "active:bg-[color-mix(in_oklab,var(--surface-2)_80%,var(--ink))]",
+        "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
+        "motion-reduce:transition-none",
+      )}
+    >
+      <span className="mt-1.5 shrink-0">
+        <StatusDot status={item.attention} label={dotLabel} />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span
+            data-slot="fleet-name"
+            className={cn(
+              "min-w-0 truncate text-sm leading-sm font-medium",
+              source.kind === "task" && "typed font-normal",
+              item.contextOnly ? "text-ink-2" : "text-ink",
+            )}
+          >
+            {source.title}
+          </span>
+          {item.contextOnly && <span className="eyebrow shrink-0 text-ink-3">context</span>}
+          {current && (
+            <span className="eyebrow shrink-0 text-ink-2" title="The chat you are reading">
+              reading
+            </span>
+          )}
+          {elapsed ? (
+            <span data-slot="fleet-elapsed" className="ms-auto typed shrink-0 tnum text-xs leading-xs text-ink-3">
+              {elapsed}
+            </span>
+          ) : null}
+        </span>
+        {item.contextOnly ? (
+          <span className="min-w-0 truncate text-xs leading-xs text-ink-3">Parent of work shown here.</span>
+        ) : headline ? (
+          <FleetHeadlineLine headline={headline} failed={source.state === "failed"} />
+        ) : null}
+        {!item.contextOnly ? <FleetStripLine strip={source.strip} /> : null}
+      </span>
+      <ChevronDown
+        aria-hidden="true"
+        className={cn(
+          "mt-1.5 size-4 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none",
+          expanded && "rotate-180",
+        )}
+      />
+    </button>
+  );
 
   return (
     <div
@@ -222,60 +294,7 @@ export function FleetWorkRow({
     >
       <div className="flex min-w-0 items-start gap-2 px-2 py-1.5">
         <FleetKindTile item={source} />
-        <button
-          type="button"
-          aria-expanded={expanded}
-          aria-label={accessible}
-          onClick={onToggle}
-          className={cn(
-            "flex min-h-11 min-w-0 flex-1 items-start gap-2 rounded-lg px-0.5 py-0 text-start outline-none",
-            "transition-colors duration-(--motion-instant) hover:bg-surface-2",
-            "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
-            "motion-reduce:transition-none",
-          )}
-        >
-          <span className="mt-1.5 shrink-0">
-            <StatusDot status={item.attention} label={dotLabel} />
-          </span>
-          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="flex min-w-0 items-baseline gap-2">
-              <span
-                data-slot="fleet-name"
-                className={cn(
-                  "min-w-0 truncate text-sm leading-sm font-medium",
-                  source.kind === "task" && "typed font-normal",
-                  item.contextOnly ? "text-ink-2" : "text-ink",
-                )}
-              >
-                {source.title}
-              </span>
-              {item.contextOnly && <span className="eyebrow shrink-0 text-ink-3">context</span>}
-              {current && (
-                <span className="eyebrow shrink-0 text-ink-2" title="The chat you are reading">
-                  reading
-                </span>
-              )}
-              {elapsed ? (
-                <span data-slot="fleet-elapsed" className="ms-auto typed shrink-0 tnum text-xs leading-xs text-ink-3">
-                  {elapsed}
-                </span>
-              ) : null}
-            </span>
-            {item.contextOnly ? (
-              <span className="min-w-0 truncate text-xs leading-xs text-ink-3">Parent of work shown here.</span>
-            ) : headline ? (
-              <FleetHeadlineLine headline={headline} failed={source.state === "failed"} />
-            ) : null}
-            {!item.contextOnly ? <FleetStripLine strip={source.strip} /> : null}
-          </span>
-          <ChevronDown
-            aria-hidden="true"
-            className={cn(
-              "mt-1.5 size-4 shrink-0 text-ink-3 transition-transform duration-(--motion-fast) motion-reduce:transition-none",
-              expanded && "rotate-180",
-            )}
-          />
-        </button>
+        {hint ? <ControlHint hint={hint}>{toggle}</ControlHint> : toggle}
       </div>
       {askingActions}
       {expanded && <div className="min-w-0 px-3 pb-3 hairline-t pt-3">{renderDetail(source, item.contextOnly)}</div>}

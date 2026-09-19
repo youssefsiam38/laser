@@ -36,7 +36,8 @@ import { requestEndAgent } from "@/components/agents/end-agent";
 import { Button } from "@/components/ui/button";
 import { ControlHint } from "@/components/ui/hint";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import { clearFinishedFleet, clearFleetReveal, useFleetClearedBefore, useFleetReveal } from "@/fleet/fleet-state";
+import { filterRevealing, sameFleetFilter } from "@/fleet/filter";
+import { clearFinishedFleet, clearFleetReveal, setFleetFilter, useFleetClearedBefore, useFleetFilter, useFleetReveal } from "@/fleet/fleet-state";
 import { useFleet, type FleetView } from "@/fleet/hooks";
 import { useTaskOutput } from "@/fleet/output";
 import { projectFleetSections, type FleetItem, type FleetProjectedItem, type FleetSections } from "@/fleet/model";
@@ -62,6 +63,16 @@ function projectedItemFor(items: readonly FleetProjectedItem[], key: string): Fl
     if (projected.item.key === key) return projected;
     const child = projectedItemFor(projected.children, key);
     if (child) return child;
+  }
+  return undefined;
+}
+
+function actualItemFor(sections: FleetSections, key: string): FleetItem | undefined {
+  for (const section of ["active", "finished"] as const) {
+    for (const projectedGroup of sections[section].groups) {
+      const projected = projectedItemFor(projectedGroup.items, key);
+      if (projected && !projected.contextOnly) return projected.item;
+    }
   }
   return undefined;
 }
@@ -107,17 +118,26 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
   const treeSections = useMemo(() => projectFleetSections(fleet.tree ? [fleet.tree] : [], { clearedBefore }), [fleet.tree, clearedBefore]);
   const elsewhereSections = useMemo(() => projectFleetSections(fleet.elsewhere, { clearedBefore }), [fleet.elsewhere, clearedBefore]);
   const revealed = useFleetReveal();
+  const filter = useFleetFilter();
   const [expanded, setExpanded] = useState<FleetDisclosure | undefined>(undefined);
 
   // A reveal carries canonical identity. Resolve it to the actual work's
   // current section so a task that just ended opens Finished, never both copies
-  // of one ancestor. Spent immediately, so asking twice works twice.
+  // of one ancestor. Spent immediately, so asking twice works twice. A filter
+  // that would hide the target is cleared so the row is actually there.
   useEffect(() => {
     if (revealed === undefined) return;
     const target = actualDisclosureFor(treeSections, "tree", revealed) ?? actualDisclosureFor(elsewhereSections, "strays", revealed);
-    if (target) setExpanded(target);
+    if (target) {
+      const item = actualItemFor(target.surface === "tree" ? treeSections : elsewhereSections, target.key);
+      if (item) {
+        const next = filterRevealing(filter, item);
+        if (!sameFleetFilter(filter, next)) setFleetFilter(next);
+      }
+      setExpanded(target);
+    }
     clearFleetReveal();
-  }, [elsewhereSections, revealed, treeSections]);
+  }, [elsewhereSections, filter, revealed, treeSections]);
 
   // Projection changes can move actual work between lifecycle sections. Follow
   // that canonical membership, but never let a vanished context disclosure be
@@ -187,6 +207,8 @@ export function FleetPanel({ variant, onClose }: FleetPanelProps) {
               renderAskingActions={renderAskingActions}
               onClearFinished={hasFinished ? () => clearFinishedFleet() : undefined}
               filters
+              filter={filter}
+              onFilterChange={setFleetFilter}
             />
           ) : (
             <FleetEmpty />
@@ -294,6 +316,14 @@ function AskingActions({ item }: { item: FleetItem }) {
     : s.sessions.length === 0 || s.sessions.some((session) => session.path === item.sessionPath));
   const here = useLaserState((s) => s.current === item.sessionPath);
   const open = () => void actions.openSession(item.sessionPath);
+  if (here) {
+    return (
+      <div data-slot="fleet-asking-actions" className="flex flex-wrap items-center gap-2 px-3 pb-2">
+        <span data-slot="fleet-here" className="text-xs leading-xs text-ink-3">This is the chat you are reading.</span>
+      </div>
+    );
+  }
+  if (!reachable) return null;
   return (
     <div
       data-slot="fleet-asking-actions"
@@ -307,19 +337,15 @@ function AskingActions({ item }: { item: FleetItem }) {
         }
       }}
     >
-      {here ? (
-        <span data-slot="fleet-here" className="text-xs leading-xs text-ink-3">This is the chat you are reading.</span>
-      ) : reachable ? (
-        <Button size="xs" variant="outline" data-slot="fleet-open-chat" onClick={open}>
-          Open
-        </Button>
-      ) : null}
+      <Button size="xs" variant="outline" data-slot="fleet-open-chat" onClick={open}>
+        Open
+      </Button>
       <Button
         size="xs"
         variant="outline"
         data-slot="fleet-answer"
         className="text-attention"
-        onClick={here ? undefined : open}
+        onClick={open}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
             event.preventDefault();

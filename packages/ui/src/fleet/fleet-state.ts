@@ -15,6 +15,7 @@
 import { useSyncExternalStore } from "react";
 
 import { DEVICE_KEYS, deviceStore } from "../runtime/device-storage.js";
+import { DEFAULT_FLEET_FILTER, type FleetFilter, type FleetKindFilter } from "./filter.js";
 
 let sheetOpen = false;
 /** The item key the fleet should scroll to and expand, when it was asked for. */
@@ -73,7 +74,25 @@ export function clearFleetReveal(): void {
  */
 const readCleared = (): string | undefined => deviceStore.read(DEVICE_KEYS.fleetCleared);
 
+function parseFleetFilter(value: unknown): FleetFilter | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const rec = value as Record<string, unknown>;
+  const lifecycle = rec.lifecycle;
+  if (!lifecycle || typeof lifecycle !== "object") return undefined;
+  const flags = lifecycle as Record<string, unknown>;
+  if (typeof flags.going !== "boolean" || typeof flags.asking !== "boolean" || typeof flags.ended !== "boolean") return undefined;
+  const kind = rec.kind;
+  if (kind !== "all" && kind !== "agent" && kind !== "task") return undefined;
+  return {
+    lifecycle: { going: flags.going, asking: flags.asking, ended: flags.ended },
+    kind: kind as FleetKindFilter,
+  };
+}
+
+const readFilter = (): FleetFilter => deviceStore.readJson(DEVICE_KEYS.fleetFilter, parseFleetFilter) ?? DEFAULT_FLEET_FILTER;
+
 let clearedBefore: string | undefined = readCleared();
+let filter: FleetFilter = readFilter();
 
 /** Put every piece of work finished up to now out of sight. */
 export function clearFinishedFleet(at: string = new Date().toISOString()): void {
@@ -101,12 +120,32 @@ export function useFleetClearedBefore(): string | undefined {
   return useSyncExternalStore(subscribe, () => clearedBefore, () => undefined);
 }
 
+export function setFleetFilter(next: FleetFilter): void {
+  if (
+    filter.kind === next.kind &&
+    filter.lifecycle.going === next.lifecycle.going &&
+    filter.lifecycle.asking === next.lifecycle.asking &&
+    filter.lifecycle.ended === next.lifecycle.ended
+  ) {
+    return;
+  }
+  filter = next;
+  deviceStore.writeJson(DEVICE_KEYS.fleetFilter, next);
+  publish();
+}
+
+export function useFleetFilter(): FleetFilter {
+  return useSyncExternalStore(subscribe, () => filter, () => DEFAULT_FLEET_FILTER);
+}
+
 /** Test seam: forget the mark entirely, in memory and on the device. */
 export function resetFleetState(): void {
   sheetOpen = false;
   revealed = undefined;
   clearedBefore = undefined;
+  filter = DEFAULT_FLEET_FILTER;
   deviceStore.write(DEVICE_KEYS.fleetCleared, undefined);
+  deviceStore.writeJson(DEVICE_KEYS.fleetFilter, undefined);
   publish();
 }
 
@@ -121,6 +160,7 @@ export function rehydrateFleetState(): void {
   sheetOpen = false;
   revealed = undefined;
   clearedBefore = readCleared();
+  filter = readFilter();
   publish();
 }
 
@@ -129,6 +169,7 @@ deviceStore.subscribe((event) => {
     sheetOpen = false;
     revealed = undefined;
     clearedBefore = undefined;
+    filter = DEFAULT_FLEET_FILTER;
     publish();
     return;
   }

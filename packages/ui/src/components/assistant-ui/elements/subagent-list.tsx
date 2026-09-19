@@ -24,19 +24,21 @@
  * actions are callbacks. The surfaces around it (the column and the phone's
  * sheet) own the data and the host.
  */
-import { ChevronDown, FileX } from "lucide-react";
+import { ChevronDown, FileX, RadioTower } from "lucide-react";
 import { useEffect, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 
 import { FleetFilters } from "@/components/fleet/FleetFilters.js";
 import { FleetWorkRow } from "@/components/fleet/FleetWorkRow.js";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { StatusDot } from "@/components/status";
+import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
 import {
-  DEFAULT_FLEET_FILTER,
   filterFleetSections,
   fleetFilterCounts,
+  fleetFilterIsRestricting,
   type FleetFilter,
+  type FleetGroup,
   type FleetItem,
   type FleetProjectedGroup,
   type FleetProjectedItem,
@@ -73,13 +75,15 @@ export interface SubagentListProps extends Omit<ComponentProps<"div">, "children
   onClearFinished?: (() => void) | undefined;
   /** Show Going · Asking · Ended chips. The tree list does; strays do not. */
   filters?: boolean;
+  /** Lifted filter, shared by the column and the sheet and persisted. */
+  filter?: FleetFilter;
+  onFilterChange?: ((next: FleetFilter) => void) | undefined;
 }
 
-export function SubagentList({ sections, surface, expanded, currentKey, onToggle, renderDetail, renderAskingActions, onClearFinished, filters = false, className, ...props }: SubagentListProps) {
+export function SubagentList({ sections, surface, expanded, currentKey, onToggle, renderDetail, renderAskingActions, onClearFinished, filters = false, filter, onFilterChange, className, ...props }: SubagentListProps) {
   const [finishedOpen, setFinishedOpen] = useState(false);
-  const [filter, setFilter] = useState<FleetFilter>(DEFAULT_FLEET_FILTER);
   const counts = useMemo(() => fleetFilterCounts(sections), [sections]);
-  const visible = useMemo(() => (filters ? filterFleetSections(sections, filter) : sections), [filter, filters, sections]);
+  const visible = useMemo(() => (filters && filter ? filterFleetSections(sections, filter) : sections), [filter, filters, sections]);
 
   // Opening a finished row from elsewhere (a task-exit notice) must not land
   // on a fold that hides it. Ordinary rerenders never override a manual fold.
@@ -89,7 +93,8 @@ export function SubagentList({ sections, surface, expanded, currentKey, onToggle
 
   return (
     <div data-slot="subagent-list" className={cn("flex flex-col", className)} {...props}>
-      {filters ? <FleetFilters filter={filter} counts={counts} onChange={setFilter} /> : null}
+      {filters && filter && onFilterChange ? <FleetFilters filter={filter} counts={counts} onChange={onFilterChange} /> : null}
+      <FleetSectionHeader label="In progress" count={visible.active.count} />
       {visible.active.groups.length > 0 ? (
         <FleetGroups
           groups={visible.active.groups}
@@ -103,7 +108,7 @@ export function SubagentList({ sections, surface, expanded, currentKey, onToggle
         />
       ) : (
         <p className="px-4 py-5 text-sm leading-sm text-ink-3">
-          {filters && !filter.lifecycle.going && !filter.lifecycle.asking ? "Nothing matches these filters." : "Nothing is in progress."}
+          {filters && filter && fleetFilterIsRestricting(filter) ? "Nothing matches these filters." : "Nothing is in progress."}
         </p>
       )}
 
@@ -153,6 +158,33 @@ export function SubagentList({ sections, surface, expanded, currentKey, onToggle
   );
 }
 
+function FleetSectionHeader({ label, count }: { label: string; count: number }) {
+  return (
+    <header data-slot="fleet-section-header" className="flex items-center gap-2 px-4 py-3">
+      <RadioTower aria-hidden="true" className="size-4 shrink-0 text-live" />
+      <h3 className="text-xs leading-xs font-medium text-ink">{label}</h3>
+      <span className="tnum text-xs leading-xs text-ink-3">{count}</span>
+    </header>
+  );
+}
+
+function GroupCounts({ group }: { group: FleetGroup }) {
+  const parts: { n: number; word: string }[] = [];
+  if (group.running > 0) parts.push({ n: group.running, word: "going" });
+  if (group.needsYou > 0) parts.push({ n: group.needsYou, word: "asking" });
+  if (group.ended > 0) parts.push({ n: group.ended, word: "ended" });
+  if (parts.length === 0) return null;
+  return (
+    <span
+      data-slot="fleet-group-counts"
+      className="tnum text-xs leading-xs text-ink-3"
+      aria-label={parts.map((part) => `${part.n} ${part.word}`).join(" · ")}
+    >
+      {parts.map((part) => part.n).join(" · ")}
+    </span>
+  );
+}
+
 function FleetGroups({
   groups,
   surface,
@@ -178,22 +210,20 @@ function FleetGroups({
       <section key={group.path} aria-label={group.title} data-slot="fleet-group" data-section={section} data-deleted={group.deleted || undefined}>
         {/* Opaque: DESIGN.md keeps glass out of the system, and a blurred
             header over a scrolling list is exactly the decoration it names. */}
-        <header className="sticky top-0 z-10 flex items-baseline gap-2 bg-bg px-4 py-1.5 hairline-b">
+        <header className="sticky top-0 z-10 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 overflow-x-hidden bg-bg px-4 py-1.5 hairline-b">
           <h4 className="min-w-0 truncate text-xs leading-xs font-medium text-ink" title={group.deleted ? group.path : undefined}>
             {group.title}
           </h4>
-          {group.project && <span className="eyebrow shrink-0">{group.project}</span>}
-          <span data-slot="fleet-group-counts" className="shrink-0 tnum text-xs leading-xs text-ink-3">
-            {[group.running > 0 ? `${group.running} going` : undefined, group.needsYou > 0 ? `${group.needsYou} asking` : undefined, group.ended > 0 ? `${group.ended} ended` : undefined].filter(Boolean).join(" · ")}
-          </span>
+          {group.cwd ? <span className="eyebrow min-w-0 truncate">{shortCwd(group.cwd)}</span> : null}
+          <GroupCounts group={group} />
           {group.deleted ? (
             // Deleted, not closed: there is no session to open, so the header
             // says what the work lost rather than implying a way back to it.
-            <span className="shrink-0 text-xs leading-xs text-ink-3" title="This session was deleted; its work kept going.">
+            <span className="text-xs leading-xs text-ink-3" title="This session was deleted; its work kept going.">
               session deleted
             </span>
           ) : group.orphaned ? (
-            <span className="shrink-0 text-xs leading-xs text-ink-3" title="This session is closed here; its work kept going.">
+            <span className="text-xs leading-xs text-ink-3" title="This session is closed here; its work kept going.">
               session closed
             </span>
           ) : null}

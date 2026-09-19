@@ -774,6 +774,15 @@ describe("the fleet is one session's tree (M13-T51)", () => {
       expect(strays()).not.toBeNull();
     });
 
+    it("labels and counts the active stray section", async () => {
+      withStray();
+      await render();
+      await act(async () => toggle().click());
+      const header = strays()?.querySelector('[data-slot="fleet-section-header"]');
+      expect(header?.textContent).toContain("In progress");
+      expect(header?.textContent).toMatch(/2/);
+    });
+
     it("opens into the same rows, says the session is deleted, and still stops the work", async () => {
       withStray();
       await render();
@@ -902,10 +911,14 @@ describe("the fleet is one session's tree (M13-T51)", () => {
 });
 
 describe("the fleet row (leap §3)", () => {
-  const pressEnter = async (el: HTMLElement): Promise<void> => {
+  /** jsdom does not activate buttons from the keyboard. Honour preventDefault. */
+  const pressKey = async (el: HTMLElement, key: string): Promise<KeyboardEvent> => {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
     await act(async () => {
-      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      el.dispatchEvent(event);
+      if (!event.defaultPrevented && (key === "Enter" || key === " ")) el.click();
     });
+    return event;
   };
 
   it("renders live activity on line 2, never the task brief", async () => {
@@ -1033,22 +1046,71 @@ describe("the fleet row (leap §3)", () => {
     };
     await render();
     const row = rowFor("explorer");
-    const expand = row.querySelector("button")!;
+    const expand = row.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
     const answer = row.querySelector<HTMLButtonElement>('[data-slot="fleet-answer"]')!;
     const open = row.querySelector<HTMLButtonElement>('[data-slot="fleet-open-chat"]')!;
     expect(answer.textContent).toContain("Answer");
     expect(open.textContent).toContain("Open");
+    expect(expand.getAttribute("aria-label")?.startsWith("Asking")).toBe(true);
+
     expand.focus();
-    await pressEnter(expand);
+    const expandEnter = await pressKey(expand, "Enter");
+    expect(expandEnter.defaultPrevented).toBe(false);
+    expect(row.getAttribute("data-expanded")).toBe("true");
     expect(fixture.actions.openSession).not.toHaveBeenCalled();
+
+    const expandEnterAgain = await pressKey(expand, "Enter");
+    expect(expandEnterAgain.defaultPrevented).toBe(false);
+    expect(row.getAttribute("data-expanded")).toBeNull();
+
+    const expandSpace = await pressKey(expand, " ");
+    expect(expandSpace.defaultPrevented).toBe(false);
+    expect(row.getAttribute("data-expanded")).toBe("true");
+    expect(fixture.actions.openSession).not.toHaveBeenCalled();
+
+    await act(async () => expand.click());
+    expect(row.getAttribute("data-expanded")).toBeNull();
+    await act(async () => expand.click());
+    expect(row.getAttribute("data-expanded")).toBe("true");
+
+    const expanded = row.getAttribute("data-expanded");
     answer.focus();
-    await pressEnter(answer);
+    const answerEnter = await pressKey(answer, "Enter");
+    expect(answerEnter.defaultPrevented).toBe(true);
     expect(fixture.actions.openSession).not.toHaveBeenCalled();
-    await act(async () => open.click());
+    expect(row.getAttribute("data-expanded")).toBe(expanded);
+
+    const answerSpace = await pressKey(answer, " ");
+    expect(answerSpace.defaultPrevented).toBe(false);
     expect(fixture.actions.openSession).toHaveBeenCalledWith(CHILD);
     fixture.actions.openSession.mockClear();
     await act(async () => answer.click());
     expect(fixture.actions.openSession).toHaveBeenCalledWith(CHILD);
+    fixture.actions.openSession.mockClear();
+    await act(async () => open.click());
+    expect(fixture.actions.openSession).toHaveBeenCalledWith(CHILD);
+  });
+
+  it("omits Answer when this is the chat being read, and when the session is gone", async () => {
+    const asking = {
+      ...child,
+      status: "needs_input" as const,
+      question: { id: "ui-1", kind: "select" as const, title: "Which token store?", askedAt: "2026-09-08T10:04:00.000Z" },
+    };
+    fixture.state.agents.runs = { r1: asking };
+    fixture.state.current = CHILD;
+    await render();
+    const here = rowFor("explorer");
+    expect(here.querySelector('[data-slot="fleet-here"]')).not.toBeNull();
+    expect(here.querySelector('[data-slot="fleet-answer"]')).toBeNull();
+    expect(here.querySelector('[data-slot="fleet-open-chat"]')).toBeNull();
+
+    fixture.state.current = ROOT;
+    fixture.state.sessions = [summary({ path: ROOT, name: "Root session" })];
+    await render();
+    const gone = rowFor("explorer");
+    expect(gone.querySelector('[data-slot="fleet-answer"]')).toBeNull();
+    expect(gone.querySelector('[data-slot="fleet-open-chat"]')).toBeNull();
   });
 
   it("middle-truncates a path, keeps a branch suffix, and puts the full text in the tooltip and accessible name", async () => {
@@ -1077,9 +1139,39 @@ describe("the fleet row (leap §3)", () => {
     expect(chip.textContent).toContain("6a5fb144");
     expect(chip.textContent).not.toBe(branch);
     expect(chip.querySelector("[aria-label]")?.getAttribute("aria-label")).toBe(branch);
-    const expand = row.querySelector("button")!;
+    const expand = row.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    expect(expand.getAttribute("aria-label")?.startsWith("Working")).toBe(true);
     expect(expand.getAttribute("aria-label")).toContain(path);
     expect(expand.getAttribute("aria-label")).toContain(branch);
+    expect(expand.querySelector('[data-slot="hint"]')).toBeNull();
+    expect(row.querySelector('[data-slot="fleet-worktree-chip"]')?.textContent).toContain("6a5fb144");
+  });
+
+  it("lets the model and turns shrink so a long strip keeps the branch suffix", async () => {
+    const branch = "agents/explorer-long-suffix-6a5fb144";
+    fixture.state.agents.runs = {
+      r1: run({
+        runId: "r1",
+        sessionPath: CHILD,
+        subagentName: "explorer",
+        model: { provider: "anthropic", id: "claude-opus-4", name: "claude-opus-4" },
+        activity: { turns: 12, tools: 1, currentTool: "vitest", lastAt: "2026-09-08T10:04:00.000Z" },
+        worktree: { path: "/p/.worktrees/explorer-1", branch, baseCommit: "abc" },
+      }),
+    };
+    await render();
+    const strip = rowFor("explorer").querySelector('[data-slot="fleet-strip"]')!;
+    const model = [...strip.querySelectorAll("span")].find((el) => el.textContent === "claude-opus-4");
+    const turns = [...strip.querySelectorAll("span")].find((el) => el.textContent === "12t");
+    expect(model?.className).toContain("min-w-0");
+    expect(model?.className).not.toContain("shrink-0");
+    expect(turns?.className).toContain("min-w-0");
+    expect(turns?.className).not.toContain("shrink-0");
+    const chip = strip.querySelector('[data-slot="fleet-worktree-chip"]')!;
+    expect(chip.className).toContain("shrink-0");
+    expect(chip.textContent).toContain("6a5fb144");
+    expect(strip.getAttribute("aria-label")).toContain("claude-opus-4");
+    expect(strip.getAttribute("aria-label")).toContain(branch);
   });
 
   it("puts command, bytes and clock on a command's developer strip", async () => {
@@ -1098,6 +1190,101 @@ describe("the fleet row (leap §3)", () => {
     const header = container.querySelector('[data-slot="fleet-group"] header');
     expect(header?.querySelector("h4")?.textContent).toBe("Root session");
     expect(header?.textContent).toMatch(/p/i);
-    expect(container.querySelector('[data-slot="fleet-group-counts"]')?.textContent).toContain("going");
+    expect(container.querySelector('[data-slot="fleet-group-counts"]')?.textContent?.trim()).toBe("1");
+    expect(container.querySelector('[data-slot="fleet-group-counts"]')?.getAttribute("aria-label")).toBe("1 going");
+  });
+
+  it("compacts group counts so a mixed header can wrap at the column width", async () => {
+    fixture.state.agents.runs = {
+      r1: child,
+      r2: {
+        ...child,
+        runId: "r2",
+        sessionPath: "/p/asking.jsonl",
+        subagentName: "reviewer",
+        status: "needs_input",
+        question: { id: "q", kind: "confirm", title: "Overwrite?", askedAt: "2026-09-08T10:04:00.000Z" },
+      },
+      r3: {
+        ...child,
+        runId: "r3",
+        sessionPath: "/p/done.jsonl",
+        subagentName: "writer",
+        status: "completed",
+        endedAt: "2026-09-08T10:01:00.000Z",
+      },
+    };
+    await render();
+    const header = container.querySelector('[data-slot="fleet-group"] header')!;
+    expect(header.className).toMatch(/flex-wrap/);
+    expect(header.className).toMatch(/overflow-x-hidden/);
+    const counts = header.querySelector('[data-slot="fleet-group-counts"]')!;
+    expect(counts.textContent?.trim()).toBe("2 · 1 · 1");
+    expect(counts.getAttribute("aria-label")).toBe("2 going · 1 asking · 1 ended");
+    expect(header.querySelector("h4")?.className).toMatch(/truncate/);
+  });
+
+  it("moves kind with arrow keys, Home and End, on one tab stop", async () => {
+    fixture.state.agents.runs = { r1: child };
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: ROOT }) };
+    await render();
+    const group = container.querySelector<HTMLElement>('[role="radiogroup"]')!;
+    const all = container.querySelector<HTMLButtonElement>('[data-slot="fleet-filter-kind-all"]')!;
+    const agents = container.querySelector<HTMLButtonElement>('[data-slot="fleet-filter-kind-agents"]')!;
+    const commands = container.querySelector<HTMLButtonElement>('[data-slot="fleet-filter-kind-commands"]')!;
+    expect(all.tabIndex).toBe(0);
+    expect(agents.tabIndex).toBe(-1);
+    expect(commands.tabIndex).toBe(-1);
+    all.focus();
+    await act(async () => {
+      group.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+    });
+    expect(agents.getAttribute("aria-checked")).toBe("true");
+    expect(agents.tabIndex).toBe(0);
+    expect(all.tabIndex).toBe(-1);
+    expect(rowFor("explorer")).toBeDefined();
+    expect(rowFor("pnpm vite dev")).toBeUndefined();
+    await act(async () => {
+      group.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true }));
+    });
+    expect(commands.getAttribute("aria-checked")).toBe("true");
+    expect(rowFor("pnpm vite dev")).toBeDefined();
+    await act(async () => {
+      group.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true }));
+    });
+    expect(all.getAttribute("aria-checked")).toBe("true");
+    expect(rowFor("explorer")).toBeDefined();
+    expect(rowFor("pnpm vite dev")).toBeDefined();
+  });
+
+  it("reveals a row that the current filter would hide", async () => {
+    fixture.state.agents.runs = { r1: child };
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: CHILD }) };
+    await render();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="fleet-filter-going"]')!.click());
+    expect(rowFor("pnpm vite dev")).toBeUndefined();
+    await act(async () => revealInFleet("task:t1", { sheet: false }));
+    await act(async () => {});
+    expect(rowFor("pnpm vite dev").getAttribute("data-expanded")).toBe("true");
+    expect(container.querySelector('[data-slot="fleet-filter-going"]')?.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("says a kind-only miss is a filter miss, not an empty fleet", async () => {
+    fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: ROOT }) };
+    await render();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="fleet-filter-kind-agents"]')!.click());
+    expect(container.textContent).toContain("Nothing matches these filters.");
+    expect(container.textContent).not.toContain("Nothing is in progress.");
+  });
+
+  it("keeps the filter across a remount of the panel", async () => {
+    fixture.state.agents.runs = { r1: child };
+    await render();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="fleet-filter-going"]')!.click());
+    expect(rowFor("explorer")).toBeUndefined();
+    await act(async () => root.render(<LaserStoreProvider store={store}><TooltipProvider><span /></TooltipProvider></LaserStoreProvider>));
+    await act(async () => root.render(<LaserStoreProvider store={store}><TooltipProvider><FleetPanel variant="panel" /></TooltipProvider></LaserStoreProvider>));
+    expect(container.querySelector('[data-slot="fleet-filter-going"]')?.getAttribute("aria-pressed")).toBe("false");
+    expect(rowFor("explorer")).toBeUndefined();
   });
 });

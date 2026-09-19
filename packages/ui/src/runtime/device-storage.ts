@@ -79,6 +79,8 @@ export const DEVICE_KEYS = {
   /** `[{path, id, open}]`, bounded. */
   activityDisclosure: "activity-disclosure",
   fleetCleared: "fleet-cleared",
+  /** `{ lifecycle, kind }` — Going/Asking/Ended plus the kind cut. */
+  fleetFilter: "fleet-filter",
   /** Content: `{ "<id>": {text, at} }`. Reached only through the draft API. */
   drafts: "drafts",
   /** The descriptor fingerprint this namespace was written under. */
