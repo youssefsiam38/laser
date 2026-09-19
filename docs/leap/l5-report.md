@@ -125,3 +125,47 @@ Once the host is mounted and a file row opens it:
 Designed states covered in tests: no changes, one file, huge, binary, deleted
 (patch), renamed, mode, failed repository, agent worktree / shared / removed /
 branch gone.
+
+## Corrections
+
+Branch `agents/l5-overlay-corrections-2f464e09`. The overlay is mounted once in
+`App` next to `Shell`. Call sites (telemetry Files, fleet Changes) are still
+owned elsewhere.
+
+### Blockers
+
+| ID | Fix |
+| --- | --- |
+| B1 | `App.tsx` mounts `ChangesOverlayHost`. Main chunk after mount: `index-BK6npFA5.js` 2,381.01 kB / 719.73 kB gzip (before: `index-LY4fB5Qh.js` 2,343.84 / 708.74). Pierre is `diff-body-DmcBtl02.js` 310.16 kB / 80.31 kB gzip, absent from main. |
+| B2 | Default adapter refuses with “Changes are not available in this view.” Host adapter talks to `pi/project/changes`, `file_diff`, `file_source`. Mock is tests-only (`setChangesAdapter(createMockAdapter())`). |
+| B3 | `copy` events `preventDefault` and write clipped `text/plain` from the shadow root’s selection. Tested by dispatching a real `copy` event with fake `clipboardData`. |
+| B4 | Find scrolls only on query/step. MutationObserver re-ranges without scrolling, debounced 80ms. |
+| B5 | Restored `integrity:` on the three `@modelcontextprotocol/*` pkg.pr.new lockfile entries from `c61b7d22`. |
+
+### Should-fix
+
+| ID | Fix |
+| --- | --- |
+| S1 | Split-view matches deduped by excerpt so context lines count once. |
+| S2 | Find matches live in state; status/excerpt/step use the current query. |
+| S3 | Rail feeds `fileTreeFromChanges` per repository; keeps DiffStat and viewed tick. |
+| S4 | Canonical `Dialog`/`DialogContent` (`showCloseButton={false}`, full-screen classes). |
+| S5 | Range fields commit on Enter/blur via `committedRange`. |
+| S6 | `openChanges` selects `repo`/`path` without setting `repoFilter`. |
+| S7 | Unified-fallback notice is dismissible; split toggle disabled with the reason while it holds. |
+| S8 | Truncated pages show “This patch is large…” and fetch `nextOffset` on demand. |
+| S9 | `personFacingChangesError` keeps our sentences; stacks go to `console.warn`. |
+| S10 | Chunk-graph test bundles `src/source-control/index.ts` with splitting: entry has no `@pierre`, a sibling does. |
+| S11 | Tests for find status/hidden/dedupe, `nextHunkIndex`, `loadedDiffFiles`/`appendPatchPage`, prefs. |
+| S12 | `ThemeRegistration` typed assignment, not `as never`. |
+| Structure | `changesBodyState(...)` tagged union; overlay switches on it. |
+
+### Nits
+
+`@pierre/diffs` alphabetical in `package.json`. `formatBytes` from `@/format`.
+Split/phone thresholds named. Overlay measures `--text-code` for mitigation 3.
+Removed dead `keyboard` no-op, `isViewed`, `insideShadow`. Range inputs use
+`pointer-coarse:text-base`. Line counts use the locale. Tabs are `role="tab"`
+with `aria-controls` on `#changes-diff-panel`. Shortcuts listen on `document`
+so they work while the phone file sheet has focus.
+

@@ -43,7 +43,6 @@ export function overlayKeyAction(event: KeyboardEvent): OverlayKeyAction | undef
   if (!mod && !event.altKey && key === "[") return "prev-hunk";
   if (!mod && !event.altKey && lower === "v") return "toggle-viewed";
   if (!mod && !event.altKey && lower === "u") return "toggle-unified";
-  if (!mod && !event.altKey && lower === "f" && !event.shiftKey) return undefined;
   if (!mod && !event.altKey && lower === "b") return "toggle-tree";
   return undefined;
 }

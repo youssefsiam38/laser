@@ -7,7 +7,7 @@
  */
 import { useMemo } from "react";
 import { FileDiff, Virtualizer } from "@pierre/diffs/react";
-import { parsePatchFiles, registerCustomTheme } from "@pierre/diffs";
+import { parsePatchFiles, registerCustomTheme, type ThemeRegistration } from "@pierre/diffs";
 
 import { LASER_SHIKI_THEME } from "@/components/assistant-ui/elements/shiki-theme.js";
 import { useThemeBase } from "@/theme/use-theme.js";
@@ -15,6 +15,7 @@ import { useThemeBase } from "@/theme/use-theme.js";
 import { classifyDiffPage } from "./classify.js";
 import type { ChangesScope, FileDiffPage } from "./contract.js";
 import { getChangesAdapter } from "./data.js";
+import { loadedDiffFiles } from "./diff-files.js";
 import { DiffErrorState, EmptyBodyState } from "./states.js";
 import type { DiffStylePref } from "./prefs.js";
 
@@ -23,7 +24,8 @@ let themeRegistered = false;
 function ensurePierreTheme(): void {
   if (themeRegistered) return;
   themeRegistered = true;
-  registerCustomTheme(LASER_SHIKI_THEME.name, async () => LASER_SHIKI_THEME as never);
+  const theme: ThemeRegistration = LASER_SHIKI_THEME;
+  registerCustomTheme(LASER_SHIKI_THEME.name, async () => theme);
 }
 
 export function DiffBody({ page, scope, diffStyle }: { page: FileDiffPage; scope: ChangesScope; diffStyle: DiffStylePref }) {
@@ -64,11 +66,7 @@ export function DiffBody({ page, scope, diffStyle }: { page: FileDiffPage; scope
           loadDiffFiles: async () => {
             const oldFile = await load(scope, page.repo, page.oldPath ?? page.path, "old");
             const newFile = await load(scope, page.repo, page.path, "new");
-            if (!oldFile && !newFile) return { oldFile: null, newFile: { name: page.path, contents: "" } };
-            return {
-              oldFile: oldFile ? { name: page.oldPath ?? page.path, contents: oldFile.contents } : null,
-              newFile: newFile ? { name: page.path, contents: newFile.contents } : { name: page.path, contents: "" },
-            };
+            return loadedDiffFiles(oldFile, newFile, page);
           },
         }
       : {}),

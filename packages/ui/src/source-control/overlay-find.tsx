@@ -11,8 +11,11 @@ import {
 } from "@/components/thread/find-ranges.js";
 
 import { patchValueMatches } from "./classify.js";
+import { dedupeDiffLineMatches, overlayFindStatus } from "./overlay-find-model.js";
 
-function publishOverlayHighlights(matches: RootMatch[], index: number): void {
+const MUTATION_PAINT_MS = 80;
+
+function publishOverlayHighlights(matches: RootMatch[], index: number, scroll: boolean): void {
   if (typeof CSS === "undefined" || !("highlights" in CSS) || typeof Highlight === "undefined") return;
   if (!matches.length) {
     CSS.highlights.delete(OVERLAY_FIND_HIGHLIGHTS.matches);
@@ -20,10 +23,10 @@ function publishOverlayHighlights(matches: RootMatch[], index: number): void {
     return;
   }
   const current = matches[index];
-  const rest = matches.filter((_, i) => i !== index).map(match => match.range);
+  const rest = matches.filter((_, i) => i !== index).map((match) => match.range);
   CSS.highlights.set(OVERLAY_FIND_HIGHLIGHTS.matches, new Highlight(...rest));
   CSS.highlights.set(OVERLAY_FIND_HIGHLIGHTS.current, new Highlight(...(current ? [current.range] : [])));
-  current?.range.startContainer.parentElement?.scrollIntoView({ block: "center", behavior: "auto" });
+  if (scroll) current?.range.startContainer.parentElement?.scrollIntoView({ block: "center", behavior: "auto" });
 }
 
 export function useOverlayFind({
@@ -39,29 +42,34 @@ export function useOverlayFind({
 }) {
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
+  const [matches, setMatches] = useState<RootMatch[]>([]);
   const input = useRef<HTMLInputElement>(null);
-  const matchesRef = useRef<RootMatch[]>([]);
 
-  const paint = useCallback(() => {
-    const node = host.current;
-    if (!node || !open) {
-      matchesRef.current = [];
-      publishOverlayHighlights([], 0);
-      return;
-    }
-    for (const root of collectOpenShadowRoots(node)) adoptOverlayFindStyles(root);
-    const matches = query.trim() ? findTextMatchesAcrossRoots(node, query, DIFF_LINE_FIND_POLICY) : [];
-    matchesRef.current = matches;
-    const at = Math.min(index, Math.max(0, matches.length - 1));
-    publishOverlayHighlights(matches, at);
-  }, [host, index, open, query]);
+  const paint = useCallback(
+    (scroll: boolean) => {
+      const node = host.current;
+      if (!node || !open) {
+        setMatches([]);
+        publishOverlayHighlights([], 0, false);
+        return;
+      }
+      for (const root of collectOpenShadowRoots(node)) adoptOverlayFindStyles(root);
+      const next = query.trim()
+        ? dedupeDiffLineMatches(findTextMatchesAcrossRoots(node, query, DIFF_LINE_FIND_POLICY))
+        : [];
+      setMatches(next);
+      const at = Math.min(index, Math.max(0, next.length - 1));
+      publishOverlayHighlights(next, at, scroll);
+    },
+    [host, index, open, query],
+  );
 
   useEffect(() => {
     if (!open) {
       setQuery("");
       setIndex(0);
-      matchesRef.current = [];
-      publishOverlayHighlights([], 0);
+      setMatches([]);
+      publishOverlayHighlights([], 0, false);
       return;
     }
     requestAnimationFrame(() => {
@@ -72,32 +80,35 @@ export function useOverlayFind({
 
   useEffect(() => {
     if (!open) return;
-    paint();
-    const node = host.current;
-    if (!node) return;
-    const observer = typeof MutationObserver === "function" ? new MutationObserver(() => paint()) : undefined;
-    observer?.observe(node, { childList: true, subtree: true, characterData: true });
-    return () => observer?.disconnect();
+    paint(true);
   }, [open, paint]);
 
-  useEffect(() => () => publishOverlayHighlights([], 0), []);
+  useEffect(() => {
+    if (!open) return;
+    const node = host.current;
+    if (!node || typeof MutationObserver !== "function") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const observer = new MutationObserver(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => paint(false), MUTATION_PAINT_MS);
+    });
+    observer.observe(node, { childList: true, subtree: true, characterData: true });
+    return () => {
+      observer.disconnect();
+      if (timer) clearTimeout(timer);
+    };
+  }, [host, open, paint]);
 
-  const rendered = matchesRef.current;
+  useEffect(() => () => publishOverlayHighlights([], 0, false), []);
+
   const modelCount = open && query.trim() ? patchValueMatches(modelText, query) : 0;
-  const hidden = Math.max(0, modelCount - rendered.length);
-  const status = !query.trim()
-    ? "0 / 0"
-    : rendered.length
-      ? `${Math.min(index, rendered.length - 1) + 1} / ${rendered.length}${hidden ? ` · ${hidden} in collapsed context` : ""}`
-      : modelCount
-        ? `Collapsed · ${modelCount} in this file`
-        : "No matches";
+  const status = overlayFindStatus(query, index, matches.length, modelCount);
 
   const bar = open ? (
     <ConversationSearch
       inputRef={input}
       query={query}
-      hits={rendered.map((match, i) => ({
+      hits={matches.map((match, i) => ({
         id: String(i),
         messageId: "overlay",
         occurrence: i,
@@ -105,17 +116,17 @@ export function useOverlayFind({
         match: match.match,
         after: match.after,
       }))}
-      activeIndex={Math.min(index, Math.max(0, rendered.length - 1))}
+      activeIndex={Math.min(index, Math.max(0, matches.length - 1))}
       status={status}
       label="Find in this file"
-      onQueryChange={value => {
+      onQueryChange={(value) => {
         setQuery(value);
         setIndex(0);
       }}
-      onStep={delta => {
-        const total = matchesRef.current.length;
+      onStep={(delta) => {
+        const total = matches.length;
         if (!total) return;
-        setIndex(current => (current + delta + total) % total);
+        setIndex((current) => (current + delta + total) % total);
       }}
       onClose={onClose}
     />

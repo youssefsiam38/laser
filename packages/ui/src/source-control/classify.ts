@@ -20,22 +20,33 @@ export type EmptyBody = {
 /** Changed plus context lines above this open collapsed, with an explicit control. */
 export const LARGE_DIFF_LINE_LIMIT = 2000;
 
+/** Two columns of at least 20ch plus an 8ch gutter, in the code size. */
+export const SPLIT_MIN_COLUMNS_CH = 20 * 2 + 8;
+
+/** Tailwind `sm` is 40rem. Phone chrome below that. */
+export const OVERLAY_PHONE_MAX_REM = 40;
+
 /**
  * Two columns of code, each at least 20ch of the code size, plus an 8ch gutter.
  * A width we have not measured yet keeps the person's remembered preference.
  */
 export function splitColumnsFit(widthPx: number, codeSizePx: number): boolean {
   if (!(widthPx > 0) || !(codeSizePx > 0)) return true;
-  return widthPx >= codeSizePx * (20 * 2 + 8);
+  return widthPx >= codeSizePx * SPLIT_MIN_COLUMNS_CH;
 }
 
 /**
- * Phone chrome: a single column, tree as a sheet. `40` is the `sm` step in rem.
+ * Phone chrome: a single column, tree as a sheet.
  * An unmeasured box stays desktop so tests and the first frame do not flash.
  */
 export function overlayChromeLayout(widthPx: number, rootFontPx: number): "phone" | "desktop" {
   if (!(widthPx > 0) || !(rootFontPx > 0)) return "desktop";
-  return widthPx < 40 * rootFontPx ? "phone" : "desktop";
+  return widthPx < OVERLAY_PHONE_MAX_REM * rootFontPx ? "phone" : "desktop";
+}
+
+/** Prefer `--text-code`; fall back to the root size when the token is missing. */
+export function codeSizeFromTheme(codeTokenPx: number, rootFontPx: number): number {
+  return codeTokenPx > 0 ? codeTokenPx : rootFontPx;
 }
 
 export function fileLineCount(file: Pick<ChangedFile, "added" | "removed">): number {
@@ -95,13 +106,6 @@ export function modeWords(prevMode?: string, mode?: string): string {
   if (!exec(prevMode) && exec(mode)) return "executable";
   if (exec(prevMode) && !exec(mode)) return "not executable";
   return "its file mode";
-}
-
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
-  const mb = n / (1024 * 1024);
-  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
 }
 
 export function repoTotals(repo: ChangedRepo): { added: number; removed: number } {

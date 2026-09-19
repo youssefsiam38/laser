@@ -3,6 +3,7 @@ import { useDirection } from "@/hooks/use-direction";
 import { Shell } from "@/components/shell/Shell";
 import { LaserProvider } from "@/runtime";
 import { LinkDestination } from "@/components/shell/LinkDestination";
+import { ChangesOverlayHost } from "@/source-control";
 
 /** Root: the host connection + assistant-ui runtime, then the frame. */
 export function App() {
@@ -12,6 +13,7 @@ export function App() {
       <LaserProvider>
         <Shell />
         <LinkDestination />
+        <ChangesOverlayHost />
       </LaserProvider>
     </Direction.Provider>
   );

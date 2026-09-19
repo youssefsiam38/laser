@@ -96,12 +96,12 @@ export function openChanges(args: OpenChangesArgs): void {
   sessionKey = args.sessionKey ?? sessionKey;
   request = args;
   scope = args.scope;
-  repoFilter = args.repo ?? repoFilter;
   open = true;
   findOpen = false;
   treeOpen = false;
+  fallbackSaid = false;
   if (args.repo && args.path) addTab(args.repo, args.path);
-  refresh();
+  else refresh();
 }
 
 export function closeChanges(): void {
@@ -109,6 +109,8 @@ export function closeChanges(): void {
   open = false;
   findOpen = false;
   treeOpen = false;
+  fallbackSaid = false;
+  unifiedFallback = false;
   refresh();
 }
 
@@ -184,10 +186,6 @@ export function toggleViewed(repo: string, path: string): void {
   refresh();
 }
 
-export function isViewed(repo: string, path: string, viewed: ReadonlySet<string>): boolean {
-  return viewed.has(fileKey(repo, path));
-}
-
 export function setDiffStyle(next: DiffStylePref): void {
   diffStyle = next;
   writeDiffStylePref(next);
@@ -197,13 +195,12 @@ export function setDiffStyle(next: DiffStylePref): void {
 export function setUnifiedFallback(active: boolean): void {
   if (unifiedFallback === active) return;
   unifiedFallback = active;
-  if (active) fallbackSaid = true;
   refresh();
 }
 
-export function resetFallbackSaid(): void {
-  fallbackSaid = false;
-  unifiedFallback = false;
+export function dismissFallbackNotice(): void {
+  if (fallbackSaid) return;
+  fallbackSaid = true;
   refresh();
 }
 
@@ -246,6 +243,7 @@ export function useChangesUi(): ChangesUiSnapshot {
   return useSyncExternalStore(subscribe, () => current, () => current);
 }
 
-export function getChangesUi(): ChangesUiSnapshot {
+/** Snapshot for tests. Production reads through {@link useChangesUi}. */
+export function peekChangesUi(): ChangesUiSnapshot {
   return current;
 }

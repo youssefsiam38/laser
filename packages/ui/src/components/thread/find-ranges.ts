@@ -178,14 +178,11 @@ export function findTextMatchesIn(
 
 export type RootMatch = FindMatch & { root: Document | ShadowRoot };
 
-function insideShadow(range: Range, roots: ShadowRoot[]): boolean {
-  return roots.some(root => root.contains(range.startContainer));
-}
-
 /**
  * Find across the host and every open shadow root under it. Adopts the overlay
  * highlight sheet into each root (Pierre's constructor assigns `[coreSheet]`;
- * replacing would wipe it).
+ * replacing would wipe it). A TreeWalker never crosses a shadow boundary, so
+ * the host walk cannot see inside Pierre's roots.
  */
 export function findTextMatchesAcrossRoots(
   host: Element,
@@ -196,7 +193,6 @@ export function findTextMatchesAcrossRoots(
   for (const root of roots) adoptOverlayFindStyles(root);
   const fromRoots = roots.flatMap(root => findTextMatchesIn(root, query, policy).map(match => ({ ...match, root })));
   const fromHost = findTextMatchesIn(host, query, policy)
-    .filter(match => !insideShadow(match.range, roots))
     .map(match => ({ ...match, root: host.getRootNode() as Document | ShadowRoot }));
   return [...fromRoots, ...fromHost];
 }

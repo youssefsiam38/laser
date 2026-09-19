@@ -56,6 +56,10 @@ export type FileDiffPage = {
   oldSize?: number;
   /** Unified patch for this file. Empty when the change has no textual hunks. */
   patch: string;
+  /** Byte offset of this page in the full patch. */
+  offset?: number;
+  /** Bytes in this page. */
+  bytes?: number;
   /** Byte offset for the next page; absent when this is the last page. */
   nextOffset?: number;
   truncated?: boolean;

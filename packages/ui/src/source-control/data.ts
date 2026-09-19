@@ -1,7 +1,7 @@
 /**
  * The one data access module for the overlay. Everything else talks to this
- * adapter. The mock is the default until M18-T2 lands `pi/project/changes`
- * and friends; swapping is one call to `setChangesAdapter`.
+ * adapter. The default refuses rather than inventing a working tree; tests and
+ * the sandbox register the mock explicitly.
  */
 import type {
   AgentChangesContext,
@@ -10,7 +10,7 @@ import type {
   FileDiffPage,
   FileSource,
 } from "./contract.js";
-import { createMockAdapter } from "./mock.js";
+import { CHANGES_UNAVAILABLE } from "./errors.js";
 
 export type ChangesDataAdapter = {
   listChanges(scope: ChangesScope): Promise<ChangesList>;
@@ -19,16 +19,34 @@ export type ChangesDataAdapter = {
   getAgentContext?(runId: string): Promise<AgentChangesContext>;
 };
 
-let adapter: ChangesDataAdapter = createMockAdapter();
+export type ChangesAdapterSource = "none" | "host" | "custom";
 
-export function setChangesAdapter(next: ChangesDataAdapter): void {
+const unavailable = (): never => {
+  throw new Error(CHANGES_UNAVAILABLE);
+};
+
+export const unavailableChangesAdapter: ChangesDataAdapter = {
+  listChanges: async () => unavailable(),
+  getFileDiff: async () => unavailable(),
+};
+
+let adapter: ChangesDataAdapter = unavailableChangesAdapter;
+let adapterSource: ChangesAdapterSource = "none";
+
+export function setChangesAdapter(next: ChangesDataAdapter, source: ChangesAdapterSource = "custom"): void {
   adapter = next;
+  adapterSource = source;
 }
 
 export function getChangesAdapter(): ChangesDataAdapter {
   return adapter;
 }
 
+export function getChangesAdapterSource(): ChangesAdapterSource {
+  return adapterSource;
+}
+
 export function resetChangesAdapter(): void {
-  adapter = createMockAdapter();
+  adapter = unavailableChangesAdapter;
+  adapterSource = "none";
 }
