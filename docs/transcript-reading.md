@@ -21,8 +21,39 @@ viewport; acceptance tests require that fallback count to remain zero.
 ## The reader never moves on their own
 
 One rule covers every arrival: **anything that changes above the reader moves
-the viewport by exactly that amount, once, in the same frame.** Its corollaries
-are what acceptance measures.
+the viewport by exactly that amount, once, in the same frame — and "exactly"
+is measured from the browser, never computed from the model.**
+
+The reader's position is recorded as one or more mounted rows' tops in the
+scroller's own content coordinates (`rect.top - viewport.top + scrollTop`),
+while the layout is settled. When a layout lands — a React commit, a
+`ResizeObserver` delivery, a measured frame — the same rows are read again and
+`scrollTop` moves by the difference. Content coordinates are scroll-invariant,
+so the person's own scrolling between the two readings cancels out, and a write
+this controller makes never looks like content moving.
+
+Model arithmetic cannot answer this question. Above a reader are measured rows,
+rows whose height is still a guess, an estimated range that changes in the same
+commit and the history controls, and `globalOffset` mixes all four; writing its
+difference to `scrollTop` moves the person by whatever the guess got wrong,
+which is what pushed a reader back page after page in a long real session
+(M16-T85). The estimated index survives as one explicit fallback, named in the
+code: the reader is on loaded rows and not one is mounted — a destination jump,
+or a window that has not caught up with a long wheel.
+
+Three consequences follow, and acceptance measures them.
+
+- **Nothing on screen, nothing to hold.** When no loaded row is on screen the
+  person is looking at the placeholder for history that has not arrived. The
+  rows that arrive belong exactly there, so no `scrollTop` is written at all.
+  Holding a row below the fold still would push them down for their own reading.
+- **One page, one answer.** While an arrived page is still being reconciled —
+  its rows mounted but not yet measured, its height not yet exchanged with the
+  estimate — the recorded rows are not re-chosen, only re-positioned after each
+  compensation. Re-choosing mid-exchange spends half of it and keeps the other.
+- **One authority.** An away reader's pixels belong to the measured anchor;
+  `restore()` keeps the live edge, a settled destination and the disclosure
+  hold, and does not place them a second time.
 
 - A page is attributed to unloaded history whenever it changes the head of the
   id list while a cursor still points before it. It is not gated on the page
@@ -39,13 +70,20 @@ are what acceptance measures.
   prove it. Removing the estimate then would take pixels from above the reader
   while their replacement is still arriving, so the estimate is held until that
   page's own commit, and removed with its compensation in one frame.
-- Compensation that the clamp at `scrollTop` 0 cannot spend stays owed, with
-  its sign, until content above the reader exists again. Without that, a reader
-  at the top of the window loses the movement and stays pinned there.
-- A measured frame takes the anchor's offset once, before anything in the
-  frame can move it — relayout, a held root estimate going, the reserve
-  refining, rows measuring — and shifts by the one difference at the end.
-  There is no second authority: an absolute "hold" that re-places a surviving
+- Compensation that a clamp cannot spend stays owed, with its sign, until the
+  geometry allows it. Neither end absorbs everything: above the content there
+  is nowhere to go, and a window whose rows have not mounted yet is not as tall
+  as it is about to be. Without the debt the truncated part is simply lost and
+  the reader keeps the shift's error.
+- Measuring a mounted row never moves the layout — the row is already that tall
+  on screen and the spacers cover unmounted rows only — so it never writes
+  `scrollTop`. It runs in the commit that mounted the row, not a frame later,
+  because a window chosen from a model the browser has already contradicted
+  unmounts rows above the reader and collapses the page that just arrived.
+- A page whose boundary row is not among the rendered entries — an oversized
+  record held as a stub — is inserted at the front rather than refused, so a
+  long conversation cannot ask the producer the same question for ever (D-302).
+- There is no second authority: an absolute "hold" that re-places a surviving
   row for a run of frames was tried and removed, because it fought the
   structural shift and the reserve exchange for the same pixels, clamped at 0,
   and kept the reading place from being re-taken after a merged head.
@@ -90,7 +128,11 @@ The thumb is therefore an honest estimate, not a random-access map. It can be
 larger or smaller than the final measured conversation in a tool-heavy turn.
 It retains one geometric unit while a cursor remains, so it never claims the
 root. Once that conservative range is exchanged, arrived pages grow the range
-and push the viewport by exactly their unabsorbed height. Real-session
+by their unabsorbed height. What that does to the person is decided by the
+measured anchor and nothing else: a loaded row on screen keeps its place, so
+the range's growth is absorbed by `scrollTop`; a reader inside the placeholder
+keeps their pixels, so the range grows under content they had not read yet.
+Real-session
 acceptance permits a wider initial/final range ratio for this reason and still
 requires a nonzero reserve, visible loading state, continuous anchors and zero
 reserve at the true root.

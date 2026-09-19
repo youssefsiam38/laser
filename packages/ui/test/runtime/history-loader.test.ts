@@ -1,6 +1,6 @@
 import { BODY_EXCERPT_MAX_BYTES } from "@/runtime/body-excerpt";
 import { describe, expect, it, vi } from "vitest";
-import { ErrorCodes, boundedHistoryWindow, historyWindow, type ClientRequests, type SessionState } from "@lasercode/protocol";
+import { ErrorCodes, boundedHistoryWindow, historyWindow, withElidedBodies, type ClientRequests, type SessionState } from "@lasercode/protocol";
 import { initialState, reduce, type Action } from "../../src/store.js";
 import { createHistoryLoader } from "../../src/runtime/history-loader.js";
 
@@ -84,6 +84,38 @@ describe("history request ownership", () => {
     while (f.view().history?.gapBefore) expect(await f.loader.earlier(state.path, () => true)).toBe(true);
     expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.map(row => row.id));
     expect(f.view().history).toMatchObject({ anchor: "e0", complete: true });
+  });
+
+  it("keeps an earlier page whose boundary row is held as a stub rather than an entry", async () => {
+    // The person's real session: the oldest row this view held was an
+    // oversized record the producer had left out of the page, so the boundary
+    // the next request names is a stub and not one of the rendered entries.
+    // The page used to be dropped on the way in, the same cursor was asked for
+    // again for ever, and the top of the conversation stayed a skeleton while
+    // the person scrolled (D-302).
+    const oversized = { ...entries[40]!, message: { role: "user", content: [{ type: "text", text: "x".repeat(4096) }] } };
+    const elidedSource = { entries: entries.map((entry, index) => (index === 40 ? oversized : entry)), leafId: "e79" };
+    const request = vi.fn(async (params: Params) => withElidedBodies(historyWindow(elidedSource, params.window!, scope), 512, text => `digest-${text.length}`));
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    const held = f.view();
+    expect(held.history?.anchor).toBe("e40");
+    expect(held.entries.some(entry => (entry as { id?: string }).id === "e40")).toBe(false);
+    expect(held.stubs?.some(stub => stub.id === "e40")).toBe(true);
+    const before = held.history!.before!;
+
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+
+    // The page landed at the front, whole, and the cursor moved on.
+    expect(f.view().entries.map(entry => (entry as { id: string }).id))
+      .toEqual([...entries.slice(0, 40), ...entries.slice(41)].map(entry => entry.id));
+    expect(f.view().history?.before).not.toBe(before);
+    expect(f.view().history?.complete).toBe(true);
+    expect(f.view().blocks.some(block => "entryId" in block && block.entryId === "e0")).toBe(true);
+    // And the loader is not asking the producer the same question again.
+    expect(await f.loader.earlier(state.path, () => true)).toBe(false);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]![0].window).toMatchObject({ before });
   });
 
   it("recovers a producer-split middle gap even when no device trim created it", async () => {
