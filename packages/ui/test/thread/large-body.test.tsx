@@ -136,7 +136,9 @@ describe("a prompt with an oversized image", () => {
 
   it("parses one fitting attachment exactly once from a wire-elided prompt", () => {
     const prompt = attached("Review the image and file.");
-    const elided = elideOversizedEntries([entry(prompt.text)], 16 * 1024, text => `digest-${utf8ByteLength(text)}`).elided[0]!;
+    // Images are references now (M16-T89), so an image alone no longer makes a
+    // record oversized; the record ceiling is what elides this fixture.
+    const elided = elideOversizedEntries([entry(prompt.text)], 16 * 1024, text => `digest-${utf8ByteLength(text)}`, 64).elided[0]!;
     const earlier = elideOversizedEntries([entry("old".repeat(100_000))], 16 * 1024, text => `digest-${utf8ByteLength(text)}`).elided[0]!;
     earlier.id = "old-prompt";
     earlier.parentId = "root";
