@@ -211,6 +211,29 @@ const provider = createServer((req, res) => {
       send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 12, total_tokens: 22 } });
       res.end("data: [DONE]\n\n");
     };
+    // Source-control scene (the leap's §13.2 sandbox). A turn has to *change
+    // files* for a checkpoint, a turn scope and a diff to have anything in
+    // them, so this scene writes and edits real files through the engine's own
+    // tools rather than describing a change in prose.
+    if (process.env.SANDBOX_SOURCE_CONTROL === "1") {
+      const lastRole = msgs.at(-1)?.role;
+      const previousTool = lastToolName(msgs);
+      if (lastRole === "user" && /\b(change|edit|refactor|write)\b/i.test(prompt)) {
+        return callTool("write", {
+          path: "src/feature.ts",
+          content: "export interface Feature {\n  name: string;\n  enabled: boolean;\n}\n\nexport const features: Feature[] = [\n  { name: \"overlay\", enabled: true },\n  { name: \"checkpoints\", enabled: true },\n];\n",
+        });
+      }
+      if (lastRole === "tool" && previousTool === "write") {
+        return callTool("edit", {
+          path: "src/index.ts",
+          edits: [{ oldText: "export function greet(", newText: "/** Greets somebody. */\nexport function greet(" }],
+        });
+      }
+      if (lastRole === "tool" && previousTool === "edit") {
+        return sayShort("Added **src/feature.ts** and documented `greet`. Open the changes to read the diff.");
+      }
+    }
     // Agents scene (docs/agents.md). The parent delegates once; a child lists
     // the directory and ends through `complete_agent_run`, the only successful
     // ending the harness accepts. Child detection prefers the tool list — the
@@ -254,33 +277,6 @@ const provider = createServer((req, res) => {
       if (lastRole === "tool") return sayShort("Noted the result.");
       if (/explorer|counted/i.test(prompt)) return sayShort("The explorer finished: it counted the files.");
       return sayShort("Noted. Say **delegate** to start a subagent, **background** to start a command that reports back, or **fleet** to read the tree of work under this session.");
-    }
-    // Source-control scene (the leap's §13.2 sandbox). A turn has to *change
-    // files* for a checkpoint, a turn scope and a diff to have anything in
-    // them, so this scene writes and edits real files through the engine's own
-    // tools rather than describing a change in prose.
-    if (process.env.SANDBOX_SOURCE_CONTROL === "1") {
-      const lastRole = msgs.at(-1)?.role;
-      const previousTool = lastToolName(msgs);
-      if (lastRole === "user" && /\b(change|edit|refactor|write)\b/i.test(prompt)) {
-        return callTool("write", {
-          path: "src/feature.ts",
-          content: "export interface Feature {\n  name: string;\n  enabled: boolean;\n}\n\nexport const features: Feature[] = [\n  { name: \"overlay\", enabled: true },\n  { name: \"checkpoints\", enabled: true },\n];\n",
-        });
-      }
-      if (lastRole === "tool" && previousTool === "write") {
-        return callTool("edit", {
-          path: "src/index.ts",
-          edits: [{ oldText: "export function greet(", newText: "/** Greets somebody. */\nexport function greet(" }],
-        });
-      }
-      if (lastRole === "tool" && previousTool === "edit") {
-        return sayShort("Added **src/feature.ts** and documented `greet`. Open the changes to read the diff.");
-      }
-      if (lastRole === "tool") return sayShort("Noted the result.");
-      if (lastRole === "user") {
-        return sayShort("Say **change** and I will write a new file and edit an existing one, so this turn has a real diff.");
-      }
     }
     // Goal regression specimen: the real engine terminates on this tool with
     // no assistant text. Its durable summary must remain readable in chat.
