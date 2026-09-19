@@ -50,6 +50,8 @@ export interface ProviderCaptureSummary {
   tools?: number;
   stream?: boolean;
   thinking?: boolean;
+  /** Token estimates for the assembled request; absent when it cannot be measured. */
+  composition?: { tools: number; chat: number; thinking: number; system: number };
 }
 
 export interface ProviderCaptureMeta {

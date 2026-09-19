@@ -22,7 +22,7 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, isLiveEdgeWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, WIRE_NAMESPACE, AGENT_ISOLATION_DEFAULT, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TelemetrySection, type TypedClientRequest, type WorkerActivationState, type AgentIsolationDefault } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, isLiveEdgeWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, WIRE_NAMESPACE, AGENT_ISOLATION_DEFAULT, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TelemetryContext, type TelemetrySection, type TypedClientRequest, type WorkerActivationState, type AgentIsolationDefault } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
 import {
   PRESSURE_MAX_REPLAY_DROPS,
@@ -67,7 +67,7 @@ import type {
 import { ProjectFilesService } from "./files.js";
 import { RevisionCanonicalisationError, type SessionRevisionHeader } from "@lasercode/protocol";
 import { SessionRevisionTracker } from "./history-revision.js";
-import { childSources, computeLiveTelemetry, liveOverlay, telemetryUpdateKind } from "./telemetry.js";
+import { ChildTelemetryCache, computeLiveTelemetry, liveOverlay, telemetryUpdateKind } from "./telemetry.js";
 import { TelemetryFold } from "@lasercode/protocol";
 import { ReplayBudget, ReplayBuffer } from "./replay-buffer.js";
 import { sessionPins, type SessionSafetySnapshot } from "./session-safety.js";
@@ -217,6 +217,10 @@ interface Live {
   revisions: SessionRevisionTracker;
   /** Incremental whole-session telemetry fold (L3). */
   telemetry: TelemetryFold;
+  /** True after this session has been asked for `pi/session/telemetry`. */
+  telemetryWanted?: boolean;
+  /** Last live-request composition observed from provider-log. */
+  contextComposition?: TelemetryContext["composition"];
   seq: number;
   buffer: ReplayBuffer;
   /** Read-only hydration baseline while a first turn is speculative/restoring. */
@@ -240,6 +244,18 @@ interface Live {
 
 type Result<M extends keyof ClientRequests> = ClientRequests[M]["result"];
 
+function compositionOfCapture(message: { type: string; summary?: { composition?: TelemetryContext["composition"] } }): TelemetryContext["composition"] | undefined {
+  if (message.type !== "lasercode/provider/request" && message.type !== "lasercode/provider/request/begin" && message.type !== "lasercode/provider/request/omitted") {
+    return undefined;
+  }
+  const composition = message.summary?.composition;
+  if (!composition) return undefined;
+  if ([composition.tools, composition.chat, composition.thinking, composition.system].some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+    return undefined;
+  }
+  return composition;
+}
+
 export class WorkerServer {
   /**
    * The sessions this worker holds and every fence around them (RP-4):
@@ -261,6 +277,8 @@ export class WorkerServer {
    * worker that never opens the settings screen should pay for neither.
    */
   private settingsAdapter: SettingsAdapter | undefined;
+  /** Incremental child-session telemetry folds, keyed by child path. */
+  private readonly childTelemetry = new ChildTelemetryCache();
   private packagesAdapter: PackagesAdapter | undefined;
   private modelsAdapter: ModelsAdapter | undefined;
   /** M2-T6 git line. Built on first use like the adapters above. */
@@ -816,6 +834,7 @@ export class WorkerServer {
           );
         }
         try {
+          live.telemetryWanted = true;
           return this.sessionTelemetry(live, snapshot, {
             revision,
             environmentKey,
@@ -1695,9 +1714,18 @@ export class WorkerServer {
       ...(options.include ? { include: options.include } : {}),
       ...(options.scope ? { scope: options.scope } : {}),
       ...(options.turnId ? { turnId: options.turnId } : {}),
-      overlay: liveOverlay(state),
-      children: childSources(live.path, this.harness.runs(), (path) => this.runtimes.get(path)?.driver.entriesNow?.()?.entries),
+      overlay: liveOverlay(state, {
+        ...(live.contextComposition ? { composition: live.contextComposition } : {}),
+        reserveTokens: this.compactionReserveTokens(),
+      }),
+      children: this.childTelemetry.sources(live.path, this.harness.runs(), (path) => this.runtimes.get(path)?.driver.entriesNow?.()?.entries),
     });
+  }
+
+  private compactionReserveTokens(): number {
+    if (!this.settingsAdapter) return 16_384;
+    const value = (this.settingsAdapter.snapshot().effective as { compaction?: { reserveTokens?: unknown } }).compaction?.reserveTokens;
+    return typeof value === "number" && Number.isFinite(value) ? value : 16_384;
   }
 
   /** The revision for one snapshot, or a refusal that says the read is unavailable. */
@@ -2605,7 +2633,7 @@ export class WorkerServer {
           update,
           at: new Date().toISOString(),
         };
-        if (telemetryUpdateKind(update.kind)) {
+        if (live.telemetryWanted && telemetryUpdateKind(update.kind)) {
           const snapshot = live.driver.entriesNow?.() ?? live.preAcceptance;
           if (snapshot) {
             try {
@@ -2653,6 +2681,8 @@ export class WorkerServer {
         // inventory (RP-1) and nowhere else: it is a number about this
         // machine, not conversation state, so it never joins the extension
         // message stream a client can hear.
+        const composition = compositionOfCapture(event.message);
+        if (composition) live.contextComposition = composition;
         if (event.message.type === "lasercode/process/registration") {
           const { pid, taskId } = event.message;
           this.notify("pi/resource/process", {

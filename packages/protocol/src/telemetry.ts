@@ -19,6 +19,9 @@ export type TelemetryScope = "session" | "turn";
 /** Ranked tool histogram: this many named rows, then an `other` bucket. */
 export const TELEMETRY_TOOL_HISTOGRAM_TOP = 8;
 
+/** Sparkline series cap. Full turn arrays are downsampled to this many points. */
+export const TELEMETRY_SERIES_MAX = 64;
+
 export type SessionBillingMode = "api" | "account" | "mixed" | "none";
 
 export function isAccountProvider(provider: string | undefined): boolean {
@@ -48,11 +51,10 @@ export interface TelemetryContext {
   contextWindow: number;
   percent: number | null;
   /**
-   * Tokens in the live request the engine assembled (tools / chat / thinking /
-   * system). Absent when that request is not available — it is never guessed
-   * from the transcript (spec C.4). Pi's `ContextUsage` has no composition,
-   * so live fills tokens/window/percent and leaves this off until the engine
-   * exposes a breakdown.
+   * Token **estimates** for the live request the engine assembled (tools /
+   * chat / thinking / system), using Pi's chars/4 estimator on that payload.
+   * Absent when that request has not been observed. Never guessed from the
+   * transcript (spec C.4). The figure is an estimate, not a billed count.
    */
   composition?: {
     tools: number;
@@ -123,6 +125,10 @@ export interface TelemetryHistory {
   branches: number;
 }
 
+/**
+ * Whole-session numbers. Child-run costs are merged from sessions **beneath**
+ * the requested path — a child's siblings are not included in that child's spend.
+ */
 export interface SessionTelemetry {
   revision: string;
   environmentKey: string;
@@ -149,6 +155,13 @@ export interface TelemetryChildSource {
   /** `provider/id` when the run recorded a model. Sets billing even with no usage. */
   model?: string;
   fold?: TelemetryFoldState;
+}
+
+/** The run fields both authorities need to decide which children to fold. */
+export interface TelemetryRunRef {
+  sessionPath: string;
+  rootSessionPath: string;
+  parent?: { sessionPath: string } | null;
 }
 
 export interface TelemetryLiveOverlay {
@@ -295,7 +308,8 @@ function cloneLines(value: Record<string, TelemetryModelLine>): Record<string, T
   return Object.fromEntries(Object.entries(value).map(([key, line]) => [key, { ...line }]));
 }
 
-function cloneState(state: TelemetryFoldState): TelemetryFoldState {
+/** One clone of fold state. Index reads use this instead of resume().state. */
+export function cloneTelemetryFoldState(state: TelemetryFoldState): TelemetryFoldState {
   return {
     ...state,
     lastModel: state.lastModel ? { ...state.lastModel } : null,
@@ -309,6 +323,53 @@ function cloneState(state: TelemetryFoldState): TelemetryFoldState {
     toolFailed: { ...state.toolFailed },
     childCounts: { ...state.childCounts },
   };
+}
+
+function cloneState(state: TelemetryFoldState): TelemetryFoldState {
+  return cloneTelemetryFoldState(state);
+}
+
+/** Evenly sample `values` down to `max` points so a sparkline stays bounded. */
+export function downsampleSeries(values: readonly number[], max = TELEMETRY_SERIES_MAX): number[] {
+  if (values.length <= max) return [...values];
+  if (max <= 1) return values.length === 0 ? [] : [values[values.length - 1]!];
+  const last = values.length - 1;
+  const out = new Array<number>(max);
+  for (let i = 0; i < max; i++) out[i] = values[Math.round((i * last) / (max - 1))]!;
+  return out;
+}
+
+/**
+ * Runs whose session is a descendant of `sessionPath`. The requested session
+ * itself is omitted — it is the fold, not a child source.
+ */
+export function runsBeneathSession<T extends TelemetryRunRef>(sessionPath: string, runs: readonly T[]): T[] {
+  const parentOf = new Map<string, string>();
+  for (const run of runs) {
+    const parent = run.parent?.sessionPath;
+    if (parent && !parentOf.has(run.sessionPath)) parentOf.set(run.sessionPath, parent);
+  }
+  const beneath = (run: T): boolean => {
+    if (run.sessionPath === sessionPath) return false;
+    if (run.rootSessionPath === sessionPath) return true;
+    let parent = run.parent?.sessionPath;
+    const seen = new Set<string>();
+    while (parent) {
+      if (parent === sessionPath) return true;
+      if (seen.has(parent)) break;
+      seen.add(parent);
+      parent = parentOf.get(parent);
+    }
+    return false;
+  };
+  const seen = new Set<string>();
+  const children: T[] = [];
+  for (const run of runs) {
+    if (seen.has(run.sessionPath) || !beneath(run)) continue;
+    seen.add(run.sessionPath);
+    children.push(run);
+  }
+  return children;
 }
 
 function toolNameOfPart(part: unknown): string | undefined {
@@ -356,6 +417,11 @@ export class TelemetryFold {
 
   get state(): TelemetryFoldState {
     return cloneState(this.current);
+  }
+
+  /** Approximate JS identity bytes of this fold, for the session-index budget. */
+  get accountedBytes(): number {
+    return 256 + (this.current.costSeries.length + this.current.tokenSeries.length) * 8;
   }
 
   /**
@@ -429,7 +495,6 @@ export class TelemetryFold {
     if (role === "toolResult") {
       const name = typeof message.toolName === "string" && message.toolName ? message.toolName : "unknown";
       if (message.isError === true) bump(this.current.toolFailed, name);
-      this.addUsage(message.usage, false, undefined, undefined);
       return;
     }
     if (role !== "assistant") return;
@@ -457,23 +522,24 @@ export class TelemetryFold {
   private addUsage(raw: unknown, assistantTurn: boolean, model: string | undefined, provider: string | undefined): void {
     const usage = usageOf(raw);
     if (!usage) return;
-    const account = isAccountProvider(provider);
+    const resolved = provider ?? this.current.lastModel?.provider;
+    const account = isAccountProvider(resolved);
     if (account) this.current.billingAccount = true;
-    else this.current.billingApi = true;
+    else if (resolved) this.current.billingApi = true;
     addTotals(this.current.all, usage, assistantTurn);
     if (assistantTurn) this.current.usageTurnsAll += 1;
     if (model) addModelLine(this.current.byModelAll, model, usage);
-    if (!account) {
-      addTotals(this.current.api, usage, assistantTurn);
-      if (assistantTurn) {
-        this.current.usageTurnsApi += 1;
-        this.current.costSeries.push(this.current.api.cost);
-        this.current.tokenSeries.push(usage.total);
-      }
-      if (model) addModelLine(this.current.byModelApi, model, usage);
-    } else if (assistantTurn) {
+    if (account || !resolved) {
+      if (assistantTurn) this.current.tokenSeries.push(usage.total);
+      return;
+    }
+    addTotals(this.current.api, usage, assistantTurn);
+    if (assistantTurn) {
+      this.current.usageTurnsApi += 1;
+      this.current.costSeries.push(this.current.api.cost);
       this.current.tokenSeries.push(usage.total);
     }
+    if (model) addModelLine(this.current.byModelApi, model, usage);
   }
 }
 
@@ -568,7 +634,7 @@ export function sessionTelemetryOf(
         spend.api = {
           totals: cloneTotals(state.api),
           byModel: Object.values(state.byModelApi).sort((a, b) => b.cost - a.cost || a.model.localeCompare(b.model)),
-          series: [...state.costSeries],
+          series: downsampleSeries(state.costSeries),
         };
       }
     }
@@ -583,7 +649,7 @@ export function sessionTelemetryOf(
     const provider = live?.provider ?? stored?.provider;
     const id = live?.id ?? stored?.id;
     const contextWindow = live?.contextWindow ?? stored?.contextWindow;
-    const model: TelemetryModel = { tokenSeries: [...state.tokenSeries] };
+    const model: TelemetryModel = { tokenSeries: downsampleSeries(state.tokenSeries) };
     if (provider !== undefined) model.provider = provider;
     if (id !== undefined) model.id = id;
     if (thinking !== undefined) model.thinkingLevel = thinking;

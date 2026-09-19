@@ -92,7 +92,31 @@ The full `pnpm -F @lasercode/host test` also reported 61 failures, all `WorkerRp
 
 ## Left for later milestones
 
-- Visual rebuild of the telemetry column (L4): scope bar, section layout, Work section as specified, Files from git.
-- `composition` tokens once the engine exposes a live-request breakdown.
-- `historyRows` remaining as CheckpointHistory's loaded-page tree (L4 may replace the list).
-- `useSessionFileChanges` / Files section untouched (Part E / L2).
+- `historyRows` remaining as CheckpointHistory's loaded-page tree.
+- Files from git (Part E / L2) — the column now reads `ProjectChanges`, not this query.
+
+## Corrections
+
+Independent review rejected the query because three numbers on screen were wrong. This batch keeps the architecture (one shared fold, fencing, incremental index) and fixes the figures.
+
+### historyRows
+
+`historyRows` survives as CheckpointHistory's fork/jump tree. That is a navigable view-model over the **loaded page**, not a session total. §5.1 names it because the original aggregations lived next to it; deleting it would take away the tree the person forks and jumps with. History **counts** (`records`, `prompts`, `compactions`, `branches`) come from the authority. The "N of M" qualification compares `entries.length` (what this client holds) against `history.records` (what the authority folded). The displayed figure when qualifying is still `rows.length` — the navigable rows — but a fully loaded session no longer claims to be a partial page.
+
+### composition
+
+§5.4 asks for the composition of the live request the engine assembled. `before_provider_request` already carries that payload; `summarize()` now runs Pi's chars/4 estimator (`estimateTokens`'s heuristic) over four sections of it: tool definitions, chat messages, thinking blocks / request-level thinking, and system / instructions. Those four numbers ride the capture summary onto the worker's live overlay as `context.composition`. They are estimates, not billed tokens, and are never guessed from the transcript. The rebuilt column already degrades when the field is absent; this batch fills it and does not restyle the section. Durable snapshots still omit `context`.
+
+`estimateTokens` itself takes an `AgentMessage`, not a provider payload, so it is not called on the request body. The same heuristic is applied per section instead. `autoCompact.thresholdTokens` is `contextWindow - reserveTokens`.
+
+### What changed
+
+- **B1** Live `childSources` now keeps only runs beneath the requested session (`runsBeneathSession`). Two roots in one worker no longer share spend.
+- **B2** History "N of M" tests `entries.length < history.records`.
+- **B3** Usage with no provider inherits `lastModel.provider`. Account + compaction stays `billing: "account"` with no `spend.api`.
+- **S1** Sparkline series downsample to 64 points. Child folds are cached per path. Streamed snapshots attach only after `pi/session/telemetry` has been asked for that session.
+- **S2** Host test deep-equals worker `computeLiveTelemetry` against the durable reader (minus `authority`, `context`, `spend.account`) on a compacted parent with two children. `telemetryFromEntries` deleted. WorkerServer.handle covers the request, turn errors, and subscriber-gated `session/update`. UI test covers the single request, update uptake, no polling, and the History string.
+- **S3** Live composition estimates and `thresholdTokens`, as above.
+- **S4** Both authorities merge only runs beneath the requested path. The type says so.
+- **S5** The Tools section is gone. Work already prints `work.tools.total` (`work-section.tsx`). No UI change.
+- **Nits** `copyIndex` clones telemetry state once. The index byte budget includes fold `accountedBytes`. `toolResult` usage is no longer folded. Turn-scoped live results no longer carry the session overlay. The shared child filter is `runsBeneathSession`.
