@@ -1,0 +1,136 @@
+diff --git a/react.js b/react.js
+index 914d2dafaafa001c9ab6791a0a0581659295e333..0c2917d82ba02b50fccf3ee2619ebbd62c87ae4c 100644
+--- a/react.js
++++ b/react.js
+@@ -4702,7 +4702,8 @@ function maybeUpdateAnchoredEndSpace(ctx) {
+       contentBelowAnchor = Math.max(0, contentBelowAnchor - ctx.scrollAxisGap);
+       contentBelowAnchor += (ctx.values.get("footerSize") || 0) + getStylePaddingEnd(state.props);
+       isReady = !hasUnknownTailSize;
+-      nextSize = hasUnknownTailSize ? previousSize || 0 : Math.max(0, state.scrollLength - contentBelowAnchor - anchorOffset);
++      const knownSizeBound = Math.max(0, state.scrollLength - contentBelowAnchor - anchorOffset);
++      nextSize = hasUnknownTailSize ? Math.min(previousSize || 0, knownSizeBound) : knownSizeBound;
+     } else if (anchorIndex >= 0) {
+       isReady = false;
+     }
+@@ -4722,6 +4723,12 @@ function maybeUpdateAnchoredEndSpace(ctx) {
+       updateScroll(ctx, state.scroll, true, { markHasScrolled: false });
+     }
+     (_b = anchoredEndSpace == null ? void 0 : anchoredEndSpace.onReady) == null ? void 0 : _b.call(anchoredEndSpace, { anchorIndex: nextAnchorIndex, anchorKey: nextAnchorKey, size: nextSize });
++  } else if (!isReady && didSizeChange && nextSize < (previousSize || 0)) {
++    set$(ctx, "anchoredEndSpaceSize", nextSize);
++    (_a3 = anchoredEndSpace == null ? void 0 : anchoredEndSpace.onSizeChanged) == null ? void 0 : _a3.call(anchoredEndSpace, nextSize);
++    if (anchoredEndSpace == null ? void 0 : anchoredEndSpace.includeInEndInset) {
++      updateScroll(ctx, state.scroll, true, { markHasScrolled: false });
++    }
+   }
+   return nextSize;
+ }
+@@ -5651,6 +5658,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+ });
+ 
+ // src/utils/reordering.ts
++// Element.moveBefore keeps the moved subtree's state and does not count as an
++// insertion, so CSS @starting-style transitions and iframes inside a row do not
++// restart when the list reorders its containers. insertBefore is the fallback.
++function moveChildBefore(container, element, reference) {
++  if (typeof container.moveBefore === "function") {
++    container.moveBefore(element, reference);
++  } else if (reference) {
++    container.insertBefore(element, reference);
++  } else {
++    container.appendChild(element);
++  }
++}
+ function sortDOMElements(container, indexByElement) {
+   const elements = Array.from(container.children);
+   if (elements.length <= 1) return elements;
+@@ -5690,9 +5709,9 @@ function sortDOMElements(container, indexByElement) {
+         }
+       }
+       if (nextStableElement) {
+-        container.insertBefore(element, nextStableElement);
++        moveChildBefore(container, element, nextStableElement);
+       } else {
+-        container.appendChild(element);
++        moveChildBefore(container, element, null);
+       }
+     }
+   }
+@@ -6446,8 +6465,8 @@ function ScrollAdjust() {
+               window.getComputedStyle(contentNode)[axis.paddingEndProp]
+             );
+             const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
+-            temporaryPaddingRef.current = { baseline: baselinePaddingEnd, value: temporaryPaddingEnd };
+             contentNode.style[axis.paddingEndProp] = temporaryPaddingEnd;
++            temporaryPaddingRef.current = { baseline: baselinePaddingEnd, value: contentNode.style[axis.paddingEndProp] };
+             void contentNode.offsetHeight;
+             scrollBy();
+             if (resetPaddingRafRef.current !== void 0) {
+diff --git a/react.mjs b/react.mjs
+index 95465f2ab89ce41a10553f58af83618f7310e83c..b73bfdf7b3b33a5b73f1d875f2b56b904019a066 100644
+--- a/react.mjs
++++ b/react.mjs
+@@ -4681,7 +4681,8 @@ function maybeUpdateAnchoredEndSpace(ctx) {
+       contentBelowAnchor = Math.max(0, contentBelowAnchor - ctx.scrollAxisGap);
+       contentBelowAnchor += (ctx.values.get("footerSize") || 0) + getStylePaddingEnd(state.props);
+       isReady = !hasUnknownTailSize;
+-      nextSize = hasUnknownTailSize ? previousSize || 0 : Math.max(0, state.scrollLength - contentBelowAnchor - anchorOffset);
++      const knownSizeBound = Math.max(0, state.scrollLength - contentBelowAnchor - anchorOffset);
++      nextSize = hasUnknownTailSize ? Math.min(previousSize || 0, knownSizeBound) : knownSizeBound;
+     } else if (anchorIndex >= 0) {
+       isReady = false;
+     }
+@@ -4701,6 +4702,12 @@ function maybeUpdateAnchoredEndSpace(ctx) {
+       updateScroll(ctx, state.scroll, true, { markHasScrolled: false });
+     }
+     (_b = anchoredEndSpace == null ? void 0 : anchoredEndSpace.onReady) == null ? void 0 : _b.call(anchoredEndSpace, { anchorIndex: nextAnchorIndex, anchorKey: nextAnchorKey, size: nextSize });
++  } else if (!isReady && didSizeChange && nextSize < (previousSize || 0)) {
++    set$(ctx, "anchoredEndSpaceSize", nextSize);
++    (_a3 = anchoredEndSpace == null ? void 0 : anchoredEndSpace.onSizeChanged) == null ? void 0 : _a3.call(anchoredEndSpace, nextSize);
++    if (anchoredEndSpace == null ? void 0 : anchoredEndSpace.includeInEndInset) {
++      updateScroll(ctx, state.scroll, true, { markHasScrolled: false });
++    }
+   }
+   return nextSize;
+ }
+@@ -5630,6 +5637,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+ });
+ 
+ // src/utils/reordering.ts
++// Element.moveBefore keeps the moved subtree's state and does not count as an
++// insertion, so CSS @starting-style transitions and iframes inside a row do not
++// restart when the list reorders its containers. insertBefore is the fallback.
++function moveChildBefore(container, element, reference) {
++  if (typeof container.moveBefore === "function") {
++    container.moveBefore(element, reference);
++  } else if (reference) {
++    container.insertBefore(element, reference);
++  } else {
++    container.appendChild(element);
++  }
++}
+ function sortDOMElements(container, indexByElement) {
+   const elements = Array.from(container.children);
+   if (elements.length <= 1) return elements;
+@@ -5669,9 +5688,9 @@ function sortDOMElements(container, indexByElement) {
+         }
+       }
+       if (nextStableElement) {
+-        container.insertBefore(element, nextStableElement);
++        moveChildBefore(container, element, nextStableElement);
+       } else {
+-        container.appendChild(element);
++        moveChildBefore(container, element, null);
+       }
+     }
+   }
+@@ -6425,8 +6444,8 @@ function ScrollAdjust() {
+               window.getComputedStyle(contentNode)[axis.paddingEndProp]
+             );
+             const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
+-            temporaryPaddingRef.current = { baseline: baselinePaddingEnd, value: temporaryPaddingEnd };
+             contentNode.style[axis.paddingEndProp] = temporaryPaddingEnd;
++            temporaryPaddingRef.current = { baseline: baselinePaddingEnd, value: contentNode.style[axis.paddingEndProp] };
+             void contentNode.offsetHeight;
+             scrollBy();
+             if (resetPaddingRafRef.current !== void 0) {

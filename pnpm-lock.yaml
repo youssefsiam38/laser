@@ -13,6 +13,9 @@ patchedDependencies:
   '@earendil-works/pi-coding-agent@0.85.0':
     hash: 39b992f6ae37908eefb1e1c7176c37ffc22e29cc6ccf13249d2dcc9f148fff77
     path: patches/@earendil-works__pi-coding-agent@0.85.0.patch
+  '@legendapp/list@3.3.5':
+    hash: 52bcddbf5af3ad3337434a3e132675791e54ea38c785b6c365561392c8bf9f11
+    path: patches/@legendapp__list@3.3.5.patch
   '@narumitw/pi-goal@0.54.4':
     hash: 5f2752b39af2be966e72de8498d0e40734590e707b3135c7a486b2ce8f5b8c64
     path: patches/@narumitw__pi-goal@0.54.4.patch
@@ -230,6 +233,9 @@ importers:
       '@dnd-kit/utilities':
         specifier: 3.2.2
         version: 3.2.2(react@19.1.1)
+      '@legendapp/list':
+        specifier: 3.3.5
+        version: 3.3.5(patch_hash=52bcddbf5af3ad3337434a3e132675791e54ea38c785b6c365561392c8bf9f11)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
       '@lobehub/icons':
         specifier: 5.18.0
         version: 5.18.0(@lobehub/ui@5.40.0)(@types/react@19.1.12)(antd@6.6.2(react-dom@19.1.1(react@19.1.1))(react@19.1.1))(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
@@ -239,9 +245,6 @@ importers:
       '@tailwindcss/vite':
         specifier: 4.3.3
         version: 4.3.3(vite@7.1.5(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.0))
-      '@tanstack/react-virtual':
-        specifier: 3.14.13
-        version: 3.14.13(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
       '@types/katex':
         specifier: 0.16.7
         version: 0.16.7
@@ -1273,6 +1276,18 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
+  '@legendapp/list@3.3.5':
+    resolution: {integrity: sha512-XTsLYtpg41SVb5uLBYA+YcDSA3w0tgoPq/W8ZggQ2tx+3lrC/rf+ehTP9KYHea9oFaZIuePAgzACs5/auVMJlQ==}
+    peerDependencies:
+      react: '*'
+      react-dom: '*'
+      react-native: '*'
+    peerDependenciesMeta:
+      react-dom:
+        optional: true
+      react-native:
+        optional: true
+
   '@lit-labs/ssr-dom-shim@1.6.0':
     resolution: {integrity: sha512-VHb0ALPMTlgKjM6yIxxoQNnpKyUKLD04VzeQdsiXkMqkvYlAHxq9glGLmgbb889/1GsohSOAjvQYoiBppXFqrQ==}
 
@@ -1403,17 +1418,17 @@ packages:
     resolution: {integrity: sha512-Y28PR25bHXUg88kCV7nivXrP2Nj2RueZ3/l/jdx6J9f8J4nsEGcgX0Qe6lt7Pa+J79+kPiJU3LguR6O/6zrLOw==}
 
   '@modelcontextprotocol/client@https://pkg.pr.new/@modelcontextprotocol/client@3b205e7dd2f997b6a87e479e36421f7eaa2058e0':
-    resolution: {integrity: sha512-ZlibxQrqxSzt9L2FWO5PM22zhpdcLOaAdHJCZxHL+3vrZzJrvD49LwsLlt+l7YVt+9S3vYMOZwi9Vc96odBfhw==, tarball: https://pkg.pr.new/@modelcontextprotocol/client@3b205e7dd2f997b6a87e479e36421f7eaa2058e0}
+    resolution: {tarball: https://pkg.pr.new/@modelcontextprotocol/client@3b205e7dd2f997b6a87e479e36421f7eaa2058e0}
     version: 2.0.0
     engines: {node: '>=20'}
 
   '@modelcontextprotocol/core@https://pkg.pr.new/@modelcontextprotocol/core@3b205e7dd2f997b6a87e479e36421f7eaa2058e0':
-    resolution: {integrity: sha512-lJLq7wP4hNwRcckA1Hd1fF1vPyA0QCDUqi+EO6GKzoXlxM10oIlY+f8m2pq+WLQJsG+/VwlJ4GA6Mx3Ei8uXKw==, tarball: https://pkg.pr.new/@modelcontextprotocol/core@3b205e7dd2f997b6a87e479e36421f7eaa2058e0}
+    resolution: {tarball: https://pkg.pr.new/@modelcontextprotocol/core@3b205e7dd2f997b6a87e479e36421f7eaa2058e0}
     version: 2.0.0
     engines: {node: '>=20'}
 
   '@modelcontextprotocol/core@https://pkg.pr.new/modelcontextprotocol/typescript-sdk/@modelcontextprotocol/core@3b205e7':
-    resolution: {integrity: sha512-lJLq7wP4hNwRcckA1Hd1fF1vPyA0QCDUqi+EO6GKzoXlxM10oIlY+f8m2pq+WLQJsG+/VwlJ4GA6Mx3Ei8uXKw==, tarball: https://pkg.pr.new/modelcontextprotocol/typescript-sdk/@modelcontextprotocol/core@3b205e7}
+    resolution: {tarball: https://pkg.pr.new/modelcontextprotocol/typescript-sdk/@modelcontextprotocol/core@3b205e7}
     version: 2.0.0
     engines: {node: '>=20'}
 
@@ -3066,15 +3081,6 @@ packages:
     resolution: {integrity: sha512-yYU8cogLeSh/ms2jh8Fj7jaba/EWa7Ja6GoUqYZaraEuCI5YS6ms6ObZgjjedm+jm6XZjdNRWBpPP6Z86oOxcw==}
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
-
-  '@tanstack/react-virtual@3.14.13':
-    resolution: {integrity: sha512-JbDTAwtzZ99aOeCrAfW5EsE5KSq5RWh6Af2dtFwyLIIk48Ja7vm6n4axu/43T3vfjFnEGJalxJ1wyYjSQD6bSg==}
-    peerDependencies:
-      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
-      react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
-
-  '@tanstack/virtual-core@3.17.11':
-    resolution: {integrity: sha512-+ILjvtHup6Y2hzQ6YzwMgX1Q+oQpxEGOXCEsCNaPoIP0VxMbizIBTmYTDtkerkIQS8/CbP1BRuyt8V/8BCsy1g==}
 
   '@types/babel__core@7.20.5':
     resolution: {integrity: sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==}
@@ -7901,6 +7907,13 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
 
+  '@legendapp/list@3.3.5(patch_hash=52bcddbf5af3ad3337434a3e132675791e54ea38c785b6c365561392c8bf9f11)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)':
+    dependencies:
+      react: 19.1.1
+      use-sync-external-store: 1.6.0(react@19.1.1)
+    optionalDependencies:
+      react-dom: 19.1.1(react@19.1.1)
+
   '@lit-labs/ssr-dom-shim@1.6.0': {}
 
   '@lit/reactive-element@2.1.2':
@@ -9788,14 +9801,6 @@ snapshots:
       '@tailwindcss/oxide': 4.3.3
       tailwindcss: 4.3.3
       vite: 7.1.5(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.0)
-
-  '@tanstack/react-virtual@3.14.13(react-dom@19.1.1(react@19.1.1))(react@19.1.1)':
-    dependencies:
-      '@tanstack/virtual-core': 3.17.11
-      react: 19.1.1
-      react-dom: 19.1.1(react@19.1.1)
-
-  '@tanstack/virtual-core@3.17.11': {}
 
   '@types/babel__core@7.20.5':
     dependencies:

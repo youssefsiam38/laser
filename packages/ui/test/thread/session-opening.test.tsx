@@ -80,12 +80,18 @@ it("failed load offers keyboard-focusable Retry, and successful empty hydration 
   expect(container.textContent).toContain("New session. What should the agent work on?");
 });
 
+/**
+ * The first row's own node. The transcript's rows are the list's, so identity
+ * across a reopen is read from the row wrapper rather than from a container
+ * the list owns and may reuse.
+ */
+const firstRow = () => container.querySelector('[data-window-message]')!.firstElementChild;
 const history = (text: string) => ({ entries: [{ type: "message", id: "u", parentId: null, message: { role: "user", content: [{ type: "text", text }] } }] });
 const visibleHistory = async () => {
   world.overrides["pi/session/entries"] = () => history("Visible history");
   await act(async () => { await actions.openSession(path); await settle(30); });
   expect(container.textContent).toContain("Visible history");
-  return container.querySelector('[data-slot="thread-messages"]')!.firstChild;
+  return firstRow();
 };
 const reopened = () => FakeHostClient.current.notify("pi/worker/status", { cwd: "/p", status: "ready", reopened: [path] });
 
@@ -96,7 +102,7 @@ it.each(["worker notification", "explicit reopen"])("keeps a visible transcript 
   world.overrides["session/load"] = async () => { await hold; return { state: world.states[path], replayFrom: 0, seq: 0 }; };
   await act(async () => { if (source === "worker notification") reopened(); else void actions.openSession(path); await settle(180); });
   expect(state.sessionLoads[path]?.phase).toBe("opening");
-  expect(container.querySelector('[data-slot="thread-messages"]')!.firstChild).toBe(message);
+  expect(firstRow()).toBe(message);
   expect(container.textContent).toContain("Visible history");
   expect(container.querySelector('[data-slot="conversation-skeleton"]')).toBeNull();
   expect(container.querySelector("textarea")?.disabled).toBe(false);
@@ -109,7 +115,7 @@ it("a background goal failure does not hide history, disable input, or skip trac
   const track = vi.spyOn(FakeHostClient.current, "track");
   world.overrides["session/goal/get"] = () => { throw new Error("Goal unavailable"); };
   await act(async () => { reopened(); await settle(180); });
-  expect(container.querySelector('[data-slot="thread-messages"]')!.firstChild).toBe(message);
+  expect(firstRow()).toBe(message);
   expect(container.querySelector('[role="alert"]')).toBeNull();
   expect(container.querySelector("textarea")?.disabled).toBe(false);
   expect(track).toHaveBeenCalledWith(path, 0);
@@ -180,7 +186,7 @@ it("resumes a restarted worker epoch by re-hydrating while retaining visible his
   });
   expect(state.open[path]?.hydrated).toBe(false);
   expect(state.sessionLoads[path]?.phase).toBe("opening");
-  expect(container.querySelector('[data-slot="thread-messages"]')!.firstChild).toBe(message);
+  expect(firstRow()).toBe(message);
   expect(container.querySelector('[data-slot="conversation-skeleton"]')).toBeNull();
   expect(container.querySelector("textarea")?.disabled).toBe(false);
   await act(async () => { release(history("Fresh history")); await settle(30); });

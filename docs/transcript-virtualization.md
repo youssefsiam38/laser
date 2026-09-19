@@ -1,155 +1,214 @@
-# Transcript scrolling, rebuilt on a proven virtualizer (M16-T87)
+# The transcript's list, and why it is the list's job (M16-T91)
 
-Status: design contract for the rebuild. Written after three rounds of repairs
-to the bespoke windowing failed in front of the person: rows appearing and
-disappearing while reading, a row arriving before the reader reached it, rows
-above the reading position never arriving, and the view pushing back.
+Status: the contract as built. It supersedes the M16-T87 contract on this
+page (D-303), which adopted `@tanstack/react-virtual`; the history of why the
+bespoke engine before that failed is kept at the bottom, because the reasons
+still bind whatever replaces this.
 
-## Why the bespoke engine keeps failing
+## What was still wrong after M16-T87
 
-`transcript-viewport.tsx` computes which rows to mount from a model of heights
-(`HeightIndex` + an estimate for unmeasured rows) while the browser lays out the
-measured DOM. The two disagree for at least one commit after anything changes —
-a page arriving, a row measuring, an image decoding, the estimate shrinking —
-and the controller both *renders the window* and *writes `scrollTop`* from the
-stale side. Every repair so far moved the error rather than removing it.
+TanStack owns one authority and anchors correctly, and reading upwards through
+a long conversation stopped losing rows. One defect survived it, and it was
+the one the person kept reporting: **text still moved while they read**.
 
-## What the proven implementations do
+The cause is in the shape of the fix, not in its execution. TanStack corrects
+the scroll offset *after* a measurement changes: it learns a row's new height,
+then compensates. The compensation is for the row as a whole, so content
+growing *inside* the row the reader is in — above their line, which is where
+late markdown work, syntax highlighting and formula layout land — moved their
+text by exactly that much. `docs/transcript-reading.md` recorded that as an
+accepted trade. It was not acceptable; it was the defect.
 
-Read and cloned locally for study: TanStack Virtual (`virtual-core`, MIT) and
-Virtuoso's message list (commercial, read for its contract only).
+## The decision (D-306)
 
-TanStack's chat mode (`packages/virtual-core/src/index.ts`, the
-`anchorTo: 'end'` branch) is the algorithm we need, and the ordering is the
-point:
+Adopt **`@legendapp/list` 3.3.5** (MIT, exact-pinned, peer `react` only, web
+entry `@legendapp/list/react`) as the transcript's list, and hand it the
+reader's position rather than correcting the reader's position afterwards.
 
-1. When the edge keys change — a prepend, a trim, a reorder — it captures an
-   anchor from the item under the current scroll offset: `[key, scrollOffset −
-   item.start]`.
-2. It invalidates the measurement cache, because a stable `getItemKey` with an
-   unchanged count would otherwise return the old layout.
-3. It resolves the anchor key's new `start` and sets `scrollOffset` **eagerly,
-   during the same update pass**, so the range rendered in this pass is already
-   the right one. The comment in the source is explicit: without it "the
-   virtualizer would render the wrong items for one frame … producing a visible
-   jump on prepend with dynamic sizes". That single frame is what the person
-   sees as blocks appearing and disappearing.
-4. The DOM `scrollTop` write happens in a layout effect, with an iOS deferral
-   while a touch is in flight, and follow-on-append only when the reader was
-   already at the end.
+The reference is `pingdotgg/t3code`, which renders the same surface — a chat
+timeline with dynamic rows, prepended history and a live edge — on this list,
+and does not have the trade above. Nothing is vendored from it. What is copied
+is the design: which props, which values, and which of them are load-bearing.
+`docs/transcript-parity.md` §3 is the brief.
 
-Other invariants both libraries share: normal chronological DOM order (never
-`column-reverse` or inverted transforms), stable ids as keys (never indices),
-`measureElement` on every mounted row, a conservative size estimate, and one
-system owning the adjustment (so `overflow-anchor: none` on the scroller).
-
-## The decision
-
-Adopt `@tanstack/react-virtual` (MIT, exact-pinned) as the windowing and
-anchoring engine for the transcript, and delete Laser's window/anchor
-arithmetic. Laser keeps everything that is Laser's: which rows exist, history
-paging and its fences, the live-edge policy, pins for selection/focus/approvals
-/Find, `content-visibility`, the placeholder for unloaded history, reduced
-motion, and every accessibility guarantee.
-
-Not adopted: Virtuoso's message list (commercial licence, and it owns the whole
+Not adopted: Virtuoso's message list (commercial, and it owns the whole
 surface rather than sitting under ours).
 
-## Contract for the rebuild
+## What the list owns now
 
-1. **One authority.** The virtualizer owns the mounted range and every
-   scroll-position adjustment that follows a data or measurement change. No
-   other code writes `scrollTop` except explicit person/destination intent
-   (Jump to latest, a search hit, a deep link), and those go through the
-   virtualizer's own `scrollToIndex`/`scrollToOffset`. That includes
-   assistant-ui's own thread viewport: its automatic scrolling is switched off
-   and "Jump to latest" prevents the default on its click, so
-   `ThreadPrimitive.ScrollToBottom` decides whether the button exists and the
-   engine decides where the transcript goes. The remaining browser-owned move
-   is a `.focus()` without `preventScroll`, which asks the browser to reveal an
-   element rather than setting a position; the transcript itself always passes
-   `preventScroll: true`.
-2. **Stable identity.** `getItemKey` is the message id. Indices never key a row.
-3. **Measured, not estimated.** Every mounted row is measured with
-   `measureElement`; the estimate is conservative and used only for rows that
-   have never been measured.
-4. **Reading upwards.** A page of older messages is a prepend: the reader's row
-   keeps its screen position to within a pixel, the window for that pass is
-   already correct (no flash of other rows), and nothing appears below the
-   reader that was not there before.
-5. **The live edge.** Follow only when the reader was at the end; a local send
-   always reveals itself; otherwise the existing "Jump to latest" affordance.
-6. **Unloaded history.** The placeholder region and continuous paging stay a
-   Laser policy on top, expressed as items the virtualizer measures — not as a
-   spacer the controller compensates for by hand.
-7. **Rows that grow.** Image decode, highlighting, disclosure, streaming text:
-   the virtualizer re-measures and re-anchors; Laser adds nothing.
-8. **What must not regress.** Find (DOM ranges over mounted rows, forced layout
-   for a `content-visibility` hit), native selection across rows and Select All,
-   focus and keyboard traversal through approvals and controls, agent/tool rows,
-   reduced motion, both themes, both widths, touch.
+1. **Position across a prepend** — `maintainVisibleContentPosition.data`.
+   A page of older messages arriving does not move the rows on screen. The
+   list resolves the anchor and the new positions in the same pass, so there
+   is no frame in which the wrong rows are mounted.
+2. **Position across a row changing size** — `maintainVisibleContentPosition.size`.
+   The row whose top is on screen keeps its top. Growth *above* the reading
+   line — including growth inside the row the person is reading, which is the
+   case D-303 could not hold — leaves their text exactly where it was.
+3. **The live edge** — `maintainScrollAtEnd` as an options object,
+   `{ animated, on: { dataChange: true, footerLayout: false, itemLayout: true,
+   layout: true } }`. `footerLayout: false` is deliberate: the composer's
+   inset is the list's own trailing spacer, and a composer growing a line must
+   not move a message. `animated: true` only while a turn is streaming and
+   `prefers-reduced-motion` is off; instant for session switches and layout
+   settles.
+4. **Which rows are mounted** — the reading window, plus `alwaysRender.keys`
+   for the rows a surface is holding open.
+5. **Every scroll position that follows a data or measurement change.** The
+   only scroll positions Laser asks for are explicit intents — Jump to latest,
+   a search hit, a deep link, Edit/Fork — and they go through the list's own
+   `scrollToEnd`/`scrollToIndex`/`scrollToOffset`.
 
-## As built (M16-T87)
+## What Laser still owns
 
-`@tanstack/react-virtual` 3.14.13 is pinned exactly in `packages/ui`
-(`@tanstack/virtual-core` 3.17.11 comes with it; nothing else was added).
-The transcript is one list: a head item — the history controls and the
-unloaded-history placeholder — then one item per message, keyed by message id,
-in chronological DOM order, positioned absolutely from the engine's own
-measurements. `docs/transcript-reading.md` is the working description.
+Which rows exist, history paging and its fences, the live-edge *policy*
+(whether to follow, not how), the unloaded-history placeholder, pins for
+selection/focus/approvals/Find, the keyboard and gesture reading of what the
+person meant, `content-visibility`, reduced motion, and every accessibility
+guarantee. `docs/transcript-reading.md` is the working description.
 
-What was deleted with the second authority: `transcript-window.ts`
-(`HeightIndex`, `windowRanges`), `reading-anchor.ts`, the reserve's pixel model
-and its arrival/refinement exchange, the earlier-page transaction and its
-fallback, clamp debt, `layoutStale`, the disclosure hold, the mutation/theme
-/font observers that existed to re-run that arithmetic, and every `scrollTop`
-write Laser computed for itself.
+## The pinned dependency and its patch
 
-The head item carries **everything above the conversation**: the worker
-recovery notice, the load/refresh error, the history controls, then the
-unloaded-history placeholder. Anything left above the transcript inside the
-same scroller reaches the engine as `scrollMargin`, and a change in that margin
-is neither an edge-key change nor an item resize — the engine keeps the scroll
-offset and moves every item, so the reader is pushed by exactly the height that
-appeared. Inside the head it is an ordinary item resize, compensated to the
-pixel. Nothing above the transcript in this scroller may change height.
+`@legendapp/list` is pinned exactly at `3.3.5` in `packages/ui` and patched
+through `pnpm patch` (`patches/@legendapp__list@3.3.5.patch`, registered in
+`pnpm-workspace.yaml`'s `pnpm.patchedDependencies`, so
+`pnpm install --frozen-lockfile` reproduces it). The patch carries **only** the
+`react.js` and `react.mjs` hunks of the reference's patch — its React Native,
+`keyboard.*` and `reanimated.*` hunks do not apply, because Laser has no React
+Native app. Three corrections, and why each one matters here:
 
-Three deliberate adaptations, each supplied through an option the engine
-already has, and each recorded here because a reviewer will ask:
+1. **Anchored end space that shrank before it was ready.** When the trailing
+   space is not yet resolved and the computed size has *shrunk*, publish the
+   smaller size and bound it by the known-size bound, instead of holding a
+   stale larger one. A held-open stale end space is trailing blank the person
+   scrolls through.
+2. **`Element.moveBefore` when reordering.** The list re-sorts its row
+   containers into index order; `insertBefore` removes and re-inserts, which
+   restarts CSS `@starting-style` transitions and reloads iframes inside a row.
+   `moveBefore` moves the subtree with its state; `insertBefore`/`appendChild`
+   remain the fallback where it does not exist.
+3. **Record the padding that was applied, not the padding that was asked
+   for.** The scroll-adjust trick writes a temporary end padding and reads it
+   back to undo it; recording the requested string instead of the node's own
+   value leaves a residue when the browser normalises it.
 
-1. **`shouldAdjustScrollPositionOnItemSizeChange`** — Laser's rule from
-   M16-T85 (content ending at or above the reading position moves it by
-   exactly what it changed; content in view does not) replaces the engine's
-   default, which skips a re-measurement while the reader travels upwards.
-   That guard would skip the placeholder shrinking, which happens only while
-   somebody reads upwards.
-2. **`measureElement`** — reads the border box directly and rounds both the
-   synchronous and the `ResizeObserver` path the same way, so a row measured in
-   the commit that mounted it and the same row measured by the observer never
-   differ by a sub-pixel.
-3. **`observeElementRect`** — a scroller reporting no height at all (not laid
-   out yet, a hidden tab) reads as the window's height, so the transcript still
-   mounts a reading window for Find, a deep link or a screen reader.
+## The shape of the surface
 
-One guarantee was given up on purpose: the block-level reading anchor. The row
-is the unit of identity a virtualizer can express, so content growing *inside*
-the row the reader is in, above their line, moves their text by that much.
-This is strictly worse than an ordinary page, where the browser's own scroll
-anchoring holds the reader through exactly that; this scroller turns that
-fallback off (`overflow-anchor: none`) so one engine owns the pixels. The way
-to shrink the loss is to stop rows growing rather than to anchor finer, and the
-largest instance is already gone: an image reserves its box from its own header
-before it decodes (`elements/image.tsx` with `runtime/view-measure.ts`'s
-`dataUriImageDimensions`), so a picture arriving changes no height at all. What
-remains is late markdown work in a tall row — highlighting, formulae, diagrams
-— above the reading line.
+```
+ThreadPrimitive.Root
+└── thread-column                      (relative, no scrolling of its own)
+    ├── the conversation map's rail    (absolute, zero height)
+    ├── LegendList  data-slot="thread-viewport"   ← the scroller
+    │   ├── ListHeaderComponent: the notices, the history controls,
+    │   │                        the unloaded-history placeholder
+    │   ├── one row per message, keyed by message id
+    │   └── ListFooterComponent: a spacer the height of the composer
+    └── ThreadPrimitive.ViewportFooter (absolute, bottom) — the composer
+```
 
-## Acceptance (the person runs the browser pass)
+Two consequences are load-bearing:
+
+- **Nothing that can change height renders above the list.** That was blocker
+  B2 of the M16-T87 review and it stays fixed: everything above the
+  conversation is the list's header, which the list measures and restores the
+  reading position through. Chrome above the list would push the reader by its
+  own height.
+- **The list is the thread's viewport.** `ThreadPrimitive.Viewport` is gone
+  from this thread: a scrolling box around a scrolling list is two authorities
+  over the same pixels. The transcript registers the list's own element as the
+  thread viewport's element, reports its height, and reports whether the
+  newest turn is on screen — which is the one thing
+  `ThreadPrimitive.ScrollToBottom` reads to decide whether "Jump to latest"
+  exists. The conversation map, the question notice and Find all ask the
+  thread for its viewport and get the real scroller.
+
+## The props, and which ones are policy
+
+| Prop | Value | Why |
+| --- | --- | --- |
+| `data` / `keyExtractor` | the message ids, keyed by id | a prepend never renumbers a measured row |
+| `getItemType` | the row's role once it has rendered one | per-kind size averages; unknown until a row renders is the honest answer |
+| `estimatedItemSize` | six lines and five spacing steps of the active scales | read from the browser, never a literal |
+| `extraData` | `path` + row count | the identity of what is on screen |
+| `dataVersion` | `path` + the pinned rows | a pin is not a scroll: this is what asks the list to look at the data again |
+| `alwaysRender.keys` | pins, focus, destination, the whole native selection | a released row would truncate a selection |
+| `initialScrollAtEnd` | true | a conversation opens at its newest turn |
+| `maintainScrollAtEndThreshold` | 1 | one screen, as the reference has it |
+| `recycleItems` | false | a row is a conversation turn, not a cell |
+| `onScroll` / `onItemSizeChanged` | re-read where the reader is | never a scroll of our own |
+| class list | `h-full min-h-0 overflow-x-hidden overscroll-y-contain px-4 [overflow-anchor:none] md:px-6` | the browser's own scroll anchoring must not compete |
+
+## The two places Laser overrides the list's default
+
+1. **A fold the person toggled.** The list restores the row whose top is on
+   screen; when somebody opens a disclosure, the row that must not move is the
+   one they clicked. For as long as that fold takes to measure, the transcript
+   names it through `shouldRestorePosition`, switches `size` anchoring off
+   (so nothing below the fold pulls the view), and suspends live follow. The
+   transcript learns that a fold moved from `aria-expanded` on the control
+   itself, so a pointer and a keyboard arrive by the same path and no
+   disclosure has to be taught to tell it.
+2. **Whether to follow the live edge at all.** The live edge is a mode, not a
+   measurement: a person enters it by reaching the newest turn and leaves it
+   by scrolling away. Content arriving underneath a follower briefly makes the
+   distance to the end non-zero, and that must not read as the person having
+   walked away.
+
+## The one position this list does not hold
+
+Content growing **below the reading line, inside the row the person is already
+halfway through**, moves the boundary below it, and the view follows by that
+much. The list restores the row whose top is on screen, and a row that starts
+above the fold is not that row.
+
+This is the mirror of D-303's trade, and it is the better half of it:
+
+- D-303 moved the reader for growth *above* their line, which is what happens
+  continuously while somebody reads upwards through history that is still
+  measuring, highlighting and laying out.
+- This one needs late work to land *below* their line inside the one row they
+  are in. The two largest instances are already gone: an image reserves its
+  box before it decodes (`elements/image.tsx`, `runtime/view-measure.ts`), and
+  a fold is a person's own action, which is held (above).
+
+`transcript-virtualization.test.tsx > rows that grow` pins both halves,
+including this one, so it is a recorded behaviour rather than an implied one.
+
+## What acceptance measures
 
 - Reading up through a long real conversation: no row appears or disappears
   under the eye, no row arrives before the reader reaches it, every older page
-  arrives above and stays reachable, and the reading position never moves back.
+  arrives above and stays reachable, and the reading position never moves.
 - The same with an image decoding, a disclosure opening, and a turn streaming
   at the bottom.
 - The scrollbar grows as history loads without the text moving.
 - Deep link, search hit, Jump to latest, Edit/Fork still land exactly.
+- A composer growing a line moves no message.
+
+## What was deleted with the second authority
+
+With M16-T87: `transcript-window.ts` (`HeightIndex`, `windowRanges`),
+`reading-anchor.ts`, the reserve's pixel model and its arrival/refinement
+exchange, the earlier-page transaction and its fallback, clamp debt,
+`layoutStale`, the disclosure hold, and the observers that existed to re-run
+that arithmetic.
+
+With this milestone: the head item and its index arithmetic (the header is the
+list's), `measureRow` and the engine's `measureElement` (the list measures),
+`observeElementRect` (the list observes), the `scrollMargin` model and
+`readLayout`'s margin (nothing stands above the list), `rangeExtractor` and the
+mounted-window arithmetic (`alwaysRender` is the list's own), the
+`shouldAdjustScrollPositionOnItemSizeChange` rule (the list's
+`maintainVisibleContentPosition` is the rule), the `writeScroll` trace wrapper
+and `window.__laserScrollTrace` (no Laser code writes a scroll position for a
+data or measurement change any more, so there is nothing of ours to attribute),
+and `@tanstack/react-virtual` itself.
+
+## Why the bespoke engine failed, kept
+
+`transcript-viewport.tsx` used to compute which rows to mount from a model of
+heights while the browser laid out the measured DOM. The two disagreed for at
+least one commit after anything changed — a page arriving, a row measuring, an
+image decoding — and the controller both rendered the window and wrote
+`scrollTop` from the stale side. Every repair moved the error rather than
+removing it. That is the reason a library owns this, and the reason the rule
+"one authority over the pixels" is not negotiable in whatever comes next.
