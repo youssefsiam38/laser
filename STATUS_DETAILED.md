@@ -4011,6 +4011,11 @@ Consequences: no RP-2 requirement is dropped. T4–T8 may start only after T2's 
 **Why.** The person asked for the release right away after the reasoning-segment fix; the measured state (24 of 25 images decoded after settlement, the 25th recoverable by reopening) is disclosed in the notes rather than blocking the repairs people are waiting for.
 **Consequences.** PLAN.md T79 dependency line drops T82; release notes carry a "Not in this release" section; T82 keeps its plan row and evidence. Supersedes the T82 prerequisite in D-294/D-295 planning notes for 0.9.2 only.
 
+### D-302 · 2026-09-19 · A page whose boundary is not a rendered entry is kept, and the estimate ahead of a reader is bounded
+**Decision.** `historyPrepend`/`historyRecover` insert a `before` page at the front when the held window's boundary row is not among its rendered entries (an oversized record held as a stub, for instance), instead of refusing the page. Unloaded history occupies at most three screens in front of the reading position, and reading into it pages continuously (each page awaited) while the explicit control stays one page.
+**Why.** In a long real session the oldest loaded row was not a rendered entry, so every earlier page the producer answered was dropped by the fold; the UI re-sent the same cursor for ever and the top of the conversation stayed a skeleton. Separately, the estimate for that session was 67,000 px, so even with pages arriving a person scrolled through a blank region no paging could fill.
+**Consequences.** Every identity/revision/epoch/environment fence still guards the page; only the "where does it go" question changed. A page larger than the bounded estimate inserts its surplus above the reader (invariant 2 unchanged), and the scroll range under-reports a very long past rather than showing a chasm. Measured on the person's session: loaded height 3,819 px → 54,408 px, reserve 67,357 px → bounded.
+
 ## Open questions
 
 | ID | Question | Blocks | Asked of |

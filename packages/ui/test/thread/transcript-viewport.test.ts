@@ -760,9 +760,17 @@ describe("scoped transcript destinations", () => {
       viewport.scrollTop = 120; viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
       viewport.scrollTop = 0; viewport.dispatchEvent(new Event("scroll"));
       controller.beginEarlierPage();
+      const reserveBefore = controller.reserveHeight, totalBefore = controller.heights.total;
       ids = [...Array.from({ length: 40 }, (_, index) => `new-${index}`), ...ids];
       controller.setIds(ids); controller.committed();
-      expect(viewport.scrollTop).toBeLessThanOrEqual(1);
+      // The estimate ahead of a reader is bounded (D-302), so a page larger
+      // than it inserts the difference above them and the view moves by exactly
+      // that: what they were reading stays where it was. Nothing here is an
+      // absolute placement, and nothing goes to the newest turn.
+      const inserted = controller.heights.total - totalBefore;
+      const absorbed = reserveBefore - controller.reserveHeight;
+      expect(viewport.scrollTop).toBeCloseTo(Math.max(0, inserted - absorbed), 0);
+      expect(viewport.scrollTop).toBeLessThan(inserted);
       expect(controller.capture().following).toBe(false);
     } finally { detach(); viewport.remove(); }
   });
@@ -1127,7 +1135,9 @@ describe("upward reading geometry", () => {
     try {
       await scope.step();
       const reserve = scope.controller.reserveHeight;
-      expect(reserve).toBeCloseTo(2000, 0);
+      // Five earlier turns of 400 px would estimate 2000, but unloaded history
+      // never stands more than three screens in front of the reader (D-302).
+      expect(reserve).toBeCloseTo(900, 0);
       scope.readUp(500);
       // No loaded row is on screen: the reader is inside the estimated range.
       expect(scope.controller.isReadingHistoryReserve()).toBe(true);

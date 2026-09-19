@@ -1,13 +1,13 @@
-# Laser 0.9.3
+# Laser 0.9.4
 
-One repair, finished properly: the images in a conversation.
+One fix, for long conversations.
 
-## Every image you asked for is there
+## The top of a long conversation stops being a skeleton
 
-In a conversation with many pictures, the last ones used to go grey — "Image not kept in this window" — and stay that way. Opening them was impossible too, because the button was tied to the same small pool of decoded pictures. Twenty-four was the whole budget, and the twenty-fifth image was refused once and never asked about again.
+Scrolling up far enough in a long conversation could leave the screen full of placeholder rows that never became messages, however long you waited or however much you scrolled.
 
-Now a picture that cannot be decoded right now is *waiting*, not failed. Whatever is on screen is drawn; scrolling towards a waiting picture loads it before you reach it; and opening any picture always works — it reads the bytes from the conversation itself, verified against the image's own fingerprint, whether or not it happens to be decoded. A picture that genuinely could not be rebuilt says so in words and offers Try again.
+The conversation was asking for the older messages the whole time, and the answers were arriving — they were being thrown away. A page of earlier history is placed against the oldest row the window is holding, and in a long conversation that row is not always one the transcript draws (a very large tool result, for example, is held as a reference). When it was not, the page was refused, the same request went out again, and the placeholders stayed for ever.
 
-Memory is still bounded, and now honestly: only pictures nobody is looking at count against the limit, and when the window comes under memory pressure those are the first thing released. A conversation with forty images stays around 50 MB while you read it.
+Now such a page is kept: it is older than everything on screen by definition, so it goes where it belongs. Measured on a real 27 MB conversation, the loaded transcript goes from 3,800 px of content to 54,000 px as you read upwards, instead of standing still.
 
-Two supporting repairs: a picture is now identified by its own content, so a conversation that is still being written no longer re-reads every image each time it changes; and images stay attached to the conversation they belong to.
+Two supporting changes: unloaded history now occupies at most three screens in front of you rather than an estimate of the entire past — an estimate of tens of thousands of pixels was a blank region no amount of loading could fill — and reading upwards into it loads pages one after another as you go, while the explicit "Load earlier messages" button still loads exactly one.

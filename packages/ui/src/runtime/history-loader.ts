@@ -119,11 +119,20 @@ const entryId = (entry: unknown): string | undefined => {
   return typeof id === "string" ? id : undefined;
 };
 
-/** Insert a producer page at its exclusive boundary, preserving later islands. */
-function insertBefore<T>(held: readonly T[], incoming: readonly T[], boundary: string, idOf: (value: T) => string | undefined): T[] | undefined {
+/**
+ * Insert a producer page at its exclusive boundary, preserving later islands.
+ * The boundary is the oldest row this view holds. It is not always among the
+ * entries it renders: an oversized record the page left out is held as a stub,
+ * and a conversation whose oldest loaded row is one of those has no entry to
+ * find. A `before` page is older than everything held by construction — every
+ * identity, revision and environment fence has already been checked — so when
+ * the boundary is not an entry the page belongs at the front rather than being
+ * refused. Refusing it silently is what left a long conversation asking the
+ * producer for the same page for ever (D-302).
+ */
+function insertBefore<T>(held: readonly T[], incoming: readonly T[], boundary: string, idOf: (value: T) => string | undefined): T[] {
   const at = held.findIndex(value => idOf(value) === boundary);
-  if (at < 0) return undefined;
-  return [...held.slice(0, at), ...incoming, ...held.slice(at)];
+  return at < 0 ? [...incoming, ...held] : [...held.slice(0, at), ...incoming, ...held.slice(at)];
 }
 
 type ActiveAncestry = { kind: "complete" } | { kind: "gap"; before: string } | { kind: "unknown" };
@@ -310,7 +319,6 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const wireStubs = allWireStubs.filter(stub => !ids.has(stub.id));
       const incomingStubs = mergeStubs(retained.stubs, wireStubs);
       const entries = insertBefore(v.entries, retained.entries, action.anchor, entryId);
-      if (!entries) return v;
       const projectedStubs = mergeStubs(projected.stubs, allWireStubs);
       const blockIds = new Set(v.blocks.map(block => block.id));
       const pageBlocks = blocksFromEntries(projected.entries, undefined, modelNamesOf(v.state), { stubs: projectedStubs, revision: action.window.revision })
@@ -323,10 +331,10 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
         // rendered block at or after that boundary; when the retained suffix is
         // entirely invisible, its visible predecessor belongs at the end.
         const boundary = v.entries.findIndex(entry => entryId(entry) === action.anchor);
-        if (boundary < 0) return v;
-        const suffix = new Set(v.entries.slice(boundary).map(entryId));
+        // No entry boundary: the page precedes everything rendered here.
+        const suffix = new Set(boundary < 0 ? v.entries.map(entryId) : v.entries.slice(boundary).map(entryId));
         const found = v.blocks.findIndex(block => "entryId" in block && suffix.has(block.entryId));
-        const at = found < 0 ? v.blocks.length : found;
+        const at = found < 0 ? (boundary < 0 ? 0 : v.blocks.length) : found;
         blocks = [...v.blocks.slice(0, at), ...pageBlocks, ...v.blocks.slice(at)];
       }
       const stubs = mergeStubs(incomingStubs, v.stubs ?? []);

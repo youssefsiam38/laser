@@ -1,4 +1,13 @@
 const MINIMUM_RESERVE = 1;
+/**
+ * How much unloaded history may stand in front of the reader at once, in
+ * screens. An estimate of a whole long conversation can be tens of thousands
+ * of pixels; a person reading upwards would then travel through a blank region
+ * no page can fill fast enough, which is what they see as "loading for ever".
+ * Pages arrive as they read, so the range ahead is kept to what the next few
+ * pages can cover, and grows again while a cursor remains (D-302).
+ */
+const RESERVE_SCREENS = 3;
 
 export interface HistoryReserveEstimate {
   hasBefore: boolean;
@@ -7,6 +16,8 @@ export interface HistoryReserveEstimate {
   loadedHeight: number;
   rowEstimate: number;
   lastPageHeight: number;
+  /** The reading window's height; the reserve never exceeds a few of these. */
+  viewportHeight?: number | undefined;
 }
 
 /**
@@ -22,8 +33,13 @@ export function estimateHistoryReserve(input: HistoryReserveEstimate): number {
   const averageTurn = input.loadedUserTurns > 0 && input.loadedHeight > 0
     ? input.loadedHeight / input.loadedUserTurns
     : row;
-  if (input.userOffset > 1) return Math.max(row, averageTurn * input.userOffset);
-  return Math.max(row, input.loadedHeight, input.lastPageHeight);
+  const estimate = input.userOffset > 1
+    ? Math.max(row, averageTurn * input.userOffset)
+    : Math.max(row, input.loadedHeight, input.lastPageHeight);
+  const ceiling = input.viewportHeight && input.viewportHeight > 0
+    ? input.viewportHeight * RESERVE_SCREENS
+    : undefined;
+  return ceiling ? Math.max(row, Math.min(estimate, ceiling)) : estimate;
 }
 
 /** Unloaded-history geometry. Only arrived-page height may reduce it. */
@@ -80,6 +96,7 @@ export class HistoryReserveModel {
   // A row-sized floor can exceed the final page and collapse the range when the
   // producer removes the cursor; arrived rows now grow the range monotonically.
   private floor() { return this.hasBefore ? MINIMUM_RESERVE : 0; }
+
 }
 
 export interface EarlierPageTransaction {

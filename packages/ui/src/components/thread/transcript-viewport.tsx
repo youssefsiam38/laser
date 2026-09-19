@@ -547,6 +547,7 @@ export class TranscriptViewport {
       loadedHeight: this.heights.total,
       rowEstimate: this.estimate,
       rows: this.ids.length,
+      viewportHeight: this.viewport?.clientHeight,
     });
   }
   setHistoryWindow(userOffset: number, loadedUserTurns: number, before: string | undefined) {
