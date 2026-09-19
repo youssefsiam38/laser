@@ -1,8 +1,13 @@
 /**
- * Repositories this working directory belongs to, via the shared workspace resolver (M18-T1).
+ * Repositories this working directory belongs to, via the shared workspace
+ * resolver (M18-T1).
+ *
+ * The resolver already knows every repository in the workspace, whether each
+ * one has a work tree, and where its common dir is, under the bounds the
+ * harness uses — so this is a projection, not a second walk. A bare repository
+ * is excluded: there is no work tree to checkpoint.
  */
-import { isAbsolute, resolve } from "node:path";
-import { runGit } from "./git-run.js";
+import { listCheckpointRepositories } from "@lasercode/protocol";
 import { createWorkspaceResolver } from "../workspace.js";
 
 export interface RepoRef {
@@ -15,31 +20,5 @@ export interface RepoRef {
 const resolver = createWorkspaceResolver();
 
 export async function sessionRepositories(cwd: string): Promise<RepoRef[]> {
-  const shape = await resolver.resolve(cwd, { rescan: true });
-  const found: RepoRef[] = [];
-  for (const row of shape.repositories) {
-    const repo = await repoAt(row.root);
-    if (repo) found.push(repo);
-  }
-  return found;
-}
-
-async function repoAt(cwd: string): Promise<RepoRef | undefined> {
-  const inside = await runGit({
-    cwd,
-    args: ["rev-parse", "--is-inside-work-tree"],
-    timeoutMs: 4000,
-  }).catch(() => undefined);
-  if (!inside || inside.exitCode !== 0 || inside.stdout.trim() !== "true") return undefined;
-  const top = await runGit({ cwd, args: ["rev-parse", "--show-toplevel"], timeoutMs: 4000 }).catch(() => undefined);
-  const path = top?.stdout.trim();
-  if (!path) return undefined;
-  const resolved = resolve(path);
-  const common = await runGit({
-    cwd: resolved,
-    args: ["rev-parse", "--git-common-dir"],
-    timeoutMs: 4000,
-  }).catch(() => undefined);
-  const raw = common?.stdout.trim() || ".git";
-  return { path: resolved, gitDir: isAbsolute(raw) ? raw : resolve(resolved, raw) };
+  return listCheckpointRepositories(await resolver.resolve(cwd));
 }

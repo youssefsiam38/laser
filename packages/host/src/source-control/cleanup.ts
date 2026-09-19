@@ -3,17 +3,23 @@
  * directory belongs to. Best-effort: a missing git or a directory that is not
  * a repository is not a reason to refuse deleting the transcript.
  */
-import { CHECKPOINT_REF_NAMESPACE } from "@lasercode/protocol";
+import { CHECKPOINT_REF_NAMESPACE, listCheckpointRepositories } from "@lasercode/protocol";
 import { checkpointSessionKey } from "@lasercode/protocol/checkpoint-key";
 import { runGit } from "@lasercode/protocol/git-run";
 import { createWorkspaceResolver } from "../workspace.js";
 
 const resolver = createWorkspaceResolver();
 
+/**
+ * The same projection the worker checkpoints (`sessionRepositories`), so a
+ * deletion never leaves refs behind in a repository the capture wrote to.
+ * `rescan` because a repository may have appeared since the shape was cached,
+ * and this runs once per deleted session, not per turn.
+ */
 async function repoRoots(cwd: string): Promise<string[]> {
   const shape = await resolver.resolve(cwd, { rescan: true }).catch(() => undefined);
   if (!shape) return [];
-  return shape.repositories.map((row) => row.root);
+  return listCheckpointRepositories(shape).map((tree) => tree.path);
 }
 
 async function deleteRefs(repo: string, prefix: string): Promise<number> {
