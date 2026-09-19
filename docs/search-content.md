@@ -94,3 +94,17 @@ stale, and this paragraph is the contract. Live
 session search also consumes partial output; it never indexes provider metadata,
 credentials or image data from the tool result envelope. No workers are started
 to search saved sessions.
+
+## Changes overlay diffs
+
+The conversation contract above is unchanged: transcript tool rows still mark
+value regions with `data-search-content`, and that attribute is not present in
+`@pierre/diffs` markup. Overlay find uses the shared walker in
+`packages/ui/src/components/thread/find-ranges.ts` with a **roots** policy:
+open shadow roots are collected, one constructed highlight stylesheet is
+**appended** to each root's `adoptedStyleSheets` (never replaced), and text is
+concatenated per `[data-line]`. Gutters, separators and file headers are
+skipped. Collapsed context and virtualized-offscreen lines are not in the tree;
+the overlay also searches the file's patch model for counts and says when
+matches sit in collapsed context. Find inside the overlay is this machinery,
+not a second implementation.
