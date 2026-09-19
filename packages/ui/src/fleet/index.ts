@@ -38,6 +38,10 @@ export {
   FLEET_CHROME_BUDGET_PX,
   FLEET_FILTERS_HEIGHT,
   FLEET_HEADER_HEIGHT,
+  FLEET_MARK_GAP,
+  FLEET_MARK_GUTTER_PX,
+  FLEET_MARK_SIZE,
+  FLEET_TEXT_INDENT,
 } from "./chrome.js";
 export {
   agentHeadline,

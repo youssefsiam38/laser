@@ -968,10 +968,10 @@ describe("the fleet row (leap §3)", () => {
     // Mono on both, from the `eyebrow` utility that owns the 11px size.
     expect(command?.className).toContain("eyebrow");
     expect(agent?.className).toContain("eyebrow");
-    // 20px, and the same 20px for both: an identity mark beside a name, not a
-    // thumbnail that owns the line.
-    expect(agent?.className).toContain("size-5");
-    expect(command?.className).toContain("size-5");
+    // The same size for both: an identity mark beside a name, not a thumbnail
+    // that owns the line. The width it costs is `fit.test.tsx`'s claim.
+    expect(agent?.className).toContain("size-4.5");
+    expect(command?.className).toContain("size-4.5");
     expect(rowFor("explorer").querySelector('[data-slot="fleet-name"]')?.className).not.toContain("typed");
     expect(rowFor("pnpm vite dev").querySelector('[data-slot="fleet-name"]')?.className).toContain("typed");
   });
