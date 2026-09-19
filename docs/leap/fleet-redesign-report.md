@@ -361,3 +361,125 @@ Fleet suite alone: 7 files, 144 passed (139 before this change). Two heavy
 log-dialog files time out at 5 s when the machine is under load (load average
 > 45 from other work); they pass on this branch in isolation and fail the same
 way on `bf450d5a`. No Playwright and no `scripts/browser-check`, as instructed.
+
+---
+
+## 7 · Filters fit, and the command tile's cost
+
+Branch `agents/fleet-filter-row-fit-5a793c26`. Two measured defects, one row
+and one mark.
+
+### 7.1 · The filter row was 53px too wide
+
+Measured in the running app at the 320px column:
+
+```
+panel width            320
+filter row width       319   (clientWidth 319)
+row scrollWidth        372   → 53 px of overflow
+Commands 2             x=272 w=87  NO  ← sliced by the panel border
+```
+
+A horizontally scrolling row was the previous answer, and it is the defect: a
+person sees a control cut in half, with no affordance telling them to scroll,
+and the thing that is hidden is the one carrying a count. A component that
+cannot fit its content shows less content (AGENTS.md), never smaller text, and
+nothing overflows its container.
+
+**Mechanism.** The row measures itself in a layout effect and gives things up,
+in a fixed order, until `scrollWidth ≤ clientWidth` — before the browser
+paints, so no frame shows the overflow:
+
+| step | what it shows | what it gives up |
+| --- | --- | --- |
+| 0 | Going · Asking · Ended with counts, All · Agents · Commands with counts | nothing — the sheet on a tablet stays here |
+| 1 | lifecycle chips unchanged; kind is one glyph+chevron that opens a menu | reading both kind-counts without opening anything |
+| 2 | the chips tighten (`px-1`, no hairline margins) | 4px of padding. Paint, not content |
+| 3 | lifecycle counts move into each chip's tooltip and accessible name | glancing at a number the panel header already carries |
+
+The 320px column with a realistic set of counts lands on **step 1**. Both
+questions stay reachable; the current selection of each is readable at a
+glance (the lifecycle word is still on the chip; the kind glyph is the current
+kind, named by `aria-label` and a tooltip). A count is still omitted when it
+is zero. Three-digit counts (`Going 128`) keep the number on the chip (step 2).
+The larger text-size setting plus three-digit counts is the only combination
+that reaches step 3.
+
+There is no horizontal scrollbar. `overflow-hidden` is the backstop, not the
+mechanism.
+
+**Measured at 288px of content**, same pessimistic text model that pins the
+six original chips to within 5px of the running app and never under:
+
+```
+before (step 0, the six chips)     scrollWidth 374   clientWidth 288   overflow 86
+after  (step 1, one going + one command in the tree)
+  Going 2      x=12    w=56   yes
+  Asking       x=70    w=53   yes
+  Ended        x=125   w=50   yes
+  Kind: All    x=184   w=40   yes
+  last control ends at 224 of 288. No clip.
+```
+
+What a person loses when the column is narrow: the always-visible *All ·
+Agents · Commands* chips. Kind is one control; the agent and command counts
+live in its menu. Lifecycle words stay. At a larger type scale with
+three-digit counts, the lifecycle *number* also leaves the chip for the
+tooltip — the word does not.
+
+### 7.2 · The command tile cost an eighth of the row
+
+Measured on a command row in the running app (row 319px wide):
+
+```
+x=12  w=20  h=20   the kind tile
+x=28  w=8          status dot, overlapping the tile's corner
+x=40               where the row's text actually starts
+```
+
+40px — an eighth of the row — before the first character of a command that is
+already being middle-truncated to keep `--port 5173`.
+
+**What I chose.** Keep the filled tiles (kind is a shape: rounded initials vs
+square `>`). Shrink the mark from 20px to 18px (`size-4.5`) and the gap from
+8px to 6px, and drop the eyebrow tracking on the two initials. Both kinds pay
+exactly this, so sibling titles still line up. Line 3's indent follows
+(`ps-6`). The status dot hangs 2px past the tile instead of 4, so the 6px of
+air before the title stays air.
+
+18px is the floor, not a taste. Two initials in Martian Mono are 2 × 0.6em =
+15.6px at the largest text-size setting; compact density takes the spacing
+unit to 3.5px, so `size-4.5` is 15.75px there — the last step that cannot clip
+a letter. A narrower command mark that left the agent at 20px would break the
+alignment the column reads by.
+
+```
+before   title starts at 40   (pad 12 + tile 20 + gap 8)
+after    title starts at 36   (pad 12 + tile 18 + gap 6)
+         agent and command agree; line 3 agrees with line 1
+```
+
+Returned: 4px. The rest of that eighth is the row's own padding (shared with
+the header) and two letters that will not fit in less.
+
+### 7.3 · Tests
+
+`packages/ui/test/fleet/fit.test.tsx` (13), via `layout-rig.ts` — a flex
+measurer whose sans/mono advances are pinned against the six running-app chip
+widths, required to be ≥ the app and within 5px.
+
+| test | claim |
+| --- | --- |
+| the width model never under-measures the six chips | the budget is a budget |
+| the six chips overflow 288px by > 50 | **red on the previous code** (scrollWidth 374) |
+| the row fits 288px with every control whole | **red before**: Commands sliced |
+| three-digit counts still fit, and stay on the chip | Going 128 is visible |
+| larger text-size + three-digit counts still fit | the number moves into the name, not off the edge |
+| widest labels (Commands selected, 888 everywhere, 1.2× type) | still inside 288 |
+| title x is 36 on both kinds | **red before**: 40 |
+| line 3 starts at the same x as line 1 | the indent followed the mark |
+
+Existing chrome budget (≤ 72px), one-row rule, strip fields, quiet context
+row, and stability tests stay green. The one-row test now asserts
+`overflow-hidden` and forbids `overflow-x-auto`.
+

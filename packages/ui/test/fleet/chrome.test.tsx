@@ -6,11 +6,11 @@
  * measured off the rendered DOM rather than asserted in prose:
  *
  *   - the chrome above the session is at most 72px at 320px width;
- *   - there is one filter row, it scrolls rather than wraps, and a count that
- *     is zero is not drawn;
+ *   - there is one filter row, it does not wrap, and a count that is zero is
+ *     not drawn;
  *   - a row is a row: no border, no radius, no card ground of its own, with
  *     hairlines between siblings and a hairline rail for nesting;
- *   - the tile is 20px on both kinds and on a context ancestor;
+ *   - the tile is the same size on both kinds and on a context ancestor;
  *   - a context ancestor is one quiet line.
  *
  * Heights are read back from the height utilities on the elements themselves
@@ -159,7 +159,7 @@ describe("the fleet column's chrome budget", () => {
 });
 
 describe("one filter row", () => {
-  it("puts every filter on one scrolling row and draws no zero", async () => {
+  it("puts every filter on one row and draws no zero", async () => {
     // One agent, going: Asking and Ended are zero, and Commands is zero.
     fixture.state.agents.runs = { r1: child };
     await render();
@@ -168,8 +168,12 @@ describe("one filter row", () => {
     expect(rowsOfFilters).toHaveLength(1);
     const filters = rowsOfFilters[0] as HTMLElement;
     expect(filters.className).not.toContain("flex-wrap");
-    expect(filters.className).toContain("overflow-x-auto");
-    // Six controls, and all six are in this one row.
+    // The row does not scroll its overflow: it sheds content until it fits
+    // (`fit.test.tsx`). A scroller here is the defect that sliced `Commands`.
+    expect(filters.className).not.toContain("overflow-x-auto");
+    expect(filters.className).toContain("overflow-hidden");
+    // Six controls, and all six are in this one row. Headless layout reports
+    // no overflow, so the row is still spelled out in full — the wide form.
     const controls = [...filters.querySelectorAll("button")];
     expect(controls).toHaveLength(6);
     expect(container.querySelectorAll('[data-slot="fleet-filters"] button')).toHaveLength(6);
@@ -246,7 +250,7 @@ describe("a row is a row", () => {
     expect(row.className).toContain("before:bg-live");
   });
 
-  it("keeps the tile at 20px on both kinds and on a context ancestor", async () => {
+  it("keeps the tile the same size on both kinds and on a context ancestor", async () => {
     fixture.state.agents.runs = { r1: child };
     fixture.state.tasks.tasks = {
       t1: task({ id: "t1", sessionPath: CHILD, status: "completed", exitCode: 0, endedAt: "2026-09-08T10:04:00.000Z" }),
@@ -255,7 +259,7 @@ describe("a row is a row", () => {
     await act(async () => [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.startsWith("Finished"))!.click());
     const tiles = [...container.querySelectorAll<HTMLElement>('[data-slot="fleet-kind-tile"]')];
     expect(tiles.length).toBeGreaterThanOrEqual(3);
-    for (const tile of tiles) expect(tile.className).toContain("size-5");
+    for (const tile of tiles) expect(tile.className).toContain("size-4.5");
     // Eyebrow size, mono, tracked: the one sub-12px exception, and taken from
     // the utility that owns it rather than spelled as a size class.
     for (const tile of tiles) expect(tile.className).toContain("eyebrow");

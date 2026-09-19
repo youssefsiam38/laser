@@ -30,7 +30,10 @@ import { Button } from "@/components/ui/button";
 import { ControlHint, Hint } from "@/components/ui/hint";
 import { openChanges } from "@/source-control/store.js";
 import {
+  FLEET_MARK_GAP,
+  FLEET_MARK_SIZE,
   FLEET_STATE_LABEL,
+  FLEET_TEXT_INDENT,
   agentTintIndex,
   headlineText,
   stripText,
@@ -57,19 +60,32 @@ const AGENT_TINT = [
 ] as const;
 
 /**
- * The tile is 20px and no larger. It is an identity mark beside a name, not a
- * thumbnail: at 28px it was the loudest thing on a line whose job is to carry
- * a name and a duration. Its letters are the `eyebrow` utility — mono, 11px,
- * tracked, uppercase — which is the one place type goes below the 12px floor,
- * and only ever for two letters of a category, never for a value. The size is
- * never spelled as a class (`design-system.test.ts`); only the colour is
- * overridden, and colour utilities are emitted after it.
+ * The tile is an identity mark beside a name, not a thumbnail, and it is as
+ * small as two letters allow. 20px plus an 8px gap put the first character of
+ * a row's title 40px in — an eighth of a 320px column spent before the thing
+ * the person came to read, in a column that is already middle-truncating
+ * `pnpm vite dev --host --port 5173`. It is 18px now, with 6px of air
+ * (`FLEET_MARK_GUTTER_PX`), and 18 is the floor rather than a taste: two
+ * initials in the mono face are 2 × 0.6em, which is 15.6px at the largest
+ * text-size setting, and the spacing unit drops to 3.5px at compact density —
+ * `size-4.5` is 15.75px there, the last step that cannot clip a letter. The
+ * eyebrow's tracking comes off the initials for the same reason: it is air
+ * between two letters that the tile has no room to buy.
+ *
+ * Both kinds pay exactly this, so the titles of sibling rows line up down the
+ * column whichever kind they are — that alignment is most of why the column
+ * reads at a glance — and the strip on line 3 is indented to the same column
+ * (`FLEET_TEXT_INDENT`).
+ *
+ * Its letters are the `eyebrow` utility — mono, 11px, uppercase — which is the
+ * one place type goes below the 12px floor, and only ever for two letters of a
+ * category, never for a value.
  *
  * `-mt-0.5` is optical, not arithmetic: it aligns the tile to the cap height
  * of line 1 rather than to its line box, which sits ~2px lower.
  */
 export function FleetKindTile({ item, quiet = false }: { item: FleetItem; quiet?: boolean }) {
-  const base = "eyebrow flex size-5 shrink-0 items-center justify-center";
+  const base = cn("eyebrow flex shrink-0 items-center justify-center", FLEET_MARK_SIZE);
   if (item.kind === "task") {
     return (
       <span
@@ -89,7 +105,7 @@ export function FleetKindTile({ item, quiet = false }: { item: FleetItem; quiet?
       data-slot="fleet-kind-tile"
       data-shape="round"
       aria-hidden="true"
-      className={cn(base, "rounded-md font-medium", quiet ? "bg-surface-2 text-ink-3" : cn(tint, "text-on-fleet-agent"))}
+      className={cn(base, "rounded-md font-medium tracking-normal", quiet ? "bg-surface-2 text-ink-3" : cn(tint, "text-on-fleet-agent"))}
     >
       {item.initials ?? "?"}
     </span>
@@ -298,7 +314,8 @@ export function FleetWorkRow({
         // The target grows on a finger; the paint does not. `min-h-11` on a
         // mouse would push 8px of nothing between line 2 and line 3, which is
         // the gap that made the old row look like a form.
-        "flex min-w-0 w-full items-start gap-2 text-start outline-none pointer-coarse:min-h-11",
+        "flex min-w-0 w-full items-start text-start outline-none pointer-coarse:min-h-11",
+        FLEET_MARK_GAP,
         "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
       )}
     >
@@ -306,8 +323,9 @@ export function FleetWorkRow({
         <FleetKindTile item={source} quiet={item.contextOnly} />
         {/* The dot rides the tile's corner rather than taking a column of its
             own: 16px of a 288px column for a mark that belongs to the same
-            identity the tile carries. */}
-        <StatusDot status={item.attention} label={dotLabel} className="absolute -end-1 -top-1" />
+            identity the tile carries. It hangs 2px past the tile, not 4, so
+            the 6px of air before the title stays air. */}
+        <StatusDot status={item.attention} label={dotLabel} className="absolute -end-0.5 -top-1" />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-baseline gap-2">
@@ -372,19 +390,19 @@ export function FleetWorkRow({
       <div className="flex min-w-0 flex-col gap-0.5 px-3 py-2">
         {hint ? <ControlHint hint={hint}>{toggle}</ControlHint> : toggle}
         {/* Lines 3 and the row's controls hang below the button, indented to
-            the text column (tile 20px + gap 8px) and kept clear of the
-            chevron. They cannot live inside it: the worktree chip carries a
-            focusable hint, and a focusable thing inside a button is neither
-            valid nor reachable. */}
+            the text column (the mark plus its gap, `FLEET_TEXT_INDENT`) and
+            kept clear of the chevron. They cannot live inside it: the worktree
+            chip carries a focusable hint, and a focusable thing inside a
+            button is neither valid nor reachable. */}
         {!item.contextOnly ? (
-          <span className="flex min-w-0 items-baseline ps-7 pe-6">
+          <span className={cn("flex min-w-0 items-baseline pe-6", FLEET_TEXT_INDENT)}>
             <FleetStripLine strip={source.strip} />
           </span>
         ) : null}
         {(showChanges || askingActions) && (
           <div
             data-slot="fleet-row-actions"
-            className="flex flex-wrap items-center gap-2 ps-7 pt-1"
+            className={cn("flex flex-wrap items-center gap-2 pt-1", FLEET_TEXT_INDENT)}
             onKeyDown={(event) => {
               swallowEnterOnSlot(event, "fleet-changes");
               swallowEnterOnSlot(event, "fleet-answer");
