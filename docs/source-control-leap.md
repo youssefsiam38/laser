@@ -43,7 +43,8 @@ source as `docs/transcript-parity.md` and D-305.
 | 9 | **Tracked changes only.** Untracked and ignored files are not shown. |
 | 10 | Commit messages, PR titles and descriptions are written by **the session's current model**, never the Namer. |
 | 11 | Git actions live in the **overlay's toolbar only** this leap. |
-| 12 | A fleet row opening its **agent worktree's** diff is documented and deferred. |
+| 12 | A fleet row **opens its agent's changes** in the same overlay (in scope, §11 L5). |
+| 13 | A session's changes **outside the project** are shown too, in three honest tiers (§9). |
 
 ---
 
@@ -296,6 +297,7 @@ per-project off switch, and `Delete session` removing that session's refs.
 | **This turn** | checkpoint(N−1) → checkpoint(N) | a turn's own control in the transcript |
 | **Uncommitted** | HEAD → working tree | the overlay's "what would I commit" |
 | **Commit range** | any two refs the person picks | the overlay's picker |
+| **This agent** | the run's `baseCommit` → its worktree's HEAD and working tree | a fleet row's "Changes" (§F.5) |
 
 ### E.3 Methods
 
@@ -387,7 +389,106 @@ machinery, not a second one.
 
 ---
 
-## 9 · Part G — Git actions
+### F.5 Opening an agent's changes from the fleet
+
+A fleet row for an agent run carries **Changes**, which opens this same overlay
+scoped to that run: its worktree, from the run's recorded `baseCommit` to its
+branch's HEAD plus anything uncommitted in it. It is the review a parent owes
+its child's branch before merging (D-157), in the place where the run already
+lives.
+
+- The data is what L2 already captures: a child's worktree checkpoints itself,
+  and the run record already stores `baseCommit` and the branch.
+- A run with no worktree (started with `worktree: false`, or in a workspace
+  that cannot be isolated) opens the **This agent** scope against its own
+  session's checkpoints in the shared checkout, so the control is never dead —
+  it says which of the two it is showing.
+- A removed worktree whose branch still exists shows the branch's commits; a
+  branch that is gone says so and offers nothing.
+- Merge is not offered here this leap: this is a reader, and merging a child's
+  branch stays the parent's explicit `git` act.
+
+## 9 · Part H — Changes outside the project
+
+A session does not stay inside its project. It edits a skill in
+`~/.agents/skills`, a file in another repository, a script in `/tmp`, a dotfile
+in `$HOME`. Those changes are real work and today nothing shows them. Git can
+only help for part of it, so the model is **three tiers, each labelled for what
+it can and cannot prove**.
+
+### H.1 Tier 1 — another repository
+
+The first time a session touches a path inside a git repository that is not one
+of its workspace's, that repository is **registered** for the session and
+checkpointed from that moment, exactly as the project's repositories are
+(§7.1). Registration is triggered by an observed write, an observed edit, or a
+command whose working directory is inside it.
+
+- Everything Tier 1 gives is **exact**, including changes a command made,
+  deletions and renames, because git computed it.
+- A checkpoint before the first touch does not exist, so the range is *from
+  first touch*, and the overlay says so on that group rather than implying the
+  whole session.
+- **Consent, once per repository.** Writing hidden refs into the person's
+  *other* work is not covered by the project's trust: the first registration
+  asks, in one sentence naming the repository, and remembers the answer.
+  Refusing drops that repository to Tier 2.
+
+### H.2 Tier 2 — loose files
+
+A path inside no repository is captured by a **bounded file snapshot store** in
+Laser's own state, never in the person's directories:
+
+- before the **first** write or edit of a path in a session, its current bytes
+  are copied into the store (content-addressed, deduplicated);
+- at turn end the current bytes are read again, so the overlay can draw a real
+  two-way diff for that file, including a file the agent created (no before) or
+  deleted (no after);
+- **bounds**: a per-file size cap, a per-session total cap, binaries recorded as
+  "changed" without content, and a **deny list** that is never captured —
+  `auth.json`, `.env*`, anything under the agent's credential directories, and
+  any path the person adds. A denied path is listed as changed with its content
+  withheld, and says why.
+- Restore (§7.4) can put a Tier 2 file back, one file at a time, with the same
+  explicit confirmation.
+
+### H.3 Tier 3 — what we cannot see
+
+A command can write anywhere. Outside a repository and outside the observed
+write set there is nothing to compare against, and Laser does not pretend
+otherwise: the overlay's footer states, once, that changes made by commands
+outside a repository and outside the files above are not tracked. We do not
+add filesystem watchers over `$HOME` to chase it — the cost and the privacy
+surface are both wrong, and a watcher that misses is worse than a sentence that
+is true.
+
+### H.4 How they appear together
+
+The overlay's left rail carries the same merged list, with group kinds in this
+order:
+
+1. the project's repositories (as §F.2);
+2. **Other repositories** — one group each, header showing the repository's
+   path and "since first touch", with its own branch and totals;
+3. **Loose files** — grouped by directory, header "not in a repository", each
+   row a file with `+/−` or a withheld marker;
+4. the Tier 3 sentence, always last, never a group.
+
+The telemetry Files section shows the same grouping, collapsed to counts. A
+group outside the project is never included in a commit: git actions (§10) act
+on the project's repositories only, and the toolbar's Commit is disabled with
+its reason when the selected group is not one of them.
+
+### H.5 Detection sources
+
+| Source | Gives | Tier |
+| --- | --- | --- |
+| The worker's observation of `write` / `edit` tool calls (the mechanism `file-freshness` already uses, which holds metadata only) | the exact path, at the moment of the write | 1 registration, 2 capture |
+| A command's working directory and the repositories it resolves into | registration of a repository a command worked in | 1 |
+| `git status` / checkpoint diff inside a registered repository | every change in that repository, whoever made it | 1 |
+| Nothing | a command writing to a loose path it was never asked about | 3 |
+
+## 10 · Part G — Git actions
 
 ### G.1 Scope
 
@@ -425,25 +526,26 @@ action needs a credential that lives on another machine.
 
 ---
 
-## 10 · Milestones
+## 11 · Milestones
 
 | # | Title | Done when |
 | --- | --- | --- |
 | **L1** | Workspace shapes and the harness | `workspaceShape` resolves all five shapes with tests over real layouts (a repo, a monorepo, a 41-repo workspace, a nested repo, no git); `start_agent` never fails over shape; `worktree: "strict"` keeps D-156's refusal; the project default exists in Settings; no wasted turn in `~/projects/kwentra` |
-| **L2** | Checkpoints, scopes, restore | Checkpoints captured per turn per repository through an isolated index; the person's index, working tree, branches and reflog provably untouched; `project/changes` returns numstat for all four scopes; live and durable authorities agree; undo-this-turn restores files and staging behind one confirmation; retention cap and off switch |
+| **L2** | Checkpoints, scopes, restore | Checkpoints captured per turn per repository through an isolated index; the person's index, working tree, branches and reflog provably untouched; `project/changes` returns numstat for all five scopes; live and durable authorities agree; undo-this-turn restores files and staging behind one confirmation; retention cap and off switch |
+| **L2b** | Outside the project | Foreign repositories register on first touch with consent remembered; the loose-file snapshot store captures before/after within its caps and never captures a denied path; created and deleted files render; Tier 3's sentence is present and the tiers are never conflated |
 | **L3** | Telemetry query | `pi/session/telemetry` computes over the whole session, incrementally, fenced by revision; both authorities identical; opening a 27 MB session performs no full re-read; every client-side aggregation deleted; the panel's apology gone |
 | **L4** | The two columns | Fleet rows as §3, telemetry sections as §4, at 320px, both themes, both pointers, with interaction tests for the asking state, nesting, filters and truncation order |
-| **L5** | The overlay | Files open full-screen, tabs, tree grouped by repository, split and unified, Shiki tokens, viewed ticks, all designed states, keyboard path, phone layout |
+| **L5** | The overlay | Files open full-screen, tabs, tree grouped by repository and by the outside tiers, split and unified, Shiki tokens, viewed ticks, all designed states, keyboard path, phone layout; a fleet row's **Changes** opens it scoped to that run (§F.5) |
 | **L6** | Git actions | Commit, push, branch, PR create / read / checkout / merge for GitHub and Bitbucket through installed CLIs, per-repository discovery, session-model prose, explicit confirmations, no interpolation |
 
-L1 and L3 are independent of each other; L2 depends on L1; L4 depends on L3;
-L5 depends on L2 and L4; L6 depends on L5. Each milestone gets one independent
+L1 and L3 are independent of each other; L2 depends on L1; L2b depends on L2;
+L4 depends on L3; L5 depends on L2b and L4; L6 depends on L5. Each milestone gets one independent
 review and one correction batch, and the person performs browser acceptance on
 a parent-built sandbox before any release (the working agreement since 0.9.2).
 
 ---
 
-## 11 · Decisions to record
+## 12 · Decisions to record
 
 | ID | Decision |
 | --- | --- |
@@ -454,14 +556,17 @@ a parent-built sandbox before any release (the working agreement since 0.9.2).
 | D-311 | Files open in a read-only full-screen overlay; git actions live in its toolbar and nowhere else this leap |
 | D-312 | Commit messages and pull-request prose are written by the session's current model, never the Namer |
 | D-313 | The overlay renders diffs with Laser's own elements and Shiki; a patch parser is the only dependency taken *(pending confirmation, §8.3)* |
+| D-314 | Changes outside the project are shown in three tiers: registered foreign repositories (exact, from first touch, consent once), loose files (bounded snapshot store, deny list), and an honest sentence for what a command did where neither can see |
+| D-315 | A fleet row opens its agent's changes in the same overlay, scoped from the run's `baseCommit`; the reader never merges |
 
 ---
 
-## 12 · Not in this leap
+## 13 · Not in this leap
 
 - Editing files in the overlay.
-- Opening an agent worktree's diff from its fleet row (documented here, deferred).
 - A commit control in the transcript or beside the composer.
+- Filesystem watchers over the machine to catch Tier 3 changes (§9.3).
+- Committing or pushing a repository outside the project's workspace.
 - Cloning and publishing repositories.
 - Linked pull requests, stacks, auto-merge, auto-settle.
 - GitLab, Gitea, Forgejo, Azure DevOps.
@@ -471,7 +576,7 @@ a parent-built sandbox before any release (the working agreement since 0.9.2).
 
 ---
 
-## 13 · Open questions
+## 14 · Open questions
 
 1. §8.3 — confirm "our own rendering plus a parser" rather than `@pierre/diffs`.
 2. Split or unified as the overlay's default view.
@@ -480,3 +585,7 @@ a parent-built sandbox before any release (the working agreement since 0.9.2).
 4. Whether `project/changes` should include a repository the session never
    touched but which sits in the same workspace (my proposal: no, unless the
    person asks for it in the repository filter).
+5. Tier 2 caps (§9.2): my proposal is 2 MB per file and 64 MB per session,
+   with the oldest before-images pruned first and the file still listed.
+6. Whether registering a foreign repository (§9.1) should be remembered per
+   repository for ever, or per repository per project.
