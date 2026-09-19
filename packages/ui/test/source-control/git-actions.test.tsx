@@ -377,7 +377,7 @@ it("previews a pull request, lets the person edit the title, then confirms with 
     },
   });
   await mount({ adapter });
-  await act(async () => requestGitAction({ kind: "pr-create", repo: "app" }));
+  await act(async () => requestGitAction({ kind: "pull-request-create", repo: "app" }));
   await flush();
   const title = dialog().querySelector<HTMLInputElement>('[data-slot="git-pr-title"]');
   expect(title?.value).toMatch(/overlay toolbar/);
@@ -418,7 +418,7 @@ it("shows failing checks on a pull request and still lets the person review a me
   };
   const { adapter } = recordingAdapter({ prRead: async () => failing });
   await mount({ adapter });
-  await act(async () => requestGitAction({ kind: "pr-read", repo: "app" }));
+  await act(async () => requestGitAction({ kind: "pull-request-read", repo: "app" }));
   await flush();
   const number = dialog().querySelector<HTMLInputElement>('[aria-label="Pull request number"]');
   expect(number).toBeTruthy();

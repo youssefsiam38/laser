@@ -178,7 +178,7 @@ function GitOutcomeView({
             Review again
           </Button>
         ) : null}
-        {isDone && kind === "pr-create" && prUrlOf(result) ? (
+        {isDone && kind === "pull-request-create" && prUrlOf(result) ? (
           <Button asChild className="[@media(pointer:coarse)]:min-h-11">
             <a href={prUrlOf(result)} target="_blank" rel="noreferrer">
               Open pull request
@@ -264,7 +264,7 @@ function GitActionBody({ kind, repo }: { kind: GitActionKind; repo: string }) {
               ? " · names the branch and the remote before anything is sent."
               : kind === "branch"
                 ? " · created from an explicit base."
-                : kind === "pr-create"
+                : kind === "pull-request-create"
                   ? " · title and body are drafted by this session's model. You can edit both."
                   : " · comments, checks, check out or merge."}
         </DialogDescription>
@@ -272,8 +272,8 @@ function GitActionBody({ kind, repo }: { kind: GitActionKind; repo: string }) {
       {kind === "commit" ? <CommitBody repo={repo} /> : null}
       {kind === "push" ? <PushBody repo={repo} /> : null}
       {kind === "branch" ? <BranchBody repo={repo} /> : null}
-      {kind === "pr-create" ? <PrCreateBody repo={repo} /> : null}
-      {kind === "pr-read" ? <PrReadBody repo={repo} /> : null}
+      {kind === "pull-request-create" ? <PrCreateBody repo={repo} /> : null}
+      {kind === "pull-request-read" ? <PrReadBody repo={repo} /> : null}
     </DialogContent>
   );
 }
@@ -793,7 +793,7 @@ function PrCreateBody({ repo }: { repo: string }) {
   if (shown) {
     return (
       <GitOutcomeView
-        kind="pr-create"
+        kind="pull-request-create"
         result={shown}
         onClose={clearGitAction}
         {...(offersPreviewAgain(shown.outcome) ? { onReviewAgain: () => void runPreview() } : {})}
@@ -846,7 +846,7 @@ function PrCreateBody({ repo }: { repo: string }) {
         busy={busy !== null}
         confirmBusy={busy === "confirm"}
         confirmDisabled={!title.trim() || (Boolean(preview) && !offersMutation(preview?.outcome))}
-        confirmText={offersMutation(preview?.outcome) ? confirmLabel("pr-create", preview?.confirmation) : "Review pull request"}
+        confirmText={offersMutation(preview?.outcome) ? confirmLabel("pull-request-create", preview?.confirmation) : "Review pull request"}
         onCancel={clearGitAction}
         onConfirm={() => void (offersMutation(preview?.outcome) ? runConfirm() : runPreview())}
       />
@@ -945,7 +945,7 @@ function PrReadBody({ repo }: { repo: string }) {
   if (shown) {
     return (
       <GitOutcomeView
-        kind="pr-read"
+        kind="pull-request-read"
         result={shown}
         onClose={clearGitAction}
         {...(offersPreviewAgain(shown.outcome)

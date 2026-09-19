@@ -34,7 +34,7 @@ export const GIT_BITBUCKET_REBASE = "Bitbucket cannot rebase-merge. Choose merge
 export const GIT_PR_NOT_OPEN = "This pull request is not open, so it cannot be merged.";
 export const GIT_BRANCH_NAME = "Name the new branch.";
 
-export type GitActionKind = "commit" | "push" | "branch" | "pr-create" | "pr-read";
+export type GitActionKind = "commit" | "push" | "branch" | "pull-request-create" | "pull-request-read";
 
 export function repoLeafName(repo: string): string {
   const parts = repo.split(/[\\/]/).filter(Boolean);
@@ -154,9 +154,9 @@ export function actionTitle(kind: GitActionKind): string {
       return "Push";
     case "branch":
       return "New branch";
-    case "pr-create":
+    case "pull-request-create":
       return "Open a pull request";
-    case "pr-read":
+    case "pull-request-read":
       return "Pull request";
   }
 }
@@ -171,9 +171,9 @@ export function confirmLabel(kind: GitActionKind, confirmation: GitActionConfirm
       return branch && remote ? `Push ${branch} to ${remote}` : "Push";
     case "branch":
       return branch ? `Create ${branch}` : "Create branch";
-    case "pr-create":
+    case "pull-request-create":
       return "Open pull request";
-    case "pr-read":
+    case "pull-request-read":
       return "Check out branch";
   }
 }

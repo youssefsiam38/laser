@@ -26,7 +26,7 @@ import {
 } from "./git-model.js";
 import { requestGitAction } from "./store.js";
 
-const MENU_KINDS: GitActionKind[] = ["commit", "push", "branch", "pr-create", "pr-read"];
+const MENU_KINDS: GitActionKind[] = ["commit", "push", "branch", "pull-request-create", "pull-request-read"];
 
 export function ChangesGitActions({
   repos,
@@ -112,7 +112,7 @@ export function ChangesGitActions({
         <DropdownMenuSeparator />
         {MENU_KINDS.map((kind) => (
           <DropdownMenuItem key={kind} disabled={!repo} onSelect={() => run(kind)}>
-            {kind === "pr-create" || kind === "pr-read" ? <GitPullRequestArrow /> : <GitBranch />}
+            {kind === "pull-request-create" || kind === "pull-request-read" ? <GitPullRequestArrow /> : <GitBranch />}
             {actionTitle(kind)}
           </DropdownMenuItem>
         ))}
