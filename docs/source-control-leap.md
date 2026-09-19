@@ -44,6 +44,10 @@ source as `docs/transcript-parity.md` and D-305.
 | 10 | Commit messages, PR titles and descriptions are written by **the session's current model**, never the Namer. |
 | 11 | Git actions live in the **overlay's toolbar only** this leap. |
 | 12 | A fleet row **opens its agent's changes** in the same overlay (in scope, §10 L5). |
+| 13 | The overlay renders diffs with **our own elements and Shiki**; the only dependency is a patch parser (§8.3). |
+| 14 | **Split** is the default view; unified is a toggle that is remembered. |
+| 15 | Checkpoint retention defaults to the **last 200 turns per session**, configurable per project, and deleting a session deletes its checkpoints. |
+| 16 | A repository in the workspace that the session never touched is **not listed**. |
 
 ---
 
@@ -285,8 +289,13 @@ to, the worker captures a checkpoint:
 - captured for `worktreePath ?? projectRoot`, so a child agent's worktree
   checkpoints itself.
 
-Retention: a stated cap per session with the oldest checkpoints pruned, a
-per-project off switch, and `Delete session` removing that session's refs.
+**Retention.** The default is the **last 200 turns per session**: older
+checkpoints are pruned oldest-first, and a scope whose checkpoint was pruned
+says so rather than showing a wrong range. Settings offers, per project:
+*Last 50 turns · Last 200 · Last 1 000 · Every turn · Off*. Deleting a session
+deletes its checkpoint refs — stated in the delete dialog, not asked as a
+second question. Refs are packed so thousands do not slow `for-each-ref`, and
+turning retention off removes that session's existing refs too.
 
 ### E.2 Scopes
 
@@ -303,6 +312,8 @@ per-project off switch, and `Delete session` removing that session's refs.
 ```
 project/workspace          → the resolved shape and its repositories
 project/changes            → { scope, repos: [{ repo, branch, files: [{ path, status, added, removed }] }] }   (numstat)
+                             only repositories this session actually touched; an untouched repository in the
+                             same workspace is never listed
 project/file_diff          → one file's patch for a scope, with context expansion
 project/file_source        → one file's bytes at a ref (for the overlay's plain view)
 project/checkpoint/list    → the session's checkpoints
@@ -353,9 +364,11 @@ position and its draft; Escape returns to exactly where the person was.
 - **Left rail**: the changed-file tree, **grouped by repository** with per-group
   branch and totals, per-file `+/−`, and a **viewed tick** per file with a
   running count.
-- **Body**: the diff, split by default with a unified toggle, our own Shiki
-  tokens and theme, line numbers, expandable context, and virtualization
-  through `@legendapp/list` (already a dependency since M16-T91).
+- **Body**: the diff, **split by default** with a unified toggle whose choice
+  is remembered per person (not per file), our own Shiki tokens and theme, line
+  numbers, expandable context, and virtualization through `@legendapp/list`
+  (already a dependency since M16-T91). Below the width where two columns of
+  code fit, split falls back to unified automatically and says so once.
 
 ### F.3 Rendering
 
@@ -373,9 +386,35 @@ Candidates considered, with verified facts:
 | `react-diff-view` | MIT · 3.3.3 | None; you feed tokens | Closest to our needs; its parser (`gitdiff-parser`, MIT) is what we actually want |
 | `@codemirror/merge` | MIT · 6.12.2 | Lezer | An editor, not a review surface; only worth it if files become editable |
 
-The deciding reason is not the code: a diff in the overlay must look identical
-to a diff in the transcript, and `docs/ux-elements.md` already claims both
-surfaces. **Open item: confirm this choice before Part F starts.**
+**Confirmed, and the deciding evidence is Shadow DOM.** `@pierre/diffs`
+renders inside a shadow root: its supported customization is a set of CSS
+custom properties, and anything deeper goes through `unsafeCSS`, which its own
+maintainers mark unstable. Three things Laser already does break against that
+boundary:
+
+- **Find.** Our search paints native highlights over DOM ranges
+  (`thread/find-ranges.ts`). `CSS.highlights` is window-wide, but a
+  `::highlight()` rule only paints inside the tree whose stylesheet carries it,
+  and **one `Range` cannot span the light DOM and a shadow tree** — boundary
+  points must share a root. Searching a diff would need a rule injected into
+  every shadow root through the unstable API, and one Range per tree.
+- **Searchable content markers.** AGENTS.md §6b requires value regions to carry
+  `data-search-content`. Inside a shadow root we do not own the markup.
+- **A second highlighter theme and a second virtualizer.** Their theme system
+  is registered Shiki themes plus their own CSS properties, and they ship their
+  own `Virtualizer`; we pin Shiki 4.4.3 and adopted `@legendapp/list` in
+  M16-T91.
+
+So: **our own rendering, one parser.** The parser is
+[`parse-git-diff`](https://www.npmjs.com/package/parse-git-diff) (MIT, TypeScript,
+last published 2026-02) pinned exactly, with `parse-diff` (MIT, 2026-04) as the
+fallback if an edge case defeats it — renames, mode changes, binary files and
+"no newline at end of file" are the cases to pin with tests. `gitdiff-parser`
+(what `react-diff-view` uses) is untouched since 2023 and is not taken.
+
+The other deciding reason is not the code: a diff in the overlay must look
+identical to a diff in the transcript, and `docs/ux-elements.md` already claims
+both surfaces.
 
 ### F.4 The bar
 
@@ -473,8 +512,10 @@ a parent-built sandbox before any release (the working agreement since 0.9.2).
 | D-310 | Changed files come from git, never from the agent's tool calls |
 | D-311 | Files open in a read-only full-screen overlay; git actions live in its toolbar and nowhere else this leap |
 | D-312 | Commit messages and pull-request prose are written by the session's current model, never the Namer |
-| D-313 | The overlay renders diffs with Laser's own elements and Shiki; a patch parser is the only dependency taken *(pending confirmation, §8.3)* |
+| D-313 | The overlay renders diffs with Laser's own elements and Shiki; `parse-git-diff` is the only dependency taken. `@pierre/diffs` is rejected because its Shadow DOM breaks our find (one Range cannot span light and shadow trees), our `data-search-content` contract and our single-highlighter, single-virtualizer rule |
 | D-314 | A fleet row opens its agent's changes in the same overlay, scoped from the run's `baseCommit`; the reader never merges |
+| D-315 | Split is the default diff view, remembered per person, falling back to unified when two columns of code do not fit |
+| D-316 | Checkpoint retention defaults to the last 200 turns per session, is configurable per project, and follows the session's deletion |
 
 ---
 
@@ -501,10 +542,7 @@ a parent-built sandbox before any release (the working agreement since 0.9.2).
 
 ## 13 · Open questions
 
-1. §8.3 — confirm "our own rendering plus a parser" rather than `@pierre/diffs`.
-2. Split or unified as the overlay's default view.
-3. Checkpoint retention: how many turns per session before pruning, and does a
-   deleted session take its refs with it silently or ask?
-4. Whether `project/changes` should include a repository the session never
-   touched but which sits in the same workspace (my proposal: no, unless the
-   person asks for it in the repository filter).
+None. The four that were open are settled above: rendering (§8.3, D-313), split
+as the default (D-315), retention (§7.1, D-316) and untouched repositories
+(§7.3). The next unknown will come from L1's contact with real workspaces, and
+belongs in `STATUS_DETAILED.md` as it is found.
