@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CheckpointInfo, ProjectChanges, RestorePreview, RestoreRepoResult } from "@lasercode/protocol";
 
-import { DIALOG_EXIT_FALLBACK_MS, dialogExitMs } from "../../src/components/thread/dialog-presence.js";
 import {
   UNDO_ROWS_SHOWN,
   UNDO_TURN_FAILED,
@@ -207,17 +206,6 @@ describe("joining the preview with the change lists", () => {
     expect(moreRowsLabel(bounded.hidden)).toBe(`and ${30 - UNDO_ROWS_SHOWN} more`);
     expect(boundedRows(many, true).shown).toHaveLength(30);
     expect(boundedRows(many.slice(0, 3), false)).toEqual({ shown: many.slice(0, 3), hidden: 0 });
-  });
-});
-
-describe("dialogExitMs", () => {
-  it("reads the motion token and still leaves a window when motion is off", () => {
-    expect(dialogExitMs("75ms")).toBeGreaterThan(75);
-    expect(dialogExitMs("0ms")).toBeGreaterThan(0);
-    expect(dialogExitMs(" 0.2s ")).toBeGreaterThan(200);
-    expect(dialogExitMs(undefined)).toBe(DIALOG_EXIT_FALLBACK_MS);
-    expect(dialogExitMs("")).toBe(DIALOG_EXIT_FALLBACK_MS);
-    expect(dialogExitMs("nonsense")).toBe(DIALOG_EXIT_FALLBACK_MS);
   });
 });
 

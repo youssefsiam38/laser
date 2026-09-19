@@ -227,6 +227,7 @@
   --measure-prose: 80ch;
   --space-unit: 4px;
   --radius: 8px;
+  --motion-off: initial;
   --motion-instant: 75ms;
   --motion-fast: 150ms;
   --motion-slow: 200ms;
@@ -611,6 +612,41 @@
 
   --ease-morph: var(--motion-ease);
 
+  /* ---------------------------------------------------------------------
+   * Reduced motion means *no* animation, not a zero-length one.
+   *
+   * Every enter/exit utility from tw-animate-css compiles to
+   * `animation: enter|exit var(--tw-duration…) …`, and our durations come
+   * from the motion tokens — which are `0ms` when Motion is reduced. A
+   * zero-duration animation is the worst of both worlds: the engine creates
+   * no animation for it at all (no `animationstart`, no `animationend`, no
+   * `animationcancel`, `el.getAnimations()` is empty) while computed
+   * `animation-name` still reads `exit`. Radix `Presence` decides whether to
+   * keep a closing element mounted from that name alone, so it waits for an
+   * end event that can never arrive and the closed dialog, sheet, popover,
+   * menu, tooltip or collapsible stays in the document, painted, clickable.
+   *
+   * So when motion is off the animation is `none`, which is also the honest
+   * reading of the preference (AGENTS.md: a reduced-motion fallback loses
+   * the movement and nothing else). `--motion-off` is that switch: `none`
+   * with Motion reduced, `initial` otherwise — and `initial` on a custom
+   * property is the guaranteed-invalid value, so `var()` takes the fallback
+   * and the full animation is used. `src/theme/compile.ts` writes it beside
+   * the durations; the `prefers-reduced-motion` block below covers the frame
+   * before the theme store has run.
+   *
+   * These four re-declare tw-animate-css's own values (its `@theme inline`,
+   * imported above) with that one wrapper added. Keep them in step with the
+   * package when it is bumped; `test/theme/reduced-motion.test.ts` compiles
+   * this file and fails if a state-driven utility escapes the switch.
+   * ------------------------------------------------------------------- */
+  --animate-in: var(--motion-off, enter var(--tw-animation-duration, var(--tw-duration, .15s)) var(--tw-ease, ease) var(--tw-animation-delay, 0s) var(--tw-animation-iteration-count, 1) var(--tw-animation-direction, normal) var(--tw-animation-fill-mode, none));
+  --animate-out: var(--motion-off, exit var(--tw-animation-duration, var(--tw-duration, .15s)) var(--tw-ease, ease) var(--tw-animation-delay, 0s) var(--tw-animation-iteration-count, 1) var(--tw-animation-direction, normal) var(--tw-animation-fill-mode, none));
+  --animate-collapsible-down: var(--motion-off, collapsible-down var(--tw-animation-duration, var(--tw-duration, .2s)) var(--tw-ease, ease-out) var(--tw-animation-delay, 0s) var(--tw-animation-iteration-count, 1) var(--tw-animation-direction, normal) var(--tw-animation-fill-mode, none));
+  --animate-collapsible-up: var(--motion-off, collapsible-up var(--tw-animation-duration, var(--tw-duration, .2s)) var(--tw-ease, ease-out) var(--tw-animation-delay, 0s) var(--tw-animation-iteration-count, 1) var(--tw-animation-direction, normal) var(--tw-animation-fill-mode, none));
+  --animate-accordion-down: var(--motion-off, accordion-down var(--tw-animation-duration, var(--tw-duration, .2s)) var(--tw-ease, ease-out) var(--tw-animation-delay, 0s) var(--tw-animation-iteration-count, 1) var(--tw-animation-direction, normal) var(--tw-animation-fill-mode, none));
+  --animate-accordion-up: var(--motion-off, accordion-up var(--tw-animation-duration, var(--tw-duration, .2s)) var(--tw-ease, ease-out) var(--tw-animation-delay, 0s) var(--tw-animation-iteration-count, 1) var(--tw-animation-direction, normal) var(--tw-animation-fill-mode, none));
+
   --animate-sweep: radar-sweep 2s linear infinite;
   /* The busy spinner. Ours, beside the others, rather than Tailwind's
    * `animate-spin` default — so there is one place to change how a wait
@@ -675,6 +711,10 @@
     --motion-fast: 0ms;
     --motion-slow: 0ms;
     --motion-morph: 0ms;
+    /* No duration and no animation either: an enter/exit animation that is
+     * promised and never runs strands the element Radix is waiting on. See
+     * `--animate-out` above. */
+    --motion-off: none;
   }
 }
 

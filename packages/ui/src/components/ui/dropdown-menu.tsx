@@ -2,6 +2,7 @@ import type * as React from "react";
 import { CheckIcon, ChevronRightIcon, CircleIcon } from "lucide-react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 
+import { useExitPresence } from "@/components/ui/exit-presence";
 import { cn } from "@/lib/utils";
 import { useDirection } from "@/hooks/use-direction";
 import { logicalSide } from "@/theme/direction";
@@ -34,12 +35,15 @@ function DropdownMenuContent({
   sideOffset = 6,
   side = "bottom",
   collisionPadding = 8,
+  ref,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
   const direction = useDirection();
+  const contentRef = useExitPresence<HTMLDivElement>(ref);
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
+        ref={contentRef}
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         side={logicalSide(side, direction)}
@@ -207,10 +211,13 @@ function DropdownMenuSubTrigger({
 
 function DropdownMenuSubContent({
   className,
+  ref,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
+  const contentRef = useExitPresence<HTMLDivElement>(ref);
   return (
     <DropdownMenuPrimitive.SubContent
+      ref={contentRef}
       data-slot="dropdown-menu-sub-content"
       className={cn(
         "z-50 min-w-[8rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden p-1",

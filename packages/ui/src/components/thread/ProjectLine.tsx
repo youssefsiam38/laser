@@ -16,7 +16,6 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { useLaserStable, useLaserState } from "@/runtime";
-import { useDialogPresence } from "./dialog-presence.js";
 import { FILE_CHANGING_TOOLS, deltaParts, githubCompareUrl, pullRequestCommands, subscribeProjectGitRefresh } from "./project-git.js";
 import { useSessionUpdates } from "./session-updates.js";
 
@@ -99,9 +98,9 @@ export function ProjectLine({ className }: { className?: string | undefined }) {
   const cwd = useLaserState((s) => (s.current ? s.open[s.current]?.state.cwd : undefined));
   const path = useLaserState((s) => s.current);
   const git = useProjectGit(cwd, path);
-  // Presence, not just `open`: a closed Radix dialog only leaves the document
-  // when its exit animation ends (`dialog-presence.ts`).
-  const pr = useDialogPresence();
+  // The shared dialog owns leaving the document, including the reduced-motion
+  // exit that never ends (`components/ui/exit-presence.ts`).
+  const [pr, setPr] = useState(false);
 
   if (!git || !git.isRepo) return null;
   const delta = deltaParts(git.added, git.removed);
@@ -152,11 +151,11 @@ export function ProjectLine({ className }: { className?: string | undefined }) {
       ) : null}
       {canPr ? (
         <>
-          <Button variant="link" size="xs" className="h-4 shrink-0 gap-1 text-xs" onClick={() => pr.show()}>
+          <Button variant="link" size="xs" className="h-4 shrink-0 gap-1 text-xs" onClick={() => setPr(true)}>
             <GitPullRequestArrow aria-hidden="true" className="size-3" />
             Create PR
           </Button>
-          {pr.mounted ? <CreatePrDialog git={git} open={pr.open} onOpenChange={(next) => { if (!next) pr.hide(); }} /> : null}
+          <CreatePrDialog git={git} open={pr} onOpenChange={(next) => { if (!next) setPr(false); }} />
         </>
       ) : null}
     </div>

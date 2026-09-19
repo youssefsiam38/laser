@@ -85,9 +85,13 @@ describe("every preset (T5: the default must be good, and so must the rest)", ()
       it("writes only measurable colours, pixel sizes and reading measures", () => {
         const vars = compileVars(preset);
         for (const [k, v] of Object.entries(vars)) {
-          if (k.startsWith("--shadow") || k.startsWith("--font") || k === "--motion-ease" || k === "color-scheme" || k === "--text-scale") continue;
+          // `--motion-off` is a switch, not a measure: `none` with Motion
+          // reduced, `initial` (guaranteed-invalid, so `var()` takes the real
+          // animation) otherwise. It is checked as one, just below.
+          if (k.startsWith("--shadow") || k.startsWith("--font") || k === "--motion-ease" || k === "color-scheme" || k === "--text-scale" || k === "--motion-off") continue;
           expect(v, k).toMatch(/^(#[0-9a-f]{6}|[\d.]+px|[\d.]+ms|[\d.]+ch)$/);
         }
+        expect(vars["--motion-off"], "--motion-off").toBe(preset.motion === "reduced" ? "none" : "initial");
       });
     });
   }

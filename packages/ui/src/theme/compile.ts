@@ -158,6 +158,17 @@ export function compileVars(theme: Theme): Record<string, string> {
   vars["--radius"] = `${RADIUS_BASE[theme.radius]}px`;
 
   const off = theme.motion === "reduced";
+  // Motion reduced turns the animations off, it does not make them instant.
+  // A zero-duration animation still computes `animation-name: exit`, but no
+  // animation is ever created for it and no `animationend` is ever delivered
+  // — and Radix `Presence` keeps a closing dialog, sheet, popover, menu or
+  // collapsible in the document until it hears one. `--motion-off` is what
+  // the enter/exit utilities indirect through (`globals.css`): `none` here,
+  // and the guaranteed-invalid `initial` otherwise, so `var()` falls back to
+  // the real animation. Written on every theme, so the compiled theme at
+  // `:root[data-theme]` never leaves the `prefers-reduced-motion` block's
+  // value in place when the person has asked for motion.
+  vars["--motion-off"] = off ? "none" : "initial";
   vars["--motion-instant"] = off ? "0ms" : `${DURATIONS.instant}ms`;
   vars["--motion-fast"] = off ? "0ms" : `${DURATIONS.fast}ms`;
   vars["--motion-slow"] = off ? "0ms" : `${DURATIONS.slow}ms`;

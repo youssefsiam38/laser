@@ -1,6 +1,7 @@
 import type * as React from "react";
 import { Popover as PopoverPrimitive } from "radix-ui";
 
+import { useExitPresence } from "@/components/ui/exit-presence";
 import { cn } from "@/lib/utils";
 import { useDirection } from "@/hooks/use-direction";
 import { logicalSide } from "@/theme/direction";
@@ -20,12 +21,15 @@ function PopoverContent({
   side = "bottom",
   collisionPadding = 8,
   container,
+  ref,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Content> & { container?: HTMLElement | null | undefined }) {
   const direction = useDirection();
+  const contentRef = useExitPresence<HTMLDivElement>(ref);
   return (
     <PopoverPrimitive.Portal container={container}>
       <PopoverPrimitive.Content
+        ref={contentRef}
         data-slot="popover-content"
         align={align}
         dir={direction}

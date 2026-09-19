@@ -1,6 +1,7 @@
 import type * as React from "react";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
 
+import { useExitPresence } from "@/components/ui/exit-presence";
 import { cn } from "@/lib/utils";
 import { useDirection } from "@/hooks/use-direction";
 import { logicalSide } from "@/theme/direction";
@@ -33,12 +34,15 @@ function TooltipContent({
   sideOffset = 6,
   side = "top",
   children,
+  ref,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
   const direction = useDirection();
+  const contentRef = useExitPresence<HTMLDivElement>(ref);
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
+        ref={contentRef}
         data-slot="tooltip-content"
         sideOffset={sideOffset}
         side={logicalSide(side, direction)}
