@@ -2,7 +2,7 @@
 /** Settings → Projects: one Bash pre-command per known project. */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, FolderKanban } from "lucide-react";
-import type { ProjectEnvStatus, ProjectInfo } from "@lasercode/protocol";
+import { AGENT_ISOLATION_DEFAULT, type AgentIsolationDefault, type ProjectEnvStatus, type ProjectInfo } from "@lasercode/protocol";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,11 +14,13 @@ import { cn } from "@/lib/utils";
 import { useCapability, useLaserStable } from "@/runtime";
 import { CapabilityNotice } from "@/components/capability-gate";
 
+import { Segmented } from "./appearance/controls.js";
 import { Empty } from "./SettingsScreen.js";
 
 export function ProjectsTab() {
   const { client, projectInfo } = useLaserStable();
   const execution = useCapability("pi/project/env/set", { presentation: "explained" });
+  const isolation = useCapability("pi/project/isolation/set", { presentation: "explained" });
   const projects = useMemo(
     () => Object.values(projectInfo).sort((a, b) => a.name.localeCompare(b.name) || a.cwd.localeCompare(b.cwd)),
     [projectInfo],
@@ -69,6 +71,11 @@ export function ProjectsTab() {
     return answer.status;
   }, [client]);
 
+  const saveIsolation = useCallback(async (cwd: string, value: AgentIsolationDefault) => {
+    const answer = await client.request("pi/project/isolation/set", { cwd, isolation: value });
+    return answer.project.agentIsolation ?? AGENT_ISOLATION_DEFAULT;
+  }, [client]);
+
   if (projects.length === 0) {
     return <Empty title="No projects yet" body="Open a project and it will appear here." />;
   }
@@ -79,11 +86,14 @@ export function ProjectsTab() {
         <div className="flex flex-col gap-1">
           <h2 className="text-base font-semibold text-ink">Projects</h2>
           <p className="text-xs leading-5 text-ink-3">
-            Give any project one optional command to prepare its shell. Each project keeps its own setting.
+            Give any project one optional command to prepare its shell, and choose how agents are isolated. Each project keeps its own settings.
           </p>
         </div>
         {execution.state === "explained" ? (
           <CapabilityNotice title="Project setup changes are unavailable here" explanation={execution.explanation ?? "Use a connection with execution access to change project setup."} />
+        ) : null}
+        {isolation.state === "explained" ? (
+          <CapabilityNotice title="Agent isolation cannot be changed here" explanation={isolation.explanation ?? "Use a connection with settings access to change how agents are isolated."} />
         ) : null}
         <div className="flex flex-col gap-2">
           {projects.map(project => (
@@ -93,7 +103,9 @@ export function ProjectsTab() {
               status={statuses[project.cwd]}
               loadError={failures[project.cwd]}
               writable={execution.state === "available"}
+              isolationWritable={isolation.state === "available"}
               onSave={save}
+              onIsolation={saveIsolation}
             />
           ))}
         </div>
@@ -107,24 +119,54 @@ function ProjectSection({
   status,
   loadError,
   writable,
+  isolationWritable,
   onSave,
+  onIsolation,
 }: {
   project: ProjectInfo;
   status: ProjectEnvStatus | undefined;
   loadError: string | undefined;
   writable: boolean;
+  isolationWritable: boolean;
   onSave: (cwd: string, command: string) => Promise<ProjectEnvStatus>;
+  onIsolation: (cwd: string, value: AgentIsolationDefault) => Promise<AgentIsolationDefault>;
 }) {
   const [open, setOpen] = useState(false);
   const [command, setCommand] = useState("");
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; error?: boolean }>();
+  const [isolation, setIsolation] = useState<AgentIsolationDefault>(project.agentIsolation ?? AGENT_ISOLATION_DEFAULT);
+  const [isolationNote, setIsolationNote] = useState<{ text: string; error?: boolean }>();
 
   useEffect(() => {
     if (dirty || !status) return;
     setCommand(status.config?.preface ?? "");
   }, [dirty, status]);
+
+  useEffect(() => {
+    setIsolation(project.agentIsolation ?? AGENT_ISOLATION_DEFAULT);
+  }, [project.agentIsolation]);
+
+  const changeIsolation = async (value: AgentIsolationDefault) => {
+    const previous = isolation;
+    setIsolation(value);
+    setIsolationNote(undefined);
+    try {
+      const saved = await onIsolation(project.cwd, value);
+      setIsolation(saved);
+      setIsolationNote({
+        text: saved === "isolate"
+          ? "Saved. New agents isolate when they can, and refuse when they cannot."
+          : saved === "share"
+            ? "Saved. New agents share this checkout unless they ask for strict isolation."
+            : "Saved. Each agent chooses: isolate if this workspace can, or share it.",
+      });
+    } catch (error) {
+      setIsolation(previous);
+      setIsolationNote({ text: error instanceof Error ? error.message : "That setting could not be saved.", error: true });
+    }
+  };
 
   const configured = Boolean(status?.config?.preface);
   const olderConfig = Boolean(status?.config?.command && !status.config.preface);
@@ -179,6 +221,19 @@ function ProjectSection({
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="hairline-t flex flex-col gap-3 px-3 py-4 sm:ps-14">
+          <div className={cn(!isolationWritable && "pointer-events-none opacity-60")}>
+            <Segmented
+              label="Agents"
+              value={isolation}
+              onChange={value => { if (isolationWritable) void changeIsolation(value); }}
+              options={[
+                { value: "isolate", label: "Isolate agents", detail: "start_agent isolates a child when this workspace can, and refuses when it cannot." },
+                { value: "share", label: "Share my checkout", detail: "New agents work in this checkout unless they pass worktree strict." },
+                { value: "decide", label: "Decide per agent", detail: "The caller's worktree argument decides. True isolates when it can; false shares." },
+              ]}
+            />
+          </div>
+          {isolationNote && <p className={cn("text-xs leading-5", isolationNote.error ? "text-danger" : "text-ink-2")} role={isolationNote.error ? "alert" : "status"}>{isolationNote.text}</p>}
           <label className="flex flex-col gap-1.5" htmlFor={`project-command-${project.cwd}`}>
             <span className="text-xs font-medium text-ink-2">Command to run before Bash</span>
             <Input
