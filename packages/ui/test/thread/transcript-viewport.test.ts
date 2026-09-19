@@ -895,7 +895,15 @@ describe("scoped transcript destinations", () => {
     }
   });
 
-  it("pushes a top reader by the exact unabsorbed height of a merged page", async () => {
+  // Policy corrected in M16-T85. This test used to require the reader at the
+  // top to be pushed down by the height a merged page did not absorb, which is
+  // what the estimate arithmetic produced. A merged group starts where its
+  // oldest folded row started, so the content under a reader at scrollTop 0 is
+  // the same content before and after the fold: it grows downwards, away from
+  // them. Writing the unabsorbed height there moved them into text they had
+  // already read — the push this milestone exists to remove. The range still
+  // has to grow by the unabsorbed height; only the person stays put.
+  it("keeps a top reader on the same content when a merged page measures taller", async () => {
     const frames = new Map<number, FrameRequestCallback>(); let frameId = 0;
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
     vi.stubGlobal("cancelAnimationFrame", (id: number) => { frames.delete(id); });
@@ -920,6 +928,8 @@ describe("scoped transcript destinations", () => {
 
       viewport.scrollTop = 0; viewport.dispatchEvent(new Event("scroll")); controller.capture();
       const before = { top: viewport.scrollTop, height: viewport.scrollHeight, reserve: controller.reserveHeight };
+      const trace: { from: number; to: number }[] = [];
+      (globalThis as { __laserScrollTrace?: unknown[] }).__laserScrollTrace = trace;
       controller.beginEarlierPage();
       ids = ["merged-head", "tail"]; controller.setIds(ids);
       const merged = document.createElement("div");
@@ -928,14 +938,17 @@ describe("scoped transcript destinations", () => {
       controller.setHistoryWindow(0, 1, undefined); controller.finishEarlierPage(); controller.committed();
       await step();
       const after = { top: viewport.scrollTop, height: viewport.scrollHeight };
-      expect(after.height).toBeGreaterThanOrEqual(before.height - 1);
-      // Height also loses the floor the range keeps while a cursor remains, and
-      // that floor is compensated in its own frame: the reader's movement is
-      // the insertion minus what the estimate gave back, within a pixel.
-      expect(Math.abs((after.top - before.top) - (after.height - before.height)))
-        .toBeLessThanOrEqual(1 + Math.abs(before.reserve - controller.reserveHeight));
+      // The merged group is taller than the rows it folded, so the scroll range
+      // grows by that difference, less the floor the estimate was still holding.
+      expect(after.height - before.height).toBeGreaterThanOrEqual(900 - 584 - before.reserve - 1);
+      // And the person has not moved: the merged head begins exactly at the
+      // top edge of the viewport, where the oldest row it folded began, and
+      // the controller moved the viewport not at all to put it there.
+      expect(merged.getBoundingClientRect().top).toBe(0);
+      expect(after.top).toBe(before.top);
+      expect(trace.filter(write => Math.abs(write.to - write.from) >= 0.5)).toEqual([]);
       expect(controller.earlierPageFallbackCount).toBe(0);
-    } finally { detach(); viewport.remove(); vi.unstubAllGlobals(); }
+    } finally { detach(); viewport.remove(); delete (globalThis as { __laserScrollTrace?: unknown[] }).__laserScrollTrace; vi.unstubAllGlobals(); }
   });
 
   it("keeps the reader's row still when a replacing page measures taller than its estimate", async () => {
@@ -1159,7 +1172,14 @@ describe("upward reading geometry", () => {
     } finally { scope.dispose(); }
   });
 
-  it("invariant 2: an under-estimated page inserts only its surplus above the reader", async () => {
+  // Policy corrected in M16-T85: the estimate arithmetic used to write the
+  // surplus of an under-estimated page to `scrollTop` while the reader was
+  // inside the placeholder. On the person's real session that is the push
+  // itself — a wheel notch upwards answered by the view moving down, page
+  // after page. A reader inside the estimate has no loaded row to hold still,
+  // so the arriving rows fill the placeholder they are looking at and nothing
+  // is written; the range still gains the surplus (D-302).
+  it("invariant 2: an under-estimated page fills the placeholder without moving the reader", async () => {
     const scope = rig({ path: "/reserve-surplus", ids: ["tail"], height: () => 400, clientHeight: 300 });
     scope.controller.setHistoryWindow(1, 1, "cursor-a");
     try {
@@ -1178,7 +1198,8 @@ describe("upward reading geometry", () => {
       await scope.step();
 
       const inserted = 1200 - (before.reserve - scope.controller.reserveHeight);
-      expect(Math.abs((scope.viewport.scrollTop - before.top) - inserted)).toBeLessThanOrEqual(1);
+      expect(inserted).toBeGreaterThan(0);
+      expect(scope.viewport.scrollTop).toBe(before.top);
       expect(scope.controller.reserveHeight).toBeGreaterThan(0);
     } finally { scope.dispose(); }
   });
