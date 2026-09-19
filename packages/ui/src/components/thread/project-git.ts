@@ -6,6 +6,20 @@
 /** Tools whose completion can change the working tree, so the git line re-reads after the turn. */
 export const FILE_CHANGING_TOOLS: ReadonlySet<string> = new Set(["edit", "write", "bash"]);
 
+const gitRefreshListeners = new Set<() => void>();
+
+/** Ask the project line to re-read after a restore (it does not see a turn settle). */
+export function requestProjectGitRefresh(): void {
+  for (const listener of [...gitRefreshListeners]) listener();
+}
+
+export function subscribeProjectGitRefresh(listener: () => void): () => void {
+  gitRefreshListeners.add(listener);
+  return () => {
+    gitRefreshListeners.delete(listener);
+  };
+}
+
 export interface GitHubRemote {
   owner: string;
   repo: string;
