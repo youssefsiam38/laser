@@ -143,6 +143,42 @@ function insertBefore<T>(held: readonly T[], incoming: readonly T[], boundary: s
   return at < 0 ? [...incoming, ...held] : [...held.slice(0, at), ...incoming, ...held.slice(at)];
 }
 
+/**
+ * The record a page's cursor names is a row of the conversation whether or not
+ * this view holds it whole. A turn page begins at its prompt, and a prompt too
+ * large for the page's body bound is delivered as a stub, not an entry — so the
+ * next earlier page is anchored at an id that `entries` does not contain. Read
+ * as "not held", that anchor put the page at the front of everything, ahead of
+ * the stub's own row, and every page after it was inserted behind that row:
+ * an eighteen-kilobyte prompt from the middle of a conversation sat above its
+ * first message, as an empty bubble with "Show full message" (the 0.11.0
+ * screenshot). The boundary in `entries` for a stubbed anchor is the first held
+ * record that continues it: its child, or the child of a stub that descends
+ * from it. Only an anchor nothing here descends from belongs at the front.
+ */
+function entryBoundaryOf(view: Pick<SessionView, "entries" | "stubs">, anchor: string): string {
+  if (view.entries.some(entry => entryId(entry) === anchor)) return anchor;
+  const stubs = new Map((view.stubs ?? []).map(stub => [stub.id, stub] as const));
+  if (!stubs.has(anchor)) return anchor;
+  // Walk down through stubs only: the first record held whole under the anchor
+  // is where the anchor's row stands among `entries`.
+  const frontier = new Set([anchor]);
+  for (let depth = 0; depth < stubs.size + 1 && frontier.size > 0; depth += 1) {
+    for (const entry of view.entries) {
+      const parent = (entry as { parentId?: unknown } | null)?.parentId;
+      if (typeof parent === "string" && frontier.has(parent)) {
+        const id = entryId(entry);
+        if (id) return id;
+      }
+    }
+    const next = new Set<string>();
+    for (const stub of stubs.values()) if (stub.parentId && frontier.has(stub.parentId)) next.add(stub.id);
+    frontier.clear();
+    for (const id of next) frontier.add(id);
+  }
+  return anchor;
+}
+
 type ActiveAncestry = { kind: "complete" } | { kind: "gap"; before: string } | { kind: "unknown" };
 
 /** Prove the active ancestry whole, or name its first missing parent. */
@@ -326,7 +362,8 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
       const allWireStubs = (action.window.elided ?? []).map(stubOfElided);
       const wireStubs = allWireStubs.filter(stub => !ids.has(stub.id));
       const incomingStubs = mergeStubs(retained.stubs, wireStubs);
-      const entries = insertBefore(v.entries, retained.entries, action.anchor, entryId);
+      const entryBoundary = entryBoundaryOf(v, action.anchor);
+      const entries = insertBefore(v.entries, retained.entries, entryBoundary, entryId);
       const projectedStubs = mergeStubs(projected.stubs, allWireStubs);
       const blockIds = new Set(v.blocks.map(block => block.id));
       const pageBlocks = blocksFromEntries(projected.entries, undefined, modelNamesOf(v.state), { stubs: projectedStubs, revision: action.window.revision })
@@ -338,9 +375,12 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
         // be the entry boundary without owning a block. Insert before the first
         // rendered block at or after that boundary; when the retained suffix is
         // entirely invisible, its visible predecessor belongs at the end.
-        const boundary = v.entries.findIndex(entry => entryId(entry) === action.anchor);
+        const boundary = v.entries.findIndex(entry => entryId(entry) === entryBoundary);
         // No entry boundary: the page precedes everything rendered here.
         const suffix = new Set(boundary < 0 ? v.entries.map(entryId) : v.entries.slice(boundary).map(entryId));
+        // An anchor held as a stub owns a block of its own, and the page goes
+        // in front of that block, not behind it.
+        if (entryBoundary !== action.anchor) suffix.add(action.anchor);
         const found = v.blocks.findIndex(block => "entryId" in block && suffix.has(block.entryId));
         const at = found < 0 ? (boundary < 0 ? 0 : v.blocks.length) : found;
         blocks = [...v.blocks.slice(0, at), ...pageBlocks, ...v.blocks.slice(at)];
@@ -394,20 +434,18 @@ let nextToken = 0;
 /** Every read one rendered surface can ask for; scoped surfaces have their own. */
 export type HistoryReads = ReturnType<typeof createHistoryLoader>;
 
-/** One request owner for tail/all reads, generation adoption and cursor recovery. */
+/**
+ * One request owner for tail reads, generation adoption and cursor recovery.
+ *
+ * Nothing here ever asks for the whole conversation. `{ all: true }` is an
+ * indivisible read the producer refuses past one page, which for a person is
+ * every conversation long enough to matter, and the refusal had a sentence of
+ * its own that a person could be shown. The transcript is read in turn pages
+ * that cannot be refused for size; other versions of a message come from a
+ * bounded window of that message's siblings (D-340). There is no whole-read
+ * path left to refuse, and no sentence for it.
+ */
 const STALE_BASE_MESSAGE = "This conversation changed since that page was read. Re-read recent messages to continue.";
-/** The worker's API-caller sentence for an indivisible `{ all }` / `{ from }` that cannot fit. */
-const WHOLE_CONVERSATION_TOO_LARGE =
-  "That part of this conversation is too large to send at once. Open it and read it a page at a time.";
-const WHOLE_CONVERSATION_TOO_LARGE_FOR_PERSON =
-  "This conversation is too large to load all at once. Load earlier messages a page at a time instead.";
-
-function rewriteHistoryError(error: unknown): unknown {
-  if (!error || typeof error !== "object" || !("message" in error)) return error;
-  if ((error as { message?: unknown }).message !== WHOLE_CONVERSATION_TOO_LARGE) return error;
-  (error as { message: string }).message = WHOLE_CONVERSATION_TOO_LARGE_FOR_PERSON;
-  return error;
-}
 
 /**
  * What one earlier-history request came to: whether it added rows to the
@@ -447,14 +485,14 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     return () => accepting() && (generations.get(path) ?? 0) === generation && deps.get(path)?.historyRevision === revision
       && (deps.get(path)?.hydrationEpoch ?? 0) === hydration;
   };
-  const read = async (path: string, all = false, accepting: () => boolean = () => true, legacySeq?: number, policy?: "recent" | "reread" | "refresh", allowDelta = true): Promise<void> => {
+  const read = async (path: string, accepting: () => boolean = () => true, legacySeq?: number, policy?: "recent" | "reread" | "refresh", allowDelta = true): Promise<void> => {
     if (!accepting()) return;
     if (policy === "recent" || policy === "reread") generations.set(path, (generations.get(path) ?? 0) + 1);
     const active = fence(path, accepting);
     const pending = policy === "recent" || policy === "reread" ? undefined : reads.get(path);
     if (pending) {
       await pending;
-      if (!active() || !all || hasCompleteTree(deps.get(path))) return;
+      return;
     }
     const token = String(++nextToken);
     const expectSeq = deps.get(path)?.lastSeq ?? 0;
@@ -466,12 +504,12 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     /** A proved suffix the fold refused: the same read is spent again, once. */
     let refusedDelta = false;
     const work = (async () => {
-      const window: HistoryWindowRequest = all ? { all: true } : { turns: HISTORY_FIRST_PAGE_TURNS };
+      const window: HistoryWindowRequest = { turns: HISTORY_FIRST_PAGE_TURNS };
       // The durable revision this view still holds, when it holds one whole
       // (RP-9): the host may then answer the tail as a proved suffix instead of
       // a replacement. A cache-painted view holds no window, so it asks for a
       // replacement and gets one.
-      const base = allowDelta && !all ? deltaBaseOf(deps.get(path)) : undefined;
+      const base = allowDelta ? deltaBaseOf(deps.get(path)) : undefined;
       // RP-5b: this surface cannot hold a body larger than its excerpt bound,
       // so every page it asks for leaves those bodies out and lists the records
       // that carry them — which is also what lets a page of a conversation with
@@ -506,11 +544,11 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
       deps.track(path, deps.get(path)?.lastSeq ?? 0);
     })();
     reads.set(path, work);
-    try { await work; } catch (error) { if (active()) throw rewriteHistoryError(error); } finally {
+    try { await work; } catch (error) { if (active()) throw error; } finally {
       deps.dispatch({ type: "historyEnd", path, token });
       if (reads.get(path) === work) reads.delete(path);
     }
-    if (refusedDelta) await read(path, false, accepting, legacySeq, policy === "reread" ? "reread" : "recent", false);
+    if (refusedDelta) await read(path, accepting, legacySeq, policy === "reread" ? "reread" : "recent", false);
   };
 
   /**
@@ -526,13 +564,6 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
       || !view.hydrated || view.provisional !== undefined) return undefined;
     return base;
   };
-  const all = async (path: string, accepting: () => boolean): Promise<boolean> => {
-    const active = fence(path, accepting);
-    if (!active()) return false;
-    if (!reads.has(path) && deps.get(path)?.history && hasCompleteTree(deps.get(path))) return true;
-    await read(path, true, active);
-    return active() && hasCompleteTree(deps.get(path));
-  };
   /**
    * Ask the producer for one bounded page ending before the retained entry.
    * This is the only recovery for a lost or stale cursor: it extends the view
@@ -543,8 +574,8 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     return result.entries.some(entry => !known.has(entryId(entry))) || (result.window?.elided ?? []).some(stub => !known.has(stub.id));
   };
   const refuseStaleBase = (path: string, error: unknown): void => {
-    const rewritten = rewriteHistoryError(error) as { message?: unknown } | null;
-    const message = typeof rewritten?.message === "string" && rewritten.message ? rewritten.message : STALE_BASE_MESSAGE;
+    const raw = error as { message?: unknown } | null;
+    const message = typeof raw?.message === "string" && raw.message ? raw.message : STALE_BASE_MESSAGE;
     deps.dispatch({ type: "historyPageRefused", path, cause: "stale-base", message });
   };
   const recoverEarlier = async (path: string, accepting: () => boolean): Promise<EarlierPage> => {
@@ -606,14 +637,9 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     return accepted ? { accepted, bytes: pageBytes(result.entries) } : NO_EARLIER_PAGE;
   };
   const metadata = (path: string, accepting: () => boolean): Promise<void> =>
-    deps.get(path)?.hydrated ? read(path, false, accepting, undefined, "refresh") : Promise.resolve();
-  const ensure = async (path: string, entryId: string, accepting: () => boolean): Promise<void> => {
-    const view = deps.get(path);
-    if (view?.entries.some(entry => (entry as { id?: string }).id === entryId) || !view?.history || hasCompleteTree(view)) return;
-    await read(path, true, accepting);
-  };
-  const recent = (path: string, accepting: () => boolean, legacySeq?: number) => read(path, false, accepting, legacySeq, "recent");
-  const reread = (path: string, accepting: () => boolean) => read(path, false, accepting, undefined, "reread");
+    deps.get(path)?.hydrated ? read(path, accepting, undefined, "refresh") : Promise.resolve();
+  const recent = (path: string, accepting: () => boolean, legacySeq?: number) => read(path, accepting, legacySeq, "recent");
+  const reread = (path: string, accepting: () => boolean) => read(path, accepting, undefined, "reread");
   /**
    * Replace what a trim released, if the replacement really contains what the
    * surface is standing on (RP-5b §7).
@@ -679,5 +705,5 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     }
   };
 
-  return { read, recent, reread, all, earlier, metadata, ensure, reconcile };
+  return { read, recent, reread, earlier, metadata, reconcile };
 }

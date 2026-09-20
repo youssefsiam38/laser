@@ -200,12 +200,16 @@ export interface LaserActions {
   loadMoreSessions(cwd: string): Promise<boolean>;
   allSessionSummaries(): Promise<SessionSummary[]>;
   expandCatalog(): () => void;
-  refreshEntries(options?: { tail?: boolean }): Promise<void>;
+  /**
+   * Refresh the conversation's recent tail as a proved suffix of what is held.
+   * This is a bounded read: nothing in this window ever asks for the whole
+   * conversation, which the producer refuses past one page (D-340).
+   */
+  refreshEntries(): Promise<void>;
   /** One earlier page: whether it added rows, and its size, for a caller pacing itself. */
   loadEarlierEntries(): Promise<EarlierPage>;
   /** Explicitly accept a bounded current-tail re-read after an old page base is refused. */
   rereadHistory(): Promise<void>;
-  loadAllEntries(): Promise<boolean>;
   /** Refresh cross-app allowance for the session's account provider. */
   refreshAccountUsage(): Promise<void>;
   goal(action: GoalAction): Promise<void>;
@@ -1069,7 +1073,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         // session's recent tail, before anything older can be mounted again.
         const history = options.policy === "recent" ? historyLoader.recent(path, accepting, loadedSeq)
           : (!hydrated || needsResync || options.refreshHistory)
-          ? readHistory(path, false, accepting, loadedSeq) : Promise.resolve();
+          ? readHistory(path, accepting, loadedSeq) : Promise.resolve();
         void client.request("session/goal/get", { path }).then(({ goal }) => {
           if (accepting()) dispatch({ type: "goal", path, goal });
         }).catch(() => {});
@@ -1480,16 +1484,6 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * inside the Beam bubble sets Beam's model, not the main session's.
    */
   const buildActions = useCallback((readScoped: () => AppState, history: HistoryReads = historyLoader): LaserActions => {
-    /**
-     * The one thing this window refuses while it is short of memory, recorded
-     * once and refused before any request leaves the process (RP-8, D-265).
-     * Every bounded read, every reconnect and every mutation stays available.
-     */
-    const refuseWholeTranscript = (): void => {
-      if (pressure.admits("whole_transcript")) return;
-      pressure.refused("whole_transcript");
-      throw new PressureRefusedError("whole_transcript", PRESSURE_REFUSAL_MESSAGES.whole_transcript);
-    };
     const requireCurrent = (): string => {
       const snapshot = readScoped();
       const path = snapshot.current;
@@ -1525,10 +1519,12 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       }
     };
 
-    const ensureEntry = async (path: string, entryId: string) => {
-      await history.ensure(path, entryId, () => readScoped().current === path);
+    // The engine, not a client-side tree projection, validates a move's
+    // target: an entry this window has not paged in — another version's leaf,
+    // say — is as good a target as one on screen, and every move re-reads the
+    // recent tail of wherever it landed. Nothing is fetched to "make sure".
+    const ensureEntry = async (path: string, _entryId: string) => {
       if (requireCurrent() !== path) throw new Error("The conversation changed. Choose the message again.");
-      // The engine, not a client-side tree projection, validates the target.
     };
 
     const fork = async (entryId: string, options?: MoveOptions) => {
@@ -1689,27 +1685,14 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         void catalogLoader.refresh().catch(onError);
         return () => { release(); void refreshSessions(); };
       },
-      refreshEntries: (options) =>
+      refreshEntries: () =>
         guard(async () => {
-          // The whole tree, every branch and every version, is the largest read
-          // this window makes; under pressure it is the one thing it will not
-          // start (RP-8 step 7). Refused before anything is asked for, so no
-          // request is sent and nothing here changes. A manual refresh is not
-          // an exception to the policy — there is no way to force it.
-          if (!options?.tail) refuseWholeTranscript();
           const path = requireCurrent();
           if (moving.current.has(path)) return;
           const epoch = openEpochs.current.get(path);
           const accepting = () => !moving.current.has(path) && openEpochs.current.get(path) === epoch;
-          if (!options?.tail) { await history.read(path, true, accepting); return; }
           await history.metadata(path, accepting);
         }).then(() => undefined),
-      loadAllEntries: () => guard(async () => {
-        refuseWholeTranscript();
-        const path = requireCurrent();
-        const epoch = openEpochs.current.get(path);
-        return history.all(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
-      }).then(Boolean),
       loadEarlierEntries: () => guard(async () => {
         const path = requireCurrent();
         const epoch = openEpochs.current.get(path);

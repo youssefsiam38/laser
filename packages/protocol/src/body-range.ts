@@ -988,6 +988,8 @@ export interface ElidedEntry {
   id: string;
   parentId: string | null;
   type: string;
+  /** When the record was written, as the record itself says. A row without it would date itself to the moment it was drawn. */
+  timestamp?: string;
   role?: string;
   /** The call a `toolResult` answers, so a client can put its row back. */
   toolCallId?: string;
@@ -1146,6 +1148,7 @@ export function elideOversizedEntries(
       id,
       parentId: typeof value.parentId === "string" ? value.parentId : null,
       type: typeof value.type === "string" ? value.type : "",
+      ...(typeof value.timestamp === "string" ? { timestamp: value.timestamp } : {}),
       ...(typeof record(value.message).role === "string" ? { role: record(value.message).role as string } : {}),
       ...(typeof record(value.message).toolCallId === "string" ? { toolCallId: record(value.message).toolCallId as string } : {}),
       ...(entryToolCalls(entry).length > 0 ? { toolCalls: entryToolCalls(entry) } : {}),

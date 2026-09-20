@@ -4,7 +4,7 @@ import type { TelemetryHistory } from "@lasercode/protocol";
 
 import { CheckpointHistory } from "@/components/assistant-ui/elements/checkpoint-history";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import { useLaserStable, useLaserState, useSessionMeta, useWholeTranscriptRefusal } from "@/runtime";
+import { useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
 import { useShell } from "@/components/shell/shell-context.js";
 import { historyRows } from "@/components/shell/model.js";
 
@@ -21,7 +21,6 @@ export function HistorySection({ history }: { history?: TelemetryHistory | undef
     return Boolean(page && (!page.complete || page.branchesUnloaded));
   });
   const { actions } = useLaserStable();
-  const wholeTranscript = useWholeTranscriptRefusal();
   const meta = useSessionMeta();
   const shell = useShell();
   const entries = useLaserState((s) => (s.current ? s.open[s.current]?.entries : undefined));
@@ -42,7 +41,7 @@ export function HistorySection({ history }: { history?: TelemetryHistory | undef
   const path = meta.path;
   const running = meta.running;
   useEffect(() => {
-    if (shell.historyOpen && path) void refresh.current({ tail: true });
+    if (shell.historyOpen && path) void refresh.current();
   }, [shell.historyOpen, path, running]);
 
   return (
@@ -57,10 +56,9 @@ export function HistorySection({ history }: { history?: TelemetryHistory | undef
       action={
         shell.historyOpen ? (
           <TooltipIconButton
-            tooltip={wholeTranscript.paused ? "Refresh paused while this window is low on memory" : "Refresh history"}
+            tooltip="Refresh history"
             size="icon-xs"
             className="text-ink-3"
-            disabled={wholeTranscript.paused}
             onClick={() => void actions.refreshEntries()}
           >
             <RefreshCw />
@@ -79,11 +77,6 @@ export function HistorySection({ history }: { history?: TelemetryHistory | undef
         <Datum label="Branches" value={history ? count(history.branches) : "—"} />
       </dl>
       {partial && !history ? <p className="mb-3 px-3 text-xs leading-xs text-ink-2">{count(rows.length)} loaded</p> : null}
-      {wholeTranscript.paused && (
-        <p data-slot="history-refresh-paused" className="mb-3 px-3 text-sm text-ink-2">
-          {wholeTranscript.explanation}
-        </p>
-      )}
       <CheckpointHistory
         rows={rows}
         busy={meta.running || meta.compacting}

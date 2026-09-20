@@ -102,6 +102,7 @@ export function stubOfElided(elided: ElidedEntry): EntryStub {
     id: elided.id,
     parentId: elided.parentId,
     type: elided.type,
+    ...(elided.timestamp !== undefined ? { at: elided.timestamp } : {}),
     ...(elided.role !== undefined ? { role: elided.role } : {}),
     ...(elided.toolCallId !== undefined ? { toolCallId: elided.toolCallId } : {}),
     ...(elided.toolCalls ? { toolCalls: elided.toolCalls } : {}),

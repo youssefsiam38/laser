@@ -64,9 +64,6 @@ export interface MessageActionsProps extends Omit<ComponentProps<"div">, "childr
   /** Copy the session file's path. */
   onCopyPath?: (() => void) | undefined;
   onViewRequest?: (() => void) | undefined;
-  onLoadHistory?: (() => void) | undefined;
-  /** Why the whole-tree action is present but unavailable right now. */
-  loadHistoryRefusal?: string | undefined;
   /** A `RegenerateMenu`, when the message can be re-run. */
   regenerate?: ReactNode;
   /**
@@ -79,7 +76,7 @@ export interface MessageActionsProps extends Omit<ComponentProps<"div">, "childr
 /** What the tree actions mean while a turn runs, said once. */
 const STOPS_REPLY = "stops the reply";
 
-export function MessageActions({ copied, onCopy, copyLabel, onEdit, onRegenerate, onRegenerateFork, onFork, onJump, onCopyPath, onViewRequest, onLoadHistory, loadHistoryRefusal, regenerate, busy = false, className, ...props }: MessageActionsProps) {
+export function MessageActions({ copied, onCopy, copyLabel, onEdit, onRegenerate, onRegenerateFork, onFork, onJump, onCopyPath, onViewRequest, regenerate, busy = false, className, ...props }: MessageActionsProps) {
   const aui = useAui();
   const more = useRef<HTMLButtonElement>(null);
   const quoteAtOpen = useRef<TranscriptSelectionQuote | undefined>(undefined);
@@ -142,16 +139,7 @@ export function MessageActions({ copied, onCopy, copyLabel, onEdit, onRegenerate
                 Try again in a new session
               </DropdownMenuItem>
             ) : null}
-            {onFork || onJump || onLoadHistory || loadHistoryRefusal ? <DropdownMenuLabel>Session tree</DropdownMenuLabel> : null}
-            {loadHistoryRefusal ? (
-              <DropdownMenuItem disabled className="items-start whitespace-normal">
-                <GitFork className="mt-0.5" />
-                <span className="flex max-w-sm flex-col gap-1">
-                  <span>Load history and versions</span>
-                  <span className="text-xs leading-xs text-ink-2">{loadHistoryRefusal}</span>
-                </span>
-              </DropdownMenuItem>
-            ) : onLoadHistory ? <DropdownMenuItem onSelect={onLoadHistory}><GitFork />Load history and versions</DropdownMenuItem> : null}
+            {onFork || onJump ? <DropdownMenuLabel>Session tree</DropdownMenuLabel> : null}
             {onFork ? (
               <DropdownMenuItem onSelect={onFork}>
                 <GitFork />

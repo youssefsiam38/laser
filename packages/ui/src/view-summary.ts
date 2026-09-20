@@ -183,6 +183,34 @@ export interface TrimResult {
   releasedPrompts: number;
 }
 
+/**
+ * Walking up from the conversation's leaf through what is retained, the first
+ * record whose parent is not: where the released region begins on the active
+ * branch. `undefined` when the branch is whole back to its root, or when there
+ * is no producer-owned leaf to walk from.
+ */
+function firstMissingParent(entries: readonly unknown[], stubs: readonly { id: string; parentId: string | null }[], leafId: string | null | undefined): string | undefined {
+  if (typeof leafId !== "string") return undefined;
+  const parents = new Map<string, string | null>();
+  for (const entry of entries) {
+    const id = idOfEntry(entry);
+    const parent = (entry as { parentId?: unknown } | null)?.parentId;
+    if (id) parents.set(id, typeof parent === "string" ? parent : null);
+  }
+  for (const stub of stubs) parents.set(stub.id, stub.parentId);
+  const visited = new Set<string>();
+  let id: string | null = leafId;
+  while (id !== null) {
+    if (visited.has(id)) return undefined;
+    visited.add(id);
+    if (!parents.has(id)) return undefined;
+    const parent: string | null = parents.get(id) ?? null;
+    if (parent !== null && !parents.has(parent)) return id;
+    id = parent;
+  }
+  return undefined;
+}
+
 export function trimView(view: SessionView, options: TrimOptions, at: string): TrimResult {
   const none: TrimResult = { view, releasedBlocks: 0, releasedBytes: 0, releasedPrompts: 0 };
   if (view.dormant !== undefined) return none;
@@ -217,9 +245,30 @@ export function trimView(view: SessionView, options: TrimOptions, at: string): T
   // and has not read back yet — is nobody's to drop.
   const releasedIds = new Set(view.blocks.flatMap((block, index) =>
     held.has(index) ? [] : entryIdOf(block) ? [entryIdOf(block)!] : []));
-  const entries = view.entries.filter(entry => !releasedIds.has(idOfEntry(entry) ?? ""));
-  const stubs = (view.stubs ?? []).filter(stub => !releasedIds.has(stub.id));
-  const anchor = entries.length > 0 ? idOfEntry(entries[0]) : undefined;
+  let entries = view.entries.filter(entry => !releasedIds.has(idOfEntry(entry) ?? ""));
+  let stubs = (view.stubs ?? []).filter(stub => !releasedIds.has(stub.id));
+  // The recovery anchor is the first retained record on the active branch
+  // whose parent went — the row the producer is asked for the page before.
+  // It is not simply the first record left in `entries`: a record with no row
+  // of its own (a model change, a compaction, a custom record) is released by
+  // no block and so survived the cut wherever it was, and once the person had
+  // read back to the start of the conversation the survivor at the front was
+  // the session's very first record. Recovery anchored there found nothing
+  // before it and stopped, while every row between it and the retained tail
+  // was gone: the transcript sat at a mid-turn cut and would not scroll up.
+  const gap = firstMissingParent(entries, stubs, view.leafId);
+  if (gap !== undefined) {
+    // Survivors above the gap that no held row references are the released
+    // region's, not this window's; a held row above the cut keeps its record.
+    const heldIds = new Set(blocks.flatMap(block => entryIdOf(block) ? [entryIdOf(block)!] : []));
+    const gapAt = entries.findIndex(entry => idOfEntry(entry) === gap);
+    if (gapAt > 0) {
+      const above = new Set(entries.slice(0, gapAt).flatMap(entry => { const id = idOfEntry(entry); return id && !heldIds.has(id) ? [id] : []; }));
+      entries = entries.filter(entry => !above.has(idOfEntry(entry) ?? ""));
+      stubs = stubs.filter(stub => heldIds.has(stub.id) || !above.has(stub.id));
+    }
+  }
+  const anchor = gap ?? (entries.length > 0 ? idOfEntry(entries[0]) : undefined);
   const { history, ...rest } = view;
   let window: SessionView["history"];
   if (history) {

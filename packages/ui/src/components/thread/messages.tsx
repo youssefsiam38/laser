@@ -10,8 +10,8 @@ import { AGENT_COMPLETION_DATA_PART, AGENT_EVENT_DATA_PART, GOAL_DATA_PART, TASK
 import type { GoalRecord as GoalRecordData } from "@/runtime/goal-history";
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentPropsWithoutRef } from "react";
 import { useTranscriptViewport } from "./transcript-viewport.js";
-import { useThreadWholeTranscriptRefusal } from "./whole-transcript-refusal.js";
 import { useTranscriptPresentation } from "@/runtime/LaserProvider";
+import { useMessageVersions } from "./message-versions.js";
 import { MessageEditPresentation } from "@/runtime/transcript-presentation";
 import { useFileOpener } from "@/lib/file-opener";
 import { attachmentFile, describeMediaType } from "@/components/preview/media";
@@ -201,7 +201,6 @@ export function UserMessage() {
   const leafId = useLeafId();
   const userOffset = useUserOffset();
   const partialHistory = usePartialHistory();
-  const wholeTranscript = useThreadWholeTranscriptRefusal();
   const id = useAuiState(s => s.message.id);
   const presentation = useTranscriptPresentation();
   const viewport = useTranscriptViewport();
@@ -242,9 +241,22 @@ export function UserMessage() {
     [entries, leafId, ordinal, userOffset, optimistic, persistedEntryId],
   );
   // Every version of this prompt, oldest first: editing it in place, and
-  // running its reply again, both leave the previous one here.
-  const versions = useMemo(() => (entryId ? versionsOf(entries, entryId) : []), [entries, entryId]);
-  const versionIndex = entryId ? versions.indexOf(entryId) : -1;
+  // running its reply again, both leave the previous one here. The loaded
+  // tree knows the ones it holds; while the conversation is partial the
+  // producer's bounded sibling window says how many there are in all, and
+  // where each one's branch ends, without the whole conversation ever being
+  // read (D-340). A version is reached through its own leaf — navigating onto
+  // the prompt itself would put the session before it instead of on it.
+  const loadedVersions = useMemo(() => (entryId ? versionsOf(entries, entryId) : []), [entries, entryId]);
+  const window = useMessageVersions(path, entryId, partialHistory);
+  const versions = useMemo<ReadonlyArray<{ id: string; leafId: string | undefined }>>(
+    () => window
+      ? window.leaves.map(leaf => ({ id: leaf.id, leafId: leaf.leafId }))
+      : loadedVersions.map(id => ({ id, leafId: undefined })),
+    [window, loadedVersions],
+  );
+  const versionCount = window ? window.total : loadedVersions.length;
+  const versionIndex = entryId ? versions.findIndex(version => version.id === entryId) : -1;
   const { quote, rest } = useMemo(() => splitLeadingQuote(text), [text]);
   const opener = useFileOpener();
   const { problem: attachmentProblem, openRegionFile, openAttachment } = usePromptAttachments({ path, files, refs: promptBodies?.files, opener });
@@ -400,27 +412,26 @@ export function UserMessage() {
         <MessageFooter className="ms-0 me-0 h-auto min-h-6 justify-end">
           {navigateCapability.state === "available" ? <MessageBranches
             {...(versionIndex >= 0 ? { index: versionIndex } : {})}
-            count={versions.length}
+            count={versionCount}
             busy={busy}
             onIndexChange={(i) => {
-              // A version is reached through its own last entry: navigating
-              // onto a prompt would put the session before it instead of on it.
-              const target = versions[i];
+              // The window carried fewer versions than exist when it had to
+              // shrink; the count is still honest, and the arrows walk what
+              // can be reached from here.
+              const target = versions[i % Math.max(1, versions.length)];
               if (target) {
                 // Jump, not navigate: a version whose leaf is an unanswered
                 // prompt hands that text back, and it belongs in the composer.
                 const location = viewport.startAction();
-                const branchLeaf = leafOf(entries, target);
+                const branchLeaf = target.leafId ?? leafOf(entries, target.id);
                 void actions.jump(branchLeaf).then(moved => {
-                  if (moved) void viewport.afterAction(location, { messageId: `entry:${target}`, leafId: branchLeaf });
+                  if (moved) void viewport.afterAction(location, { messageId: `entry:${target.id}`, leafId: branchLeaf });
                 });
               }
             }}
           /> : null}
           <UndoTurn turn={ordinal} entryId={entryId} at={requestAt} className={hoverReveal} />
           <MessageActions
-            onLoadHistory={partialHistory && !wholeTranscript.paused ? () => void actions.loadAllEntries() : undefined}
-            loadHistoryRefusal={partialHistory ? wholeTranscript.explanation : undefined}
             className={hoverReveal}
             copied={copied || copiedPartial}
             copyLabel={copying ? "Copying the whole message…" : copiedPartial ? "Copied what is shown" : undefined}
@@ -704,8 +715,6 @@ function AssistantFooter() {
   const entries = useEntries();
   const leafId = useLeafId();
   const userOffset = useUserOffset();
-  const partialHistory = usePartialHistory();
-  const wholeTranscript = useThreadWholeTranscriptRefusal();
   const busy = useAuiState((s) => s.thread.isRunning);
   const model = useLaserState((s) => (s.current ? s.open[s.current]?.state.model ?? null : null));
   const thinking = useLaserState((s) => (s.current ? s.open[s.current]?.state.thinkingLevel : undefined));
@@ -747,8 +756,6 @@ function AssistantFooter() {
   return (
     <MessageFooter>
       <MessageActions
-        onLoadHistory={partialHistory && !wholeTranscript.paused ? () => void actions.loadAllEntries() : undefined}
-        loadHistoryRefusal={partialHistory ? wholeTranscript.explanation : undefined}
         className={hoverReveal}
         copied={copied || copiedPartial}
         copyLabel={copying ? "Copying the whole reply…" : copiedPartial ? "Copied what is shown" : undefined}

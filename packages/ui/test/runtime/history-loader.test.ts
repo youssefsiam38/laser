@@ -26,7 +26,7 @@ describe("history request ownership", () => {
     const f = fixture(request);
     await f.loader.read(state.path, true);
     expect(f.view().blocks).toHaveLength(80);
-    await f.loader.read(state.path, false, () => true, undefined, "recent");
+    await f.loader.read(state.path, () => true, undefined, "recent");
     expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { turns: HISTORY_FIRST_PAGE_TURNS }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision: scope.revision });
     const expected = historyWindow(source, { turns: HISTORY_FIRST_PAGE_TURNS }, scope);
     expect(f.view().entries).toEqual(expected.entries);
@@ -435,7 +435,7 @@ describe("history request ownership", () => {
     const f = fixture(request);
     await f.loader.read(state.path);
     const expanding = f.loader.all(state.path, () => true);
-    const resetting = f.loader.read(state.path, false, () => true, undefined, "recent");
+    const resetting = f.loader.read(state.path, () => true, undefined, "recent");
     expect(request.mock.calls.map(([p]) => p.window)).toEqual([{ turns: HISTORY_FIRST_PAGE_TURNS }, { all: true }, { turns: HISTORY_FIRST_PAGE_TURNS }]);
     await resetting;
     const accepted = f.view();
@@ -456,7 +456,7 @@ describe("history request ownership", () => {
     const before = f.view().history!.before!;
     hold = true;
     const stale = f.loader[kind](state.path, () => true);
-    await f.loader.read(state.path, false, () => true, undefined, "recent");
+    await f.loader.read(state.path, () => true, undefined, "recent");
     const accepted = f.view();
     expect(accepted.history?.before).toBe(before);
     const obsolete = { type: "message", id: "obsolete", parentId: "e79", message: { role: "assistant", content: "abandoned branch" } };
