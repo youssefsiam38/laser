@@ -85,7 +85,13 @@ export function ChangesRail({
           <p className="text-sm leading-sm text-ink-3">Viewed on this device.</p>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        data-slot="changes-rail-scroll"
+        role="region"
+        aria-label="File list"
+        tabIndex={0}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live"
+      >
         {repos.map((repo) => (
           <RepoGroup
             key={repo.repo || "unknown"}

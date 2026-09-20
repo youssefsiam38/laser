@@ -116,6 +116,7 @@ it("closes a tab with the pointer and from the keyboard, and keeps the name type
     await Promise.resolve();
   });
   expect(tabs()).toHaveLength(2);
+  expect(overlay().querySelector('[data-slot="changes-tabs"]')?.className).toMatch(/\boverscroll-contain\b/);
 
   // The name is mono and keeps its extension even when the stem ellipsizes.
   const selected = tabs().find((tab) => tab.getAttribute("aria-selected") === "true")!;
@@ -163,6 +164,10 @@ it("draws the tree with hairline rails, a quiet tick that answers pointer and ke
   await mount();
   await open({ scope: { kind: "session" } });
   const rail = overlay().querySelector<HTMLElement>('[data-slot="changes-rail"]')!;
+  const list = rail.querySelector<HTMLElement>('[data-slot="changes-rail-scroll"]')!;
+  expect(list.tabIndex).toBe(0);
+  expect(list.className).toMatch(/\boverflow-y-auto\b/);
+  expect(list.className).toMatch(/\boverscroll-contain\b/);
   const tree = rail.querySelector('[role="tree"]')!;
   const items = [...tree.querySelectorAll('[role="treeitem"]')];
   expect(items.length).toBeGreaterThan(0);

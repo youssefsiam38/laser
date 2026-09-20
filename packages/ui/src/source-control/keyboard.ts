@@ -21,6 +21,23 @@ export function isEditingTarget(target: EventTarget | null): boolean {
 }
 
 /**
+ * A focused overflow region — the diff, the file list, a stacked image — must
+ * keep ArrowUp/ArrowDown for native scrolling. `j`/`k` still cycle files.
+ */
+export function isOverlayScrollTarget(event: KeyboardEvent): boolean {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return false;
+  const nodes: EventTarget[] = typeof event.composedPath === "function" ? event.composedPath() : [];
+  if (event.target) nodes.push(event.target);
+  for (const node of nodes) {
+    if (!(node instanceof HTMLElement)) continue;
+    const slot = node.dataset.slot;
+    if (slot === "changes-diff-scroll" || slot === "changes-rail-scroll") return true;
+    if (node.getAttribute("role") === "region" && node.tabIndex >= 0) return true;
+  }
+  return false;
+}
+
+/**
  * Overlay shortcuts. Find and close still fire while typing in the find field;
  * file/hunk motion does not.
  */
@@ -41,8 +58,14 @@ export function overlayKeyAction(
 
   if (editing) return undefined;
 
-  if (!mod && !event.altKey && (key === "ArrowDown" || lower === "j")) return "next-file";
-  if (!mod && !event.altKey && (key === "ArrowUp" || lower === "k")) return "prev-file";
+  if (!mod && !event.altKey && (key === "ArrowDown" || lower === "j")) {
+    if (key === "ArrowDown" && isOverlayScrollTarget(event)) return undefined;
+    return "next-file";
+  }
+  if (!mod && !event.altKey && (key === "ArrowUp" || lower === "k")) {
+    if (key === "ArrowUp" && isOverlayScrollTarget(event)) return undefined;
+    return "prev-file";
+  }
   if (!mod && !event.altKey && key === "]") return "next-hunk";
   if (!mod && !event.altKey && key === "[") return "prev-hunk";
   if (!mod && !event.altKey && lower === "v") return "toggle-viewed";

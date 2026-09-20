@@ -565,7 +565,7 @@ function ChangesOverlay() {
         {chrome === "phone" ? (
           <Sheet open={ui.treeOpen} onOpenChange={setTreeOpen}>
             <SheetContent side="left" className="p-0">
-              <SheetTitle className="hairline-b px-3 py-2 text-sm font-semibold text-ink">Changed files</SheetTitle>
+              <SheetTitle className="shrink-0 hairline-b px-3 py-2 text-sm font-semibold text-ink">Changed files</SheetTitle>
               <div className="flex min-h-0 flex-1 flex-col">{rail}</div>
             </SheetContent>
           </Sheet>

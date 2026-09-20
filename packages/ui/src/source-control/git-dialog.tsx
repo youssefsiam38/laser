@@ -124,7 +124,7 @@ function GitConfirmation({ confirmation }: { confirmation: GitActionConfirmation
       {confirmation.files?.length ? (
         /* One hairline above the list, not a box around it: the dialog is
            already the card this sits in. */
-        <ul className="max-h-32 overflow-y-auto hairline-t pt-2">
+        <ul className="max-h-32 overflow-y-auto overscroll-contain hairline-t pt-2">
           {confirmation.files.map((file) => (
             <li key={file} className="typed truncate text-ink-2">
               {file}
@@ -243,7 +243,7 @@ export function GitActionDialog() {
 function GitActionBody({ kind, repo }: { kind: GitActionKind; repo: string }) {
   return (
     <DialogContent
-      className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg"
+      className="max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain sm:max-w-lg"
       showCloseButton={false}
       data-slot="git-action-dialog"
       data-kind={kind}

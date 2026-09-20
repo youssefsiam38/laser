@@ -33,7 +33,7 @@ export function ChangesNotice({
   return (
     <div
       data-slot="changes-notice"
-      className={cn("flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 py-6", className)}
+      className={cn("flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain px-4 py-6", className)}
       {...rest}
     >
       <h2 className="text-md font-semibold text-ink">{title}</h2>
