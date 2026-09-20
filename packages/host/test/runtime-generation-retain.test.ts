@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -10,8 +10,10 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,6 +57,40 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 const token = (): string => randomBytes(16).toString("hex");
 const sha = (bytes: string | Buffer): string => createHash("sha256").update(bytes).digest("hex");
 const lockFixture = fileURLToPath(new URL("./runtime-generation-retain-lock-fixture.mjs", import.meta.url));
+
+function viteNodeCli(): string {
+  const require = createRequire(import.meta.url);
+  return createRequire(require.resolve("vitest/package.json")).resolve("vite-node/vite-node.mjs");
+}
+
+function spawnFixture(mode: string, retainDir: string, extra: string[] = []): ChildProcess {
+  return spawn(process.execPath, [viteNodeCli(), lockFixture, mode, retainDir, ...extra], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+async function waitPhase(child: ChildProcess, phase: string, label: string): Promise<string> {
+  let output = "";
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} did not reach ${phase}: ${output}`)), 12_000);
+    child.stdout!.setEncoding("utf8");
+    child.stdout!.on("data", (chunk: string) => {
+      output += chunk;
+      if (!output.includes(`"phase":"${phase}"`)) return;
+      clearTimeout(timer);
+      resolve();
+    });
+    child.stderr!.setEncoding("utf8");
+    child.stderr!.on("data", (chunk: string) => { output += chunk; });
+    child.once("exit", (code) => {
+      if (!output.includes(`"phase":"${phase}"`)) {
+        clearTimeout(timer);
+        reject(new Error(`${label} exited ${code}: ${output}`));
+      }
+    });
+  });
+  return output;
+}
 
 function tmp(prefix: string): string {
   const root = mkdtempSync(join(tmpdir(), prefix));
@@ -235,6 +271,40 @@ describe("retain materialization", () => {
       .toBe("worker-moved");
   });
 
+  it("reuses T against an already-bound envelope after R has moved on", () => {
+    const source = packagedFixture("bound");
+    const retainDir = tmp("retain-bound-");
+    const selected = runtimeReferenceFromManifest(source.path);
+    const first = retainRuntimeGeneration({
+      retainDir,
+      selected,
+      manifest: source.manifest,
+      launchId: token(),
+      launcherLeaseId: token(),
+    });
+    writeFileSync(source.worker, "worker-next");
+    writeRuntimeGenerationManifest({
+      installRoot: source.root,
+      files: [source.cli, source.worker, source.node],
+      entries: source.manifest.entries,
+      productVersion: "1.1.0",
+      buildIdentity: "build-next",
+    });
+    const reused = retainRuntimeGeneration({
+      retainDir,
+      selected,
+      manifest: source.manifest,
+      launchId: token(),
+      launcherLeaseId: token(),
+      expectedRetainedDigest: first.retainedDigest,
+    });
+    expect(reused.reference.installRoot).toBe(first.reference.installRoot);
+    expect(reused.retainedDigest).toBe(first.retainedDigest);
+    expect(readFileSync(join(first.reference.installRoot, "resources/app.asar.unpacked/worker.js"), "utf8"))
+      .toBe("worker-bound");
+    expect(() => verifyRetainedRuntimeGeneration(reused.reference, reused.retainedDigest)).not.toThrow();
+  });
+
   it("aborts when the source is overwritten after the fd is opened", () => {
     const source = packagedFixture("race");
     const retainDir = tmp("retain-race-");
@@ -348,6 +418,44 @@ describe("retain materialization", () => {
     rmSync(join(result.reference.installRoot, RUNTIME_SUPPLEMENT_NAME));
     expect(() => verifyRetainedRuntimeGeneration(result.reference, result.retainedDigest))
       .toThrow(RuntimeRetainError);
+  });
+
+  it("orders supplement digest rows by code unit", () => {
+    const rows = [
+      { path: "b", length: 1, sha256: "a".repeat(64), mode: 0o644 },
+      { path: "A", length: 1, sha256: "b".repeat(64), mode: 0o644 },
+      { path: "a", length: 1, sha256: "c".repeat(64), mode: 0o644 },
+    ];
+    const canonical = [...rows]
+      .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))
+      .map((row) => `${row.path}\0${row.length}\0${row.sha256}\0${row.mode}\n`)
+      .join("");
+    expect(runtimeSupplementDigest(rows)).toBe(sha(canonical));
+    expect(runtimeSupplementDigest(rows)).toBe(runtimeSupplementDigest([...rows].reverse()));
+  });
+
+  it("skips incidental .bin symlinks while scanning and does not copy them into T", () => {
+    const source = packagedFixture("binlink");
+    const unpacked = join(source.root, "resources", "app.asar.unpacked");
+    const pkg = join(unpacked, "node_modules", "pkg", "foo.js");
+    const bin = join(unpacked, "node_modules", ".bin", "foo");
+    write(pkg, "module.exports = 1;\n");
+    mkdirSync(dirname(bin), { recursive: true });
+    symlinkSync("../pkg/foo.js", bin);
+    const rows = scanRuntimeSupplement(source.root, source.manifest);
+    expect(rows.some((row) => row.path.includes(".bin"))).toBe(false);
+    expect(rows.map((row) => row.path)).toContain("resources/app.asar.unpacked/node_modules/pkg/foo.js");
+    const result = retainRuntimeGeneration({
+      retainDir: tmp("retain-binlink-"),
+      selected: runtimeReferenceFromManifest(source.path),
+      manifest: source.manifest,
+      launchId: token(),
+    });
+    const t = result.reference.installRoot;
+    expect(existsSync(join(t, "resources/app.asar.unpacked/node_modules/.bin/foo"))).toBe(false);
+    expect(lstatSync(join(t, "resources/app.asar.unpacked/node_modules/pkg/foo.js")).isFile()).toBe(true);
+    expect(lstatSync(join(t, "resources/app.asar.unpacked/node_modules/pkg/foo.js")).isSymbolicLink()).toBe(false);
+    expect(() => verifyRetainedRuntimeGeneration(result.reference, result.retainedDigest)).not.toThrow();
   });
 });
 
@@ -559,6 +667,34 @@ describe("leases and sweep", () => {
     });
     expect(existsSync(executionRoot)).toBe(true);
   });
+
+  it("sweeps a markerless staging directory after a bounded age and never a leased tree", () => {
+    const retainDir = tmp("retain-orphan-staging-");
+    const generationId = "a".repeat(64);
+    const leased = join(retainDir, generationId);
+    mkdirSync(leased, { recursive: true });
+    writeFileSync(join(leased, RUNTIME_RETAINED_MARKER_NAME), "RETAINED\n");
+    acquireRuntimeGenerationLease({
+      retainDir,
+      launchId: token(),
+      launcherLeaseId: token(),
+      generationId,
+      executionRoot: leased,
+      retainedDigest: "b".repeat(64),
+    });
+    const fresh = join(retainDir, `.staging-${generationId}-${"c".repeat(16)}`);
+    mkdirSync(fresh, { recursive: true });
+    writeFileSync(join(fresh, "partial"), "x");
+    const aged = join(retainDir, `.staging-${generationId}-${"d".repeat(16)}`);
+    mkdirSync(aged, { recursive: true });
+    writeFileSync(join(aged, "partial"), "y");
+    const past = Date.now() / 1000 - 120;
+    utimesSync(aged, past, past);
+    sweepRuntimeGenerations({ retainDir });
+    expect(existsSync(leased)).toBe(true);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(aged)).toBe(false);
+  });
 });
 
 describe("store lock", () => {
@@ -581,7 +717,7 @@ describe("store lock", () => {
 
     const held = tmp("retain-live-lock-");
     mkdirSync(held, { recursive: true });
-    const child = spawn(process.execPath, [lockFixture, "hold-lock", held], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnFixture("hold-lock", held);
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("lock holder did not start")), 8_000);
       child.stdout!.setEncoding("utf8");
@@ -611,7 +747,7 @@ describe("store lock", () => {
   it("keeps a just-published leased T while another process sweeps", async () => {
     const source = packagedFixture("overlap");
     const retainDir = tmp("retain-overlap-");
-    const child = spawn(process.execPath, [lockFixture, "sweep-loop", retainDir], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnFixture("sweep-loop", retainDir);
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("sweeper did not start")), 8_000);
       child.stdout!.setEncoding("utf8");
@@ -644,4 +780,98 @@ describe("store lock", () => {
       await new Promise((resolve) => child.once("close", resolve));
     }
   }, 20_000);
+
+  it("refuses adopt/reuse while another process holds the lock without deleting T", async () => {
+    const source = packagedFixture("adopt-lock");
+    const retainDir = tmp("retain-adopt-lock-");
+    const first = retainRuntimeGeneration({
+      retainDir,
+      selected: runtimeReferenceFromManifest(source.path),
+      manifest: source.manifest,
+      launchId: token(),
+      launcherLeaseId: token(),
+    });
+    const t = first.reference.installRoot;
+    const holder = spawnFixture("hold-lock", retainDir);
+    await waitPhase(holder, "ready", "lock holder");
+    try {
+      expect(() => retainRuntimeGeneration({
+        retainDir,
+        selected: runtimeReferenceFromManifest(source.path),
+        manifest: source.manifest,
+        launchId: token(),
+        launcherLeaseId: token(),
+      })).toThrow(RuntimeRetainError);
+      expect(existsSync(t)).toBe(true);
+      expect(existsSync(join(t, RUNTIME_RETAINED_MARKER_NAME))).toBe(true);
+      expect(() => verifyRetainedRuntimeGeneration(first.reference, first.retainedDigest)).not.toThrow();
+    } finally {
+      holder.kill("SIGKILL");
+      await new Promise((resolve) => holder.once("close", resolve));
+    }
+  }, 20_000);
+
+  it("keeps a leased T when sweep races a reuse adopt", async () => {
+    const source = packagedFixture("adopt-sweep");
+    const retainDir = tmp("retain-adopt-sweep-");
+    const first = retainRuntimeGeneration({
+      retainDir,
+      selected: runtimeReferenceFromManifest(source.path),
+      manifest: source.manifest,
+      launchId: token(),
+      launcherLeaseId: token(),
+    });
+    const sweeper = spawnFixture("sweep-loop", retainDir);
+    await waitPhase(sweeper, "ready", "sweeper");
+    try {
+      const reused = retainRuntimeGeneration({
+        retainDir,
+        selected: runtimeReferenceFromManifest(source.path),
+        manifest: source.manifest,
+        launchId: token(),
+        launcherLeaseId: token(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(reused.reference.installRoot).toBe(first.reference.installRoot);
+      expect(existsSync(first.reference.installRoot)).toBe(true);
+      expect(() => verifyRetainedRuntimeGeneration(first.reference, first.retainedDigest)).not.toThrow();
+    } finally {
+      sweeper.kill("SIGTERM");
+      await new Promise((resolve) => sweeper.once("close", resolve));
+    }
+  }, 20_000);
+
+  it("overlapping publish does not delete a leased T the loser failed to match", async () => {
+    const source = packagedFixture("two-prep");
+    const retainDir = tmp("retain-two-prep-");
+    const goFile = join(tmp("retain-gate-"), "go");
+    const configPath = join(tmp("retain-config-"), "retain.json");
+    writeFileSync(configPath, JSON.stringify({
+      selected: runtimeReferenceFromManifest(source.path),
+      manifest: source.manifest,
+      launchId: token(),
+      launcherLeaseId: token(),
+      waitBoundary: "before-publish",
+      goFile,
+    }));
+    const stalled = spawnFixture("retain", retainDir, [configPath]);
+    let stalledOut = await waitPhase(stalled, "before-publish", "stalled publisher");
+    stalled.stdout!.on("data", (chunk: string) => { stalledOut += chunk; });
+    writeFileSync(source.instructions, "instructions-from-winner");
+    const winner = retainRuntimeGeneration({
+      retainDir,
+      selected: runtimeReferenceFromManifest(source.path),
+      manifest: source.manifest,
+      launchId: token(),
+      launcherLeaseId: token(),
+    });
+    writeFileSync(goFile, "go\n");
+    await new Promise<void>((resolve) => { stalled.once("close", () => resolve()); });
+    expect(stalledOut).toContain('"phase":"error"');
+    expect(stalledOut).toContain("failed-changed");
+    expect(existsSync(winner.reference.installRoot)).toBe(true);
+    expect(readFileSync(join(winner.reference.installRoot, "resources/app.asar.unpacked/core-instructions.md"), "utf8"))
+      .toBe("instructions-from-winner");
+    expect(() => verifyRetainedRuntimeGeneration(winner.reference, winner.retainedDigest)).not.toThrow();
+  }, 25_000);
 });
