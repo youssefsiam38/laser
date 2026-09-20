@@ -930,7 +930,7 @@ M21 implementation starts after the person accepts M20's sandbox.
 | M21-T14 | Greenfield design foundation | M21-T10, M21-T11, M21-T13 | proposed tokens/themes/type/icons/layout/motion/component contracts, licence checks, sandbox-only components, approval and implementation ordering; repository unchanged before Build |
 | M21-T15 | Plan DAG and Project Task engine | M21-T1, M21-T3, M21-T8 | dependency validation/cycle refusal, readiness, Task transitions, stale propagation, assignments, conflicts, evidence rules and no automatic run→done transition |
 | M21-T16 | Plans and Tasks workspace | M21-T6, M21-T15 | plan document/graph, Task list/board/detail, filters, dependencies, blockers, attempts and evidence use adopted elements; no fabricated progress, schedule or fleet row |
-| M21-T17 | Model tools and execution linking | M21-T9, M21-T15, M13 | compact tool surface over worker bridge, context packet, feature gating, visible existing/new session choice, agent-run linking, wrong-project refusal and session deletion resilience |
+| M21-T17 | Model tools and execution linking | M21-T9, M21-T15, M13, M26-T1 | compact tool surface over worker bridge conforming to `docs/agent-tool-contract.md`, context packet, feature gating, visible existing/new session choice, agent-run linking, wrong-project refusal and session deletion resilience |
 | M21-T18 | Checkpoints, changes and delivery evidence | M21-T17, M20 | every attempt links M20 base/checkpoints/diffs/commits/PRs; exact artifact revisions gain many-to-many `based_on`, `implemented_by` and `verified_at` repository links; historical identity survives missing objects and gate/done evidence stays reviewable through bounded canonical captures after checkpoint pruning; changed files come from git, destructive actions retain previews/confirmations and multiple repositories stay distinct |
 | M21-T19 | Verification and convergence | M21-T13, M21-T18 | Spec/Design/Plan/Task verifier, browser/native matrices, accessible evidence, deviation workflow, affected-only stale graph and final report; blocking failures cannot read Done |
 | M21-T20 | Cross-session continuity and recovery | M21-T9, M21-T17, M21-T18, M21-T19 | create in one session, revise in another, execute in a third, resume after restart/retirement, archive/delete sessions, relocate project and remove worktree with entity and repository-link identity intact |
@@ -991,3 +991,92 @@ format and every model-choosing surface. Tasks must clear the inventory in
 | M22-T9 | Agents page and CLI | M22-T5 | Agents editor and built-in panels choose profiles with warnings; `doctor` walks every profile model and names the profile; `runs`/`session` print profile and effective model |
 | M22-T10 | Documents, identity guard and reconciliation | M22-T6–M22-T9 | listed docs updated; identity guard flags "chain"/"tier" on person surfaces; `settings-scope-audit.md` rows re-dispositioned; every area in the inventory ticked or moved to a named follow-up |
 | M22-T11 | Migration acceptance and release | M22-T10 | migration run on the person's real settings file with a reviewed preview; pre-migration and post-migration sessions both open; staged gates, clean CI, exact tag, migration notes in the release, Latest verified |
+
+## M23 · Plain Chat
+
+Goal: Beam, Chat and Namer stop being agents. Chat is the plain conversation
+with a three-field prompt; naming is a one-shot request on the naming
+profile; Beam is removed. Binding specification:
+[`docs/plain-chat.md`](docs/plain-chat.md); decision D-347.
+
+Done when: no `builtin` agent kind exists, a new Chat renders exactly the
+three-field prompt, sessions are still named, every Beam surface is gone, old
+Beam and Chat sessions still open, and the release is public.
+
+Dependencies: M22 (profiles carry every model choice this removes).
+
+| Task | Title | Depends on | Acceptance |
+| --- | --- | --- | --- |
+| M23-T0 | Binding contract | — | `docs/plain-chat.md` binding; D-347 recorded; ledger and status updated |
+| M23-T1 | Protocol removal and `sessionKind` | M23-T0, M22-T1 | `AgentKind` is `custom` only; built-in names, states, methods and template fields gone from messages, schemas, policy and instruction-template catalogue; `SessionAgentInfo.sessionKind`; samples updated |
+| M23-T2 | Worker: chat prompt and one-shot naming | M23-T1, M22-T4 | Chat renders exactly `{{availableTools}}\n\n{{toolGuidelines}}\n\n{{availableSkills}}` with no additions; naming is one bounded completion on `namingProfileId`, silent on failure; qualification, `NamerState` and the naming pin are gone; tests prove the rendered prompt byte-for-byte |
+| M23-T3 | Host: no built-ins, Beam re-home | M23-T1 | `builtins.ts` deleted; store/validate/models synthesise nothing; `allowedAgents` naming a removed built-in warns and drops; Beam workspace sessions listed as Chat after start; removed methods unrouted |
+| M23-T4 | UI: remove Beam, plain Chat entry points | M23-T3 | `components/beam/*` deleted with every shell, sidebar, composer, destination, store and theme reference; Chat `+`, palette `New chat` and shortcut start an empty Chat; Agents page lists only person agents with a designed empty state; tests replaced |
+| M23-T5 | Docs, identity guard, gates | M23-T2–M23-T4 | listed docs rewritten; identity guard flags Beam/Namer on person surfaces; browser-check Beam fixtures deleted; `clean-machine.mjs` no longer expects the Beam skill |
+| M23-T6 | Release | M23-T5 | old Beam/Chat sessions open and are named on a real state directory; staged gates, clean CI, exact tag, notes, Latest verified |
+
+## M24 · Ask Oracle
+
+Goal: one-shot, tool-less consultation of a stronger model in a fresh
+context. Binding specification: [`docs/ask-oracle.md`](docs/ask-oracle.md);
+decision D-348.
+
+Done when: any session or agent run can call `ask_oracle` with bounded
+context, the Oracle never sees history or tools, the answer returns as a tool
+result, the caller's model is unchanged, and the release is public.
+
+Dependencies: M22 (`oracleProfileId`), M26-T1 (tool contract), M21-T4 for
+`work`/`repo` context rendering (text-only context may ship first).
+
+| Task | Title | Depends on | Acceptance |
+| --- | --- | --- | --- |
+| M24-T0 | Binding contract | — | `docs/ask-oracle.md` binding; D-348 recorded |
+| M24-T1 | Protocol and tool schema | M24-T0, M26-T1 | `ask_oracle` input/output schemas, annotations, `purpose: "oracle"` on log and usage records; conformance lint passes |
+| M24-T2 | Worker Oracle service | M24-T1, M22-T3 | prompt assembly with caller instructions minus tool fields, provenance-labelled context, budget truncation, profile walk, timeout, cancel-with-turn, stored call keeps digest; tests prove no history and no tools reach the request |
+| M24-T3 | Work and repo context | M24-T2, M21-T4 | `work` and `repo` refs render bounded windows through the host; wrong-project refusal; trust check |
+| M24-T4 | Transcript row, logs, usage | M24-T2 | Oracle tool row with question, expandable answer, profile/model, context provenance and truncation notice; logs tag; usage attribution; both widths and themes; tests |
+| M24-T5 | Docs and release | M24-T3, M24-T4 | `agents.md` §2, `product-boundary.md`, `transcript-reading.md`; staged gates, clean CI, exact tag, Latest verified |
+
+## M25 · External work links
+
+Goal: export lifecycle entities to Jira issues with exact-revision links,
+explicit previewed pushes and no reverse authority. Binding specification:
+[`docs/external-work-links.md`](docs/external-work-links.md); decision D-349.
+
+Done when: a Spec and a Task can each be exported to a Jira issue from the UI
+and from an agent tool, the link records the exact revision, a later revision
+can be pushed explicitly, Jira never changes Laser state, no token ever leaves
+the host, and the release is public.
+
+Dependencies: M21-T3 (host authority), M21-T7 and M21-T16 (entity surfaces),
+M26-T1 (tool contract).
+
+| Task | Title | Depends on | Acceptance |
+| --- | --- | --- | --- |
+| M25-T0 | Binding contract | — | `docs/external-work-links.md` binding; D-349 recorded |
+| M25-T1 | Protocol: links, export methods, integration methods | M25-T0, M21-T1 | `ExternalWorkLink`, `project/work/export/*`, `integrations/jira/*`, closed schemas, policy rows, samples |
+| M25-T2 | Host Jira client and store | M25-T1, M21-T3 | OAuth 3LO with minimum scopes into the keychain, create-meta, issue create/update/transition, issue property and remote link best effort, refresh/detach, link table and migration, deterministic revision rendering, redacted logging; tests with a recorded Jira fixture |
+| M25-T3 | UI: chip, dialogs, integrations tab | M25-T2, M21-T7, M21-T16 | header chip states, create/update/transition dialogs ending in a preview, integrations settings with plain-words scopes, every empty/error state, both widths and themes; Enter never creates |
+| M25-T4 | Agent export tool | M25-T2, M26-T1 | `export_project_work` with preview + idempotency key + confirm digest; wrong-project refusal; conformance fixture |
+| M25-T5 | Security review, docs and release | M25-T3, M25-T4 | threat-model rows, token-never-leaves-host test, `doctor` state; leap cross-references; staged gates, clean CI, exact tag, Latest verified |
+
+## M26 · Tool contract conformance
+
+Goal: every Laser-owned tool obeys one schema, behaviour and
+context-efficiency standard, checked by a lint and an evaluation harness.
+Binding specification:
+[`docs/agent-tool-contract.md`](docs/agent-tool-contract.md); decision D-350.
+
+Done when: the lint runs in `pnpm verify`, every harness and background tool
+passes it, the evaluation harness runs the fixtures across every configured
+profile, and M21-T17, M24 and M25 tools are registered through it.
+
+Dependencies: M22 (profiles for the evaluation matrix). Runs alongside M21.
+
+| Task | Title | Depends on | Acceptance |
+| --- | --- | --- | --- |
+| M26-T0 | Binding contract | — | `docs/agent-tool-contract.md` binding; D-350 recorded |
+| M26-T1 | Protocol lint and shapes | M26-T0 | `ToolAnnotations`, `ToolError`, `toolContract()` lint with tests; one worker registration helper applies it |
+| M26-T2 | Retrofit harness and background tools | M26-T1 | the nine existing tools pass the lint; error shape adopted; surviving deviations recorded as decisions; `agents.md` §2/§6 tables gain annotations |
+| M26-T3 | Evaluation harness | M26-T1, M22-T3 | recorded-response runner over per-tool fixtures across every configured profile measuring schema violations, wrong-tool selection, calls/tokens, retry and unsafe-attempt recovery; optional live run the person starts; not a browser check |
+| M26-T4 | UI error and preview rendering | M26-T1 | tool rows show `committed`/`next`; preview rows reuse the person's preview component; tests |

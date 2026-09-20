@@ -6214,6 +6214,137 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 - 2026-09-21 indexed: `docs/project-lifecycle-leap.md` gains "Companion contracts" naming `model-profiles.md` as binding and listing the outlined-but-unwritten companions (plain Chat and built-in removal, Ask Oracle, Jira external links, agent-facing tool contract); the leap document is the root source of truth for the whole change; execution section states that attempts run on a profile.
 - 2026-09-21 done: `docs/model-profiles.md` is binding (domain, assignments, per-session pin, runtime reuse of M15-T3/T8, migration, bounds, methods, affected-area inventory across protocol/worker/host/UI/CLI/persistence/docs); `PLAN.md` M22 index with the breaking-change summary and eleven dependency-ordered tasks; `docs/model-fallback-chains.md` carries the superseded banner and stays as the runtime record; D-346 recorded. Implementation not started; M22 precedes the built-in agent removal and Ask Oracle, which consume profile ids.
 
+## M23 · Plain Chat
+
+| ID | Task | State | Owner | Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| M23-T0 | Binding contract | done | codex-2026-09-21-model-profiles | `docs/plain-chat.md`; `PLAN.md` M23; D-347 | see notes |
+| M23-T1 | Protocol removal and `sessionKind` | todo | — | — | `PLAN.md` M23 |
+| M23-T2 | Worker: chat prompt and one-shot naming | todo | — | — | `PLAN.md` M23 |
+| M23-T3 | Host: no built-ins, Beam re-home | todo | — | — | `PLAN.md` M23 |
+| M23-T4 | UI: remove Beam, plain Chat entry points | todo | — | — | `PLAN.md` M23 |
+| M23-T5 | Docs, identity guard, gates | todo | — | — | `PLAN.md` M23 |
+| M23-T6 | Release | todo | — | — | `PLAN.md` M23 |
+
+#### M23-T0 notes
+- 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/plain-chat.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M23 tasks added; D-347 recorded. Implementation not started.
+
+## M24 · Ask Oracle
+
+| ID | Task | State | Owner | Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| M24-T0 | Binding contract | done | codex-2026-09-21-model-profiles | `docs/ask-oracle.md`; `PLAN.md` M24; D-348 | see notes |
+| M24-T1 | Protocol and tool schema | todo | — | — | `PLAN.md` M24 |
+| M24-T2 | Worker Oracle service | todo | — | — | `PLAN.md` M24 |
+| M24-T3 | Work and repo context | todo | — | — | `PLAN.md` M24 |
+| M24-T4 | Transcript row, logs, usage | todo | — | — | `PLAN.md` M24 |
+| M24-T5 | Docs and release | todo | — | — | `PLAN.md` M24 |
+
+#### M24-T0 notes
+- 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/ask-oracle.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M24 tasks added; D-348 recorded. Implementation not started.
+
+## M25 · External work links
+
+| ID | Task | State | Owner | Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| M25-T0 | Binding contract | done | codex-2026-09-21-model-profiles | `docs/external-work-links.md`; `PLAN.md` M25; D-349 | see notes |
+| M25-T1 | Protocol: links, export methods, integration methods | todo | — | — | `PLAN.md` M25 |
+| M25-T2 | Host Jira client and store | todo | — | — | `PLAN.md` M25 |
+| M25-T3 | UI: chip, dialogs, integrations tab | todo | — | — | `PLAN.md` M25 |
+| M25-T4 | Agent export tool | todo | — | — | `PLAN.md` M25 |
+| M25-T5 | Security review, docs and release | todo | — | — | `PLAN.md` M25 |
+
+#### M25-T0 notes
+- 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/external-work-links.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M25 tasks added; D-349 recorded. Implementation not started.
+
+## M26 · Tool contract conformance
+
+| ID | Task | State | Owner | Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| M26-T0 | Binding contract | done | codex-2026-09-21-model-profiles | `docs/agent-tool-contract.md`; `PLAN.md` M26; D-350 | see notes |
+| M26-T1 | Protocol lint and shapes | todo | — | — | `PLAN.md` M26 |
+| M26-T2 | Retrofit harness and background tools | todo | — | — | `PLAN.md` M26 |
+| M26-T3 | Evaluation harness | todo | — | — | `PLAN.md` M26 |
+| M26-T4 | UI error and preview rendering | todo | — | — | `PLAN.md` M26 |
+
+#### M26-T0 notes
+- 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/agent-tool-contract.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M26 tasks added; D-350 recorded. Implementation not started.
+
+### D-350 · 2026-09-21 · One contract for every Laser-owned tool
+
+Decision: every tool Laser registers with the engine — harness, background,
+lifecycle, `ask_oracle`, `export_project_work` and any later one — follows
+`docs/agent-tool-contract.md`: intent names, single purpose, closed input and
+declared output schemas, opaque ids, exact revisions with digests, annotations,
+reads without side effects, `expectedRevisionId` and idempotency keys on
+mutations, preview-then-confirm for external or destructive writes, host-side
+authorization, summary-by-default with pagination and references, and
+actionable `{ code, message, committed, next }` errors. A `toolContract()` lint
+in the protocol package and an evaluation harness run across every configured
+Model Profile enforce it (M26). Engine and MCP tools keep only the D-277
+label rule.
+
+Why: the lifecycle adds a tool surface that people and agents share; without
+one standard each tool invents its own error, paging and safety shape, and the
+model's context pays for the inconsistency on every call.
+
+Consequences: M21-T17 depends on M26-T1; existing harness tools are retrofitted
+in M26-T2 with surviving deviations recorded as decisions; the evaluation
+harness is a recorded-response runner, never a browser check (D-342).
+
+### D-349 · 2026-09-21 · Jira is a representation, never a writer
+
+Decision: lifecycle entities export to Jira through explicit, previewed
+actions recorded as `ExternalWorkLink` rows that name the exact Laser revision;
+later pushes and transitions are explicit; nothing flows back into Laser
+state; the host makes every Jira call with least-privilege OAuth tokens held in
+the keychain; Jira text is untrusted data. Binding text:
+`docs/external-work-links.md` (M25).
+
+Why: a second writer would break the leap's single-authority rule; automatic
+sync would invent state neither side approved; tokens in a browser or relay
+client would leak the person's Jira.
+
+Consequences: import from Jira remains the leap's adapter path; links are
+many-to-many and immutable except push and detach state; the agent path uses
+`export_project_work` under the tool contract.
+
+### D-348 · 2026-09-21 · Ask Oracle is a one-shot, tool-less consultation
+
+Decision: `ask_oracle` sends one question plus explicitly chosen, bounded,
+provenance-labelled context to the consultation profile (`oracleProfileId`)
+under the caller's rendered agent instructions minus tool fields; the Oracle
+gets no history, no tools, no filesystem, and its answer returns as a tool
+result; the caller's model, profile, session and fleet are untouched; no
+session or run is created. Binding text: `docs/ask-oracle.md` (M24).
+
+Why: a stronger model in a clean context gives better second opinions than the
+same model with more prompt; hiding the exchange behind a model switch or a
+child agent would break session identity and cost visibility.
+
+Consequences: `work` and `repo` context depends on M21-T4 bounded reads;
+text-only context may ship first; usage and logs tag the request as a
+consultation; the tool is registered under the tool contract.
+
+### D-347 · 2026-09-21 · Beam, Chat and Namer stop being agents
+
+Decision: `AgentKind` loses `builtin`. Chat is a `sessionKind: "chat"` session
+on `defaultProfileId` whose whole instruction template is
+`{{availableTools}}\n\n{{toolGuidelines}}\n\n{{availableSkills}}`. Naming is a
+one-shot completion on `namingProfileId` with no state, qualification or
+prompt editor. Beam is removed entirely, spark included; the Chat tab's `+`,
+the palette and the shortcut are the entry points. Old Beam and Chat sessions
+open as Chat and keep their history. Binding text: `docs/plain-chat.md` (M23).
+
+Why: the built-ins duplicated what profiles and agents now express, carried a
+persona the person did not ask for, and cost three model dialogs, a
+qualification benchmark, a naming pin and a floating launcher to maintain.
+
+Consequences: supersedes `agents.md` §7, M13-T67/T77/T78/T74/T84's Beam and
+Namer behaviours and M18-T17's naming pin as product behaviour (history rows
+stay); depends on M22 so every removed model choice has a profile to land in;
+browser-check Beam fixtures go with Beam.
+
 ### D-346 · 2026-09-21 · One model-routing concept: unlimited Model Profiles
 
 Decision: fallback chains (M15-T3), the proposed three model tiers and the raw

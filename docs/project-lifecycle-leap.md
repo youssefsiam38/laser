@@ -488,8 +488,10 @@ a typed bridge to that authority through one `project-work` companion module;
 nothing above the worker imports Pi and no new bridge package is created.
 
 The compact model tool surface is `inspect_project_work`,
-`write_project_artifact`, `request_project_review` and `report_project_task`.
-Tool descriptions state the current project and revision rules. They are
+`write_project_artifact`, `request_project_review`, `report_project_task` and,
+with M25, `export_project_work`. Every one follows
+[`agent-tool-contract.md`](agent-tool-contract.md). Tool descriptions state
+the current project and revision rules. They are
 feature-gated, carry the normal optional activity label, expose no host paths or
 storage layout and return references rather than large bodies.
 
@@ -607,14 +609,14 @@ with the decisions already taken.
 | --- | --- | --- | --- |
 | Model Profiles | [`model-profiles.md`](model-profiles.md) | binding (M22, D-346) | one model-routing concept: person-named ordered lists, unlimited count, seeded Smart/Balanced/Fast; sessions, agents, naming and consultation choose a profile by stable id; `chainKey` → `profileId`; the breaking-change inventory across protocol, worker, host, UI, CLI, persistence and docs; M22 ships before anything below |
 | Repository provenance | this document, [Repository provenance](#repository-provenance) | binding (D-345) | `RepositoryLink`, stable repository identity, `based_on` / `implemented_by` / `verified_at` / `published_as` |
-| Plain Chat and built-in agent removal | to be written | decided in outline | Beam, Chat and Namer stop being `AgentDefinition`s; Chat is a `sessionKind: "chat"` session on `defaultProfileId` whose whole instruction template is `{{availableTools}}`, `{{toolGuidelines}}`, `{{availableSkills}}`; naming is a one-shot request on `namingProfileId`; open: whether the Beam spark survives as "New Chat" |
-| Ask Oracle | to be written | decided in outline | `ask_oracle` is a one-shot, tool-less consultation on `oracleProfileId` with the caller's agent instructions and trust policy, explicit bounded context only, no history, no session, no fleet row, no model switch; usage and logs attribute it as a consultation |
-| External work links (Jira) | to be written | decided in outline | `ExternalWorkLink` records the exact revision exported to a Jira issue; creation is explicit and previewed, update is explicit, never automatic sync; Jira never approves, completes or mutates Laser work; issue property carries Laser identity, remote link points back; least-privilege OAuth in the keychain |
-| Agent-facing tool contract | to be written | decided in outline | one standard for every lifecycle tool: intent-named, single-purpose, closed schemas, opaque ids, exact revisions with digests, reads separated from mutations, `expectedRevisionId` and idempotency keys, previews for external or destructive writes, host-side authorization, summary-by-default with pagination and references, errors that say what failed, what committed and the next valid action; evaluated across every configured profile |
+| Plain Chat and built-in agent removal | [`plain-chat.md`](plain-chat.md) | binding (M23, D-347) | Beam, Chat and Namer stop being `AgentDefinition`s; Chat is a `sessionKind: "chat"` session on `defaultProfileId` whose whole instruction template is `{{availableTools}}`, `{{toolGuidelines}}`, `{{availableSkills}}`; naming is a one-shot request on `namingProfileId`; Beam and its spark are removed |
+| Ask Oracle | [`ask-oracle.md`](ask-oracle.md) | binding (M24, D-348) | `ask_oracle` is a one-shot, tool-less consultation on `oracleProfileId` with the caller's agent instructions and trust policy, explicit bounded `text`/`work`/`repo` context only, no history, no session, no fleet row, no model switch; usage and logs attribute it as a consultation |
+| External work links (Jira) | [`external-work-links.md`](external-work-links.md) | binding (M25, D-349) | `ExternalWorkLink` records the exact revision exported to a Jira issue; creation, update and transition are explicit and previewed, never automatic sync; Jira never approves, completes or mutates Laser work; issue property carries Laser identity, remote link points back; least-privilege OAuth in the keychain, host-only calls |
+| Agent-facing tool contract | [`agent-tool-contract.md`](agent-tool-contract.md) | binding (M26, D-350) | one standard for every Laser-owned tool: intent-named, single-purpose, closed schemas, opaque ids, exact revisions with digests, annotations, reads separated from mutations, `expectedRevisionId` and idempotency keys, previews for external or destructive writes, host-side authorization, summary-by-default with pagination and references, actionable errors; `toolContract()` lint and an evaluation harness across every configured profile |
 
-A companion moves from "to be written" to binding only through its own
-document, a plan milestone and a decision entry; the outline here does not
-license implementation.
+Every companion is binding through its own document, plan milestone and
+decision entry. Order of landing: M22 → M23 → M26 alongside M21-T17 → M24 →
+M25; M21 implementation stays gated on the person's M20 acceptance.
 
 ## Implementation index
 
