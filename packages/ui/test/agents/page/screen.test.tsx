@@ -859,7 +859,7 @@ describe("Agents page", () => {
     expect(description.value).toBe("Dirty project draft");
   });
 
-  it("does not close a newer workbench target when Start chat resolves late", async () => {
+  it("does not steal a workbench opened after Start chat while session/new is still pending", async () => {
     const original = mocks.stable.actions.newSession.getMockImplementation()!;
     let resolveStart!: (path: string) => void;
     mocks.stable.actions.newSession.mockImplementationOnce(() => new Promise<string>((resolve) => { resolveStart = resolve; }));
@@ -868,12 +868,13 @@ describe("Agents page", () => {
       await act(async () => workbench!.open("agents"));
       await click(q('[data-slot="agent-row"][data-agent="reviewer"][data-scope="global"]'));
       await click(button("Start chat"));
-      await act(async () => { expect(await workbench!.requestSettingsScope({ view: "global" })).toBe(true); });
       await settle();
+      expect(workbench?.page).toBeNull();
+      await act(async () => workbench!.open("agents"));
+      expect(workbench?.page).toBe("agents");
       await act(async () => { resolveStart("/p/new.jsonl"); await Promise.resolve(); });
       await settle();
       expect(workbench?.page).toBe("agents");
-      expect(workbench?.settingsScope).toEqual({ view: "global" });
     } finally {
       mocks.stable.actions.newSession.mockImplementation(original);
     }

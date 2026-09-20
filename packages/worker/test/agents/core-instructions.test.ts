@@ -21,7 +21,7 @@ describe("core instructions", () => {
     expect(source.startsWith("<!--")).toBe(true);
     expect(coreInstructions()).not.toContain("<!--");
     expect(coreInstructions()).toBe(source.replace(/^<!--[\s\S]*?-->/, "").trim());
-    expect(coreInstructions().startsWith("# Core instructions")).toBe(true);
+    expect(coreInstructions().startsWith("You are an expert coding agent")).toBe(true);
     expect(instructionTemplateIssue(source, "agent")).toBeNull();
     for (const field of instructionTemplateFields("agent")) expect(source).toContain(field.key);
     expect(source).not.toContain("{{availableAgents}}");

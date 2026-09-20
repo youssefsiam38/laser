@@ -48,6 +48,7 @@ const stable = vi.hoisted(() => ({
             ref: `refs/product/checkpoints/s/${row.turn}`,
             commit: `c${row.turn}`,
             createdAt: "2026-09-19T00:00:00.000Z",
+            entryId: `u${row.turn + 1}`,
             ...(row.failed ? { failed: true as const } : {}),
           })),
         };

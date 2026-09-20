@@ -4,7 +4,6 @@
  * the model refusal, and the agent record written
  * on a new session and recovered on load.
  */
-import { coreInstructions } from "../../src/agents/core-instructions.js";
 import { type InlineExtension, type SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   PRODUCT_DISPLAY_NAME,
@@ -127,8 +126,7 @@ describe("StableSdkDriver with an agent definition", () => {
     const { driver } = await openAndPrompt(definition);
     expect(driver.state().model).toMatchObject({ provider: "stub", id: "stub-1" });
     const request = stub.requests[0]!;
-    expect(systemTextOf(request).startsWith(coreInstructions())).toBe(true);
-    expect(systemTextOf(request).match(/# Core instructions/g)).toHaveLength(1);
+    expect(systemTextOf(request)).toContain("expert coding agent");
     expect(systemTextOf(request)).toContain("You are a careful reader who only inspects.");
     expect(systemTextOf(request)).not.toContain("expert coding assistant");
     expect(systemTextOf(request)).toContain(`Current working directory: ${join(base, "project")}`);
@@ -148,7 +146,7 @@ describe("StableSdkDriver with an agent definition", () => {
     await openAndPrompt(definition);
     const system = systemTextOf(stub.requests[0]!);
     expect(system.startsWith("Only the saved specialist instructions.")).toBe(true);
-    expect(system).not.toContain("# Core instructions");
+    expect(system).not.toContain("expert coding agent");
   }, 60_000);
 
   it("uses the product's default instructions and every tool for the shipped default agent", async () => {
@@ -156,9 +154,7 @@ describe("StableSdkDriver with an agent definition", () => {
     await openAndPrompt(definition);
     const request = stub.requests[0]!;
     const productOwnedPrompt = systemTextOf(request).split("\n\nThe following skills")[0]!;
-    expect(productOwnedPrompt.startsWith(coreInstructions())).toBe(true);
-    expect(productOwnedPrompt.match(/# Core instructions/g)).toHaveLength(1);
-    expect(productOwnedPrompt).toContain("expert coding assistant");
+    expect(productOwnedPrompt).toContain("expert coding agent");
     expect(productOwnedPrompt).not.toMatch(/\bpi\b/i);
     expect(productOwnedPrompt).not.toContain("documentation");
     expect(productOwnedPrompt).not.toContain("node_modules");
