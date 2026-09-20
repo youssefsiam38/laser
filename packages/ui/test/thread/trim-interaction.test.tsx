@@ -323,7 +323,12 @@ describe("a trim while somebody is reading", () => {
         expect(stable.actions.loadEarlierEntries).toHaveBeenCalledTimes(HISTORY_PREFETCH_PAGE_BUDGET * 2);
       });
     });
-  });
+  // Thirty-two accepted pages, each one an authoritative snapshot this test
+  // renders in full, is real work: on a machine running every package's suite
+  // at once it has taken over seven seconds. The counts above are exact and
+  // stay exact; only the clock is given room, so a release is never decided by
+  // how busy the machine was.
+  }, 30_000);
 
   it("stops a chain of large pages at the byte budget", async () => {
     prefetchSpy?.mockRestore();
