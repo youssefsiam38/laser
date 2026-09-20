@@ -6,12 +6,14 @@
  * answer from `GET /healthz`, because a pid can be reused and a file can
  * outlive a machine crash. The record only tells us *where* to look.
  */
-import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { dirname, join } from "node:path";
+import { isProcessAlive, processIdentity } from "@lasercode/host";
 import { launchIdSchema } from "@lasercode/protocol";
 import type { LaserPaths } from "./config.js";
+
+export { isProcessAlive, processIdentity };
 
 export interface HostRecord {
   pid: number;
@@ -97,51 +99,6 @@ export function writeHostFile(path: string, record: HostRecord): void {
 export function clearHostFile(path: string, expectedLaunchId?: string): void {
   if (expectedLaunchId !== undefined && readHostFile(path)?.launchId !== expectedLaunchId) return;
   rmSync(path, { force: true });
-}
-
-export function isProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM means it exists and belongs to somebody else, which still counts.
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-/**
- * A string that identifies *this run* of a process, so a reused pid cannot be
- * mistaken for it.
- *
- * Linux: the kernel's boot id (a new one per boot) plus field 22 of
- * `/proc/<pid>/stat`, the process start time in clock ticks since boot.
- * Elsewhere: `ps -o lstart=`, which is the start wall-clock time.
- * `undefined` when neither is available — the caller then falls back to the
- * older, weaker "is anything alive at this pid" test and refuses to signal.
- */
-export function processIdentity(pid: number): string | undefined {
-  if (!Number.isInteger(pid) || pid <= 0) return undefined;
-  try {
-    if (process.platform === "linux") {
-      const bootId = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-      // The comm field can contain spaces and parentheses, so parse from the
-      // last ')' — every field after it is space-separated and positional.
-      const after = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      const startTime = after[19]; // field 22 overall, 20th after the state field
-      if (bootId && startTime) return `linux:${bootId}:${startTime}`;
-      return undefined;
-    }
-    const lstart = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
-      encoding: "utf8",
-      timeout: 2000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return lstart ? `ps:${lstart}` : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /**

@@ -33,7 +33,7 @@
 import { DATA_DIR_NAME, ENV, ENV_PREFIX, PRODUCT_NAME } from "@lasercode/protocol";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { HOST_BIND_ADDRESS, HOST_DEFAULT_PORT, defaultAgentDir, defaultStateDir, laserDataDir } from "@lasercode/host";
+import { HOST_BIND_ADDRESS, HOST_DEFAULT_PORT, RUNTIME_RETAIN_DIR_NAME, defaultAgentDir, defaultStateDir, laserDataDir } from "@lasercode/host";
 import type { FlagSpecs, ParsedArgs } from "./args.js";
 import { num, str } from "./args.js";
 import { isProcessAlive, isRecordedProcess, readHostFile } from "./hostfile.js";
@@ -59,6 +59,12 @@ export interface LaserPaths {
   port: number;
   /** True when the port came from a flag or LASER_PORT, not the default. */
   portIsExplicit: boolean;
+  /**
+   * Configured retain parent: `--runtime-retain-dir`, else
+   * `<stateDir>/runtime-generations`. Native preference and the exact selected
+   * parent a daemon binds are decided at launch, not re-derived from this field.
+   */
+  runtimeRetainDir: string;
 }
 
 /** Flags that every command accepts, because every command resolves paths. */
@@ -66,6 +72,12 @@ export const PATH_FLAGS: FlagSpecs = {
   "agent-dir": { type: "string", description: `Agent directory (default <${PRODUCT_NAME} data dir>/agent)`, placeholder: "<dir>" },
   "session-dir": { type: "string", description: "Session storage directory (default <agent-dir>/sessions)", placeholder: "<dir>" },
   "state-dir": { type: "string", description: `${PRODUCT_NAME}'s own state directory (default <${PRODUCT_NAME} data dir>/state)`, placeholder: "<dir>" },
+  "runtime-retain-dir": {
+    type: "string",
+    description: "Retained runtime generation directory",
+    placeholder: "<dir>",
+    hidden: true,
+  },
 };
 
 export const PORT_FLAG: FlagSpecs = {
@@ -111,6 +123,9 @@ export function resolvePaths(parsed: ParsedArgs, env: NodeJS.ProcessEnv = proces
     host: HOST_BIND_ADDRESS,
     port,
     portIsExplicit: portFlag !== undefined || portEnv !== undefined,
+    runtimeRetainDir: expandPath(
+      pick(str(parsed, "runtime-retain-dir")) ?? join(stateDir, RUNTIME_RETAIN_DIR_NAME),
+    ),
   };
 }
 

@@ -53,11 +53,21 @@ export function unitKey(unit: MigrationUnit): string {
   return `${unit.root}:${unit.path}:${unit.type}`;
 }
 
+function rejectedStatePath(path: string): boolean {
+  return path === "migration-state.json"
+    || path.startsWith("migration-snapshots/")
+    || path === "runtime-generations"
+    || path.startsWith("runtime-generations/")
+    || path === "runtime-generation-leases"
+    || path.startsWith("runtime-generation-leases/")
+    || path === ".store.lock";
+}
+
 export function validateUnit(unit: MigrationUnit): void {
   if (!["stateDir", "agentDir", "sessionDir"].includes(unit.root)
     || !safeMigrationPath(unit.path)
     || !["file", "directory"].includes(unit.type)
-    || (unit.root === "stateDir" && (unit.path === "migration-state.json" || unit.path.startsWith("migration-snapshots/")))) {
+    || (unit.root === "stateDir" && rejectedStatePath(unit.path))) {
     throw new Error("The staged update declared an unsafe migration path.");
   }
 }
