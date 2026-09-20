@@ -177,7 +177,11 @@ export function DiffBody({ page, scope, diffStyle }: { page: FileDiffPage; scope
         style={DIFF_HOST_STYLE}
         className="min-h-0 min-w-0 flex-1 overflow-hidden"
       >
-        <Virtualizer className="h-full">
+        {/* Pierre's `Virtualizer` renders a plain div and listens for `scroll`
+            on it: it is the scroll container, so it has to be able to scroll.
+            Without an overflow of its own the rows simply overrun the host,
+            which clips them, and a long file cannot be read at all. */}
+        <Virtualizer className="h-full overflow-auto overscroll-contain">
           <FileDiff fileDiff={fileDiff} options={options} disableWorkerPool />
         </Virtualizer>
       </div>

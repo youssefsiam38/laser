@@ -25,7 +25,8 @@ vi.mock("@pierre/diffs/react", () => ({
     captured.push({ options: props.options, fileDiff: props.fileDiff });
     return <div data-slot="pierre-file-diff" />;
   },
-  Virtualizer: ({ children }: { children: React.ReactNode }) => <div data-slot="pierre-virtualizer">{children}</div>,
+  Virtualizer: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+    <div data-slot="pierre-virtualizer" className={className}>{children}</div>,
 }));
 
 /**
@@ -154,6 +155,20 @@ function body(): HTMLElement {
 function notice(): string | null {
   return container.querySelector('[data-slot="changes-expansion-notice"]')?.textContent ?? null;
 }
+
+/**
+ * Pierre's `Virtualizer` is the scroll container: it renders one plain div
+ * and listens for `scroll` on it. Handed no overflow of its own, inside a
+ * host that clips, a long file cannot be scrolled at all — which is exactly
+ * what shipped. The class is the contract here because the renderer itself
+ * is mocked; the browser check is what proves the pixels.
+ */
+it("gives the renderer a scroll container, so a file longer than the overlay can be read", async () => {
+  await mount(sidesAdapter());
+  const virtualizer = container.querySelector<HTMLElement>('[data-slot="pierre-virtualizer"]')!;
+  expect(virtualizer.className).toMatch(/\boverflow-(auto|y-auto)\b/);
+  expect(body().className).toContain("overflow-hidden");
+});
 
 it("never hands the renderer a partial diff and a loader, which is the dead row's only cause", async () => {
   await mount(sidesAdapter());
