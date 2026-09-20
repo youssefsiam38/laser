@@ -1,36 +1,23 @@
-# Laser 0.11.0 — long conversations open, new chats are instant, diffs scroll
+# Laser 0.11.1 — a long conversation is all there, every time
 
-This release is about the three places the app made you wait, guess, or give up.
+Two things 0.11.0 still got wrong on a real ten-megabyte conversation, and one thing it should never have shown you.
 
-## A long conversation opens on what you were doing
+## You can always scroll to the start
 
-Opening a big session used to show you almost nothing: the last forty entries, which on a real 8 MB conversation is thirty-six rows and not a single one of your own prompts. Getting back to your work meant scrolling up, a page at a time, past estimated empty space.
+Leaving a long conversation and coming back could leave it stuck partway: scrolling up did nothing, and everything older than a certain row was simply unreachable until you reloaded. The app frees memory when you leave a session and picks the transcript back up from where it was cut; the bookkeeping for that pickup could anchor itself on a record at the very start of the conversation and conclude there was nothing more to load, while thousands of rows were missing. Fixed. Leave, come back, scroll — it keeps loading, back to the first message, every time.
 
-Now the transcript fills its own screen and keeps about two screens loaded above the one you are reading, without a gesture. Pages are counted in turns, so a page is whole prompts and their answers rather than a fixed number of rows.
+## An oversized message stays where it belongs
 
-It stops when it should: two screens above you, the start of the conversation, or a budget for where you are sitting — whichever comes first. It picks up again when you move.
+A prompt too large to travel inside a page could turn up at the very top of the conversation — above your first message — as an empty bubble with "Show full message". It was a bug in where a page of history was placed when its boundary happened to be one of those oversized messages. It now sits in its own place, and it shows its real time instead of the moment you opened the session.
 
-**Scrolling up during a live turn no longer loses your place.** When the turn finished, the app used to quietly replace what you were reading with the newest ten turns, taking the row under your eye with it. A background refresh now leaves your window exactly as it is.
+## Nothing asks for the whole conversation any more
 
-**"Load all messages" in Find works.** It never did: it asked for the whole conversation in one read, which is refused for anything large — that is, for every conversation big enough to show the button — and the failure went into a notification while the button sat there. It now pages the conversation you are looking at back to its beginning.
+There is no "Load other versions" control, no "Load history and versions" menu item, and no sentence telling you the conversation is too large to load at once. Every one of those asked for the whole conversation in one read, which is refused for exactly the conversations big enough to show them. Other versions of a message are reached from the message itself — the ‹ 1 / 3 › picker beside a prompt now knows every version, including ones on branches you have not scrolled into, and takes you straight there.
 
-## A new chat is local
+## Your own first message stopped appearing twice
 
-Pressing New gives you the finished screen on the next frame: the name, the prompt, the suggestions, the composer, and the microphone. Nothing on it waits for an answer from the backend, and — this is the part that was wrong in 0.10.1 — nothing on it changes when that answer arrives. The conversation no longer reloads under you, the wording no longer swaps, and the header no longer redraws itself a second time.
+On the first turn of a conversation, the message you sent could be left behind a second time at the very bottom of the transcript, dimmed — a copy of your own words that never went away and came back after every refresh. The app keeps what you have sent on screen until the engine has written it down; it recognised the written one by an identifier the two copies never share, so it kept the temporary one for ever. It now recognises the words. Nothing was ever sent twice, and nothing was missing from the conversation.
 
-The microphone is there and pressable before the session exists. It checks the provider and asks for permission when you press it, and tells you in plain words if something is actually missing, instead of being invisible until a check comes back.
+## Also
 
-You can type, dictate, pick a suggestion, and send before anything has settled. Send joins the session already being prepared.
-
-## The Changes overlay scrolls
-
-A diff longer than the window could not be scrolled at all — the content simply ran past the bottom and was clipped. It scrolls now, with the wheel, with a finger, and with the keyboard: Tab into the diff, then Page Down, End and the arrow keys. `j` and `k` still move between files, and a line too long to wrap can be reached sideways. The file list beside it scrolls on its own without dragging the page with it.
-
-## When a model is busy and the conversation is long
-
-Falling back to another model used to give up twice over: "Claude is being rate-limited. Fallback could not help: the conversation is longer than this model can hold." A conversation that does not fit the model taking over is now compacted once, and the turn you asked for continues on that model instead of failing.
-
-## Also in this release
-
-- The agents' shared preamble is shorter, so custom agents inherit less style and keep more of their own.
-- Groundwork for updates that land while the app is running: the generation you are running is retained and kept whole, so a future update cannot leave a half-replaced app behind. The rest of that work continues in the next release.
+- Once you have scrolled up to read, nothing scrolls you back down but you: a new row arriving, a smooth scroll that has not finished, or a row that shrank no longer counts as "back at the end". The Jump to latest pill carries a quiet mark when new rows have arrived below you.

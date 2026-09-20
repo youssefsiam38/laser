@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
 **Last updated:** 2026-09-20T19:45:00+03:00 · orchestrator-2026-09-20-config-root · HEAD: d92c5f6b
-**Current focus:** the person's acceptance pass on the transcript and the new-chat landing; M19-T6 T6B is the next build work.
+**Current focus:** 0.11.0 is published and Latest; the person's acceptance pass on the transcript and the new-chat landing is still outstanding. M19-T6 T6B is the next build work.
 
 | Milestone | State |
 | --- | --- |
