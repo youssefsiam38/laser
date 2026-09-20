@@ -5,7 +5,6 @@ import { RadioGroup } from "radix-ui";
 import { useState, useSyncExternalStore } from "react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
-import { OptionRule } from "@/components/ui/tabs";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,14 +29,7 @@ const OPTIONS: Array<{ id: SettingsScopeView; label: string; description: string
   { id: "effective", label: "Effective", description: "Read-only resolved settings for one chosen project" },
 ];
 
-/**
- * The one visible Settings-scope control, shared by every migrated surface.
- *
- * It wears the product's one idiom (`components/ui/tabs.tsx`): no track behind
- * the row and no filled pill on it — ink and a rule name the scope in play.
- * The markup stays Radix's, rather than the shared control's, because each
- * option owes a tooltip that has to wrap its trigger.
- */
+/** The one visible Settings-scope control, shared by every migrated surface. */
 export function SettingsScopeControls() {
   const { projects, projectInfo } = useLaserStable();
   const logicalKey = useLogicalArrowKeys();
@@ -105,7 +97,7 @@ export function SettingsScopeControls() {
           radio.focus();
           void changeView(option.id);
         }}
-        className="flex items-center gap-0.5"
+        className="flex items-center gap-0.5 rounded-lg bg-surface-2 p-0.5"
       >
         {OPTIONS.map((option) => (
           <Tooltip key={option.id}>
@@ -116,11 +108,10 @@ export function SettingsScopeControls() {
                 aria-label={`${option.label}. ${option.description}`}
                 className={cn(
                   buttonVariants({ variant: "ghost", size: "sm" }),
-                  "relative pointer-coarse:min-h-11 data-[state=checked]:text-ink",
+                  "pointer-coarse:min-h-11 data-[state=checked]:bg-surface data-[state=checked]:text-ink",
                 )}
               >
                 {option.label}
-                <OptionRule selected={settingsScope.view === option.id} />
               </RadioGroup.Item>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="pointer-events-none">{option.description}</TooltipContent>

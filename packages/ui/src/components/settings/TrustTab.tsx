@@ -14,7 +14,6 @@ import { RefreshCw, ShieldAlert, ShieldCheck, ShieldQuestion, ShieldX } from "lu
 import { CapabilityNotice } from "@/components/capability-gate";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { SegmentedControl } from "@/components/ui/tabs";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
@@ -178,21 +177,44 @@ function Row({
       </div>
 
       {decidable && writable ? (
-        /* The shared segmented control (`components/ui/tabs.tsx`): the product's
-           one idiom, and the arrow keys and reachable tab stop this pair never
-           had while nothing was decided yet. The decision's tone stays on the
-           headline above, which already carries it. */
-        <SegmentedControl
-          label={`Trust for ${project.name}`}
-          value={project.trust === "trusted" ? "trust" : project.trust === "declined" ? "decline" : ""}
-          options={[
-            { value: "trust", label: "Trust" },
-            { value: "decline", label: "Decline" },
-          ]}
-          onChange={(next) => onDecide(project.cwd, next === "trust")}
-          disabled={busy}
-          className="shrink-0"
-        />
+        <div
+          role="radiogroup"
+          aria-label={`Trust for ${project.name}`}
+          className="flex shrink-0 items-center gap-0.5 rounded-lg bg-surface-2 p-0.5"
+        >
+          {(
+            [
+              { value: true, label: "Trust" },
+              { value: false, label: "Decline" },
+            ] as const
+          ).map((option) => {
+            const checked = option.value ? project.trust === "trusted" : project.trust === "declined";
+            return (
+              <button
+                key={option.label}
+                type="button"
+                role="radio"
+                aria-checked={checked}
+                tabIndex={checked ? 0 : -1}
+                disabled={busy}
+                onClick={() => onDecide(project.cwd, option.value)}
+                className={cn(
+                  "h-7 rounded-md px-2.5 text-xs font-medium outline-none",
+                  "transition-[background-color,color] duration-(--motion-instant) motion-reduce:transition-none",
+                  "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
+                  "disabled:opacity-45",
+                  checked
+                    ? option.value
+                      ? "bg-surface text-ok shadow-float-sm"
+                      : "bg-surface text-danger shadow-float-sm"
+                    : "text-ink-2 hover:text-ink",
+                )}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
       ) : !decidable ? (
         <span className="shrink-0 text-xs text-ink-3">nothing to decide</span>
       ) : null}

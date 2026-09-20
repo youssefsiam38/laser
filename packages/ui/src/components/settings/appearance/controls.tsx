@@ -8,23 +8,19 @@
  * Appearance has the same header, the same reset affordance and the same
  * keyboard behaviour.
  *
- * `Segmented` is the label, the specimen and the explanation around the
- * shared segmented control (`components/ui/tabs.tsx`), which owns the row
- * itself: a real `role="radiogroup"` where arrow keys move the selection,
+ * `Segmented` is a real `role="radiogroup"`: arrow keys move the selection,
  * Home/End jump to the ends, and only the checked option is in the tab order
  * (the roving-tabindex pattern browsers give native radios for free and
- * `<button>`s do not). The row wears the product's one idiom — quiet ground,
- * an ink rule under the chosen option — rather than the grey track and white
- * pill it used to draw for itself. Every visual value is a token; nothing here
- * spells a colour, a size or a duration.
+ * `<button>`s do not). Every visual value is a token; nothing here spells a
+ * colour, a size or a duration.
  */
-import { useId, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useId, useRef, type CSSProperties, type ReactNode } from "react";
 import { ChevronRight, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { SegmentedControl } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { useLogicalArrowKeys } from "@/hooks/use-direction";
 
 export interface GroupProps {
   title: string;
@@ -87,7 +83,31 @@ export interface SegmentedProps<T extends string> {
 }
 
 export function Segmented<T extends string>({ label, value, options, onChange, children, disabled }: SegmentedProps<T>) {
+  const logicalKey = useLogicalArrowKeys();
   const labelId = useId();
+  const container = useRef<HTMLDivElement>(null);
+
+  const move = useCallback(
+    (delta: number | "first" | "last") => {
+      const index = options.findIndex((option) => option.value === value);
+      const next =
+        delta === "first"
+          ? 0
+          : delta === "last"
+            ? options.length - 1
+            : (index + delta + options.length) % options.length;
+      const option = options[next];
+      if (!option) return;
+      onChange(option.value);
+      // Selection follows focus in a radio group, so the newly checked control
+      // must take the focus with it or the next arrow key goes nowhere.
+      requestAnimationFrame(() => {
+        container.current?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]')?.focus();
+      });
+    },
+    [onChange, options, value],
+  );
+
   const selected = options.find((option) => option.value === value);
 
   return (
@@ -96,15 +116,57 @@ export function Segmented<T extends string>({ label, value, options, onChange, c
         {label}
       </span>
       {children}
-      <SegmentedControl
-        labelledBy={labelId}
-        value={value}
-        options={options.map((option) => ({ value: option.value, label: option.label }))}
-        onChange={onChange}
-        disabled={disabled === true}
-        wrap
-        className="w-fit max-w-full"
-      />
+      <div
+        ref={container}
+        role="radiogroup"
+        aria-labelledby={labelId}
+        aria-disabled={disabled === true || undefined}
+        className={cn(
+          "flex w-fit max-w-full flex-wrap items-center gap-0.5 rounded-lg bg-surface-2 p-0.5",
+          disabled === true && "opacity-60",
+        )}
+        onKeyDown={(event) => {
+          if (disabled === true) return;
+          const key = logicalKey(event.key);
+          if (key === "ArrowRight" || key === "ArrowDown") {
+            event.preventDefault();
+            move(1);
+          } else if (key === "ArrowLeft" || key === "ArrowUp") {
+            event.preventDefault();
+            move(-1);
+          } else if (key === "Home") {
+            event.preventDefault();
+            move("first");
+          } else if (key === "End") {
+            event.preventDefault();
+            move("last");
+          }
+        }}
+      >
+        {options.map((option) => {
+          const checked = option.value === value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={checked}
+              aria-disabled={disabled === true || undefined}
+              disabled={disabled === true}
+              tabIndex={disabled === true ? -1 : checked ? 0 : -1}
+              onClick={() => { if (disabled !== true) onChange(option.value); }}
+              className={cn(
+                "h-7 rounded-md px-2.5 text-xs font-medium outline-none",
+                "transition-[background-color,color] duration-(--motion-instant) motion-reduce:transition-none",
+                "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
+                checked ? "bg-surface text-ink shadow-float-sm" : "text-ink-2 hover:text-ink",
+              )}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
       {selected?.detail && <p className="text-xs leading-4 text-ink-3">{selected.detail}</p>}
     </div>
   );

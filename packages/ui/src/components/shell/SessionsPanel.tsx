@@ -1,4 +1,5 @@
 import { PRODUCT_NAME } from "@lasercode/protocol";
+import { useLogicalArrowKeys } from "@/hooks/use-direction";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { FileClock, FolderPlus, MessageSquarePlus, Moon, Plus, Search, Settings, Sun, X } from "lucide-react";
@@ -14,7 +15,6 @@ import { useAgentsSnapshot } from "@/agents";
 import { startBeamSession } from "@/components/beam";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
-import { Tabs, type TabOption } from "@/components/ui/tabs";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useWorkbench } from "@/components/workbench";
 import { shortCwd, shortcutLabel } from "@/format";
@@ -72,15 +72,6 @@ export function SessionsPanel({ variant }: SessionsPanelProps) {
 }
 
 const TAB_LABEL: Record<SessionsTab, string> = { chat: "Chat", code: "Code" };
-/**
- * What each tab is counting, for the accessible name. The number itself is
- * drawn beside the label as a tabular figure; a screen reader gets the noun
- * with it, because "Chat, 2" is a riddle and "Chat, 2 chats" is not.
- */
-const TAB_NOUN: Record<SessionsTab, [one: string, many: string]> = {
-  chat: ["chat", "chats"],
-  code: ["session", "sessions"],
-};
 type TabActivity = "finished_unread" | "waiting_for_input";
 
 /** One acknowledgement per actual attention transition, local to this window. */
@@ -142,15 +133,6 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
 
   const catalogGroups = useLaserState(s => s.catalogGroups);
   const total = groups.reduce((n, g) => n + (catalogGroups?.find(page => page.cwd === g.cwd)?.total ?? g.rows.length), 0);
-  // The tab a person is not on carries its own number, so switching is an
-  // informed act rather than a look. One extra pass over the catalog, for the
-  // one tab the memoized `groups` above does not cover.
-  const otherTab: SessionsTab = tab === "chat" ? "code" : "chat";
-  const otherTotal = useLaserState(useCallback((s: AppState) =>
-    groupsFor(projects, s, otherTab).reduce(
-      (n, g) => n + (s.catalogGroups?.find(page => page.cwd === g.cwd)?.total ?? g.rows.length), 0),
-  [projects, otherTab]));
-  const tabCounts = { [tab]: total, [otherTab]: otherTotal } as Record<SessionsTab, number>;
   const filteredName = tab === "code" && list.filter ? shortCwd(list.filter) : undefined;
   const searching = query.trim() !== "";
   useEffect(() => searching ? actions.expandCatalog?.() : undefined, [actions, searching]);
@@ -272,11 +254,9 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
       {/* 48px, one row: the sessions hairline has to land on the same y as the
           top bar's and the telemetry header's (DESIGN.md "Layout"). */}
       <header className={cn("flex h-12 shrink-0 items-center gap-2 px-3 hairline-b", variant === "sheet" && "pe-12")}>
-        {/* The count moved onto the tabs, where it says which list it belongs
-            to; repeating it here would print the same number twice, 40px
-            apart. */}
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <h2 className="truncate text-sm leading-5 font-semibold text-ink">Sessions</h2>
+          {total > 0 && <span className="shrink-0 typed text-ink-3">{total}</span>}
         </div>
         {searchSessions.state === "available" ? <TooltipIconButton tooltip="Search all sessions" shortcut="Ctrl+Shift+F" onClick={() => { if (variant === "sheet") shell.setSessionsOpen(false); openGlobalSearch(); }}><Search /></TooltipIconButton> : null}
         {variant === "panel" && createSession.state === "available" && (
@@ -292,7 +272,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
         )}
       </header>
 
-      <SessionsTabs tab={tab} onChange={changeTab} counts={tabCounts} activity={{ chat: hiddenChatActivity, code: hiddenCodeActivity }} />
+      <SessionsTabs tab={tab} onChange={changeTab} activity={{ chat: hiddenChatActivity, code: hiddenCodeActivity }} />
 
       {variant === "sheet" && createSession.state === "available" && (
         <div className="flex shrink-0 items-center px-3 py-2 hairline-b">
@@ -391,44 +371,62 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
 // ---------------------------------------------------------------------------
 
 /**
- * The two tabs, on the shared control (`components/ui/tabs.tsx`): the product's
- * one idiom — quiet ground, a 2px ink rule under the tab you are on — instead
- * of the grey track and white pill this row used to wear.
- *
- * Each tab says what is behind it: the label, then how many conversations that
- * list holds as a tabular figure, then the activity mark for a conversation in
- * the *hidden* tab that needs reading or answering. The count is the same
- * number the header used to print, moved to where it belongs.
+ * A two-segment control, a real tablist: arrows move between the segments,
+ * the active one is `aria-selected`, and the panel below is what it controls.
  */
-function SessionsTabs({ tab, onChange, counts, activity }: {
-  tab: SessionsTab;
-  onChange(tab: SessionsTab): void;
-  counts: Record<SessionsTab, number>;
-  activity: Record<SessionsTab, TabActivity | undefined>;
-}) {
-  const options: TabOption<SessionsTab>[] = SESSIONS_TABS.map((kind) => {
-    const count = counts[kind];
-    const newActivity = activity[kind];
-    const [one, many] = TAB_NOUN[kind];
-    return {
-      value: kind,
-      label: TAB_LABEL[kind],
-      count,
-      id: `sessions-tab-${kind}`,
-      controls: "sessions-tabpanel",
-      slot: "sessions-tab",
-      name: `${TAB_LABEL[kind]}, ${count} ${count === 1 ? one : many}${newActivity ? `, ${STATUS_LABEL[newActivity]}` : ""}`,
-      ...(newActivity ? { mark: <StatusDot status={newActivity} /> } : {}),
-    };
-  });
+function SessionsTabs({ tab, onChange, activity }: { tab: SessionsTab; onChange(tab: SessionsTab): void; activity: Record<SessionsTab, TabActivity | undefined> }) {
+  const logicalKey = useLogicalArrowKeys();
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
+    event.preventDefault();
+    const index = SESSIONS_TABS.indexOf(tab);
+    const next =
+      event.key === "Home" ? 0
+      : event.key === "End" ? SESSIONS_TABS.length - 1
+      : (index + (logicalKey(event.key) === "ArrowRight" ? 1 : SESSIONS_TABS.length - 1)) % SESSIONS_TABS.length;
+    const target = SESSIONS_TABS[next]!;
+    onChange(target);
+    (event.currentTarget.querySelector<HTMLButtonElement>(`[data-tab="${target}"]`))?.focus();
+  };
   return (
-    <Tabs
-      label="Kind of session"
-      value={tab}
-      options={options}
-      onChange={onChange}
-      className="shrink-0 px-2 pt-1"
-    />
+    <div className="shrink-0 px-3 pt-2 pb-1">
+      <div
+        role="tablist"
+        aria-label="Kind of session"
+        data-slot="sessions-tabs"
+        onKeyDown={onKeyDown}
+        className="grid grid-cols-2 gap-0.5 rounded-lg bg-surface-2 p-0.5"
+      >
+        {SESSIONS_TABS.map((kind) => {
+          const selected = kind === tab;
+          const newActivity = activity[kind];
+          return (
+            <button
+              key={kind}
+              type="button"
+              role="tab"
+              id={`sessions-tab-${kind}`}
+              data-tab={kind}
+              aria-selected={selected}
+              aria-label={`${TAB_LABEL[kind]}${newActivity ? `, ${STATUS_LABEL[newActivity]}` : ""}`}
+              aria-controls="sessions-tabpanel"
+              tabIndex={selected ? 0 : -1}
+              onClick={() => onChange(kind)}
+              className={cn(
+                "relative h-7 rounded-md text-xs font-medium outline-none transition-[background-color,color,box-shadow] duration-(--motion-fast) motion-reduce:transition-none pointer-coarse:h-9",
+                "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
+                selected ? "bg-surface text-ink shadow-float-sm" : "text-ink-2 hover:text-ink active:bg-[color-mix(in_oklab,var(--surface)_60%,transparent)]",
+              )}
+            >
+              <span data-slot="sessions-tab-label" className="relative inline-flex items-center justify-center">
+                {TAB_LABEL[kind]}
+                {newActivity ? <StatusDot status={newActivity} className="absolute start-full top-1/2 ms-1.5 -translate-y-1/2" /> : null}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

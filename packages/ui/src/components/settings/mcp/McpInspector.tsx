@@ -1,4 +1,5 @@
 "use client";
+import { useLogicalArrowKeys } from "@/hooks/use-direction";
 /**
  * The inspector (docs/mcp.md "Inspecting"): a full-height sheet on a wide
  * screen, the whole screen on a phone. It connects when it opens — that is
@@ -11,7 +12,7 @@
  */
 import type { ClientRequests, McpInspection, McpScope, McpServerConfig, McpServerState, McpServerStatus, McpToolPolicy } from "@lasercode/protocol";
 import { KeyRound, LogOut, Pencil, Power, RefreshCw, Trash2, Waves } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
@@ -19,7 +20,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tabs } from "@/components/ui/tabs";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
@@ -75,6 +75,7 @@ export function McpInspector({
   onSignOut,
   onError,
 }: McpInspectorProps) {
+  const logicalKey = useLogicalArrowKeys();
   const { client } = useLaserStable();
   const [tab, setTab] = useState<InspectorTab>("overview");
   const [inspection, setInspection] = useState<McpInspection>();
@@ -254,6 +255,19 @@ export function McpInspector({
     ? TABS.filter((entry) => entry.id === "overview")
     : writable ? TABS : TABS.filter((entry) => entry.id !== "run");
 
+  const moveTab = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const keys = { ArrowRight: 1, ArrowLeft: -1 } as const;
+    const step = keys[logicalKey(event.key) as keyof typeof keys];
+    if (step === undefined && event.key !== "Home" && event.key !== "End") return;
+    event.preventDefault();
+    const index = tabs.findIndex((entry) => entry.id === tab);
+    const next =
+      event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + step + tabs.length) % tabs.length;
+    const id = tabs[next]!.id;
+    setTab(id);
+    event.currentTarget.querySelector<HTMLElement>(`#mcp-tab-${id}`)?.focus();
+  };
+
   return (
     <>
       <Sheet open={Boolean(state)} onOpenChange={(open) => (open ? onOpenChange(true) : close())}>
@@ -273,20 +287,31 @@ export function McpInspector({
             </SheetDescription>
           </SheetHeader>
 
-          {/* The shared strip (`components/ui/tabs.tsx`) owns the idiom and
-              the roving focus: Tab reaches it once, arrows move inside it. */}
-          <Tabs
-            label="What to look at"
-            value={tab}
-            onChange={setTab}
-            className="shrink-0 overflow-x-auto px-4"
-            options={tabs.map((entry) => ({
-              value: entry.id,
-              label: entry.label,
-              id: `mcp-tab-${entry.id}`,
-              controls: "mcp-inspector-panel",
-            }))}
-          />
+          <div
+            role="tablist"
+            aria-label="What to look at"
+            onKeyDown={moveTab}
+            className="flex shrink-0 items-center gap-1 overflow-x-auto px-4 pb-2"
+          >
+            {tabs.map((entry) => (
+              <Button
+                key={entry.id}
+                type="button"
+                role="tab"
+                id={`mcp-tab-${entry.id}`}
+                aria-selected={tab === entry.id}
+                aria-controls="mcp-inspector-panel"
+                // Roving focus: Tab reaches the strip once, arrows move inside it.
+                tabIndex={tab === entry.id ? 0 : -1}
+                variant="ghost"
+                size="sm"
+                onClick={() => setTab(entry.id)}
+                className={cn("shrink-0", tab === entry.id && "bg-surface-2 text-ink")}
+              >
+                {entry.label}
+              </Button>
+            ))}
+          </div>
 
           <ScrollArea className="min-h-0 flex-1">
             <div

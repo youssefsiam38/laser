@@ -153,7 +153,7 @@ const completeTab = async (next: "chat" | "code") => {
 };
 const rows = () => [...container.querySelectorAll<HTMLElement>('[data-slot="aui_thread-list-item"]')];
 const rowTitled = (text: string) => rows().find((row) => row.textContent?.includes(text));
-const tab = (kind: "chat" | "code") => container.querySelector<HTMLButtonElement>(`[role="tab"][data-option="${kind}"]`)!;
+const tab = (kind: "chat" | "code") => container.querySelector<HTMLButtonElement>(`[role="tab"][data-tab="${kind}"]`)!;
 const openMenu = async (label: string) => {
   const trigger = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
   expect(trigger, label).not.toBeNull();
@@ -163,26 +163,6 @@ const openMenu = async (label: string) => {
 };
 
 describe("sessions panel tabs", () => {
-  /**
-   * Both tabs say how much is behind them, as a tabular figure beside the
-   * label, so switching is an informed act (the header no longer repeats the
-   * selected tab's number).
-   */
-  const tabCount = (kind: "chat" | "code") => tab(kind).querySelector('[data-slot="tab-count"]')?.textContent;
-
-  it("counts both lists on the tabs, and the header does not repeat the number", async () => {
-    await mount();
-    expect(tabCount("chat")).toBe("2");
-    expect(tabCount("code")).toBe("7");
-    expect(tab("chat").getAttribute("aria-label")).toBe("Chat, 2 chats");
-    expect(tab("code").getAttribute("aria-label")).toBe("Code, 7 sessions");
-    expect(container.querySelector("h2")?.parentElement?.textContent).toBe("Sessions");
-    // The idiom: a rule under the selected tab, no track behind the row.
-    expect(container.querySelector('[data-slot="tabs"]')?.className).not.toContain("bg-surface-2");
-    expect(tab("code").querySelector('[data-slot="tab-rule"]')?.className).toContain("opacity-100");
-    expect(tab("chat").querySelector('[data-slot="tab-rule"]')?.className).toContain("opacity-0");
-  });
-
   it("opens on Code, switches to a flat Chat list on click and by keyboard, and remembers the choice", async () => {
     await mount();
     expect(tab("code").getAttribute("aria-selected")).toBe("true");
@@ -236,22 +216,22 @@ describe("sessions panel tabs", () => {
     await mount();
     await act(async () => store.dispatch({ type: "sessions", sessions: store.getSnapshot().sessions.map((item) =>
       item.path === stable.chatPath ? { ...item, attention: "finished_unread" as const } : item) }));
-    expect(tab("chat").getAttribute("aria-label")).toBe("Chat, 2 chats, Finished, unread");
+    expect(tab("chat").getAttribute("aria-label")).toBe("Chat, Finished, unread");
     expect(tab("chat").querySelector('[data-status="finished_unread"]')?.getAttribute("aria-hidden")).toBeNull();
-    expect(tab("code").getAttribute("aria-label")).toBe("Code, 7 sessions");
+    expect(tab("code").getAttribute("aria-label")).toBe("Code");
 
     await act(async () => { tab("chat").click(); await completeTab("chat"); });
-    expect(tab("chat").getAttribute("aria-label")).toBe("Chat, 2 chats");
+    expect(tab("chat").getAttribute("aria-label")).toBe("Chat");
     expect(tab("chat").querySelector('[data-slot="status-dot"]')).toBeNull();
 
     await act(async () => store.dispatch({ type: "sessions", sessions: store.getSnapshot().sessions.map((item) =>
       item.path === ROOT ? { ...item, attention: "waiting_for_input" as const } : item) }));
-    expect(tab("code").getAttribute("aria-label")).toBe("Code, 7 sessions, Waiting for you");
+    expect(tab("code").getAttribute("aria-label")).toBe("Code, Waiting for you");
     expect(tab("code").querySelector('[data-status="waiting_for_input"]')).not.toBeNull();
     expect(tab("chat").querySelector('[data-slot="status-dot"]')).toBeNull();
 
     await act(async () => { tab("code").click(); await completeTab("code"); });
-    expect(tab("code").getAttribute("aria-label")).toBe("Code, 7 sessions");
+    expect(tab("code").getAttribute("aria-label")).toBe("Code");
     expect(tab("code").querySelector('[data-slot="status-dot"]')).toBeNull();
   });
 
@@ -260,14 +240,14 @@ describe("sessions panel tabs", () => {
     store = createStateStore({ ...seed(), sessions: seed().sessions.map((item) =>
       item.path === stable.chatPath ? { ...item, attention: "finished_unread" as const } : item) });
     await mount();
-    expect(tab("chat").getAttribute("aria-label")).toBe("Chat, 2 chats");
+    expect(tab("chat").getAttribute("aria-label")).toBe("Chat");
     expect(tab("chat").querySelector('[data-slot="status-dot"]')).toBeNull();
 
     await act(async () => store.dispatch({ type: "sessions", sessions: store.getSnapshot().sessions.map((item) =>
       item.path === stable.chatPath ? { ...item, attention: "idle" as const } : item) }));
     await act(async () => store.dispatch({ type: "sessions", sessions: store.getSnapshot().sessions.map((item) =>
       item.path === stable.chatPath ? { ...item, attention: "waiting_for_input" as const } : item) }));
-    expect(tab("chat").getAttribute("aria-label")).toBe("Chat, 2 chats, Waiting for you");
+    expect(tab("chat").getAttribute("aria-label")).toBe("Chat, Waiting for you");
   });
 
   it("starts a new chat with the Chat agent in the Chat workspace", async () => {

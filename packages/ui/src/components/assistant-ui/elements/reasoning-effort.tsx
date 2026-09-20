@@ -10,10 +10,6 @@ import { useLogicalArrowKeys } from "@/hooks/use-direction";
  *     are the levels' own names; the accessible name is the full word.
  *   - A `radiogroup` with roving focus and arrow keys, Home and End, not a
  *     row of `aria-pressed` buttons: one tab stop, every level reachable.
- *   - The product's one idiom for a chosen option (`components/ui/tabs.tsx`):
- *     ink and a rule, on the popover's own ground. The registry's pill on a
- *     track is gone, and with it a `shadow-float-sm` that was a floating
- *     shadow drawn *inside* something already floating.
  *   - The "budget spent" progress bar is gone. Pi reports no thinking budget
  *     and no thinking token count per level, and a bar that cannot be filled
  *     is a fake (docs/ux-fleet.md R5, provenance honesty).
@@ -39,7 +35,7 @@ import { isUnstartedSession, useLaserStable, useLaserState, useSessionMeta } fro
 import { useSessionPreparation } from "@/components/thread/session-preparation";
 import { effectiveFirstTurnModel } from "@/runtime/first-turn";
 
-import { OptionRule } from "@/components/ui/tabs";
+import { field } from "./surfaces.js";
 
 export interface EffortLevel {
   key: string;
@@ -105,7 +101,7 @@ export function ReasoningEffort({
       aria-disabled={disabled || undefined}
       data-slot="reasoning-effort"
       onKeyDown={onKeyDown}
-      className={cn("flex items-center gap-0.5", disabled && "opacity-50", className)}
+      className={cn(field, "flex h-7 items-center gap-0.5 rounded-full p-0.5", disabled && "opacity-50", className)}
       {...props}
     >
       {levels.map((level, index) => {
@@ -122,15 +118,14 @@ export function ReasoningEffort({
             tabIndex={index === activeIndex ? 0 : -1}
             onClick={() => choose(index)}
             className={cn(
-              "relative h-7 min-w-6 rounded-md px-2 text-xs leading-xs font-medium tnum outline-none",
-              "transition-[background-color,color] duration-(--motion-instant) motion-reduce:transition-none",
-              "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
-              "pointer-coarse:min-h-11 disabled:cursor-not-allowed",
-              active ? "text-ink" : "text-ink-2 hover:bg-surface-2 hover:text-ink",
+              "h-6 min-w-6 rounded-full px-2 text-xs leading-none font-medium tnum outline-none",
+              "transition-[background-color,color] duration-(--motion-instant)",
+              "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live",
+              "disabled:cursor-not-allowed",
+              active ? "bg-surface text-ink shadow-float-sm" : "text-ink-3 hover:text-ink-2",
             )}
           >
             {level.label}
-            <OptionRule selected={active} />
           </button>
         );
       })}

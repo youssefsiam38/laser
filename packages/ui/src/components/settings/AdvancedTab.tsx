@@ -4,7 +4,8 @@ import type { SettingChange, SettingsCatalog, SettingsScope, SettingsSnapshot } 
 
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { GenerationLoader } from "@/components/assistant-ui/elements/loading-state";
-import { Tabs } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { useCapability, type SettingsScopeView } from "@/runtime";
 import { CapabilityNotice } from "@/components/capability-gate";
 
@@ -36,22 +37,32 @@ export function AdvancedTab({ view, onViewChange, scopeView, cwd, catalog, snaps
   if (shownView === "configuration" && configuration.state !== "available") shownView = "resources";
   const configured = Boolean(cwd && catalog && snapshot);
   return <div className="flex h-full min-h-0 flex-col">
-    {/* The shared strip (`components/ui/tabs.tsx`): the product's one idiom,
-        and the roving tabindex these two sections never had. */}
-    <Tabs
-      label="Advanced settings sections"
-      value={shownView}
-      onChange={onViewChange}
-      className="shrink-0 px-3 pt-2"
-      options={[
-        ...(resources.state === "available"
-          ? [{ value: "resources" as const, label: "Resources", controls: "advanced-resources" }]
-          : []),
-        ...(configuration.state === "available"
-          ? [{ value: "configuration" as const, label: "Configuration", controls: "advanced-configuration" }]
-          : []),
-      ]}
-    />
+    <div className="flex shrink-0 items-center gap-1 px-3 py-2 hairline-b" role="tablist" aria-label="Advanced settings sections">
+      {resources.state === "available" ? <Button
+        type="button"
+        role="tab"
+        aria-selected={shownView === "resources"}
+        aria-controls="advanced-resources"
+        variant="ghost"
+        size="sm"
+        onClick={() => onViewChange("resources")}
+        className={cn("pointer-coarse:min-h-11", shownView === "resources" && "bg-surface-2 text-ink")}
+      >
+        Resources
+      </Button> : null}
+      {configuration.state === "available" ? <Button
+        type="button"
+        role="tab"
+        aria-selected={shownView === "configuration"}
+        aria-controls="advanced-configuration"
+        variant="ghost"
+        size="sm"
+        onClick={() => onViewChange("configuration")}
+        className={cn("pointer-coarse:min-h-11", shownView === "configuration" && "bg-surface-2 text-ink")}
+      >
+        Configuration
+      </Button> : null}
+    </div>
 
     <div id="advanced-resources" role="tabpanel" aria-label="Resources" className="min-h-0 flex-1" hidden={shownView !== "resources"}>
       {shownView === "resources" ? <ResourceDiagnostics /> : null}
