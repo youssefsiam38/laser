@@ -83,9 +83,9 @@ try {
 // at all. Each one is seeded with work a diff can show — a modified file, a new
 // file, a deleted file, a rename, a binary, and a file `.gitignore` excludes so
 // a person can prove it is never captured and never listed.
-/** 1×1 PNGs, two different colours: the image before a change, and after it. */
-const PNG_BEFORE = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-const PNG_AFTER = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+/** Two 64×64 PNGs: the image before a change, and after it. */
+const PNG_BEFORE = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAl0lEQVR4nO3PMQ2AUBTFUAI2cYISPCEKA/8NTKVJkzt2uGfb73O547mW+1u//e1QAPpQAPpQAPrQZ4Dl6NQHoPsAdB+A7v0Ay9GpD0D3Aeg+AN37AZajUx+A7gPQfQC69wMsR6c+AN0HoPsAdO8HWI5OfQC6D0D3AejeD7AcnfoAdB+A7gPQvR9gOTr1Aeg+AN0HoHs94AUebAkPMmkQtQAAAABJRU5ErkJggg==";
+const PNG_AFTER = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAmElEQVR4nO3PMQ2AUBTFUHThAUPYQQjSwMB/A1Np0uSOHe7Z9vNe7rie5f7Wb387FIA+FIA+FIA+9BlgOTr1Aeg+AN0HoHs/wHJ06gPQfQC6D0D3foDl6NQHoPsAdB+A7v0Ay9GpD0D3Aeg+AN37AZajUx+A7gPQfQC69wMsR6c+AN0HoPsAdO8HWI5OfQC6D0D3AeheD3gBuyIRlrWzw9cAAAAASUVORK5CYII=";
 
 const workspaces = [];
 function gitIn(dir, ...args) {
