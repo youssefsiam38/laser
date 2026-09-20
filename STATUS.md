@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-20T13:21:00+03:00 · orchestrator-2026-09-20-new-session · HEAD: ae958b29
-**Current focus:** M16-T95 — main-window New Session must show an editable composer immediately; worker/`session/new` run in the background.
+**Last updated:** 2026-09-20T13:51:00+03:00 · orchestrator-2026-09-20-new-session · HEAD: bfc118ae
+**Current focus:** M20 awaits the person's sandbox acceptance; M16-T95 New Session landing is merged.
 
 | Milestone | State |
 | --- | --- |
@@ -31,7 +31,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** none. M21 implementation is still dependency-gated on the person's M20 sandbox acceptance.
-**In flight:** M16-T95 New Session landing (D-334). M20 awaits acceptance from `docs/leap/uat.md`.
+**In flight:** M20 awaits acceptance from `docs/leap/uat.md`.
 **Published:** v0.9.4 (`6d50a050`) is Latest. Autonomous completion/commits/push require the established authorization and release gates.
-**Next up:** M16-T95 implementation; the person's M20 UAT; then M21-T1 protocol/domain work.
-**Recently done:** M16-T96 unread follows message count (`ae958b29`); M21-T0 project lifecycle contract (`docs/project-lifecycle-leap.md`, D-329–D-333); M20-T6 git actions (`bc00695b`, `bb786d1c`); M20-T5 changes modal (`b3ced7f5`); M20-T4 fleet/telemetry columns (`82969dcf`).
+**Next up:** the person's M20 UAT; then M21-T1 protocol/domain work. Browser matrix for M16-T95 still open.
+**Recently done:** M16-T95 New Session is a landing (`bfc118ae`); M16-T96 unread follows message count (`ae958b29`); M21-T0 project lifecycle contract; M20-T6 git actions (`bc00695b`, `bb786d1c`); M20-T5 changes modal (`b3ced7f5`).
