@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-20T19:45:00+03:00 · orchestrator-2026-09-20-config-root · HEAD: d92c5f6b
+**Last updated:** 2026-09-21T01:02:40+03:00 · codex-2026-09-20-git-revisions · HEAD: d6469efc
 **Current focus:** 0.11.1 is published and Latest, with the person's own verification behind it. M19-T6 T6B is the next build work.
 
 | Milestone | State |
@@ -34,4 +34,4 @@
 **In flight:** nothing building. M16-T97 and M16-T99 are merged and waiting on the person's browser acceptance (D-342: agents run no browser checks; the person tests the sandbox).
 **Published:** v0.10.1 is Latest (`09d68d51` candidate; 12 verified assets).
 **Next up:** M19-T6 T6B launcher/daemon/desktop binding; the UI half of M16-T98 once the window's contract is final; M19-T7 staging once the launch spine is released (D-339).
-**Recently done:** 0.11.1 — the whole-conversation read is gone and three transcript defects with it (`3eba514b`, `259f390f`); M16-T97 transcript paging and M16-T99 the local landing (`d92c5f6b`); the Changes overlay's diff and nested regions scroll (`a264e1ba`); M19-T6 T6A retained runtime store (`40177a72`); M16-T98 producer `{ versionsOf }` window with the host's live validator (`242c7b94`).
+**Recently done:** M21-T0 now binds exact artifact-revision ↔ repository provenance (`docs/project-lifecycle-leap.md`, D-345); 0.11.1 removed the whole-conversation read and three transcript defects (`3eba514b`, `259f390f`); M16-T97 transcript paging and M16-T99 local landing (`d92c5f6b`); Changes overlay scrolling (`a264e1ba`); M19-T6 T6A retained runtime store (`40177a72`).

@@ -5934,7 +5934,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
-| M21-T0 | Binding product contract and dependency plan | done | orchestrator-2026-09-20-project-leap | `docs/project-lifecycle-leap.md`; `PLAN.md` M21 index; D-329–D-333 | see notes |
+| M21-T0 | Binding product contract and dependency plan | done | codex-2026-09-20-git-revisions | `docs/project-lifecycle-leap.md`; `PLAN.md` M21 index; D-329–D-333, D-345; `git diff --check -- docs/project-lifecycle-leap.md PLAN.md STATUS_DETAILED.md` | see notes |
 | M21-T1 | Protocol domain, revisions and transition rules | todo | — | — | `PLAN.md` M21 |
 | M21-T2 | Stable project identity and canonical store | todo | — | — | `PLAN.md` M21 |
 | M21-T3 | Host authority, methods, policy and event stream | todo | — | — | `PLAN.md` M21 |
@@ -5967,6 +5967,8 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-20 done: `PLAN.md` M21 is the binding contract and dependency-ordered implementation plan; D-329–D-333 record the choices future work must not silently reverse.
 - 2026-09-20 correction claimed: move the binding contract into its own document and reduce `PLAN.md` M21 to the repository's dependency index.
 - 2026-09-20 correction done: `docs/project-lifecycle-leap.md` is the binding contract; `PLAN.md` retains only the stable milestone summary and dependency-ordered task index.
+- 2026-09-20 correction claimed by codex-2026-09-20-git-revisions: make artifact-revision ↔ repository-state provenance a typed, exact, many-to-many contract rather than leaving commits and diffs as generic evidence.
+- 2026-09-20 correction done: `RepositoryLink`, stable repository identity, exact state/change targets, durable gate evidence and the four relation semantics are binding in `docs/project-lifecycle-leap.md`; M21-T1/T2/T18/T20/T21 acceptance carries the implementation work; D-345 records the decision; documentation diff check passes.
 
 ### D-329 · 2026-09-20 · Project lifecycle artifacts belong to projects, not sessions
 
@@ -6146,6 +6148,26 @@ facing directory is exactly `~/.laser`. `configDir` becomes part of launch and
 host-adoption identity. New binaries stop reading or writing migrated legacy
 public files after schema success; installers never inspect a home directory;
 unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
+
+### D-345 · 2026-09-20 · Artifact revisions carry exact repository provenance
+
+Decision: `RepositoryLink` is a first-class, immutable supporting record joining
+one exact `ProjectWorkRef` to an exact Git state or change as `based_on`,
+`implemented_by`, `verified_at` or `published_as`. Links are many-to-many.
+Laser-assigned repository identity survives paths and worktrees; commit object
+ids, checkpoint ids and digests are identity, while branches, checkouts and
+remotes are context. Git remains source/evidence, never lifecycle authority.
+
+Why: generic commit evidence cannot say which artifact revision a change
+implements, which code state a design came from, or which exact state was
+verified. Mutable branch names would silently retarget history.
+
+Consequences: M21-T1 schemas the link and its state/change targets; M21-T2 owns
+stable repository identity; M21-T18 records delivery and verification links;
+M21-T21 records repository publication. Missing or pruned Git objects preserve
+the historical identity without resolving to `HEAD`. Evidence used for an
+approval, accepted delivery or Task completion must remain reviewable from Git
+or bounded canonical captures; a full durable budget refuses the gate.
 
 ### D-343 · 2026-09-20 · 0.11.0 shipped before its acceptance pass
 

@@ -20,7 +20,9 @@ can approve a proposed foundation before source is written; an approved Plan
 produces dependency-ordered Tasks; a Task can be attempted in multiple sessions
 without becoming a run; implementation is reviewed through M20 checkpoints and
 diffs; verification links evidence and deviations to the exact approved
-revisions; restart, project relocation, worktrees, phone review and relay
+revisions; artifact revisions retain exact many-to-many links to the repository
+states and changes they came from, produced or verified; restart, project
+relocation, worktrees, phone review and relay
 reconnection preserve the same project state; no project entity becomes a
 fleet item or an extension-defined panel.
 
@@ -72,6 +74,7 @@ Supporting records:
 | **Approval** | Actor, gate, immutable revision digests, decision and permission mode |
 | **Decision** | A durable choice with rationale, consequences and supersession |
 | **Evidence** | Test, diff, screenshot, source location, commit, review or person acceptance |
+| **Repository link** | Joins an exact artifact revision to an exact repository state or change as `based_on`, `implemented_by`, `verified_at` or `published_as` |
 | **Execution link** | Joins a Project Task to a session, agent run, checkpoint, branch or command without transferring ownership |
 
 Every identity is opaque and stable. Slugs and titles may change. A reference is:
@@ -99,6 +102,8 @@ Project
         ├─ checkpoints and diffs
         └─ verification evidence
 
+Artifact revision ── repository links ── exact commits / checkpoints / changes
+
 Session ── mentions ProjectWorkRef[] and may link execution
         └─ never owns, cascades or deletes project work
 ```
@@ -116,8 +121,8 @@ partitioned by stable `projectId`, not by session path or current filesystem
 path. It contains:
 
 - a versioned transactional database for entities, immutable revisions, edges,
-  comments, approvals, decisions, evidence, execution links and project event
-  sequence numbers;
+  comments, approvals, decisions, evidence, repository links, execution links and
+  project event sequence numbers;
 - content-addressed blobs for large design trees, screenshots, source captures
   and generated previews, each with length, media type and digest;
 - a bounded search projection containing only searchable values, never binary
@@ -144,6 +149,64 @@ where work happened.
 Every mutation uses optimistic concurrency (`expectedRevisionId`), an
 idempotency key and one transaction. A stale write returns the current revision
 and a merge/retry choice; it never overwrites another session's work.
+
+## Repository provenance
+
+Git is source and implementation evidence, not the authority for project work.
+The store gives every repository in the project's M20 `workspaceShape` a stable,
+opaque `repositoryId` independent of its checkout path, worktree, branch or
+remote URL. A repository link has this closed shape:
+
+```text
+RepositoryLink =
+  projectId + linkId + subject: ProjectWorkRef
+  + relation: based_on | implemented_by | verified_at | published_as
+  + repositoryId
+  + target: RepositoryStateRef | RepositoryChangeRef
+  + createdBy + createdAt + supersedesLinkId?
+
+RepositoryStateRef =
+  vcs: git + objectFormat + commitObjectId
+  + checkpointId? + path? + blobObjectId? + contentDigest?
+
+RepositoryChangeRef =
+  base: RepositoryStateRef + head: RepositoryStateRef + diffDigest
+```
+
+An M20 checkpoint is a commit object, so uncommitted work is linked through its
+exact checkpoint id and object id rather than through a mutable working tree.
+The optional path is repository-relative and names the path at that state; the
+blob object id and content digest fence file-level evidence. One artifact
+revision may link several repositories, states or changes, and one repository
+state or change may link several artifact revisions. `based_on` and `verified_at`
+target states, `implemented_by` targets a change, and `published_as` targets a
+state plus its exported path.
+
+A worktree shares its repository identity with its common-dir owner. Relocation
+reconnects an already-known identity through the project relink flow; neither a
+path nor a matching remote silently merges or replaces repository history.
+
+Commit object ids and digests are identity. Branch, checkout, worktree, pull
+request and scrubbed remote are display or execution context only. Moving a
+branch, rebasing, relocating the project or removing a worktree never retargets
+a historical link. If Git no longer has the object or a checkpoint was pruned,
+the link keeps its recorded identity and reports the source as unavailable; it
+never resolves to current `HEAD`. A correction appends a superseding link and
+retains the old provenance. A repository link used to approve an artifact,
+accept delivery or mark a Task done must remain reviewable: if its Git object is
+not durably reachable, Laser first stores the bounded diff manifest and required
+source captures in the content-addressed store. A full durable budget refuses
+the gate instead of accepting digest-only evidence. Session checkpoint retention
+may then prune its ref without deleting the canonical evidence.
+
+`based_on` records the code state an artifact revision was derived from;
+`implemented_by` records the exact delivered change; `verified_at` records the
+state against which its evidence ran; `published_as` records an explicit
+repository export. Creating any of these links does not approve an artifact,
+complete a Task or make Git a second lifecycle writer. Ordinary `HEAD` movement
+does not make an artifact stale. Only a material change to a declared
+authoritative source, detected by its fenced path/blob/profile digest or
+recorded during reconciliation, applies the stale rules below.
 
 ## Revision and staleness model
 
@@ -316,8 +379,8 @@ A Project Task is one bounded action with:
 - acceptance criteria, verification commands and required visual evidence;
 - assignment policy (`unassigned`, `person`, or an agent definition) without
   embedding a session or run id;
-- attempts, checkpoints, diffs, commits, reviews, comments and final evidence as
-  linked records.
+- attempts, checkpoints, diffs, commits, repository links, reviews, comments and
+  final evidence as linked records.
 
 A Task may have several execution attempts, sequential or deliberately parallel.
 A run ending never automatically marks the Task done. A failed run records its
@@ -349,9 +412,11 @@ worker-supplied bridge and never persist through Pi.
 
 Each implementation attempt records its session/run identity, workspace shape,
 checkout, base commit, M20 checkpoints, changed repositories and terminal
-outcome. Checkpoints and git determine changed files; tool calls never do.
-Commit, push and pull-request actions retain M20's explicit previews and
-confirmations.
+outcome. Checkpoints and git determine changed files; tool calls never do. The
+attempt's approved input revisions receive `implemented_by` links only for the
+exact repository changes accepted as delivery; verification adds `verified_at`
+links to the exact tested states. Commit, push and pull-request actions retain
+M20's explicit previews and confirmations.
 
 Verification compares the implementation against four authorities:
 
@@ -512,8 +577,10 @@ Laser may import GitHub Spec Kit, OpenSpec, compatible Markdown, issue trackers
 and an existing `PLAN.md` through explicit adapters. Import creates a previewed
 revision with provenance; it never watches an external tool as a second writer.
 Export produces deterministic Markdown plus a machine-readable manifest with
-stable ids, revision digests, relations and attachment references. Re-export is
-an explicit replace or new-revision decision.
+stable ids, revision digests, relations, repository links and attachment
+references. Publishing an export into a repository adds `published_as` only
+after the exact committed or checkpoint state is known. Re-export is an explicit
+replace or new-revision decision.
 
 Optional Figma, Penpot, Storybook or registry connectors are project sources,
 not required infrastructure and not authorities over Laser approvals. Offline
