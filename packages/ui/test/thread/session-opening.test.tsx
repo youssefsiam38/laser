@@ -210,20 +210,32 @@ it("keeps an admitted New session held through the visible destination handoff",
     && (call.params as { owner?: string }).owner === undefined)).toEqual([]);
 });
 
-it("New session waits quietly and a worker-start failure keeps its real reason", async () => {
+it("New session is a landing while session/new is held, and a worker-start failure keeps the draft", async () => {
   await visibleHistory();
   let release!: () => void;
-  const hold = new Promise<void>(resolve => { release = resolve; });
-  world.overrides["session/new"] = async () => { await hold; throw new Error("The worker could not start. Retry or choose another project."); };
+  const hold = new Promise<void>((resolve, reject) => {
+    release = () => reject(new Error("The worker could not start. Retry or choose another project."));
+  });
+  world.overrides["session/new"] = async () => { await hold; return { state: world.states[path] }; };
   let creation!: Promise<unknown>;
   await act(async () => { creation = actions.newSession("/p").catch(() => {}); await settle(180); });
   expect(container.querySelector('[data-slot="conversation-skeleton"]')).toBeNull();
   expect(loading).toBe(false);
+  expect(state.destination.phase === "ready-code" || state.destination.phase === "ready-chat").toBe(true);
+  const textarea = container.querySelector("textarea");
+  expect(textarea?.disabled).toBe(false);
+  await act(async () => {
+    if (textarea) {
+      textarea.value = "keep this draft";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    await settle(0);
+  });
   await act(async () => { release(); await creation; await settle(30); });
-  expect(container.textContent).toContain("Couldn’t open this view.");
-  expect(container.textContent).toContain("The worker could not start. Retry or choose another project.");
+  expect(container.textContent).not.toContain("Couldn’t open this view.");
   expect(container.textContent).not.toContain("This session didn’t load.");
-  expect(state.toasts.some(toast => toast.text.includes("worker could not start"))).toBe(false);
+  expect(state.destination.phase === "unavailable").toBe(false);
+  expect(container.querySelector("textarea")?.disabled).toBe(false);
 });
 
 /**

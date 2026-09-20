@@ -1154,6 +1154,8 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     archived: (path) => archive.has(path),
     onError,
     beforeTransition: (current) => landingDrafts.captureBeforeTransition(current),
+    onLandingAdopted: (key, path) => landingDrafts.adopt(key, path),
+    sendInFlight: () => chatSendWait.getSnapshot(),
   });
   const startupRestoring = destination.startupRestoring;
 

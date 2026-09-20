@@ -124,6 +124,9 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
     sameGroups,
   );
   const connection = useLaserState((s) => s.connection);
+  const destination = useLaserState((s) => s.destination);
+  const destinationRef = useRef(destination);
+  destinationRef.current = destination;
   const chatCwd = useLaserState((s) => workspacesOf(s).chat);
   const beamCwd = useLaserState((s) => workspacesOf(s).beam);
   const snapshot = useAgentsSnapshot();
@@ -161,13 +164,14 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
         actions.toast("warning", "Not connected to the host yet.");
         return;
       }
-      try {
-        if (isBeam) await startBeamSession(actions, snapshot);
-        else await actions.newSession(cwd);
-        onOpen();
-      } catch (error) {
-        actions.toast("error", errorText(error));
-      }
+      onOpen();
+      void (isBeam ? startBeamSession(actions, snapshot) : actions.newSession(cwd)).catch((error: unknown) => {
+        const next = destinationRef.current;
+        const still = isBeam
+          ? next.phase === "ready-code" && (next.code.kind === "project-landing" || next.code.kind === "beam-session")
+          : next.phase === "ready-code" && next.code.kind === "project-landing" && next.code.project === cwd;
+        if (still) actions.toast("error", errorText(error));
+      });
     },
     [actions, beamCwd, connection, onOpen, snapshot],
   );
@@ -184,12 +188,11 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
       actions.toast("warning", "Chat is not ready yet. Try again in a moment.");
       return;
     }
-    try {
-      await actions.newSession(chatCwd, { agentName: "chat" });
-      onOpen();
-    } catch (error) {
-      actions.toast("error", errorText(error));
-    }
+    onOpen();
+    void actions.newSession(chatCwd, { agentName: "chat" }).catch((error: unknown) => {
+      const next = destinationRef.current;
+      if (next.phase === "ready-chat" && next.chat.kind === "landing") actions.toast("error", errorText(error));
+    });
   }, [actions, chatCwd, connection, onOpen]);
 
   // Search rows: every session of the tab (the rail's filter still applies),

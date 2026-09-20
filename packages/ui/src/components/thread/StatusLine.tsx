@@ -34,7 +34,7 @@ const wordsFor = (s: AppState): Words | undefined => {
   // Provisional content is content: it is never described as loading, and it
   // never claims to be a confirmed live connection.
   if (open.provisional) return { status: "idle", text: "showing your last view · checking with the host", live: false };
-  if (mainTab(s.destination) === "chat" && s.destination.phase === "resolving") {
+  if (mainTab(s.destination) === "chat" && s.destination.phase === "resolving" && open.expectsTranscript) {
     return { status: "idle", text: "opening the conversation · messages wait here", live: false };
   }
   if (s.destination.phase === "ready-chat" && s.destination.chat.kind === "landing"
@@ -42,10 +42,11 @@ const wordsFor = (s: AppState): Words | undefined => {
     return { status: "idle", text: "getting Chat ready · messages wait here", live: false };
   }
   // Loading is not work: the green sweep belongs to a running agent only.
-  if (open.phase === "opening") {
+  // An empty new composition is a landing, not a load — never promise history.
+  if (open.phase === "opening" && open.expectsTranscript) {
     return { status: "idle", text: open.hasTranscript ? "refreshing the conversation" : "loading the conversation", live: false };
   }
-  if (open.phase === "preparing") return { status: "idle", text: "preparing the workspace", live: false };
+  if (open.phase === "preparing" && open.expectsTranscript) return { status: "idle", text: "preparing the workspace", live: false };
   if (open.phase === "failed") {
     return { status: "error", text: open.path ? "retry to load this conversation" : "retry to open this view", live: false };
   }
