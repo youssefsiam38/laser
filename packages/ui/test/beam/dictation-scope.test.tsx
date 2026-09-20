@@ -84,21 +84,40 @@ const sessionView = (path: string, cwd: string, capabilities: string[] = ["trans
 };
 
 describe("the microphone in a second composer", () => {
-  it("offers a fresh project microphone after checking its directory, claiming only on click", async () => {
+  it("offers a fresh project microphone on the first frame, asks the host nothing, and claims only on click", async () => {
+    // D-341: the control is present before any probe could answer. Provider,
+    // credential and permission are checked on the press, by the transport.
     mocks.view = undefined; mocks.currentProject = "/fresh";
     await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
-    expect(client.request).toHaveBeenCalledWith("pi/transcribe/status", { cwd: "/fresh" });
+    expect(container.querySelector('[aria-label="Dictate a message"]')).not.toBeNull();
+    expect(client.request).not.toHaveBeenCalled();
     expect(readDictationScope()).toBeUndefined();
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Dictate a message"]')!.click());
     expect(readDictationScope()).toEqual({ cwd: "/fresh", path: undefined });
   });
 
-  it("quietly hides the landing microphone when transcription is unavailable", async () => {
+  it("keeps the landing microphone whatever a status probe would have said, and stays quiet until a press", async () => {
     mocks.view = undefined; mocks.currentProject = "/unavailable";
     client.request.mockResolvedValue({ available: false });
     await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
-    expect(container.querySelector('[data-slot="dictate"]')).toBeNull();
+    expect(container.querySelector('[data-slot="dictate"]')).not.toBeNull();
+    expect(client.request).not.toHaveBeenCalled();
     expect(mocks.toast).not.toHaveBeenCalled();
+  });
+
+  it("is the same control before the session exists and after it arrives", async () => {
+    mocks.view = undefined; mocks.currentProject = "/fresh";
+    await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
+    const before = container.querySelector('[data-slot="dictate"]');
+    expect(before).not.toBeNull();
+    // The host answers: the landing's session now exists, without "transcribe"
+    // among its capabilities. Nothing on screen may change for that.
+    mocks.view = sessionView("/fresh/new.jsonl", "/fresh", []);
+    await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
+    expect(container.querySelector('[data-slot="dictate"]')).toBe(before);
+    expect(client.request).not.toHaveBeenCalled();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Dictate a message"]')!.click());
+    expect(readDictationScope()).toEqual({ cwd: "/fresh", path: "/fresh/new.jsonl" });
   });
 
   it("discards through a neutral, named button beside stop without modifying text", async () => {
@@ -112,14 +131,14 @@ describe("the microphone in a second composer", () => {
     expect(mocks.cancel).toHaveBeenCalledOnce(); expect(mocks.setText).not.toHaveBeenCalled();
   });
 
-  it("is offered wherever the session can transcribe, and hidden where it cannot", async () => {
+  it("is offered in every session this browser can record in; whether the host can transcribe is the press's question", async () => {
     mocks.view = sessionView("/state/beam/b1.jsonl", "/state/beam");
     await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
     expect(container.querySelector('[data-slot="dictate"]')).not.toBeNull();
 
     mocks.view = sessionView("/p/s.jsonl", "/p", []);
     await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
-    expect(container.querySelector('[data-slot="dictate"]')).toBeNull();
+    expect(container.querySelector('[data-slot="dictate"]')).not.toBeNull();
   });
 
   it("files a recording under the session it was spoken into, not the one that mounted last", async () => {

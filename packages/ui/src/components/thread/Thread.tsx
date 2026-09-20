@@ -69,6 +69,14 @@ const FOLLOW_UPS = AuiConfig({
   ]),
 });
 
+/**
+ * The most turn pages one press of Find's "Load all messages" walks before
+ * giving the branch back as it stands: at twenty turns a page this is eight
+ * thousand turns, far past any conversation that has been seen, and a bound
+ * rather than a loop that only the producer's root can end.
+ */
+const FIND_LOAD_ALL_PAGE_CAP = 400;
+
 export function Thread(props: ThreadProps = {}) {
   // The conversation on screen, which during a navigation is the row that was
   // chosen rather than the one still committed (RP-11): tool rows, file opening
@@ -111,9 +119,22 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
     const target = visibleSessionPath(s);
     return target ? s.open[target]?.state.toolLabelParams : undefined;
   });
+  // Find searches the branch on screen, so "Load all messages" is that branch
+  // paged back to its root with the ordinary turn pager. The whole-conversation
+  // read (`{ all: true }`) is indivisible and the producer refuses it past
+  // HISTORY_PAGE_ENTRY_LIMIT rows — which is every conversation partial enough
+  // to offer the button — with a toast nobody is looking at while the control
+  // stayed up. Paging cannot be refused for size, terminates at the root, and
+  // the pressure policy that pauses whole reads explicitly allows it.
+  const loadWholeBranch = useCallback(async () => {
+    for (let pages = 0; pages < FIND_LOAD_ALL_PAGE_CAP; pages += 1) {
+      if (!(await actions.loadEarlierEntries())) break;
+    }
+    return true;
+  }, [actions]);
   const find = useConversationFind({
     partial: partialHistory,
-    loadAll: actions.loadAllEntries,
+    loadAll: loadWholeBranch,
     refusal: wholeTranscript.explanation,
     toolLabelParams,
   });
@@ -144,7 +165,13 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
                 {/* A crashed worker is content: it is the answer to “why is
                     nothing arriving”, and it now lives in the transcript's
                     header, so the loader must not stand in front of it. */}
-                <ConversationLoadingGate key={open.path} active={loading} hasContent={open.hasTranscript || loadError || !open.expectsTranscript || worker?.status === "crashed"}>
+                {/* Not keyed on the path. A landing starts with no path and
+                    adopts the created session's when the host answers; a key
+                    there unmounted and remounted the whole transcript subtree
+                    on that answer, which is the "it reloads the page" flicker
+                    (D-341). Identity changes underneath; the pixels do not. The
+                    gate's own anti-flash timer follows `active`, not the path. */}
+                <ConversationLoadingGate active={loading} hasContent={open.hasTranscript || loadError || !open.expectsTranscript || worker?.status === "crashed"}>
                   {/* Everything above the conversation is the list's header, so
                       a notice appearing or going is a size change the list
                       restores the reading position through, rather than a push
@@ -287,7 +314,6 @@ export function HistoryControls() {
   const pending = useRef<{ focused?: Element | null; page: boolean } | undefined>(undefined);
   const busy = useRef(false);
   const requestedHistory = useRef(false);
-  const interacted = useRef(false);
   const [loading, setLoading] = useState<"earlier" | "all" | null>(null);
   const [rereading, setRereading] = useState(false);
   const [announcement, setAnnouncement] = useState("");
@@ -356,9 +382,9 @@ export function HistoryControls() {
     }
     // On landing, and after every accepted page, keep paging while the reserve
     // is within two screens of the reader: a person should not see estimated
-    // space they did not scroll into. Each page is awaited. A gesture is not
-    // required — note() still records pointer/wheel/touch/key for everything
-    // else that reads it.
+    // space they did not scroll into. Each page is awaited. No gesture is
+    // required, and nothing here remembers whether one happened: the old
+    // gesture gate was the only reader of that state, and it is gone.
     const frame = requestAnimationFrame(() => { if (controller.needsPrefetch()) void load(false, true); });
     return () => cancelAnimationFrame(frame);
   }, [controller, history?.anchor, history?.before, history?.complete, history?.revision, history?.userOffset, load]);
@@ -366,7 +392,6 @@ export function HistoryControls() {
     const viewport = root.current?.closest<HTMLElement>("[data-slot=thread-viewport]");
     if (!viewport || (!history?.before && !deferred)) return;
     let lastTop = viewport.scrollTop;
-    const note = () => { interacted.current = true; };
     const prefetch = () => { if (controller.needsPrefetch()) void load(false, true); };
     const scroll = () => {
       const top = viewport.scrollTop;
@@ -377,20 +402,17 @@ export function HistoryControls() {
     // Already at the top, the viewport cannot scroll, so no scroll event
     // arrives: reading upwards there produces only the wheel (or a swipe, or
     // the keys). That is the person asking for what comes before.
-    const wheel = (event: WheelEvent) => { note(); if (event.deltaY < 0 && (controller.needsPrefetch() || viewport.scrollTop <= 0)) void load(false, true); };
+    const wheel = (event: WheelEvent) => { if (event.deltaY < 0 && (controller.needsPrefetch() || viewport.scrollTop <= 0)) void load(false, true); };
     let touchY: number | undefined;
     const touchstart = (event: TouchEvent) => { touchY = event.touches?.[0]?.clientY; };
     const touchmove = (event: TouchEvent) => {
-      note();
       const y = event.touches?.[0]?.clientY;
       if (y !== undefined && touchY !== undefined && y > touchY + 8 && (controller.needsPrefetch() || viewport.scrollTop <= 0)) void load(false, true);
       touchY = y;
     };
     const keydown = (event: KeyboardEvent) => {
-      note();
       if ((event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home") && (controller.needsPrefetch() || viewport.scrollTop <= 0)) void load(false, true);
     };
-    viewport.addEventListener("pointerdown", note, { passive: true });
     viewport.addEventListener("wheel", wheel, { passive: true });
     viewport.addEventListener("touchstart", touchstart, { passive: true });
     viewport.addEventListener("touchmove", touchmove, { passive: true });
@@ -400,7 +422,6 @@ export function HistoryControls() {
     observer?.observe(viewport);
     return () => {
       observer?.disconnect();
-      viewport.removeEventListener("pointerdown", note);
       viewport.removeEventListener("wheel", wheel);
       viewport.removeEventListener("touchstart", touchstart);
       viewport.removeEventListener("touchmove", touchmove);

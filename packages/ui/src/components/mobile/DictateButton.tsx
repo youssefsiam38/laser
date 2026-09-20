@@ -24,8 +24,8 @@ import {
   useEnvironment,
 } from "@/pwa";
 import { useLaserStable, useLaserState } from "@/runtime";
+import { landingWorkspaceOf } from "@/runtime/main-destination";
 import type { TranscribeScope } from "@/pwa/dictation";
-import { useTranscriptionAvailable } from "@/pwa/transcription-availability";
 
 /**
  * The composer's microphone, drawn by the `composer` element's voice pieces
@@ -35,14 +35,17 @@ import { useTranscriptionAvailable } from "@/pwa/transcription-availability";
  * binding: where the phrase lands, which session is being recorded, and when
  * the control exists at all.
  *
- * Hidden entirely where dictation cannot work (R2 — hide the control, never
- * show a dead one): a browser with no microphone or Web Audio capture, an
- * insecure origin (the insecure-origin notice says why), or no transcription
- * provider. A project landing checks its directory before a session exists.
- * Opening Beam prepares its empty session before showing this composer.
- * The reusable transcription backend ships with Laser. Before the microphone
- * opens, the adapter checks its provider requirement and reports a missing or
- * OAuth-only OpenAI credential in product language.
+ * Hidden only where dictation cannot work in this browser at all (R2 — hide
+ * the control, never show a dead one): no microphone or Web Audio capture, or
+ * an insecure origin (the insecure-origin notice says why). Those are local
+ * facts, known on the first frame. Everything that needs the host — whether
+ * the project has a transcription provider, whether the credential is usable,
+ * the browser's own permission — is asked on the press, by the transport's
+ * `check()` before the microphone opens, and a real failure is said once in
+ * the person's language where they pressed. Nothing is probed on mount and
+ * nothing arriving from the host later adds or removes this control (D-341):
+ * the microphone is ready for a press before the session exists, and the
+ * person will never be faster than the request.
  *
  * Needs `adapters.dictation` on the runtime (`getMobileDictationAdapter`);
  * `ComposerPrimitive.Dictate` disables itself without one.
@@ -56,20 +59,25 @@ interface DictateButtonProps {
 
 export function DictateButton({ className, size, touchSized = false }: DictateButtonProps) {
   const env = useEnvironment();
-  // Three narrow reads instead of the session view: a streamed token changes
-  // none of them, and the microphone must not re-render with the reply (M16-T32).
+  // Two narrow reads instead of the session view: a streamed token changes
+  // neither, and the microphone must not re-render with the reply (M16-T32).
   const path = useLaserState(s => (s.current ? s.open[s.current]?.path : undefined));
   const sessionCwd = useLaserState(s => (s.current ? s.open[s.current]?.state.cwd : undefined));
-  const transcribes = useLaserState(s => Boolean(s.current && s.open[s.current]?.capabilities.includes("transcribe")));
-  const { client, destination } = useLaserStable();
+  const { destination } = useLaserStable();
   const supported = env.microphone && PhraseDictationAdapter.isSupported();
-  const landingCwd = destination?.phase === "ready-code" && destination.code.kind === "project-landing"
-    ? destination.code.project : undefined;
+  // Where a recording would be filed before a session exists: the project the
+  // landing is for, or the built-in workspace's directory. The workspace
+  // directories are known before "New chat" is offered at all (the sessions
+  // panel gates the button on them), so this is not a wait either.
+  const workspaces = useLaserState(s => s.agents.snapshot?.workspaces);
+  const landing = destination ? landingWorkspaceOf(destination) : undefined;
+  const landingCwd = landing?.kind === "project" ? landing.cwd
+    : landing?.kind === "chat" ? workspaces?.chat
+      : landing?.kind === "beam" ? workspaces?.beam
+        : undefined;
   const cwd = sessionCwd ?? landingCwd;
-  const landingAvailable = useTranscriptionAvailable(client, supported && !path ? landingCwd : undefined);
-  const available = path ? transcribes : landingAvailable;
 
-  if (!supported || !available || !cwd) return null;
+  if (!supported || !cwd) return null;
   return <DictateControls className={className} size={size} touchSized={touchSized} cwd={cwd} path={path} />;
 }
 
