@@ -111,7 +111,10 @@ describe("a body read from the owning worker", () => {
     expect(page).toBeDefined();
     expect(page!.entries).toEqual([prompt]);
     expect(page!.window.elided).toEqual([{
-      id: "e1", parentId: "e0", type: "message", role: "assistant",
+      // Its own time, as the record says: a row a client only points at has no
+      // header to read, and one dated when it was drawn would sit in the
+      // transcript under the moment the conversation was opened.
+      id: "e1", parentId: "e0", type: "message", timestamp: "2026-01-01T00:00:01.000Z", role: "assistant",
       bodies: [{ component: { kind: "assistant_text" }, totalBytes: utf8ByteLength(HUGE), contentDigest: sha256Hex(HUGE) }],
     }]);
   });
