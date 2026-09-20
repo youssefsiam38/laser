@@ -29,8 +29,13 @@ import {
 } from "@lasercode/protocol";
 import { nodeRevisionHasher } from "@lasercode/protocol/revision-node";
 
-/** How far back a client's cached revision can still be proved a prefix. */
-const CHECKPOINTS_MAX = 512;
+/**
+ * How far back a client's cached revision can still be proved a prefix.
+ * Must outrun a single long turn (hundreds of tool rows) or an ordinary
+ * refresh of a still-current base classifies as stale. Compaction still
+ * invalidates: it changes `barrierCount`, which classify treats as a rewrite.
+ */
+const CHECKPOINTS_MAX = 4096;
 /** States this process issued that the durable leaf rule cannot reconstruct. */
 const ISSUED_MAX = 64;
 

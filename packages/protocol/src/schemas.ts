@@ -776,6 +776,7 @@ export const clientParamsSchemas = {
       z.object({ beforeEntry: z.string().min(1).max(1024), turns: z.number().int().min(1).max(HISTORY_PAGE_TURN_MAX) }).strict(),
       z.object({ from: z.string().min(1).max(1024) }).strict(),
       z.object({ all: z.literal(true) }).strict(),
+      z.object({ versionsOf: z.string().min(1).max(1024) }).strict(),
     ]).optional(),
     authority: z.enum(["live", "any"]).optional(),
     baseRevision: z.string().min(1).max(1024).optional(),

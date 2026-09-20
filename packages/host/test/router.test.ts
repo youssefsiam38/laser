@@ -462,6 +462,30 @@ describe("Router · history windows", () => {
       expect(h.workerRequests).toHaveLength(3);
     } finally { h.cleanup(); rmSync(directory, { recursive: true, force: true }); }
   });
+
+  it("routes a versions window verbatim, and refuses a malformed id", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "versions-window-"));
+    const path = join(directory, "session.jsonl");
+    writeFileSync(path, "session fixture");
+    const page = {
+      entries: [{ id: "e1" }, { id: "e2" }],
+      leafId: "e2",
+      window: { epoch: "one", seq: 1, mode: "replace", versions: { total: 2, leaves: [{ id: "e1", leafId: "e1" }, { id: "e2", leafId: "e2" }] } },
+    };
+    const h = harness({ workerRequest: async () => page });
+    h.bind(path, CWD_A);
+    h.open[CWD_A]!.push(path);
+    const call = (id: number, params: Record<string, unknown>) =>
+      h.router.handle({ jsonrpc: "2.0", id, method: "pi/session/entries", params: { path, ...params } }, LOCAL_ACCESS);
+    try {
+      expect(await call(1, { window: { versionsOf: "e1" } })).toMatchObject({ result: page });
+      expect(h.workerRequests.map(request => request.params)).toEqual([{ path, window: { versionsOf: "e1" } }]);
+      expect(h.views.get(path)).toBeUndefined();
+      expect(await call(2, { window: { versionsOf: "" } })).toMatchObject({ error: { code: ErrorCodes.InvalidParams } });
+      expect(await call(3, { window: { versionsOf: "e1", all: true } })).toMatchObject({ error: { code: ErrorCodes.InvalidParams } });
+      expect(h.workerRequests).toHaveLength(1);
+    } finally { h.cleanup(); rmSync(directory, { recursive: true, force: true }); }
+  });
 });
 
 it("declines readiness hints before prepare and returns the same silent answer", async () => {

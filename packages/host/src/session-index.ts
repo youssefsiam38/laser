@@ -33,8 +33,9 @@ export interface SessionIndexLimits {
 
 /**
  * The entry cap is intentionally below the 8 MiB accounted-identity budget.
- * With UUID-sized ids, 32k identity rows plus the checkpoint ring account for
- * about 6.8 MiB. Unusually long ids bind on `indexBytes` first.
+ * With UUID-sized ids, 32k identity rows plus a 4096-deep checkpoint ring
+ * (long enough that one long turn cannot drop a still-current prefix) stay
+ * inside it. Unusually long ids bind on `indexBytes` first.
  */
 export const DEFAULT_SESSION_INDEX_LIMITS: SessionIndexLimits = {
   /**
@@ -53,7 +54,7 @@ export const DEFAULT_SESSION_INDEX_LIMITS: SessionIndexLimits = {
   entries: 32_000,
   indexBytes: 8 * 1024 * 1024,
   fileBytes: 256 * 1024 * 1024,
-  checkpoints: 512,
+  checkpoints: 4096,
 };
 
 export interface IndexedEntry {

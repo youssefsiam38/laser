@@ -82,6 +82,30 @@ describe("a live conversation's revision", () => {
     expect(tracker.classify(atTail, header, continued, "e3")).toBe("stale");
   });
 
+  it("keeps a prefix across a turn of more than 512 entries, and still invalidates on compaction", () => {
+    const tracker = new SessionRevisionTracker(ENVIRONMENT);
+    const before = tracker.compute(header, history, "e2").revision;
+    const long: unknown[] = [...history];
+    let parent = "e2";
+    for (let i = 0; i < 600; i++) {
+      const id = `t${i}`;
+      long.push(entry(id, parent, `step ${i}`));
+      parent = id;
+    }
+    expect(tracker.classify(before, header, long, parent)).toBe("prefix");
+    const compacted = [...long, {
+      type: "compaction",
+      id: "compact-1",
+      parentId: parent,
+      timestamp: "2026-01-01T00:00:02.000Z",
+      summary: "Earlier context summarized",
+      tokensBefore: 1000,
+    }];
+    expect(tracker.classify(before, header, compacted, "compact-1")).toBe("stale");
+    const tip = tracker.compute(header, long, parent).revision;
+    expect(tracker.classify(tip, header, compacted, "compact-1")).toBe("stale");
+  });
+
   it("refuses a base it cannot prove instead of assuming it is old", () => {
     const tracker = new SessionRevisionTracker(ENVIRONMENT);
     tracker.compute(header, history, "e2");

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  ErrorCodes,
   HISTORY_EARLIER_PAGE_TURNS,
   HISTORY_FIRST_PAGE_TURNS,
   HISTORY_PAGE_BYTE_LIMIT,
   HISTORY_PAGE_ENTRY_LIMIT,
   HISTORY_PAGE_TURN_MAX,
+  ProtocolError,
   boundedHistoryWindow,
   fitHistoryWindowPlan,
   historyContentSerializedBytes,
@@ -206,6 +208,7 @@ describe("history windows", () => {
   it("round-trips every request variant, authority and base revision, and refuses invalid values", () => {
     for (const window of [
       { tail: 40 }, { before: "cursor", limit: 40 }, { beforeEntry: "entry", limit: 40 }, { from: "entry" }, { all: true },
+      { versionsOf: "entry" },
       // Turn windows (M16-T90), additive beside the entry-counted ones.
       { turns: HISTORY_FIRST_PAGE_TURNS }, { before: "cursor", turns: HISTORY_EARLIER_PAGE_TURNS }, { beforeEntry: "entry", turns: HISTORY_EARLIER_PAGE_TURNS },
     ]) {
@@ -232,9 +235,163 @@ describe("history windows", () => {
       { path: PATH, window: { turns: 10, limit: 10 } },
       { path: PATH, window: { before: "cursor", turns: 20 } },
       { path: PATH, window: { beforeEntry: "entry", turns: 20 } },
+      { path: PATH, window: { versionsOf: "" } },
+      { path: PATH, window: { versionsOf: "x".repeat(1025) } },
+      { path: PATH, window: { versionsOf: "entry", tail: 40 } },
+      { path: PATH, window: { versionsOf: "entry", all: true } },
     ]) {
       expect(() => parseClientRequest({ jsonrpc: "2.0", id: 1, method: "pi/session/entries", params })).toThrow();
     }
+  });
+});
+
+/**
+ * The other versions of one message: siblings sharing its parent, each with
+ * the leaf of the branch it heads. A page that cannot fit shrinks; it is never
+ * refused. Replacement only — never a delta.
+ */
+describe("the versions of one message", () => {
+  const replace = { ...scope, selection: { kind: "replace" as const } };
+  const digest = (text: string) => text.length.toString(16);
+  const ids = (page: { entries: unknown[] }) => page.entries.map(entry => (entry as { id: string }).id);
+  const msg = (id: string, parentId: string | null, role: string, text = id) => ({
+    type: "message", id, parentId, message: { role, content: [{ type: "text", text }] },
+  });
+
+  /**
+   * One fork: abandoned prompt e1 plus its reply and three tool results, and
+   * the live prompt e2 that replaced it.
+   *
+   *   (root) ─ e1 ─ a1 ─ r1 ─ r2 ─ r3
+   *          └─ e2 ─ a2
+   */
+  const forked = [
+    msg("e1", null, "user", "first"),
+    msg("a1", "e1", "assistant", "call"),
+    msg("r1", "a1", "toolResult", "one"),
+    msg("r2", "r1", "toolResult", "two"),
+    msg("r3", "r2", "toolResult", "three"),
+    msg("e2", null, "user", "second"),
+    msg("a2", "e2", "assistant", "done"),
+  ];
+
+  it("returns the siblings of a forked prompt with the leaf each heads", () => {
+    const page = historyWindow({ entries: forked, leafId: "a2" }, { versionsOf: "e1" }, replace);
+    expect(ids(page)).toEqual(["e1", "e2"]);
+    expect(page.leafId).toBe("a2");
+    expect(page.window.mode).toBe("replace");
+    expect(page.window.versions).toEqual({
+      total: 2,
+      leaves: [{ id: "e1", leafId: "r3" }, { id: "e2", leafId: "a2" }],
+    });
+    expect(isLiveEdgeWindow({ versionsOf: "e1" })).toBe(false);
+    expect(page.window.complete).toBe(false);
+    expect(page.window.branchesUnloaded).toBe(true);
+    expect(page.window.before).toBeUndefined();
+    expect(page.window.anchor).toBe("e1");
+    expect(page.window.context).toEqual([]);
+    // Asking about the other sibling is the same set.
+    expect(historyWindow({ entries: forked, leafId: "a2" }, { versionsOf: "e2" }, replace).window.versions).toEqual(page.window.versions);
+  });
+
+  it("treats root-level entries as siblings of each other", () => {
+    const entries = [msg("a", null, "user"), msg("b", null, "user"), msg("c", "b", "assistant")];
+    const page = historyWindow({ entries, leafId: "c" }, { versionsOf: "a" }, replace);
+    expect(ids(page)).toEqual(["a", "b"]);
+    expect(page.window.versions).toEqual({
+      total: 2,
+      leaves: [{ id: "a", leafId: "a" }, { id: "b", leafId: "c" }],
+    });
+  });
+
+  it("refuses an unknown id with a sentence a person can read", () => {
+    try {
+      historyWindow({ entries: forked, leafId: "a2" }, { versionsOf: "gone" }, replace);
+      expect.unreachable("missing id must refuse");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProtocolError);
+      expect(error).toMatchObject({ code: ErrorCodes.InvalidParams, message: "That message is not part of this conversation." });
+    }
+  });
+
+  it("is never a delta, even when the caller holds a current base", () => {
+    const page = historyWindow({ entries: forked, leafId: "a2" }, { versionsOf: "e1" }, {
+      ...replace, selection: { kind: "delta", after: "e1" },
+    });
+    expect(page.window.mode).toBe("replace");
+    expect(ids(page)).toEqual(["e1", "e2"]);
+  });
+
+  it("elides an oversized sibling body rather than refusing the page", () => {
+    const huge = msg("e1", null, "user", "x".repeat(80_000));
+    const small = msg("e2", null, "user", "second");
+    const page = boundedHistoryWindow(
+      { entries: [huge, msg("a1", "e1", "assistant", "call"), small], leafId: "e2" },
+      { versionsOf: "e1" },
+      replace,
+      { limit: 16 * 1024, digest },
+    );
+    expect(page).toBeDefined();
+    expect(ids(page!)).toEqual(["e2"]);
+    expect(page!.window.elided?.map(row => row.id)).toContain("e1");
+    expect(page!.window.versions).toEqual({
+      total: 2,
+      leaves: [{ id: "e1", leafId: "a1" }, { id: "e2", leafId: "e2" }],
+    });
+  });
+
+  it("shrinks when there are more siblings than a page can hold, keeping the named one", () => {
+    const entries = Array.from({ length: HISTORY_PAGE_ENTRY_LIMIT + 50 }, (_, i) => msg(`v${i}`, null, "user", `version ${i}`));
+    const named = `v${HISTORY_PAGE_ENTRY_LIMIT + 20}`;
+    const page = boundedHistoryWindow({ entries, leafId: named }, { versionsOf: named }, replace, { digest });
+    expect(page).toBeDefined();
+    expect(page!.entries.length).toBe(HISTORY_PAGE_ENTRY_LIMIT);
+    expect(ids(page!)).toContain(named);
+    expect(page!.window.versions?.total).toBe(HISTORY_PAGE_ENTRY_LIMIT + 50);
+    expect(page!.window.versions?.leaves).toHaveLength(HISTORY_PAGE_ENTRY_LIMIT);
+    expect(page!.window.versions?.leaves.some(row => row.id === named)).toBe(true);
+  });
+
+  it("answers a session far larger than the byte ceiling without refusing", () => {
+    const entries: unknown[] = [];
+    let parent: string | null = null;
+    for (let i = 0; i < 80; i++) {
+      const id = `u${i}`;
+      entries.push(msg(id, parent, "user", "y".repeat(20_000)));
+      const reply = `a${i}`;
+      entries.push(msg(reply, id, "assistant", "z".repeat(20_000)));
+      parent = reply;
+    }
+    entries.push(msg("fork", "a10", "user", "other version"));
+    entries.push(msg("fork-a", "fork", "assistant", "abandoned"));
+    const snapshot = { entries, leafId: "a79" };
+    expect(historyContentSerializedBytes(entries, [])).toBeGreaterThan(HISTORY_PAGE_BYTE_LIMIT);
+    const page = boundedHistoryWindow(snapshot, { versionsOf: "u11" }, replace, { digest });
+    expect(page).toBeDefined();
+    expect(ids(page!)).toEqual(["u11", "fork"]);
+    expect(page!.window.versions).toEqual({
+      total: 2,
+      leaves: [{ id: "u11", leafId: "a79" }, { id: "fork", leafId: "fork-a" }],
+    });
+  });
+
+  it("fits by dropping siblings rather than returning nothing", () => {
+    const entries = Array.from({ length: 8 }, (_, i) => msg(`v${i}`, null, "user", "x".repeat(200_000)));
+    let plans = 0;
+    const fitted = fitHistoryWindowPlan(
+      entries.map(historyWindowNode),
+      "v7",
+      { versionsOf: "v3" },
+      replace,
+      plan => {
+        plans++;
+        return plan.entryIndices.length <= 2;
+      },
+    );
+    expect(fitted?.entryIndices.map(index => (entries[index] as { id: string }).id)).toContain("v3");
+    expect(fitted?.entryIndices).toHaveLength(2);
+    expect(fitted?.window.versions?.total).toBe(8);
+    expect(plans).toBeGreaterThan(1);
   });
 });
 

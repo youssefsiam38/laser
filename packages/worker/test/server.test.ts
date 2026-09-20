@@ -498,6 +498,42 @@ describe("WorkerServer", () => {
     } finally { await h.server.dispose(); }
   });
 
+  it("serves the versions of a forked prompt as a bounded replacement, never refusing a large session", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    driver.header = { id: "s1", cwd: "/tmp/fake", version: 3 };
+    const rows: unknown[] = [];
+    let parent: string | null = null;
+    for (let i = 0; i < 40; i++) {
+      const id = `u${i}`;
+      rows.push({ type: "message", id, parentId: parent, message: { role: "user", content: [{ type: "text", text: "y".repeat(20_000) }] } });
+      const reply = `a${i}`;
+      rows.push({ type: "message", id: reply, parentId: id, message: { role: "assistant", content: [{ type: "text", text: "z".repeat(20_000) }] } });
+      parent = reply;
+    }
+    rows.push({ type: "message", id: "fork", parentId: "a10", message: { role: "user", content: [{ type: "text", text: "other version" }] } });
+    rows.push({ type: "message", id: "fork-a", parentId: "fork", message: { role: "assistant", content: [{ type: "text", text: "abandoned" }] } });
+    driver.history = { entries: rows, leafId: "a39" };
+    try {
+      const page = (await h.call(2, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { versionsOf: "u11" } })).result as {
+        entries: Array<{ id: string }>;
+        leafId: string;
+        window: { mode: string; authority: string; versions?: { total: number; leaves: Array<{ id: string; leafId: string }> } };
+      };
+      expect(page.entries.map(entry => entry.id)).toEqual(["u11", "fork"]);
+      expect(page.leafId).toBe("a39");
+      expect(page.window).toMatchObject({
+        authority: "live",
+        mode: "replace",
+        versions: { total: 2, leaves: [{ id: "u11", leafId: "a39" }, { id: "fork", leafId: "fork-a" }] },
+      });
+      const missing = await h.call(3, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { versionsOf: "gone" } });
+      expect(missing.error?.code).toBe(ErrorCodes.InvalidParams);
+      expect(missing.error?.message).toMatch(/not part of this conversation/);
+    } finally { await h.server.dispose(); }
+  });
+
   it("keeps an in-memory navigated live branch authoritative for authority:any", async () => {
     const h = harness();
     await h.call(1, "session/new", { cwd: "/tmp/fake" });
