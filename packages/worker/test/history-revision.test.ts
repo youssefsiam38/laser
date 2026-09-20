@@ -82,12 +82,12 @@ describe("a live conversation's revision", () => {
     expect(tracker.classify(atTail, header, continued, "e3")).toBe("stale");
   });
 
-  it("keeps a prefix across a turn of more than 512 entries, and still invalidates on compaction", () => {
+  it("keeps a prefix across a 909-row turn, and still invalidates on compaction", () => {
     const tracker = new SessionRevisionTracker(ENVIRONMENT);
     const before = tracker.compute(header, history, "e2").revision;
     const long: unknown[] = [...history];
     let parent = "e2";
-    for (let i = 0; i < 600; i++) {
+    for (let i = 0; i < 909; i++) {
       const id = `t${i}`;
       long.push(entry(id, parent, `step ${i}`));
       parent = id;

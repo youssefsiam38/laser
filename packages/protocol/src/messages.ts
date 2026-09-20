@@ -164,14 +164,16 @@ export interface HistoryWindow {
   /** The authority that produced this page. Durable pages never carry live work or actions. */
   authority?: "live" | "durable";
   /**
-   * `replace` atomically replaces the requested page. `delta` is available only
-   * for a live-edge tail read: append its entries to the cached current branch,
-   * update the revision/live edge, and preserve the cached page/cursor metadata.
-   * A nonempty delta may carry a current-revision `before` cursor anchored at
-   * its first suffix row; an empty delta changes no cached entries or paging
-   * metadata. Never splice a delta into a different base revision.
+   * `replace` atomically replaces the requested transcript page. `delta` is
+   * available only for a live-edge tail read: append its entries to the cached
+   * current branch, update the revision/live edge, and preserve the cached
+   * page/cursor metadata. A nonempty delta may carry a current-revision `before`
+   * cursor anchored at its first suffix row; an empty delta changes no cached
+   * entries or paging metadata. Never splice a delta into a different base
+   * revision. `versions` is the siblings of one entry — not a transcript page.
+   * Do not apply it as `replace` or `delta`; read `window.versions` instead.
    */
-  mode?: "replace" | "delta";
+  mode?: "replace" | "delta" | "versions";
 }
 
 export interface ImageContent {
@@ -1504,7 +1506,8 @@ export interface ClientRequests {
        * On an omitted/default-tail or explicit `tail` read, a proved canonical
        * prefix may be answered as a delta. `before` and `beforeEntry` require
        * this field and merge only when it is still current or a proved prefix;
-       * `from`, `all` and `versionsOf` keep replacement semantics.
+       * `from` and `all` keep replacement semantics. `{ versionsOf }` is not a
+       * transcript page: producers answer it with `mode: "versions"`.
        */
       baseRevision?: string;
       /**

@@ -186,21 +186,55 @@ interface HistoryCursor {
   b: string;
 }
 
-/** Last child in file order, until there is none: the leaf a version heads. */
-function leafOfNode(nodes: readonly HistoryWindowNode[], entryId: string): string {
-  const children = new Map<string, string[]>();
-  for (const node of nodes) {
-    if (node.id === undefined || node.parentId === null) continue;
+/** Parent → children in file order. Built once per plan/request, never per sibling. */
+interface HistoryWindowIndex {
+  byId: Map<string, number>;
+  children: Map<string | null, number[]>;
+  branch: number[];
+  visited: Set<string>;
+}
+
+/** One children map per nodes array (a fit/search reuses it; it dies with the array). */
+const INDEX_MEMO = new WeakMap<readonly HistoryWindowNode[], { leafId: string | null; index: HistoryWindowIndex }>();
+
+function indexHistoryWindow(nodes: readonly HistoryWindowNode[], leafId: string | null): HistoryWindowIndex {
+  const cached = INDEX_MEMO.get(nodes);
+  if (cached && cached.leafId === leafId) return cached.index;
+  const byId = new Map<string, number>();
+  const children = new Map<string | null, number[]>();
+  nodes.forEach((node, index) => {
+    if (node.id === undefined) return;
+    byId.set(node.id, index);
     const list = children.get(node.parentId);
-    if (list) list.push(node.id);
-    else children.set(node.parentId, [node.id]);
+    if (list) list.push(index);
+    else children.set(node.parentId, [index]);
+  });
+  const reversed: number[] = [];
+  const visited = new Set<string>();
+  let id: string | null = leafId;
+  while (typeof id === "string") {
+    if (visited.has(id)) changed();
+    visited.add(id);
+    const index = byId.get(id);
+    if (index === undefined) return changed();
+    reversed.push(index);
+    id = nodes[index]!.parentId;
   }
+  const built = { byId, children, branch: reversed.reverse(), visited };
+  INDEX_MEMO.set(nodes, { leafId, index: built });
+  return built;
+}
+
+/** Last child in file order, until there is none: the leaf a version heads. */
+function leafOfNode(nodes: readonly HistoryWindowNode[], children: Map<string | null, number[]>, entryId: string): string {
   let current = entryId;
   const seen = new Set<string>();
   for (;;) {
     if (seen.has(current)) return current;
     seen.add(current);
-    const next = children.get(current)?.at(-1);
+    const nextIndex = children.get(current)?.at(-1);
+    if (nextIndex === undefined) return current;
+    const next = nodes[nextIndex]!.id;
     if (next === undefined) return current;
     current = next;
   }
@@ -218,31 +252,25 @@ function sliceAround(indices: readonly number[], namedAt: number, count: number)
 
 /**
  * The siblings of one entry: same parent, file order, named entry included.
- * Always a replacement; never a delta, never merged with a base.
+ * `mode: "versions"`; never a transcript replace or delta, never merged with a base.
  */
 function planVersionsWindow(
   nodes: readonly HistoryWindowNode[],
-  byId: Map<string, number>,
-  branch: readonly number[],
+  index: HistoryWindowIndex,
   leafId: string | null,
   versionsOf: string,
   scope: HistoryWindowScope,
   limit: number,
 ): HistoryWindowPlan {
-  const namedIndex = byId.get(versionsOf);
+  const namedIndex = index.byId.get(versionsOf);
   if (namedIndex === undefined) return unknownMessage();
   const parentId = nodes[namedIndex]!.parentId;
-  const siblingIndices: number[] = [];
-  for (let index = 0; index < nodes.length; index++) {
-    const node = nodes[index]!;
-    if (node.id === undefined || node.parentId !== parentId) continue;
-    siblingIndices.push(index);
-  }
+  const siblingIndices = index.children.get(parentId) ?? [];
   const namedAt = siblingIndices.indexOf(namedIndex);
   const selected = sliceAround(siblingIndices, namedAt, Math.min(limit, HISTORY_PAGE_ENTRY_LIMIT));
-  const leaves = selected.map((index) => {
-    const id = nodes[index]!.id!;
-    return { id, leafId: leafOfNode(nodes, id) };
+  const leaves = selected.map((row) => {
+    const id = nodes[row]!.id!;
+    return { id, leafId: leafOfNode(nodes, index.children, id) };
   });
   return {
     entryIndices: selected,
@@ -256,14 +284,14 @@ function planVersionsWindow(
       anchor: versionsOf,
       userOffset: 0,
       complete: false,
-      branchesUnloaded: branch.length !== nodes.length,
+      branchesUnloaded: index.branch.length !== nodes.length,
       hasHistory: nodes.some((node) => node.isMessage || node.isGoalState),
       priorGoalIds: [],
       versions: { total: siblingIndices.length, leaves },
       ...(scope.live ? { live: scope.live } : {}),
       ...(scope.authority ? { authority: scope.authority } : {}),
-      // Always a replacement: never splice siblings onto a cached branch.
-      mode: "replace",
+      // Siblings of one entry, not a transcript page. Never splice onto a branch.
+      mode: "versions",
     },
   };
 }
@@ -279,29 +307,18 @@ export function historyWindowPlan(
   request: HistoryWindowRequest,
   scope: HistoryWindowScope,
   /**
-   * Allow the page to start inside a turn, for a turn no page can hold whole.
-   * Entry-unit only: a turn window already starts at a prompt (see the walk).
+   * `splitTurns`: allow the page to start inside a turn, for a turn no page can
+   * hold whole. Entry-unit only: a turn window already starts at a prompt.
+   * `rowLimit`: how many rows this plan may carry — siblings for `{ versionsOf }`,
+   * otherwise unused (the request already names the count).
    */
-  splitTurns = false,
-  /** `{ versionsOf }` only: how many siblings to carry, named entry included. */
-  versionLimit?: number,
+  fit: { splitTurns?: boolean; rowLimit?: number } = {},
 ): HistoryWindowPlan {
-  const byId = new Map<string, number>();
-  nodes.forEach((node, index) => { if (node.id !== undefined) byId.set(node.id, index); });
-  const reversed: number[] = [];
-  const visited = new Set<string>();
-  let id: string | null = leafId;
-  while (typeof id === "string") {
-    if (visited.has(id)) changed();
-    visited.add(id);
-    const index = byId.get(id);
-    if (index === undefined) return changed();
-    reversed.push(index);
-    id = nodes[index]!.parentId;
-  }
-  const branch = reversed.reverse();
+  const index = indexHistoryWindow(nodes, leafId);
+  const { byId, branch, visited } = index;
+  const splitTurns = fit.splitTurns ?? false;
   if ("versionsOf" in request) {
-    return planVersionsWindow(nodes, byId, branch, leafId, request.versionsOf, scope, versionLimit ?? HISTORY_PAGE_ENTRY_LIMIT);
+    return planVersionsWindow(nodes, index, leafId, request.versionsOf, scope, fit.rowLimit ?? HISTORY_PAGE_ENTRY_LIMIT);
   }
   let end = branch.length;
   let start = 0;
@@ -477,31 +494,18 @@ export function fitHistoryWindowPlan(
   if (fits(initial)) return initial;
   if ("all" in request || "from" in request || scope.selection?.kind === "delta") return undefined;
 
-  if ("versionsOf" in request) {
-    const total = initial.window.versions?.total ?? 1;
-    let low = 1;
-    let high = Math.min(total, HISTORY_PAGE_ENTRY_LIMIT) - 1;
-    let best: HistoryWindowPlan | undefined;
-    while (low <= high) {
-      const count = low + Math.floor((high - low) / 2);
-      const candidate = historyWindowPlan(nodes, leafId, request, scope, false, count);
-      if (fits(candidate)) {
-        best = candidate;
-        low = count + 1;
-      } else {
-        high = count - 1;
-      }
-    }
-    return best;
-  }
-
-  const search = (unit: "turns" | "entries", maximum: number, splitTurns: boolean): HistoryWindowPlan | undefined => {
+  const search = (maximum: number, forCount: (count: number) => {
+    request: HistoryWindowRequest;
+    splitTurns?: boolean;
+    rowLimit?: number;
+  }): HistoryWindowPlan | undefined => {
     let low = 1;
     let high = maximum;
     let best: HistoryWindowPlan | undefined;
     while (low <= high) {
       const count = low + Math.floor((high - low) / 2);
-      const candidate = historyWindowPlan(nodes, leafId, windowWithCount(request, unit, count), scope, splitTurns);
+      const { request: next, ...fit } = forCount(count);
+      const candidate = historyWindowPlan(nodes, leafId, next, scope, fit);
       if (fits(candidate)) {
         best = candidate;
         low = count + 1;
@@ -512,17 +516,27 @@ export function fitHistoryWindowPlan(
     return best;
   };
 
+  if ("versionsOf" in request) {
+    const total = initial.window.versions?.total ?? 1;
+    return search(Math.min(total, HISTORY_PAGE_ENTRY_LIMIT) - 1, (count) => ({ request, rowLimit: count }));
+  }
+
   const turns = windowTurns(request);
   const asked = turns === undefined
     ? Math.min(windowEntries(request), HISTORY_PAGE_ENTRY_LIMIT)
     : Math.min(turns, HISTORY_PAGE_TURN_MAX);
-  const fewer = search(turns === undefined ? "entries" : "turns", asked - 1, false);
+  const fewer = search(asked - 1, (count) => ({
+    request: windowWithCount(request, turns === undefined ? "entries" : "turns", count),
+  }));
   if (fewer) return fewer;
 
   // Not even the newest complete turn fits: page inside it rather than leave
   // the conversation unreadable. Older pages continue from the cursor, so a
   // split turn is still read whole, one page at a time.
-  return search("entries", turns === undefined ? asked : HISTORY_PAGE_ENTRY_LIMIT, true);
+  return search(turns === undefined ? asked : HISTORY_PAGE_ENTRY_LIMIT, (count) => ({
+    request: windowWithCount(request, "entries", count),
+    splitTurns: true,
+  }));
 }
 
 /** Materialize one already planned page from an in-memory snapshot. */
@@ -627,8 +641,7 @@ export function boundedHistoryWindow(
             : "beforeEntry" in request ? { beforeEntry: request.beforeEntry, limit: 1 }
               : { tail: 1 },
         scope,
-        true,
-        "versionsOf" in request ? 1 : undefined,
+        { splitTurns: true, ...("versionsOf" in request ? { rowLimit: 1 } : {}) },
       );
       const page = elide(smallest.entryIndices, ELIDED_RECORD_LIMITS.at(-1)!);
       const records = historyContentSerializedBytes(page.entries, []) + historyContentSerializedBytes(page.elided, []);

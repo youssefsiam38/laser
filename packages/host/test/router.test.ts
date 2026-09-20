@@ -470,7 +470,7 @@ describe("Router · history windows", () => {
     const page = {
       entries: [{ id: "e1" }, { id: "e2" }],
       leafId: "e2",
-      window: { epoch: "one", seq: 1, mode: "replace", versions: { total: 2, leaves: [{ id: "e1", leafId: "e1" }, { id: "e2", leafId: "e2" }] } },
+      window: { epoch: "one", seq: 1, mode: "versions", versions: { total: 2, leaves: [{ id: "e1", leafId: "e1" }, { id: "e2", leafId: "e2" }] } },
     };
     const h = harness({ workerRequest: async () => page });
     h.bind(path, CWD_A);
