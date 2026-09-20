@@ -416,6 +416,27 @@ describe("history request ownership", () => {
     expect(f.view().lastSeq).toBe(9);
   });
 
+  it("drops the stand-in for a prompt the page has published, and keeps one it has not", async () => {
+    // The first turn of a session sends and reads at the same time: the
+    // stand-in for the prompt is on screen while the authoritative page that
+    // already contains it is in flight. The two never share an id — the
+    // stand-in's is a local block id, the record's is `entry:<id>` — so an
+    // id-only test left a dimmed copy of the person's own first message at the
+    // end of the transcript for ever, and every later snapshot re-appended it.
+    const f = fixture(async params => historyWindow(source, params.window!, scope));
+    f.dispatch({ type: "optimisticUser", path: state.path, id: "sent-it", text: "Message 78", images: [] });
+    f.dispatch({ type: "optimisticUser", path: state.path, id: "still-sending", text: "not written yet", images: [] });
+    await f.loader.recent(state.path, () => true);
+    const users = f.view().blocks.filter(block => block.kind === "user");
+    expect(users.filter(block => block.text === "Message 78")).toHaveLength(1);
+    expect(users.find(block => block.text === "Message 78")?.optimistic).toBeFalsy();
+    // The one the page does not hold is still the person's unsent words.
+    expect(f.view().blocks.at(-1)).toMatchObject({ id: "still-sending", optimistic: true });
+    // And a second read does not bring the settled copy back.
+    await f.loader.recent(state.path, () => true);
+    expect(f.view().blocks.filter(block => block.kind === "user" && block.text === "Message 78")).toHaveLength(1);
+  });
+
   it("accepts the tail on every ordinary re-entry, not only the first", async () => {
     const request = vi.fn(async (params: Params) => historyWindow(source, params.window!, scope));
     const f = fixture(request);

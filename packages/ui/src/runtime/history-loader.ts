@@ -295,7 +295,19 @@ export function reduceHistory(v: SessionView, action: HistoryAction, { applyUpda
         const applied = applyUpdate(next, update.update);
         next = { ...applied, blocks: stampNewBlocks(next.blocks, applied.blocks, update.at), lastSeq: update.seq };
       }
-      const optimistic = v.blocks.filter(b => b.kind === "user" && b.optimistic);
+      // A prompt this surface sent and the authority has not published yet
+      // stays on screen. One it *has* published must not: the stand-in and the
+      // canonical row never share an id — the stand-in's is a local block id,
+      // the record's is `entry:<id>` — so an id-only test re-appended a copy
+      // of the person's own message at the end of the transcript, dimmed, for
+      // ever (every later snapshot re-appended it again). It is settled when
+      // the page's newest prompt is the same words: prompts are serial, so a
+      // stand-in still waiting is always for a turn after everything the page
+      // holds.
+      const newestPrompt = [...next.blocks].reverse().find(b => b.kind === "user" && !b.optimistic);
+      const settledText = newestPrompt?.kind === "user" ? newestPrompt.text : undefined;
+      const optimistic = v.blocks.filter(b => b.kind === "user" && b.optimistic
+        && (settledText === undefined || b.text !== settledText));
       const existingIds = new Set(next.blocks.map(b => b.id));
       next.blocks = [...next.blocks, ...optimistic.filter(b => !existingIds.has(b.id))];
       const settled: SessionView = { ...next, blocks: shareHistoryBlocks(next.blocks, v.blocks),
