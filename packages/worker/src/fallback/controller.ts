@@ -257,6 +257,15 @@ export class FallbackController {
     // it, never against a blind attempt.
     let tokensForTraversal: number | null | undefined;
     let compactedThisEvent = false;
+    // One policy skip is one attempt record even when compact recovery causes
+    // another traversal over the same candidates.
+    const recordedSkips = new Set<string>();
+    const recordSkip = (entry: SkippedCandidate): void => {
+      const key = `${modelKey(entry.model)}\0${entry.reason}`;
+      if (recordedSkips.has(key)) return;
+      recordedSkips.add(key);
+      this.recordAttempt(entry.model, { outcome: "skipped", reason: entry.reason });
+    };
     // Size skips recorded while B is selected vanish from the next traversal
     // (B is the active model). Carry them so later exhaustion still names them.
     let carriedSkips: SkippedCandidate[] = [];
@@ -304,6 +313,7 @@ export class FallbackController {
               markCompacted: () => {
                 compactedThisEvent = true;
               },
+              recordSkip,
             });
             if (recovered.kind === "aborted") return this.closeEvent("aborted");
             if (recovered.kind === "exhausted" || recovered.kind === "stopped") return false;
@@ -323,13 +333,13 @@ export class FallbackController {
             // traversal so those failures are "already tried", not a stale size skip.
             continue;
           }
-          for (const skipped of traversal.skipped) this.recordAttempt(skipped.model, { outcome: "skipped", reason: skipped.reason });
+          for (const skipped of traversal.skipped) recordSkip(skipped);
           if (this.stale(generation, abort)) return this.closeEvent("aborted");
           this.exhausted(standing ?? failed, standingFailure, [...carriedSkips, ...traversal.skipped]);
           return false;
         }
 
-        for (const skipped of traversal.skipped) this.recordAttempt(skipped.model, { outcome: "skipped", reason: skipped.reason });
+        for (const skipped of traversal.skipped) recordSkip(skipped);
         if (this.stale(generation, abort)) return this.closeEvent("aborted");
 
         const candidate = traversal.model;
@@ -452,6 +462,7 @@ export class FallbackController {
     generation: number;
     abort: AbortController;
     markCompacted: () => void;
+    recordSkip: (entry: SkippedCandidate) => void;
   }): Promise<RecoverResult> {
     for (const entry of options.sizeBlocked) {
       if (this.stale(options.generation, options.abort)) return { kind: "aborted" };
@@ -463,24 +474,31 @@ export class FallbackController {
       if (selected === "refused") continue;
       this.moveTo(index);
       if (this.stale(options.generation, options.abort)) return { kind: "aborted" };
+      // The exhausted snapshot already observed these candidates. Persist its
+      // non-size reasons before compact starts; size candidates remain
+      // recoverable and are recorded only if recovery cannot make them fit.
+      for (const skipped of options.allSkipped) {
+        if (skipped.reason !== CONTEXT_TOO_LONG_REASON) options.recordSkip(skipped);
+      }
       options.markCompacted();
       let estimate: number;
       try {
         estimate = (await this.engine.compact(options.abort.signal)).estimatedTokensAfter;
       } catch {
         if (this.stale(options.generation, options.abort)) return { kind: "aborted" };
-        this.recordAttempt(entry.model, { outcome: "skipped", reason: CONTEXT_TOO_LONG_REASON });
+        options.recordSkip(entry);
         this.exhausted(options.standing, options.standingFailure, options.allSkipped);
         return { kind: "exhausted" };
       }
+      if (this.stale(options.generation, options.abort)) return { kind: "aborted" };
       if (!Number.isFinite(estimate) || estimate < 0) {
-        this.recordAttempt(entry.model, { outcome: "skipped", reason: CONTEXT_TOO_LONG_REASON });
+        options.recordSkip(entry);
         this.exhausted(options.standing, options.standingFailure, options.allSkipped);
         return { kind: "exhausted" };
       }
       const window = options.catalogue.get(modelKey(entry.model))?.contextWindow;
       if (window !== undefined && estimate > window) {
-        this.recordAttempt(entry.model, { outcome: "skipped", reason: CONTEXT_TOO_LONG_REASON });
+        options.recordSkip(entry);
         return { kind: "reenter", tokens: estimate, skipped: [entry] };
       }
       const result = await this.finishAttempt({

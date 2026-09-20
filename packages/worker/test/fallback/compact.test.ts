@@ -151,7 +151,11 @@ function fallbacks(updates: SessionUpdate[]) {
 }
 
 it("compacts once under B then continues B without a second setModel", async () => {
-  const h = harness({ windows: { a: 200_000, b: 8_000, c: 8_000 }, tokens: 50_000 });
+  const h = harness({
+    windows: { a: 200_000, b: 8_000, c: 8_000 },
+    tokens: 50_000,
+    extras: { [modelKey(C)]: { signedIn: false } },
+  });
   expect(await h.settle()).toBe(true);
   expect(h.compacts).toBe(1);
   expect(h.setModels).toEqual([B]);
@@ -159,6 +163,8 @@ it("compacts once under B then continues B without a second setModel", async () 
   expect(fallbacks(h.updates).map((event) => event.phase)).toEqual(["switching", "switched"]);
   expect(fallbacks(h.updates).at(-1)?.to?.id).toBe("b");
   expect(h.entries.some((entry) => entry.failover?.attempts.some((attempt) => attempt.model === modelKey(B) && attempt.outcome === "failed"))).toBe(false);
+  const attempts = h.entries.at(-1)?.failover?.attempts ?? [];
+  expect(attempts.filter((attempt) => attempt.model === modelKey(C) && attempt.outcome === "skipped" && attempt.reason === "not signed in")).toHaveLength(1);
 });
 
 it("keeps the original access failure and B's size skip when compact throws", async () => {
@@ -178,6 +184,8 @@ it("keeps the original access failure and B's size skip when compact throws", as
   expect(exhausted.detail).toContain(`Stub B ${CONTEXT_TOO_LONG_REASON}`);
   expect(exhausted.detail).toContain("Stub C not signed in");
   expect((exhausted.detail?.match(new RegExp(CONTEXT_TOO_LONG_REASON, "g")) ?? []).length).toBe(1);
+  const attempts = h.entries.at(-1)?.failover?.attempts ?? [];
+  expect(attempts.filter((attempt) => attempt.model === modelKey(C) && attempt.outcome === "skipped" && attempt.reason === "not signed in")).toHaveLength(1);
 });
 
 it("does not compact when auto-compaction is off", async () => {
@@ -290,6 +298,29 @@ it("treats a missing compact estimate as compact failure, not a blind attempt", 
   expect(fallbacks(h.updates).at(-1)?.detail).toContain(CONTEXT_TOO_LONG_REASON);
 });
 
+it("manual selection fences an invalid estimate even when compact resolves", async () => {
+  let compactStarted!: () => void;
+  let releaseCompact!: () => void;
+  const started = new Promise<void>((resolve) => { compactStarted = resolve; });
+  const release = new Promise<void>((resolve) => { releaseCompact = resolve; });
+  const h = harness({
+    windows: { b: 8_000 },
+    tokens: 50_000,
+    extras: { [modelKey(C)]: { signedIn: false } },
+    compact: async () => {
+      compactStarted();
+      await release;
+      return { estimatedTokensAfter: Number.NaN };
+    },
+  });
+  const settling = h.settle();
+  await started;
+  h.controller.onManualSelection(C);
+  releaseCompact();
+  expect(await settling).toBe(false);
+  expect(fallbacks(h.updates).some((event) => event.phase === "exhausted")).toBe(false);
+});
+
 it("does not open failover on context overflow even when auto-compaction is on", async () => {
   const h = harness({ failure: OVERFLOW, windows: { b: 8_000 }, tokens: 50_000 });
   expect(await h.settle()).toBe(false);
@@ -358,6 +389,20 @@ it("re-enters traversal when the compact estimate still exceeds B but fits C", a
   expect(h.continues).toEqual([{ retries: "normal" }]);
   expect(h.entries.some((entry) => entry.failover?.attempts.some((attempt) => attempt.model === modelKey(B) && attempt.outcome === "skipped" && attempt.reason === CONTEXT_TOO_LONG_REASON))).toBe(true);
   expect(h.entries.some((entry) => entry.failover?.attempts.some((attempt) => attempt.model === modelKey(C) && attempt.outcome === "succeeded"))).toBe(true);
+});
+
+it("exhausts after one compact when B and C both remain too large", async () => {
+  const h = harness({
+    windows: { b: 1_000, c: 2_000 },
+    tokens: 50_000,
+    compact: async () => ({ estimatedTokensAfter: 4_000 }),
+  });
+  expect(await h.settle()).toBe(false);
+  expect(h.compacts).toBe(1);
+  expect(h.continues).toEqual([]);
+  const detail = fallbacks(h.updates).at(-1)?.detail ?? "";
+  expect(detail.match(new RegExp(`Stub B ${CONTEXT_TOO_LONG_REASON}`, "g"))).toHaveLength(1);
+  expect(detail.match(new RegExp(`Stub C ${CONTEXT_TOO_LONG_REASON}`, "g"))).toHaveLength(1);
 });
 
 it("does not claim B was merely too large after its selection was refused", async () => {
