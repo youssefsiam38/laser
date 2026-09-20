@@ -495,6 +495,37 @@ describe("routing a revision request", () => {
     }
   });
 
+  it("accepts a live page of other versions, which only its mode says it is", async () => {
+    const { path, cleanup } = fixture();
+    const index = new SessionIndexCache();
+    const service = revisions({ index });
+    const projection = new SessionProjection({ index, revisions: service });
+    const liveResult = {
+      entries: [{ id: "fork-a" }, { id: "fork-b" }],
+      leafId: "live-only",
+      window: {
+        revision: LIVE_REVISION,
+        environmentKey: ENVIRONMENT_KEY,
+        authority: "live",
+        mode: "versions",
+        versions: { total: 2, leaves: [{ id: "fork-a", leafId: "fork-a" }, { id: "fork-b", leafId: "fork-b" }] },
+      },
+    };
+    const h = harness({ path, open: [path], revisions: service, projection, liveResult });
+    try {
+      const response = await h.router.handle(
+        { jsonrpc: "2.0", id: 1, method: "pi/session/entries", params: { path, authority: "any", window: { versionsOf: "fork-a" } } },
+        LOCAL_ACCESS,
+      );
+      // The durable projection already answers this shape; a live worker
+      // answering it must not be treated as a foreign page.
+      expect(response).toMatchObject({ result: liveResult });
+    } finally {
+      h.cleanup();
+      cleanup();
+    }
+  });
+
   it("lets a live owner win authority:any and forwards a bounded first-screen request", async () => {
     const { path, cleanup } = fixture();
     const index = new SessionIndexCache();

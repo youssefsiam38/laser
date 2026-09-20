@@ -83,7 +83,13 @@ export class SessionRevisions {
   /** Validate a worker-produced history window without teaching Router token parsing. */
   validateWindow<T>(value: T): T {
     const window = (value as { window?: { revision?: unknown; environmentKey?: unknown; authority?: unknown; mode?: unknown } } | null)?.window;
-    if (!window || window.authority !== "live" || (window.mode !== "replace" && window.mode !== "delta")) this.liveMismatch();
+    // Every mode the protocol defines, or a worker that answers a page this
+    // host cannot name is a mismatch. `versions` is a page of one entry's
+    // siblings (M16-T98): still a live window, still bound to this
+    // environment, and rejecting it here would leave the live path refusing
+    // the exact request the durable path already serves.
+    if (!window || window.authority !== "live"
+      || (window.mode !== "replace" && window.mode !== "delta" && window.mode !== "versions")) this.liveMismatch();
     this.validateBinding(window.revision, window.environmentKey);
     return value;
   }
