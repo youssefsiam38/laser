@@ -46,7 +46,7 @@ function Controls() {
   view = useLaserView();
   useHandedBackText();
   useEffect(() => { void stable.actions.openSession(PATH); }, [stable.actions]);
-  return <button onClick={() => void actions.loadAllEntries()}>Load complete history</button>;
+  return null;
 }
 const flush = async () => { await act(async () => settle(30)); };
 const click = async (button: Element) => { await act(async () => (button as HTMLElement).click()); await flush(); };
@@ -57,6 +57,12 @@ const button = (label: string, scope: ParentNode = container) => {
 const row = (text: string) => [...container.querySelectorAll('[data-role="user"]')].find(e => e.textContent?.includes(text))!;
 const allReads = () => world.calls.filter(c => c.method === "pi/session/entries" && (c.params as { window?: { all?: boolean } }).window?.all);
 const composer = () => container.querySelector<HTMLTextAreaElement>('[data-test="composer"]')!.value;
+const pageToRoot = async () => {
+  for (const size of [60, 100, 140, 180, 220, 240]) {
+    await act(async () => { await actions.loadEarlierEntries(); }); await flush();
+    expect(view?.blocks).toHaveLength(size);
+  }
+};
 
 beforeEach(async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -75,7 +81,7 @@ beforeEach(async () => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
 it("hands the exact older fork prompt to the destination composer, without a full-history read", async () => {
-  await click(button("Load complete history"));
+  await pageToRoot();
   expect(view?.blocks).toHaveLength(240);
   const count = allReads().length;
   const more = button("More", row(prompt));
@@ -94,7 +100,7 @@ it("hands the exact older fork prompt to the destination composer, without a ful
 });
 
 it("keeps known versions through Previous and Next, without a full-history read", async () => {
-  await click(button("Load complete history"));
+  await pageToRoot();
   const count = allReads().length;
   await click(button("Edit", row(prompt)));
   const input = row(prompt).querySelector("textarea")!;
@@ -116,10 +122,7 @@ it("keeps known versions through Previous and Next, without a full-history read"
 });
 
 it("numbers three versions in persisted tree order after earlier pages, metadata refresh and version switches", async () => {
-  for (const size of [60, 100, 140, 180, 220, 240]) {
-    await act(async () => { await actions.loadEarlierEntries(); }); await flush();
-    expect(view?.blocks).toHaveLength(size);
-  }
+  await pageToRoot();
   expect(allReads()).toHaveLength(0);
   const count = allReads().length;
   const edit = async (previous: string, next: string) => {
@@ -148,7 +151,7 @@ it("numbers three versions in persisted tree order after earlier pages, metadata
 });
 
 it("does not leave a handed-back draft after editing into a new session", async () => {
-  await click(button("Load complete history"));
+  await pageToRoot();
   await click(button("Edit", row(prompt)));
   await click(button("In a new session", row(prompt)));
   expect(view?.path).not.toBe(PATH);

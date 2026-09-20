@@ -81,7 +81,6 @@ const stable = vi.hoisted(() => ({
     setModel: vi.fn(async () => undefined),
     setThinking: vi.fn(async () => undefined),
     listModels: vi.fn(async () => []),
-    loadAllEntries: vi.fn(async () => undefined),
   },
 }));
 
