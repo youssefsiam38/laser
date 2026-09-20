@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
 **Last updated:** 2026-09-20T19:45:00+03:00 · orchestrator-2026-09-20-config-root · HEAD: d92c5f6b
-**Current focus:** 0.11.0 is published and Latest; the person's acceptance pass on the transcript and the new-chat landing is still outstanding. M19-T6 T6B is the next build work.
+**Current focus:** 0.11.1 is published and Latest, with the person's own verification behind it. M19-T6 T6B is the next build work.
 
 | Milestone | State |
 | --- | --- |
@@ -34,4 +34,4 @@
 **In flight:** nothing building. M16-T97 and M16-T99 are merged and waiting on the person's browser acceptance (D-342: agents run no browser checks; the person tests the sandbox).
 **Published:** v0.10.1 is Latest (`09d68d51` candidate; 12 verified assets).
 **Next up:** M19-T6 T6B launcher/daemon/desktop binding; the UI half of M16-T98 once the window's contract is final; M19-T7 staging once the launch spine is released (D-339).
-**Recently done:** M16-T97 transcript paging + its review fixes and M16-T99 the local landing (`d92c5f6b`, UI 2992 passed / 1 skipped); the Changes overlay's diff and nested regions scroll (`a264e1ba`); M19-T6 T6A retained runtime store (`40177a72`); M16-T98 producer `{ versionsOf }` window with the host's live validator (`242c7b94`).
+**Recently done:** 0.11.1 — the whole-conversation read is gone and three transcript defects with it (`3eba514b`, `259f390f`); M16-T97 transcript paging and M16-T99 the local landing (`d92c5f6b`); the Changes overlay's diff and nested regions scroll (`a264e1ba`); M19-T6 T6A retained runtime store (`40177a72`); M16-T98 producer `{ versionsOf }` window with the host's live validator (`242c7b94`).
