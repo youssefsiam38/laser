@@ -6211,6 +6211,7 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 #### M22-T0 notes
 - 2026-09-21 claimed by codex-2026-09-21-model-profiles: the person settled that fallback chains and the proposed model tiers collapse into one unlimited, person-named Model Profile concept; write the binding contract with the full breaking-change inventory.
+- 2026-09-21 indexed: `docs/project-lifecycle-leap.md` gains "Companion contracts" naming `model-profiles.md` as binding and listing the outlined-but-unwritten companions (plain Chat and built-in removal, Ask Oracle, Jira external links, agent-facing tool contract); the leap document is the root source of truth for the whole change; execution section states that attempts run on a profile.
 - 2026-09-21 done: `docs/model-profiles.md` is binding (domain, assignments, per-session pin, runtime reuse of M15-T3/T8, migration, bounds, methods, affected-area inventory across protocol/worker/host/UI/CLI/persistence/docs); `PLAN.md` M22 index with the breaking-change summary and eleven dependency-ordered tasks; `docs/model-fallback-chains.md` carries the superseded banner and stays as the runtime record; D-346 recorded. Implementation not started; M22 precedes the built-in agent removal and Ask Oracle, which consume profile ids.
 
 ### D-346 · 2026-09-21 · One model-routing concept: unlimited Model Profiles

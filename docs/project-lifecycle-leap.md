@@ -7,10 +7,13 @@ making that session their owner. The lifecycle runs from a brief through
 research and design to an approved implementation plan, dependency-ordered
 Tasks, execution, verification and convergence.
 
-This document is the binding product and implementation contract for M21. Its
-entity names, ownership rules, revision semantics, gates, surfaces and security
-boundaries are decisions, not illustrative suggestions. The dependency-ordered
-implementation index remains in [`PLAN.md`](../PLAN.md#M21--the-project-lifecycle-leap).
+This document is the binding product and implementation contract for M21 and
+the root source of truth for the whole leap. Its entity names, ownership
+rules, revision semantics, gates, surfaces and security boundaries are
+decisions, not illustrative suggestions. Companion contracts that the leap
+depends on are listed under [Companion contracts](#companion-contracts); a
+rule stated there binds here. The dependency-ordered implementation index
+remains in [`PLAN.md`](../PLAN.md#M21--the-project-lifecycle-leap).
 
 Done when: two sessions in one project and a projectless Chat can mention the
 same Spec, Design, Plan and Task by stable identity; deleting either session
@@ -403,6 +406,12 @@ the owning project determines the worker and checkout. A session from another
 project may discuss the Task but cannot execute it in the wrong project; Laser
 offers to open or create an execution session in the owning project.
 
+An execution session, agent run or consultation runs on a **Model Profile**
+([`model-profiles.md`](model-profiles.md)): the session's profile for
+execution, `oracleProfileId` for fresh-context consultation, `namingProfileId`
+for titles. The attempt records the profile as intent and the model that
+answered as evidence; a Task never names a raw model.
+
 The implementation context packet contains exact approved revisions, unresolved
 comments, Task dependencies, acceptance criteria, project instructions and the
 last attempt's evidence. It is bounded, provenance-labelled and refreshed at
@@ -586,6 +595,26 @@ Optional Figma, Penpot, Storybook or registry connectors are project sources,
 not required infrastructure and not authorities over Laser approvals. Offline
 and self-hosted paths remain complete. Every imported component, asset or code
 candidate retains licence and source provenance.
+
+## Companion contracts
+
+The leap is one change made of several contracts. This document is the root;
+each companion below is binding for its area and is read through this index.
+A companion that is not yet written is listed so the dependency is visible,
+with the decisions already taken.
+
+| Contract | Document | Status | What the leap takes from it |
+| --- | --- | --- | --- |
+| Model Profiles | [`model-profiles.md`](model-profiles.md) | binding (M22, D-346) | one model-routing concept: person-named ordered lists, unlimited count, seeded Smart/Balanced/Fast; sessions, agents, naming and consultation choose a profile by stable id; `chainKey` → `profileId`; the breaking-change inventory across protocol, worker, host, UI, CLI, persistence and docs; M22 ships before anything below |
+| Repository provenance | this document, [Repository provenance](#repository-provenance) | binding (D-345) | `RepositoryLink`, stable repository identity, `based_on` / `implemented_by` / `verified_at` / `published_as` |
+| Plain Chat and built-in agent removal | to be written | decided in outline | Beam, Chat and Namer stop being `AgentDefinition`s; Chat is a `sessionKind: "chat"` session on `defaultProfileId` whose whole instruction template is `{{availableTools}}`, `{{toolGuidelines}}`, `{{availableSkills}}`; naming is a one-shot request on `namingProfileId`; open: whether the Beam spark survives as "New Chat" |
+| Ask Oracle | to be written | decided in outline | `ask_oracle` is a one-shot, tool-less consultation on `oracleProfileId` with the caller's agent instructions and trust policy, explicit bounded context only, no history, no session, no fleet row, no model switch; usage and logs attribute it as a consultation |
+| External work links (Jira) | to be written | decided in outline | `ExternalWorkLink` records the exact revision exported to a Jira issue; creation is explicit and previewed, update is explicit, never automatic sync; Jira never approves, completes or mutates Laser work; issue property carries Laser identity, remote link points back; least-privilege OAuth in the keychain |
+| Agent-facing tool contract | to be written | decided in outline | one standard for every lifecycle tool: intent-named, single-purpose, closed schemas, opaque ids, exact revisions with digests, reads separated from mutations, `expectedRevisionId` and idempotency keys, previews for external or destructive writes, host-side authorization, summary-by-default with pagination and references, errors that say what failed, what committed and the next valid action; evaluated across every configured profile |
+
+A companion moves from "to be written" to binding only through its own
+document, a plan milestone and a decision entry; the outline here does not
+license implementation.
 
 ## Implementation index
 

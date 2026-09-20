@@ -1,7 +1,9 @@
 # Model profiles
 
 Status: **binding design for M22** (`PLAN.md` "M22 · Model profiles"; decision
-D-346). Supersedes [`model-fallback-chains.md`](model-fallback-chains.md),
+D-346). A companion contract of
+[`project-lifecycle-leap.md`](project-lifecycle-leap.md), the root source of
+truth for the leap; it is indexed there under "Companion contracts". Supersedes [`model-fallback-chains.md`](model-fallback-chains.md),
 which stays as the record of the M15-T3 runtime this milestone reuses. Read
 [`AGENTS.md`](../AGENTS.md) invariants 1, 3, 4 and 6, and
 [`architecture.md`](architecture.md) first.
