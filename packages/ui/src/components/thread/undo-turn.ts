@@ -43,8 +43,8 @@ export function checkpointForPrompt(
   ordinal: number,
 ): CheckpointInfo | undefined {
   if (entryId) {
-    const byId = checkpoints?.find((row) => row.entryId === entryId && !row.failed);
-    if (byId) return byId;
+    // A miss must not fall back to the ordinal: extra settles drift that number.
+    return checkpoints?.find((row) => row.entryId === entryId && !row.failed);
   }
   return turnCheckpoint(checkpoints, restoreTurnForPrompt(ordinal));
 }

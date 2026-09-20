@@ -52,7 +52,7 @@ describe("checkpointForPrompt", () => {
       checkpoint(10, { entryId: "explain-13" }),
     ];
     expect(checkpointForPrompt(rows, "explain-13", 6)?.turn).toBe(10);
-    expect(checkpointForPrompt(rows, "missing", 0)?.turn).toBe(0);
+    expect(checkpointForPrompt(rows, "missing", 0)).toBeUndefined();
     expect(checkpointForPrompt(rows, undefined, 6)?.turn).toBe(6);
   });
 });
