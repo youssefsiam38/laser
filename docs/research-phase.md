@@ -34,9 +34,10 @@ changed in React 19 forms", "is this repo's licence compatible with ours" are
 complete uses. The lifecycle is one consumer of Research, not its owner:
 
 - In a project session, the artifact belongs to that project.
-- In a projectless Chat, the artifact belongs to the person's own workspace
-  (D-352) and can be moved into a project later, the same way a Chat session
-  moves (M13-T58). Nothing is copied or converted; only the owner changes.
+- In a projectless Chat, the command shows the project picker first (the
+  "Move to a project" picker, with "New project…"), creates the artifact in
+  the chosen project and continues in the same chat (D-352). The Chat stays
+  projectless.
 - `supports[]` links are optional. A Research with none is complete, not
   pending.
 - The Research tab lists standalone Research beside lifecycle Research with
@@ -184,7 +185,7 @@ others or any lifecycle state.
 
 | Entry | Effect |
 | --- | --- |
-| `/research <question>` in any session, including projectless Chat | creates a Research artifact owned by the current project, or by the person's workspace when there is none (D-352), with the root question; links it to the session; starts the loop in this session. No Spec is required or created |
+| `/research <question>` in any session, including projectless Chat | creates a Research artifact in the current project — after the project picker when the session has none (D-352) — with the root question; links it to the session; starts the loop in this session. No Spec is required or created |
 | Plain question in chat | the model may propose "Keep this as Research?" when it starts a retrieval loop; nothing is recorded unless the person or the model calls the writers |
 | **Research…** on a Spec or Design | pre-fills the question tree from the brief's open questions and constraints; links `supports` to the Spec/Design |
 | **Draft with agent** on the Research tab | same as above with a chosen session or a new one (leap rule: always session-backed and visible) |
