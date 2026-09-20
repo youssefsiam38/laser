@@ -46,7 +46,7 @@ const stable = vi.hoisted(() => ({
   client: { request: vi.fn(async () => ({})) },
   actions: {
     listModels: vi.fn(async () => []), send: vi.fn(), openSession: vi.fn(),
-    loadEarlierEntries: vi.fn(async (): Promise<EarlierPage> => ({ accepted: true, bytes: 2048 })), loadAllEntries: vi.fn(async () => true),
+    loadEarlierEntries: vi.fn(async (): Promise<EarlierPage> => ({ accepted: true, bytes: 2048 })),
     rereadHistory: vi.fn(async () => {}),
   },
 }));
@@ -138,7 +138,6 @@ afterEach(async () => {
   prefetchSpy = undefined;
   vi.clearAllMocks();
   stable.actions.loadEarlierEntries.mockImplementation(async () => PAGE);
-  stable.actions.loadAllEntries.mockImplementation(async () => true);
 });
 
 const entry = (index: number) => ({

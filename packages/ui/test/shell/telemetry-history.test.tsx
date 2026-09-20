@@ -6,13 +6,12 @@ import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { HistorySection } from "../../src/components/telemetry/history-section.js";
 import * as model from "../../src/components/shell/model.js";
 
-const mocks = vi.hoisted(() => ({ loadAllEntries: vi.fn(async () => true), refreshEntries: vi.fn(async () => {}), running: false,
-  current: "/session", entries: {} as Record<string, readonly unknown[]>, refusing: [] as string[] }));
+const mocks = vi.hoisted(() => ({ refreshEntries: vi.fn(async () => {}), running: false,
+  current: "/session", entries: {} as Record<string, readonly unknown[]> }));
 vi.mock("../../src/runtime/index.js", () => ({
   useLaserState: (selector: (state: unknown) => unknown) => selector({ current: mocks.current, open: { [mocks.current]: { path: mocks.current, running: mocks.running, entries: mocks.entries[mocks.current], history: { complete: false, branchesUnloaded: false } } } }),
   useSessionMeta: () => ({ path: mocks.current, running: mocks.running, compacting: false }),
   useLaserStable: () => ({ actions: mocks }),
-  useWholeTranscriptRefusal: () => ({ paused: mocks.refusing.includes("whole_transcript"), explanation: mocks.refusing.includes("whole_transcript") ? "This window is low on memory, so loading a whole conversation at once is paused. Earlier messages still load a page at a time." : undefined }),
 }));
 vi.mock("../../src/components/shell/shell-context.js", async () => {
   const { useState } = await import("react");
@@ -22,12 +21,10 @@ let root: Root;
 let container: HTMLDivElement;
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-  mocks.loadAllEntries.mockClear();
   mocks.refreshEntries.mockClear();
   mocks.running = false;
   mocks.current = "/session";
   mocks.entries = { "/session": [] };
-  mocks.refusing = [];
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); });
@@ -55,22 +52,6 @@ it("reuses immutable snapshots on switch-back while keeping folded counts truthf
   expect(project.mock.results[2]?.value[0]?.label).toBe("bookmark");
   expect(container.textContent).toContain("2 loaded");
   expect(mocks.refreshEntries).not.toHaveBeenCalled();
-  expect(mocks.loadAllEntries).not.toHaveBeenCalled();
-});
-
-it("explains a pressure refusal in place and does not offer a bypass", async () => {
-  const render = () => act(async () => root.render(<TooltipProvider><HistorySection /></TooltipProvider>));
-  await render();
-  const disclosure = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
-  await act(async () => disclosure.click());
-  mocks.refreshEntries.mockClear();
-  mocks.refusing = ["whole_transcript"];
-  await render();
-  expect(container.textContent).toContain("This window is low on memory, so loading a whole conversation at once is paused. Earlier messages still load a page at a time.");
-  const refresh = container.querySelector<HTMLButtonElement>('button[aria-label^="Refresh paused"]')!;
-  expect(refresh.disabled).toBe(true);
-  await act(async () => refresh.click());
-  expect(mocks.refreshEntries).not.toHaveBeenCalled();
 });
 
 it("refreshes only metadata when History opens and while its run settles", async () => {
@@ -80,13 +61,12 @@ it("refreshes only metadata when History opens and while its run settles", async
   const disclosure = container.querySelector<HTMLButtonElement>('button[aria-expanded]')!;
   await act(async () => disclosure.click());
   expect(disclosure.getAttribute("aria-expanded")).toBe("true");
-  expect(mocks.refreshEntries.mock.calls).toEqual([[{ tail: true }]]);
+  expect(mocks.refreshEntries.mock.calls).toEqual([[]]);
   mocks.running = true;
   await render();
   mocks.running = false;
   await render();
-  expect(mocks.refreshEntries.mock.calls).toEqual(Array.from({ length: 3 }, () => [{ tail: true }]));
-  expect(mocks.loadAllEntries).not.toHaveBeenCalled();
+  expect(mocks.refreshEntries.mock.calls).toEqual(Array.from({ length: 3 }, () => []));
 });
 
 it("qualifies a held count on the history figure while collapsed", async () => {

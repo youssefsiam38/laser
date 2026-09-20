@@ -4,12 +4,10 @@
  * doing it (RP-8 milestone F, D-265).
  *
  * The refusal is proved through the real provider and a real client: the host
- * publishes its summary, the window reads it the way the host decides it, and
- * the one thing it will not start — a whole-transcript read — is refused
- * *before* a request leaves the process. Everything a person is holding stays
- * exactly where it was: the transcript on screen, the draft they typed, the
- * conversation they selected. Bounded reads keep working, and the moment the
- * host says the pressure has passed, so does the refusal.
+ * publishes its summary, the window reads it the way the host decides it.
+ * Bounded reads keep working while the whole-transcript policy flag is set,
+ * and the moment the host says the pressure has passed, so does the refusal.
+ * Nothing here asks for the whole conversation; that path is gone.
  */
 import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -48,7 +46,6 @@ let world: World;
 let actions: LaserActions;
 let view: ReturnType<typeof useLaserView>;
 let refusing: readonly string[] = [];
-let rows: readonly { action: string; refusal?: string | undefined }[] = [];
 let refusalRenders = 0;
 
 function RefusalProbe() {
@@ -63,7 +60,6 @@ function Controls() {
   view = useLaserView();
   const pressure = useRendererPressure();
   refusing = pressure.refusing;
-  rows = pressure.rows;
   useEffect(() => { void stable.actions.openSession(PATH); }, [stable.actions]);
   return null;
 }
@@ -119,31 +115,6 @@ beforeEach(async () => {
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
-it("refuses a whole-transcript read without sending anything, and keeps everything a person holds", async () => {
-  const blocks = view?.blocks.length;
-  const path = view?.path;
-  const input = container.querySelector<HTMLTextAreaElement>('[data-test="composer"]')!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "half a thought");
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.focus();
-  });
-  await publish(1, "critical");
-  expect(refusing).toEqual(["whole_transcript"]);
-
-  const before = world.calls.length;
-  await act(async () => { await actions.loadAllEntries(); });
-  await flush();
-  // Nothing was asked for: no request of any kind left this window.
-  expect(world.calls.length).toBe(before);
-  expect(wholeReads()).toHaveLength(0);
-  // And nothing here moved.
-  expect(view?.path).toBe(path);
-  expect(view?.blocks.length).toBe(blocks);
-  expect(input.value).toBe("half a thought");
-  expect(document.activeElement).toBe(input);
-});
-
 it("keeps bounded reads working while it refuses the whole tree", async () => {
   await publish(1, "warning");
   const before = view?.blocks.length ?? 0;
@@ -152,20 +123,9 @@ it("keeps bounded reads working while it refuses the whole tree", async () => {
   expect(view!.blocks.length).toBeGreaterThan(before);
   expect(wholeReads()).toHaveLength(0);
   // A tail refresh is bounded too, and is never refused.
-  await act(async () => { await actions.refreshEntries({ tail: true }); });
-  await flush();
-  expect(wholeReads()).toHaveLength(0);
-});
-
-it("gives a manual refresh no way around the policy, and says why", async () => {
-  await publish(1, "critical");
-  const before = world.calls.length;
   await act(async () => { await actions.refreshEntries(); });
   await flush();
-  expect(world.calls.length).toBe(before);
-  expect(refusing).toEqual(["whole_transcript"]);
-  // The refusal is recorded once, where this window keeps its own record.
-  expect(rows.filter((row) => row.action === "admission_refused" && row.refusal === "whole_transcript")).toHaveLength(1);
+  expect(wholeReads()).toHaveLength(0);
 });
 
 it("stops refusing when the host says the pressure has passed", async () => {
@@ -173,9 +133,6 @@ it("stops refusing when the host says the pressure has passed", async () => {
   expect(refusing).toEqual(["whole_transcript"]);
   await publish(2, "normal");
   expect(refusing).toEqual([]);
-  await act(async () => { await actions.loadAllEntries(); });
-  await flush();
-  expect(wholeReads().length).toBeGreaterThan(0);
 });
 
 it("keeps a selected refusal subscriber still when unrelated pressure state changes", async () => {
