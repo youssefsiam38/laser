@@ -64,9 +64,9 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
   const status = useAgentsStatus();
   const agents = useAgentsActions();
   const { actions, projects } = useLaserStable();
-  const destination = useLaserState((s) => s.destination);
-  const destinationRef = useRef(destination);
-  destinationRef.current = destination;
+  const mainDestination = useLaserState((s) => s.destination);
+  const mainDestinationRef = useRef(mainDestination);
+  mainDestinationRef.current = mainDestination;
   const workbench = useWorkbench();
   const mobile = useIsMobile();
   const device = useSyncExternalStore(deviceStore.subscribe, deviceStore.status, deviceStore.status);
@@ -210,7 +210,7 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
       workbench.close();
     }
     void actions.newSession(projectCwd, { agentName: name }).catch((error: unknown) => {
-      const next = destinationRef.current;
+      const next = mainDestinationRef.current;
       if (next.phase === "ready-code" && next.code.kind === "project-landing" && next.code.project === projectCwd) {
         actions.toast("error", messageOf(error));
       }
