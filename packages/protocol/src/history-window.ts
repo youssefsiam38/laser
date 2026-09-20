@@ -6,6 +6,7 @@ import { ELIDED_RECORD_LIMITS, ELIDED_RECORD_MAX_BYTES, createImageReferenceCach
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
 const changed = (): never => { throw new ProtocolError(ErrorCodes.InvalidParams, "This history changed. Reload the conversation and try again."); };
+const unknownMessage = (): never => { throw new ProtocolError(ErrorCodes.InvalidParams, "That message is not part of this conversation."); };
 
 /** A durable page is deliberately recognizable without carrying a path or process identity. */
 export const DURABLE_HISTORY_EPOCH = "durable-v1";
@@ -185,6 +186,88 @@ interface HistoryCursor {
   b: string;
 }
 
+/** Last child in file order, until there is none: the leaf a version heads. */
+function leafOfNode(nodes: readonly HistoryWindowNode[], entryId: string): string {
+  const children = new Map<string, string[]>();
+  for (const node of nodes) {
+    if (node.id === undefined || node.parentId === null) continue;
+    const list = children.get(node.parentId);
+    if (list) list.push(node.id);
+    else children.set(node.parentId, [node.id]);
+  }
+  let current = entryId;
+  const seen = new Set<string>();
+  for (;;) {
+    if (seen.has(current)) return current;
+    seen.add(current);
+    const next = children.get(current)?.at(-1);
+    if (next === undefined) return current;
+    current = next;
+  }
+}
+
+/** `count` items around `namedAt`, always including that index. */
+function sliceAround(indices: readonly number[], namedAt: number, count: number): number[] {
+  const limit = Math.min(Math.max(count, 1), indices.length);
+  if (indices.length <= limit) return [...indices];
+  const before = Math.floor((limit - 1) / 2);
+  let start = Math.max(0, namedAt - before);
+  if (start + limit > indices.length) start = indices.length - limit;
+  return indices.slice(start, start + limit);
+}
+
+/**
+ * The siblings of one entry: same parent, file order, named entry included.
+ * Always a replacement; never a delta, never merged with a base.
+ */
+function planVersionsWindow(
+  nodes: readonly HistoryWindowNode[],
+  byId: Map<string, number>,
+  branch: readonly number[],
+  leafId: string | null,
+  versionsOf: string,
+  scope: HistoryWindowScope,
+  limit: number,
+): HistoryWindowPlan {
+  const namedIndex = byId.get(versionsOf);
+  if (namedIndex === undefined) return unknownMessage();
+  const parentId = nodes[namedIndex]!.parentId;
+  const siblingIndices: number[] = [];
+  for (let index = 0; index < nodes.length; index++) {
+    const node = nodes[index]!;
+    if (node.id === undefined || node.parentId !== parentId) continue;
+    siblingIndices.push(index);
+  }
+  const namedAt = siblingIndices.indexOf(namedIndex);
+  const selected = sliceAround(siblingIndices, namedAt, Math.min(limit, HISTORY_PAGE_ENTRY_LIMIT));
+  const leaves = selected.map((index) => {
+    const id = nodes[index]!.id!;
+    return { id, leafId: leafOfNode(nodes, id) };
+  });
+  return {
+    entryIndices: selected,
+    contextIndices: [],
+    leafId,
+    window: {
+      epoch: scope.epoch,
+      seq: scope.seq,
+      revision: scope.revision,
+      environmentKey: scope.environmentKey,
+      anchor: versionsOf,
+      userOffset: 0,
+      complete: false,
+      branchesUnloaded: branch.length !== nodes.length,
+      hasHistory: nodes.some((node) => node.isMessage || node.isGoalState),
+      priorGoalIds: [],
+      versions: { total: siblingIndices.length, leaves },
+      ...(scope.live ? { live: scope.live } : {}),
+      ...(scope.authority ? { authority: scope.authority } : {}),
+      // Always a replacement: never splice siblings onto a cached branch.
+      mode: "replace",
+    },
+  };
+}
+
 /**
  * Plan a window over identity-only rows. This is the shared display projection:
  * the worker materialises from its in-memory entries and the host reads only
@@ -200,6 +283,8 @@ export function historyWindowPlan(
    * Entry-unit only: a turn window already starts at a prompt (see the walk).
    */
   splitTurns = false,
+  /** `{ versionsOf }` only: how many siblings to carry, named entry included. */
+  versionLimit?: number,
 ): HistoryWindowPlan {
   const byId = new Map<string, number>();
   nodes.forEach((node, index) => { if (node.id !== undefined) byId.set(node.id, index); });
@@ -215,6 +300,9 @@ export function historyWindowPlan(
     id = nodes[index]!.parentId;
   }
   const branch = reversed.reverse();
+  if ("versionsOf" in request) {
+    return planVersionsWindow(nodes, byId, branch, leafId, request.versionsOf, scope, versionLimit ?? HISTORY_PAGE_ENTRY_LIMIT);
+  }
   let end = branch.length;
   let start = 0;
   const all = "all" in request;
@@ -355,7 +443,7 @@ function windowEntries(request: HistoryWindowRequest): number {
  * in entries already had.
  */
 export function isLiveEdgeWindow(request: HistoryWindowRequest): boolean {
-  if ("before" in request || "beforeEntry" in request || "from" in request || "all" in request) return false;
+  if ("before" in request || "beforeEntry" in request || "from" in request || "all" in request || "versionsOf" in request) return false;
   return "tail" in request || "turns" in request;
 }
 
@@ -375,7 +463,8 @@ function windowWithCount(request: HistoryWindowRequest, unit: "turns" | "entries
  * fits, a page *inside* that turn, counted in rows. A byte or row ceiling can
  * therefore shrink a page and can never refuse one (M16-T90). `all` and `from`
  * are indivisible: callers must refuse them when their exact projection is too
- * large. Every search is logarithmic, never one full branch replan per count.
+ * large. `{ versionsOf }` shrinks (fewer siblings) and is never refused.
+ * Every search is logarithmic, never one full branch replan per count.
  */
 export function fitHistoryWindowPlan(
   nodes: readonly HistoryWindowNode[],
@@ -387,6 +476,24 @@ export function fitHistoryWindowPlan(
   const initial = historyWindowPlan(nodes, leafId, request, scope);
   if (fits(initial)) return initial;
   if ("all" in request || "from" in request || scope.selection?.kind === "delta") return undefined;
+
+  if ("versionsOf" in request) {
+    const total = initial.window.versions?.total ?? 1;
+    let low = 1;
+    let high = Math.min(total, HISTORY_PAGE_ENTRY_LIMIT) - 1;
+    let best: HistoryWindowPlan | undefined;
+    while (low <= high) {
+      const count = low + Math.floor((high - low) / 2);
+      const candidate = historyWindowPlan(nodes, leafId, request, scope, false, count);
+      if (fits(candidate)) {
+        best = candidate;
+        low = count + 1;
+      } else {
+        high = count - 1;
+      }
+    }
+    return best;
+  }
 
   const search = (unit: "turns" | "entries", maximum: number, splitTurns: boolean): HistoryWindowPlan | undefined => {
     let low = 1;
@@ -515,11 +622,13 @@ export function boundedHistoryWindow(
       const smallest = historyWindowPlan(
         nodes,
         snapshot.leafId,
-        "before" in request ? { before: request.before, limit: 1 }
-          : "beforeEntry" in request ? { beforeEntry: request.beforeEntry, limit: 1 }
-            : { tail: 1 },
+        "versionsOf" in request ? request
+          : "before" in request ? { before: request.before, limit: 1 }
+            : "beforeEntry" in request ? { beforeEntry: request.beforeEntry, limit: 1 }
+              : { tail: 1 },
         scope,
         true,
+        "versionsOf" in request ? 1 : undefined,
       );
       const page = elide(smallest.entryIndices, ELIDED_RECORD_LIMITS.at(-1)!);
       const records = historyContentSerializedBytes(page.entries, []) + historyContentSerializedBytes(page.elided, []);

@@ -764,6 +764,42 @@ describe("worker-free session projection", () => {
     }
   }, 120_000);
 
+  it("serves the versions of a forked prompt from disk, matching the live authority", async () => {
+    const entries = [
+      ...messages(12),
+      message("fork", "e1", 20),
+      message("fork-a", "fork", 21),
+    ];
+    const f = fixture(entries);
+    try {
+      const { revisions, projection } = services();
+      const durable = await project(projection, f.path, { versionsOf: "e2" });
+      const revision = await revisions.read(f.path);
+      if (revision.kind !== "answer") throw new Error("missing revision");
+      const live = boundedHistoryWindow({ entries, leafId: "fork-a" }, { versionsOf: "e2" }, {
+        sessionId: "session-1", epoch: "live", seq: 9,
+        revision: revision.result.revision, environmentKey: revision.result.environmentKey,
+        authority: "live", selection: { kind: "replace" },
+      }, { digest: sha256Hex });
+      if (!live) throw new Error("the live authority refused versions");
+      expect(durable.entries.map(entry => (entry as { id: string }).id)).toEqual(["e2", "fork"]);
+      expect(durable.entries).toEqual(live.entries);
+      expect(durable.leafId).toBe(live.leafId);
+      expect(stableWindow(durable.window!)).toEqual(stableWindow(live.window));
+      expect(durable.window).toMatchObject({
+        authority: "durable",
+        mode: "replace",
+        versions: { total: 2, leaves: [{ id: "e2", leafId: "e11" }, { id: "fork", leafId: "fork-a" }] },
+      });
+      await expect(projection.read(f.path, { versionsOf: "gone" })).rejects.toMatchObject({
+        code: ErrorCodes.InvalidParams,
+        message: "That message is not part of this conversation.",
+      });
+    } finally {
+      f.cleanup();
+    }
+  });
+
   it("reindexes once across an append race and refuses a second stale-line interleaving", async () => {
     const appended = fixture(messages(2));
     try {

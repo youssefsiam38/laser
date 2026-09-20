@@ -96,7 +96,9 @@ export type HistoryWindowRequest =
   /** The page of turns immediately older than this active-ancestry entry. */
   | { beforeEntry: string; turns: number }
   | { from: string }
-  | { all: true };
+  | { all: true }
+  /** The other versions of this message: the entries sharing its parent. */
+  | { versionsOf: string };
 
 /** Accepted, nonterminal work beside a persisted history snapshot. */
 export interface HistoryLiveSnapshot {
@@ -140,6 +142,14 @@ export interface HistoryWindow {
   complete: boolean;
   /** Alternate branches exist outside this window's active-branch scope. */
   branchesUnloaded: boolean;
+  /**
+   * `{ versionsOf }` only. `total` is every sibling sharing the named entry's
+   * parent, including ones this page dropped to fit. `leaves` is the leaf of
+   * the branch each **carried** sibling heads, in file order — including a
+   * sibling whose body was elided, so the caller can navigate without a
+   * second lookup. `leaves.length < total` means this page shrank.
+   */
+  versions?: { total: number; leaves: Array<{ id: string; leafId: string }> };
   /** Durable messages or goal records exist in any branch, even with a reset leaf. */
   hasHistory: boolean;
   context: unknown[];
@@ -1494,7 +1504,7 @@ export interface ClientRequests {
        * On an omitted/default-tail or explicit `tail` read, a proved canonical
        * prefix may be answered as a delta. `before` and `beforeEntry` require
        * this field and merge only when it is still current or a proved prefix;
-       * `from` and `all` keep replacement semantics.
+       * `from`, `all` and `versionsOf` keep replacement semantics.
        */
       baseRevision?: string;
       /**
