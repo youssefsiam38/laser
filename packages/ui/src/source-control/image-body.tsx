@@ -296,7 +296,7 @@ export function BinaryFileBody({
         {...(split ? {} : { tabIndex: 0, role: "region", "aria-label": `${view.path}, before and after` })}
         className={cn(
           "flex min-h-0 min-w-0 flex-1 outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
-          split ? "flex-row divide-x divide-line overflow-hidden" : "flex-col divide-y divide-line overflow-y-auto",
+          split ? "flex-row divide-x divide-line overflow-hidden" : "flex-col divide-y divide-line overflow-y-auto overscroll-contain",
         )}
       >
         {wantsOld ? <ImageSide view={view} side="old" state={old} /> : null}

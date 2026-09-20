@@ -26,7 +26,7 @@ vi.mock("@pierre/diffs/react", () => ({
     return <div data-slot="pierre-file-diff" />;
   },
   Virtualizer: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-    <div data-slot="pierre-virtualizer" className={className}>{children}</div>,
+    <div data-pierre="virtualizer" data-slot="pierre-virtualizer" className={className}>{children}</div>,
 }));
 
 /**
@@ -160,14 +160,28 @@ function notice(): string | null {
  * Pierre's `Virtualizer` is the scroll container: it renders one plain div
  * and listens for `scroll` on it. Handed no overflow of its own, inside a
  * host that clips, a long file cannot be scrolled at all — which is exactly
- * what shipped. The class is the contract here because the renderer itself
- * is mocked; the browser check is what proves the pixels.
+ * what shipped.
+ *
+ * The class string is a proxy: this file mocks the renderer, so it cannot
+ * read `scrollHeight` / `clientHeight`. The real proof is the browser check
+ * (`scripts/browser-check/test/changes-overlay-scroll.mjs`), which opens a
+ * file taller and wider than the overlay and asserts wheel, keyboard and
+ * touch actually move `scrollTop` / `scrollLeft`.
  */
 it("gives the renderer a scroll container, so a file longer than the overlay can be read", async () => {
   await mount(sidesAdapter());
-  const virtualizer = container.querySelector<HTMLElement>('[data-slot="pierre-virtualizer"]')!;
+  const virtualizer = container.querySelector<HTMLElement>('[data-pierre="virtualizer"]')!;
   expect(virtualizer.className).toMatch(/\boverflow-(auto|y-auto)\b/);
+  expect(virtualizer.className).toMatch(/\bmin-h-0\b/);
+  expect(virtualizer.className).toMatch(/\bflex-1\b/);
   expect(body().className).toContain("overflow-hidden");
+  expect(body().className).toMatch(/\bflex\b/);
+  // Keyboard path: Tab into the region, then PageDown/End/arrows. Pierre
+  // does not forward tabIndex, so the chrome pass stamps it.
+  expect(virtualizer.getAttribute("data-slot")).toBe("changes-diff-scroll");
+  expect(virtualizer.tabIndex).toBe(0);
+  expect(virtualizer.getAttribute("role")).toBe("region");
+  expect(virtualizer.getAttribute("aria-label")).toBe("src/body-range.ts diff");
 });
 
 it("never hands the renderer a partial diff and a loader, which is the dead row's only cause", async () => {
@@ -276,7 +290,7 @@ it("bounds one press to a screenful, never a file", async () => {
   expect(options.expandUnchanged).toBe(false);
   // The virtualizer is not optional: it is what keeps an expanded large file
   // from mounting twenty thousand line nodes.
-  expect(container.querySelector('[data-slot="pierre-virtualizer"]')).toBeTruthy();
+  expect(container.querySelector('[data-pierre="virtualizer"]')).toBeTruthy();
 });
 
 it("says so plainly when the surrounding lines cannot be read", async () => {

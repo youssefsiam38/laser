@@ -41,7 +41,7 @@ export function ChangesTabStrip({
       data-slot="changes-tabs"
       role="tablist"
       aria-label="Open files"
-      className="flex shrink-0 items-stretch overflow-x-auto overflow-y-hidden bg-surface-2 hairline-b scrollbar-none"
+      className="flex shrink-0 items-stretch overflow-x-auto overflow-y-hidden overscroll-contain bg-surface-2 hairline-b scrollbar-none"
     >
       {tabs.map((tab) => {
         const file = files.get(`${tab.repo}:${tab.path}`);

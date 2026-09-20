@@ -138,7 +138,7 @@ export function DiffBody({ page, scope, diffStyle }: { page: FileDiffPage; scope
     }
   }, [partial, sides, expansion, path, oldPath]);
 
-  useDiffShadowChrome(host, `${repo}\u0000${path}\u0000${diffStyle}\u0000${base}\u0000${expansion}`);
+  useDiffShadowChrome(host, `${repo}\u0000${path}\u0000${diffStyle}\u0000${base}\u0000${expansion}`, `${path} diff`);
 
   const options = useMemo(
     () => ({
@@ -175,13 +175,14 @@ export function DiffBody({ page, scope, diffStyle }: { page: FileDiffPage; scope
         data-expansion={expansion}
         {...(mismatch ? { "data-expansion-detail": mismatch } : {})}
         style={DIFF_HOST_STYLE}
-        className="min-h-0 min-w-0 flex-1 overflow-hidden"
+        className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
       >
         {/* Pierre's `Virtualizer` renders a plain div and listens for `scroll`
             on it: it is the scroll container, so it has to be able to scroll.
-            Without an overflow of its own the rows simply overrun the host,
-            which clips them, and a long file cannot be read at all. */}
-        <Virtualizer className="h-full overflow-auto overscroll-contain">
+            `h-full` alone is not enough inside a flex host that clips — the
+            child must shrink (`min-h-0 flex-1`) or it sizes to its rows, the
+            host clips them, and nothing scrolls. */}
+        <Virtualizer className="min-h-0 h-full min-w-0 flex-1 overflow-auto overscroll-contain outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live">
           <FileDiff fileDiff={fileDiff} options={options} disableWorkerPool />
         </Virtualizer>
       </div>

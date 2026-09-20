@@ -44,3 +44,20 @@ it("does not steal file motion while typing in an input", () => {
   expect(overlayKeyAction(find)).toBe("find");
   input.remove();
 });
+
+it("lets arrows scroll a focused diff instead of changing file", () => {
+  const scroller = document.createElement("div");
+  scroller.dataset.slot = "changes-diff-scroll";
+  scroller.tabIndex = 0;
+  document.body.append(scroller);
+  const down = key({ key: "ArrowDown", bubbles: true });
+  scroller.dispatchEvent(down);
+  expect(overlayKeyAction(down)).toBeUndefined();
+  const up = key({ key: "ArrowUp", bubbles: true });
+  scroller.dispatchEvent(up);
+  expect(overlayKeyAction(up)).toBeUndefined();
+  const next = key({ key: "j", bubbles: true });
+  scroller.dispatchEvent(next);
+  expect(overlayKeyAction(next)).toBe("next-file");
+  scroller.remove();
+});
