@@ -100,6 +100,16 @@ export class TranscriptViewport {
   /** The person moved the view themselves since the last reading sample. */
   private gestured = false;
   /**
+   * The direction of the person's last deliberate movement. An upward one is
+   * the person leaving the live edge to read, and it holds: no sample that
+   * happens to find the view at the end — a smooth scroll that has not moved
+   * yet, a glide the list was already performing, a row that shrank — may put
+   * them back on it. Only a movement of their own towards the end, or an
+   * explicit "Jump to latest" / Send, does. A person who has scrolled up is
+   * never scrolled down by anything but themselves.
+   */
+  private lastGesture: "up" | "down" | "either" | undefined;
+  /**
    * How many times the person has moved the view, ever, on this surface. A
    * scroll event is not this — the list's own position keeping raises those
    * too — so a pager that must re-arm only when the person moves reads this
@@ -301,6 +311,7 @@ export class TranscriptViewport {
     // explicit intent, made once, in the commit that has the rows.
     this.place = { following: true };
     this.gestured = false;
+    this.lastGesture = undefined;
     this.attempts = 0;
     this.pendingLatest = Boolean(path);
     this.publishAnchors();
@@ -495,7 +506,16 @@ export class TranscriptViewport {
     const viewport = this.viewport;
     if (!viewport) return this.place;
     const atEnd = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= LIVE_EDGE;
-    const following = this.pendingLatest || atEnd ? true : this.gestured ? false : this.place.following;
+    // Owed placement first; then the person's own last movement. Upwards
+    // holds them off the edge whatever the geometry says right now — the
+    // wheel may not have moved the view yet, or the list may still be gliding
+    // to an end they have just asked to leave. Otherwise being at the end is
+    // being on the edge, and a movement that did not reach it is not.
+    const following = this.pendingLatest ? true
+      : this.lastGesture === "up" ? false
+      : atEnd ? true
+      : this.gestured ? false
+      : this.place.following;
     this.gestured = false;
     const view = viewport.getBoundingClientRect();
     let anchor: Anchor | undefined;
@@ -524,6 +544,7 @@ export class TranscriptViewport {
     this.cancel();
     this.attempts = 0;
     this.pendingLatest = true;
+    this.lastGesture = undefined;
     this.place = { following: true };
     this.placeToLatest();
     this.publish();
@@ -768,6 +789,7 @@ export class TranscriptViewport {
       this.cancel();
       this.pendingLatest = false;
       this.gestured = true;
+      this.lastGesture = direction;
       schedule();
     };
     const selection = () => {
