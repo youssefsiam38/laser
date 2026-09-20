@@ -297,6 +297,22 @@ recorded reason and moves on (never a throw, never a stall):
 | Not `nonTransient` for this activation | `no credit left` / `not accepted` … (the class's sentence) |
 | The conversation fits: `contextUsage.tokens ≤ candidate.contextWindow` | `the conversation is longer than this model can hold` |
 
+**D-336 exception.** The size check stays a skip, not a new eligible class, and
+`context_overflow` still never *opens* a failover. When an **access** failure
+has already opened one, auto-compaction is on, and `nextCandidate` would
+otherwise exhaust with at least one skip that is *only* that size sentence,
+the controller selects the first such candidate in traversal order, calls
+public `AgentSession.compact()` once under it, and requires a finite
+nonnegative `estimatedTokensAfter`. If the estimate fits, it continues the
+same accepted turn on that candidate (no second `setModel`, no second
+traversal for it). If the estimate is still larger than that window, it
+records the size skip once, freezes the estimate, and re-enters traversal
+from that position so a later larger-window model can take the turn without
+another compact. Compact throw, a missing estimate, cancel, and manual
+selection abort or exhaust immediately. Auto-compaction off leaves today's
+size sentence. One actual compact call per failover; a `setModel` refuse does
+not consume it.
+
 The "one bounded attempt" for an earlier model is not a health check and not a
 synthetic prompt: it is **the pending agent work, through the normal request
 path**. Concretely (§3.1) it is the same `agent.continue()` the engine uses to
@@ -439,7 +455,7 @@ is policy and refuses the part that is not:
 | Engine post-run behaviour | In the controller's continuation |
 | --- | --- |
 | Retry of a retryable error, `settings.retry` budget, exponential backoff | **Reproduced.** Budget and delays come from `settingsManager.getRetrySettings()`, the same source the engine reads; the decision uses `isRetryableAssistantError` imported from the exact-pinned `@earendil-works/pi-ai/compat`, the same function the engine uses (`agent-session.js:18`), so there is no second classifier to drift. The same `auto_retry_start`/`auto_retry_end` updates are emitted, so D-180's quiet presentation applies unchanged. A **return attempt** runs this with a budget of `0` — one request, as specified |
-| Auto-compaction / overflow recovery between attempts | **Not reproduced** (`_checkCompaction` is private). Instead, a candidate whose context window cannot hold the conversation is ineligible (§2.5), and a `context_overflow` failure never opens a failover event. If the continuation itself overflows, the controller stops and hands the turn back as an ordinary error; the person's next prompt goes through `session.prompt()`, which compacts before sending |
+| Auto-compaction / overflow recovery between attempts | **Not inlined** (`_checkCompaction` is private). Size remains an eligibility skip (§2.5). D-336 is the exception: on size-only exhaustion, with auto-compaction on, the controller calls public `session.compact()` once under that candidate, then the shared `continueTurn` path. `context_overflow` still never opens a failover. If the continuation itself overflows, the controller stops and hands the turn back as an ordinary error |
 | Draining queued steering/follow-up messages after the run | **Reproduced**: after the continuation settles, `agent.hasQueuedMessages()` drives one more `agent.continue()`, exactly as the engine's last line does |
 | `agent_settled` emission | **Deferred, not duplicated.** The engine emits `agent_settled` when the *failed* turn ends, before the failover starts. The driver holds that update while a failover event is in flight and releases one when the event closes. This matters: the harness treats the `agent_settled` update as "the run settled" (`packages/worker/src/agents/harness.ts:931`), so forwarding the premature one would end a child's run in the middle of its own failover |
 | `_flushPendingBashMessages` / `_flushPendingCustomMessages` | Not reproduced; they flush on the next prompt as they do today |
@@ -755,9 +771,9 @@ Required commands at a stable point: `pnpm -F @lasercode/protocol test`,
    one structural risk. `agent.continue()` and `agent.state.messages` are
    public, and the trailing-error-message idiom is the engine's own, used in two
    places — but the retry budget and the queue drain are reproduced by Laser
-   rather than inherited, and auto-compaction is not reproduced at all (§3.2).
-   Mitigations: the context-window eligibility check, `context_overflow` never
-   triggering a failover, and a Pi-bump checklist item under MX-T2. If a later
+   rather than inherited, and `_checkCompaction` is not inlined (§3.2). D-336
+   recovers size-only exhaustion with one public `compact()` gated by
+   auto-compaction; `context_overflow` still never opens a failover. If a later
    Pi exposes a public "continue this turn" entry point, the controller should
    switch to it and delete its own loop.
 2. **Classification is text-based for nearly every real failure.** The engine

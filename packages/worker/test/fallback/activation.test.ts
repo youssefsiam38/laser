@@ -37,6 +37,8 @@ function harness(selected: FallbackModelRef | null, chains: FallbackChain[] = CH
     setModel: async (next) => { model = next; },
     abortTurn: () => {},
     continueTurn: async () => {},
+    autoCompactionEnabled: () => true,
+    compact: async () => ({ estimatedTokensAfter: 0 }),
     appendEntry: (entry) => { entries.push(entry); },
     emit: (update) => { updates.push(update); },
     now: () => 0,

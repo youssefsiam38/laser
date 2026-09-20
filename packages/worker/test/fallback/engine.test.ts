@@ -81,15 +81,17 @@ function writeStubs(
   chain: Array<{ provider: string; id: string }> = [MODEL.a, MODEL.b, MODEL.c],
   extraChains: Array<{ models: Array<{ provider: string; id: string }> }> = [],
   defaultModel: { provider: string; id: string } = MODEL.a,
+  options: { windows?: Partial<Record<Which, number>>; compaction?: Record<string, unknown> } = {},
 ): void {
   mkdirSync(agentDir, { recursive: true });
+  const windowOf = (which: Which, fallback: number) => options.windows?.[which] ?? fallback;
   writeFileSync(
     join(agentDir, "models.json"),
     JSON.stringify({
       providers: {
-        stub: { baseUrl: stubs.a.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-1", name: "Stub A", contextWindow: 8000, maxTokens: 1000 }] },
-        "stub-b": { baseUrl: stubs.b.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-b-1", name: "Stub B", contextWindow: 8000, maxTokens: 1000 }] },
-        "stub-c": { baseUrl: stubs.c.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-c-1", name: "Stub C", contextWindow: 8000, maxTokens: 1000 }] },
+        stub: { baseUrl: stubs.a.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-1", name: "Stub A", contextWindow: windowOf("a", 8000), maxTokens: 1000 }] },
+        "stub-b": { baseUrl: stubs.b.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-b-1", name: "Stub B", contextWindow: windowOf("b", 8000), maxTokens: 1000 }] },
+        "stub-c": { baseUrl: stubs.c.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-c-1", name: "Stub C", contextWindow: windowOf("c", 8000), maxTokens: 1000 }] },
       },
     }),
   );
@@ -102,6 +104,7 @@ function writeStubs(
       // milliseconds where production spends seconds. It is still the engine's
       // loop: `maxRetries` attempts after the first, exponential backoff.
       retry: { enabled: true, maxRetries: 1, baseDelayMs: 5 },
+      ...(options.compaction ? { compaction: options.compaction } : {}),
       ...(chain.length > 0 ? { fallbackChains: [{ models: chain }, ...extraChains] } : {}),
     }),
   );
@@ -643,4 +646,83 @@ it("does not open a second failover from a failure it already acted on", async (
   await driver.compact().catch(() => {});
   await wait(100);
   expect(fallbacks(updates).filter((event) => event.phase === "exhausted")).toHaveLength(1);
+});
+
+const CHUNK = `note: ${"x".repeat(4_000)}`;
+const fat = (text: string): StubAnswer => ({
+  text,
+  usage: { prompt_tokens: 7_000, completion_tokens: 50, total_tokens: 7_050 },
+});
+
+async function fillThenFail(driver: StableSdkDriver, fail: () => void): Promise<void> {
+  script.a = () => fat("from a");
+  for (let i = 0; i < 5; i++) await driver.prompt([{ type: "text", text: CHUNK }]);
+  fail();
+  await driver.prompt([{ type: "text", text: "continue" }]);
+}
+
+it("compacts so an oversized fallback can finish the same turn", async () => {
+  writeStubs([MODEL.a, MODEL.b], [], MODEL.a, {
+    windows: { a: 100_000, b: 4_000 },
+    compaction: { enabled: true, keepRecentTokens: 200, reserveTokens: 0 },
+  });
+  script.b = () => ok("finished on b after compact");
+  const { driver, updates } = await open();
+  await fillThenFail(driver, () => {
+    script.a = () => down();
+  });
+
+  expect(idOf(driver)).toBe("stub-b-1");
+  expect(updates.some((update) => update.kind === "compaction_start")).toBe(true);
+  expect(updates.some((update) => update.kind === "compaction_end" && update.ok)).toBe(true);
+  const events = fallbacks(updates);
+  expect(events.at(-1)).toMatchObject({ phase: "switched" });
+  expect(events.at(-1)?.to?.id).toBe("stub-b-1");
+  expect(requests("b")).toBeGreaterThanOrEqual(1);
+  const settled = updates.findLastIndex((update) => update.kind === "agent_settled");
+  const switched = updates.findIndex((update) => update.kind === "model_fallback" && update.phase === "switched");
+  expect(settled).toBeGreaterThan(switched);
+  expect(driver.state().isStreaming).toBe(false);
+});
+
+it("does not compact an oversized fallback when auto-compaction is off", async () => {
+  writeStubs([MODEL.a, MODEL.b], [], MODEL.a, {
+    windows: { a: 100_000, b: 4_000 },
+    compaction: { enabled: false, keepRecentTokens: 200, reserveTokens: 0 },
+  });
+  script.b = () => ok("from b");
+  const { driver, updates } = await open();
+  await fillThenFail(driver, () => {
+    script.a = () => down();
+  });
+
+  expect(requests("b")).toBe(0);
+  expect(updates.some((update) => update.kind === "compaction_start")).toBe(false);
+  const exhausted = fallbacks(updates).at(-1);
+  expect(exhausted?.phase).toBe("exhausted");
+  expect(exhausted?.detail).toContain("the conversation is longer than this model can hold");
+});
+
+it("does not replay a tool when compacting onto the oversized fallback", async () => {
+  writeStubs([MODEL.a, MODEL.b], [], MODEL.a, {
+    windows: { a: 100_000, b: 4_000 },
+    compaction: { enabled: true, keepRecentTokens: 200, reserveTokens: 0 },
+  });
+  const marker = join(base, "ran-compact");
+  script.b = () => ok("finished on b");
+  const { driver } = await open();
+  await fillThenFail(driver, () => {
+    let aCalls = 0;
+    script.a = () => {
+      aCalls++;
+      return aCalls === 1
+        ? { toolCall: { name: "bash", args: { command: `echo one >> ${JSON.stringify(marker).slice(1, -1)}` } } }
+        : down();
+    };
+  });
+
+  expect(idOf(driver)).toBe("stub-b-1");
+  const handover = stubs.b.requests.at(-1)!;
+  expect(handover.messages.filter((m) => m.role === "tool")).toHaveLength(1);
+  expect(JSON.stringify(handover.messages)).not.toContain("Internal server error");
 });

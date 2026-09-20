@@ -53,6 +53,9 @@ export interface CandidateContext {
   now: number;
 }
 
+/** Why a candidate is skipped when the conversation does not fit its window. */
+export const CONTEXT_TOO_LONG_REASON = "the conversation is longer than this model can hold";
+
 /** One candidate the traversal passed over, with the sentence a person reads. */
 export interface SkippedCandidate {
   model: FallbackModelRef;
@@ -167,7 +170,7 @@ export function ineligibleReason(model: FallbackModelRef, context: CandidateCont
   if (cooldown !== undefined && cooldown > context.now) return "tried too recently";
   const tokens = context.contextTokens;
   if (tokens !== null && candidate.contextWindow !== undefined && tokens > candidate.contextWindow) {
-    return "the conversation is longer than this model can hold";
+    return CONTEXT_TOO_LONG_REASON;
   }
   return undefined;
 }
@@ -205,6 +208,16 @@ export function nextCandidate(context: CandidateContext): Traversal {
     };
   }
   return { kind: "exhausted", skipped };
+}
+
+/**
+ * `return` is an earlier model than the one the chain is standing on; `advance`
+ * is a later fallback. Same mapping {@link nextCandidate} uses, so a size
+ * recovery can join the shared attempt path without asking the traversal for
+ * a model it has just moved onto.
+ */
+export function attemptDirection(position: number, index: number): "return" | "advance" {
+  return index < position ? "return" : "advance";
 }
 
 /**

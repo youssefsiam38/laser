@@ -39,17 +39,39 @@ import {
 
 import {
   activate,
+  attemptDirection,
   clearActivationMarks,
+  CONTEXT_TOO_LONG_REASON,
   exhaustionDetail,
   nextCandidate,
   opensFailover,
   rememberFailure,
   type CandidateModel,
+  type SkippedCandidate,
 } from "./policy.js";
 import { EMPTY_FALLBACK_STATE, entryFor, restoreFallbackState, summaryFor, type FallbackState } from "./state.js";
 
 /** The one skip reason that is bookkeeping rather than something to tell a person. */
 const ALREADY_TRIED = "already tried in this switch";
+
+type AttemptResult =
+  | { kind: "succeeded" }
+  | { kind: "aborted" }
+  | { kind: "stopped" }
+  | { kind: "failed"; failure: ProviderFailure };
+
+type RecoverResult =
+  | { kind: "succeeded" }
+  | { kind: "aborted" }
+  | { kind: "stopped" }
+  | { kind: "exhausted" }
+  | { kind: "none" }
+  | { kind: "reenter"; tokens: number }
+  | { kind: "failed"; failure: ProviderFailure; candidate: FallbackModelRef; tokens: number };
+
+function visibleSkips(skipped: readonly SkippedCandidate[]): SkippedCandidate[] {
+  return skipped.filter((entry) => entry.reason !== ALREADY_TRIED).map((entry) => ({ model: entry.model, reason: entry.reason }));
+}
 
 /** Everything the controller needs from the live session, and nothing more. */
 export interface FallbackEngine {
@@ -72,6 +94,13 @@ export interface FallbackEngine {
   abortTurn(): void;
   /** Continue the interrupted turn on the model that is selected now. */
   continueTurn(options: { retries: "none" | "normal"; signal: AbortSignal }): Promise<void>;
+  /** Settings → Auto-compaction. Size recovery does not run when this is off. */
+  autoCompactionEnabled(): boolean;
+  /**
+   * Summarise history on the model already selected. Must return a finite
+   * nonnegative `estimatedTokensAfter`; a missing estimate is a compact failure.
+   */
+  compact(signal: AbortSignal): Promise<{ estimatedTokensAfter: number }>;
   appendEntry(entry: SessionFallbackEntry): void;
   emit(update: SessionUpdate): void;
   now(): number;
@@ -202,6 +231,11 @@ export class FallbackController {
     // first.
     let standing = failed;
     let standingFailure = failure;
+    // After a compact, Pi's usage is null until the next assistant. Freeze the
+    // estimate for the rest of this failover so later models are sized against
+    // it, never against a blind attempt.
+    let tokensForTraversal: number | null | undefined;
+    let compactedThisEvent = false;
     try {
       if (!failed) return false;
       this.openEvent(failed, failure);
@@ -216,89 +250,82 @@ export class FallbackController {
 
       for (;;) {
         if (this.stale(generation, abort)) return this.closeEvent("aborted");
+        const live = this.state.activation ?? activation;
         const traversal = nextCandidate({
-          activation: this.state.activation ?? activation,
+          activation: live,
           memory: this.state.models,
           event: this.event(),
           catalogue: await this.engine.catalogue(),
-          contextTokens: this.engine.contextTokens(),
+          contextTokens: tokensForTraversal !== undefined ? tokensForTraversal : this.engine.contextTokens(),
           now: this.engine.now(),
         });
-        for (const skipped of traversal.skipped) this.recordAttempt(skipped.model, { outcome: "skipped", reason: skipped.reason });
-        if (this.stale(generation, abort)) return this.closeEvent("aborted");
         if (traversal.kind === "exhausted") {
+          const sizeBlocked = traversal.skipped.filter((entry) => entry.reason === CONTEXT_TOO_LONG_REASON);
+          if (!compactedThisEvent && this.engine.autoCompactionEnabled() && sizeBlocked.length > 0) {
+            const recovered = await this.recoverOversized({
+              sizeBlocked,
+              allSkipped: traversal.skipped,
+              exhaustionPosition: live.position,
+              models: live.models,
+              origin: failed,
+              originFailure: failure,
+              standing: standing ?? failed,
+              standingFailure,
+              generation,
+              abort,
+              markCompacted: () => {
+                compactedThisEvent = true;
+              },
+            });
+            if (recovered.kind === "aborted") return this.closeEvent("aborted");
+            if (recovered.kind === "exhausted" || recovered.kind === "stopped") return false;
+            if (recovered.kind === "succeeded") return true;
+            if (recovered.kind === "reenter" || recovered.kind === "failed") {
+              tokensForTraversal = recovered.tokens;
+              if (recovered.kind === "failed") {
+                standing = recovered.candidate;
+                standingFailure = recovered.failure;
+              }
+              continue;
+            }
+            // `none`: every size-blocked candidate refused setModel. Re-run the
+            // traversal so those failures are "already tried", not a stale size skip.
+            continue;
+          }
+          for (const skipped of traversal.skipped) this.recordAttempt(skipped.model, { outcome: "skipped", reason: skipped.reason });
+          if (this.stale(generation, abort)) return this.closeEvent("aborted");
           this.exhausted(
             standing ?? failed,
             standingFailure,
             // "already tried in this switch" is bookkeeping, not a reason a
             // person needs; the attempt it refers to already had its say.
-            traversal.skipped.filter((entry) => entry.reason !== ALREADY_TRIED).map((entry) => ({ model: entry.model, reason: entry.reason })),
+            visibleSkips(traversal.skipped),
           );
           return false;
         }
 
+        for (const skipped of traversal.skipped) this.recordAttempt(skipped.model, { outcome: "skipped", reason: skipped.reason });
+        if (this.stale(generation, abort)) return this.closeEvent("aborted");
+
         const candidate = traversal.model;
-        let position = traversal.position;
-        try {
-          await this.engine.setModel(candidate);
-        } catch {
-          // A model the catalogue offered and the engine then refused — no
-          // credential, gone from the catalogue since. That is an attempt, not
-          // a skip: it counts against this failover and marks the model for
-          // the rest of the activation, so the traversal moves on instead of
-          // knocking on the same door forever.
-          this.recordAttempt(candidate, { outcome: "failed", class: "credential", reason: "could not be selected" });
-          this.state = {
-            ...this.state,
-            models: rememberFailure(this.state.models, candidate, { class: "credential" }, { now: this.engine.now() }),
-          };
-          this.write("attempt_failed", { to: candidate, failure: { class: "credential", at: this.iso() } });
-          continue;
-        }
-        // The session is on this model now, whatever happens next: a failover
-        // that ends without a success leaves it here, and the badge, the next
-        // traversal and the record must all agree with that.
-        this.moveTo(position);
-        if (this.stale(generation, abort)) return this.closeEvent("aborted");
-
-        let thrown: unknown;
-        try {
-          await this.engine.continueTurn({ retries: traversal.retries, signal: abort.signal });
-        } catch (error) {
-          thrown = error;
-        }
-        if (this.stale(generation, abort)) return this.closeEvent("aborted");
-
-        const after = this.engine.lastFailure();
-        if (!after && !thrown) {
-          this.succeeded(failed, candidate, position, traversal.direction, failure);
-          return true;
-        }
-        const next = after ? classifyProviderFailure(after) : { class: "unknown" as const };
-        this.recordAttempt(candidate, { outcome: "failed", class: next.class });
-        this.state = {
-          ...this.state,
-          models: rememberFailure(this.state.models, candidate, next, { now: this.engine.now() }),
-        };
-        this.engine.emit({
-          kind: "model_fallback",
-          phase: "attempt_failed",
-          to: this.ref(candidate),
-          reason: next.class,
-          detail: `${this.name(candidate)} ${failureWording(next.class)}.`,
-          position,
+        const selected = await this.selectCandidate(candidate);
+        if (selected === "refused") continue;
+        this.moveTo(traversal.position);
+        const result = await this.finishAttempt({
+          origin: failed,
+          originFailure: failure,
+          candidate,
+          position: traversal.position,
+          direction: traversal.direction,
+          retries: traversal.retries,
+          generation,
+          abort,
         });
-        this.write("attempt_failed", { to: candidate, failure: { class: next.class, at: this.iso() } });
+        if (result.kind === "aborted") return this.closeEvent("aborted");
+        if (result.kind === "succeeded") return true;
+        if (result.kind === "stopped") return false;
         standing = candidate;
-        standingFailure = next;
-        position = this.state.activation?.position ?? position;
-        if (!opensFailover(next.class)) {
-          // The new model failed for a reason a chain cannot answer (the
-          // conversation is too long, the provider refused the content, the
-          // person stopped it). Leave the session here and say so once.
-          this.exhausted(candidate, next, []);
-          return false;
-        }
+        standingFailure = result.failure;
       }
     } finally {
       this.switching = false;
@@ -307,6 +334,144 @@ export class FallbackController {
   }
 
   // ------------------------------------------------------------------ internals
+
+  /**
+   * Shared continuation/result path: the model is already selected and the
+   * activation already stands on it. Recovery joins here after compact; the
+   * ordinary attempt path joins after `setModel`.
+   */
+  private async finishAttempt(options: {
+    origin: FallbackModelRef;
+    originFailure: ProviderFailure;
+    candidate: FallbackModelRef;
+    position: number;
+    direction: "return" | "advance";
+    retries: "none" | "normal";
+    generation: number;
+    abort: AbortController;
+  }): Promise<AttemptResult> {
+    if (this.stale(options.generation, options.abort)) return { kind: "aborted" };
+    let thrown: unknown;
+    try {
+      await this.engine.continueTurn({ retries: options.retries, signal: options.abort.signal });
+    } catch (error) {
+      thrown = error;
+    }
+    if (this.stale(options.generation, options.abort)) return { kind: "aborted" };
+
+    const after = this.engine.lastFailure();
+    if (!after && !thrown) {
+      this.succeeded(options.origin, options.candidate, options.position, options.direction, options.originFailure);
+      return { kind: "succeeded" };
+    }
+    const next = after ? classifyProviderFailure(after) : { class: "unknown" as const };
+    this.recordAttempt(options.candidate, { outcome: "failed", class: next.class });
+    this.state = {
+      ...this.state,
+      models: rememberFailure(this.state.models, options.candidate, next, { now: this.engine.now() }),
+    };
+    this.engine.emit({
+      kind: "model_fallback",
+      phase: "attempt_failed",
+      to: this.ref(options.candidate),
+      reason: next.class,
+      detail: `${this.name(options.candidate)} ${failureWording(next.class)}.`,
+      position: options.position,
+    });
+    this.write("attempt_failed", { to: options.candidate, failure: { class: next.class, at: this.iso() } });
+    if (!opensFailover(next.class)) {
+      // The new model failed for a reason a chain cannot answer (the
+      // conversation is too long, the provider refused the content, the
+      // person stopped it). Leave the session here and say so once.
+      this.exhausted(options.candidate, next, []);
+      return { kind: "stopped" };
+    }
+    return { kind: "failed", failure: next };
+  }
+
+  private async selectCandidate(candidate: FallbackModelRef): Promise<"selected" | "refused"> {
+    try {
+      await this.engine.setModel(candidate);
+      return "selected";
+    } catch {
+      // A model the catalogue offered and the engine then refused — no
+      // credential, gone from the catalogue since. That is an attempt, not
+      // a skip: it counts against this failover and marks the model for
+      // the rest of the activation, so the traversal moves on instead of
+      // knocking on the same door forever.
+      this.recordAttempt(candidate, { outcome: "failed", class: "credential", reason: "could not be selected" });
+      this.state = {
+        ...this.state,
+        models: rememberFailure(this.state.models, candidate, { class: "credential" }, { now: this.engine.now() }),
+      };
+      this.write("attempt_failed", { to: candidate, failure: { class: "credential", at: this.iso() } });
+      return "refused";
+    }
+  }
+
+  /**
+   * Size-only exhaustion: compact once under the first selectable oversized
+   * candidate, then either continue that candidate or re-enter traversal from
+   * it with the frozen estimate so a later larger window can take the turn.
+   */
+  private async recoverOversized(options: {
+    sizeBlocked: SkippedCandidate[];
+    allSkipped: SkippedCandidate[];
+    exhaustionPosition: number;
+    models: readonly FallbackModelRef[];
+    origin: FallbackModelRef;
+    originFailure: ProviderFailure;
+    standing: FallbackModelRef;
+    standingFailure: ProviderFailure;
+    generation: number;
+    abort: AbortController;
+    markCompacted: () => void;
+  }): Promise<RecoverResult> {
+    for (const entry of options.sizeBlocked) {
+      if (this.stale(options.generation, options.abort)) return { kind: "aborted" };
+      const index = options.models.findIndex((model) => sameModel(model, entry.model));
+      if (index < 0) continue;
+      const direction = attemptDirection(options.exhaustionPosition, index);
+      const retries = direction === "return" ? "none" : "normal";
+      const selected = await this.selectCandidate(entry.model);
+      if (selected === "refused") continue;
+      this.moveTo(index);
+      if (this.stale(options.generation, options.abort)) return { kind: "aborted" };
+      options.markCompacted();
+      let estimate: number;
+      try {
+        estimate = (await this.engine.compact(options.abort.signal)).estimatedTokensAfter;
+      } catch {
+        if (this.stale(options.generation, options.abort)) return { kind: "aborted" };
+        this.recordAttempt(entry.model, { outcome: "skipped", reason: CONTEXT_TOO_LONG_REASON });
+        this.exhausted(options.standing, options.standingFailure, visibleSkips(options.allSkipped));
+        return { kind: "exhausted" };
+      }
+      if (!Number.isFinite(estimate) || estimate < 0) {
+        this.recordAttempt(entry.model, { outcome: "skipped", reason: CONTEXT_TOO_LONG_REASON });
+        this.exhausted(options.standing, options.standingFailure, visibleSkips(options.allSkipped));
+        return { kind: "exhausted" };
+      }
+      const window = (await this.engine.catalogue()).get(modelKey(entry.model))?.contextWindow;
+      if (window !== undefined && estimate > window) {
+        this.recordAttempt(entry.model, { outcome: "skipped", reason: CONTEXT_TOO_LONG_REASON });
+        return { kind: "reenter", tokens: estimate };
+      }
+      const result = await this.finishAttempt({
+        origin: options.origin,
+        originFailure: options.originFailure,
+        candidate: entry.model,
+        position: index,
+        direction,
+        retries,
+        generation: options.generation,
+        abort: options.abort,
+      });
+      if (result.kind === "failed") return { kind: "failed", failure: result.failure, candidate: entry.model, tokens: estimate };
+      return result;
+    }
+    return { kind: "none" };
+  }
 
   private activationForSelectedModel(): FallbackActivation | null {
     return activate(this.engine.chains(), this.engine.selectedModel(), {

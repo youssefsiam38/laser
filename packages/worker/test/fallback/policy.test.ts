@@ -20,7 +20,9 @@ import {
 
 import {
   activate,
+  attemptDirection,
   clearActivationMarks,
+  CONTEXT_TOO_LONG_REASON,
   exhaustionDetail,
   ineligibleReason,
   nextCandidate,
@@ -163,6 +165,13 @@ describe("traversal order", () => {
       "Fallback could not help: claude-sonnet-4-5 not signed in, deepseek-chat switched off in Settings.",
     );
   });
+
+  it("maps an earlier index to a bounded return and a later one to a normal advance", () => {
+    expect(attemptDirection(2, 0)).toBe("return");
+    expect(attemptDirection(2, 1)).toBe("return");
+    expect(attemptDirection(2, 3)).toBe("advance");
+    expect(attemptDirection(0, 1)).toBe("advance");
+  });
 });
 
 describe("eligibility", () => {
@@ -212,7 +221,7 @@ describe("eligibility", () => {
   it("refuses a model the conversation would not fit in, and a model that is not there", () => {
     expect(
       ineligibleReason(deepseek, context({ contextTokens: 300_000, catalogue: catalogue({ [modelKey(deepseek)]: { contextWindow: 128_000 } }) })),
-    ).toBe("the conversation is longer than this model can hold");
+    ).toBe(CONTEXT_TOO_LONG_REASON);
     // An unknown window never disqualifies, and unknown usage never does either.
     expect(ineligibleReason(deepseek, context({ contextTokens: 300_000, catalogue: catalogue({ [modelKey(deepseek)]: { contextWindow: undefined } }) }))).toBeUndefined();
     expect(ineligibleReason(deepseek, context({ contextTokens: null }))).toBeUndefined();

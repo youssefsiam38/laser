@@ -76,6 +76,8 @@ export function createFallbackEnginePort(options: FallbackPortOptions): Fallback
       void session().abort().catch(() => {});
     },
     continueTurn: (opts) => continueTurn(session(), opts, emit),
+    autoCompactionEnabled: () => session().autoCompactionEnabled,
+    compact: (signal) => compactUnderCurrentModel(session(), signal),
     appendEntry: (entry: SessionFallbackEntry) => {
       session().sessionManager.appendCustomEntry(SESSION_FALLBACK_ENTRY_TYPE, entry);
     },
@@ -147,6 +149,35 @@ function namesOf(session: () => AgentSession): ReadonlyMap<string, ModelRef> {
 }
 
 /**
+ * One bounded compact on the model already selected, for size recovery.
+ *
+ * Pi's public `compact()` summarises with `this.model`, never continues the
+ * turn, and aborts first — idle during failover, so that abort does not cancel
+ * the controller. The listener is removed in `finally` so a late abort cannot
+ * cancel a later compact. A missing or non-finite estimate is a compact
+ * failure: the controller must not read `getContextUsage()` afterwards (it is
+ * null until the next assistant) and blindly attempt.
+ */
+async function compactUnderCurrentModel(
+  session: AgentSession,
+  signal: AbortSignal,
+): Promise<{ estimatedTokensAfter: number }> {
+  if (signal.aborted) throw new Error("aborted");
+  const onAbort = () => session.abortCompaction();
+  signal.addEventListener("abort", onAbort);
+  try {
+    const result = await session.compact();
+    const tokens = result.estimatedTokensAfter;
+    if (typeof tokens !== "number" || !Number.isFinite(tokens) || tokens < 0) {
+      throw new Error("compaction did not report a token estimate");
+    }
+    return { estimatedTokensAfter: tokens };
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+/**
  * Continue the interrupted turn on the model selected now (§3.1).
  *
  * The engine's own idiom, in its own two steps: the failed attempt is removed
@@ -206,11 +237,15 @@ async function continueTurn(
  * last message is an assistant message, and the error is history, not context.
  */
 export function dropTrailingErrorAssistant(session: AgentSession): void {
-  const messages = session.agent.state.messages;
-  const last = messages[messages.length - 1] as { role?: unknown; stopReason?: unknown } | undefined;
-  if (last?.role !== "assistant") return;
-  if (last.stopReason !== "error" && last.stopReason !== "aborted" && last.stopReason !== "length") return;
-  session.agent.state.messages = messages.slice(0, -1);
+  // The engine's `_prepareRetry` drops a trailing assistant: `agent.continue()`
+  // rejects that transcript. After compact the tail can be a kept successful
+  // assistant plus the error that opened failover, so drop every trailing
+  // assistant, not only the error.
+  let messages = session.agent.state.messages;
+  while (messages[messages.length - 1]?.role === "assistant") {
+    messages = messages.slice(0, -1);
+  }
+  session.agent.state.messages = messages;
 }
 
 /** The last assistant message in agent state, failed ones included. */
