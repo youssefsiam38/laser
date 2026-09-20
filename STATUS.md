@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T01:02:40+03:00 · codex-2026-09-20-git-revisions · HEAD: d6469efc
+**Last updated:** 2026-09-21T01:52:16+03:00 · codex-2026-09-21-model-profiles · HEAD: 56f04f8b
 **Current focus:** 0.11.1 is published and Latest, with the person's own verification behind it. M19-T6 T6B is the next build work.
 
 | Milestone | State |
@@ -28,10 +28,11 @@
 | M19 Runtime recovery/update activation | in-progress |
 | M20 Source-control leap | in-progress |
 | M21 Project lifecycle leap | in-progress |
+| M22 Model profiles | in-progress |
 | MX Cross-cutting | in-progress |
 
 **Blockers:** M19-T7 source work waits for M19-T6 to release shared `LaserPaths` and migration-storage ownership. M21 remains dependency-gated on the person's M20 sandbox acceptance.
 **In flight:** nothing building. M16-T97 and M16-T99 are merged and waiting on the person's browser acceptance (D-342: agents run no browser checks; the person tests the sandbox).
 **Published:** v0.10.1 is Latest (`09d68d51` candidate; 12 verified assets).
-**Next up:** M19-T6 T6B launcher/daemon/desktop binding; the UI half of M16-T98 once the window's contract is final; M19-T7 staging once the launch spine is released (D-339).
-**Recently done:** M21-T0 now binds exact artifact-revision ↔ repository provenance (`docs/project-lifecycle-leap.md`, D-345); 0.11.1 removed the whole-conversation read and three transcript defects (`3eba514b`, `259f390f`); M16-T97 transcript paging and M16-T99 local landing (`d92c5f6b`); Changes overlay scrolling (`a264e1ba`); M19-T6 T6A retained runtime store (`40177a72`).
+**Next up:** M22-T1 protocol for Model Profiles when the person opens M22 implementation; M19-T6 T6B launcher/daemon/desktop binding; the UI half of M16-T98 once the window's contract is final; M19-T7 staging once the launch spine is released (D-339).
+**Recently done:** M22-T0 binds Model Profiles as the one model-routing concept, with the breaking-change inventory (`docs/model-profiles.md`, `PLAN.md` M22, D-346); M21-T0 now binds exact artifact-revision ↔ repository provenance (`docs/project-lifecycle-leap.md`, D-345); 0.11.1 removed the whole-conversation read and three transcript defects (`3eba514b`, `259f390f`); M16-T97 transcript paging and M16-T99 local landing (`d92c5f6b`); Changes overlay scrolling (`a264e1ba`); M19-T6 T6A retained runtime store (`40177a72`).

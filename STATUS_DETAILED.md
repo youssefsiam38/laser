@@ -1,8 +1,51 @@
 # STATUS_DETAILED.md — task ledger
 
-Format and rules: `AGENTS.md` §3. States: `todo`, `in-progress`, `blocked`,
-`done`, `dropped`. Evidence is a commit hash, a passing test command, or a file
-path. Dates in notes are history, not plans. Never delete rows or notes.
+Evidence is a commit hash, a passing test command, or a file path. Dates in
+notes are history, not plans. Never delete rows, notes, handoffs or decisions.
+
+**States.** `todo` → `in-progress` → `done`, with `blocked` and `dropped` as
+side exits. `in-progress` has exactly one owner (a session label such as
+`claude-2026-09-05-a`, or a person's name). `blocked` must name what unblocks
+it. `done` must carry evidence. `dropped` must cite the decision `D-<n>`.
+
+**Task row.** ID, Task, State, Owner, Evidence, Notes pointer:
+
+```
+| M1-T3 | Answer extension dialogs from the UI | in-progress | claude-2026-09-05-a | — | see notes |
+```
+
+**Notes block**, directly under its milestone table, dates in ISO `YYYY-MM-DD`:
+
+```
+#### M1-T3 notes
+- 2026-09-05 claimed: wire ui-bridge select() to a dialog message
+- 2026-09-05 select/confirm/input work; editor needs a multi-line component
+- 2026-09-06 done, evidence: `pnpm -F @lasercode/worker test -- ui-bridge`
+```
+
+**Handoff**, appended to `## Handoffs` when a session stops before `done`:
+
+```
+### H-7 · M3-T2 · 2026-09-06 · claude-2026-09-06-b
+State of the work: parser done, watcher half-done in packages/host/src/subagents/watch.ts.
+Uncommitted: yes (git stash list: none; working tree has 3 modified files).
+What is broken: fs.watch fires twice on Linux; dedupe by (path, mtime) not yet written.
+Next concrete step: implement dedupe, then run `pnpm -F @lasercode/host test`.
+Do not: rewrite the parser, it matches pi-subagents 0.65 status.json exactly.
+```
+
+**Decisions** are append-only: `### D-<n> · <date> · <title>` with `Decision`,
+`Why`, `Consequences`, and `Supersedes` when reversing an earlier one. A
+decision is any choice a future agent could reasonably re-litigate.
+
+**Open questions** are decisions only the user can make. List them under
+`## Open questions` with the task IDs they block; never guess. A task that
+needs the answer is `blocked`.
+
+**Regenerating `STATUS.md`** (every session, before stopping): rewrite it
+completely from this ledger using the template in the file — last updated (ISO
+timestamp, session label, HEAD hash), current focus, milestone table, blockers,
+the three ready `todo` tasks, the last five `done` with evidence. One screen.
 
 ---
 
@@ -6149,6 +6192,57 @@ host-adoption identity. New binaries stop reading or writing migrated legacy
 public files after schema success; installers never inspect a home directory;
 unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
+## M22 · Model profiles
+
+| ID | Task | State | Owner | Evidence | Notes |
+| --- | --- | --- | --- | --- | --- |
+| M22-T0 | Binding contract and affected-area inventory | done | codex-2026-09-21-model-profiles | `docs/model-profiles.md`; `PLAN.md` M22; D-346; `git diff --check -- docs PLAN.md STATUS.md STATUS_DETAILED.md` | see notes |
+| M22-T1 | Protocol: profiles, assignments, methods, policy | todo | — | — | `PLAN.md` M22 |
+| M22-T2 | Worker settings, migration and seeds | todo | — | — | `PLAN.md` M22 |
+| M22-T3 | Worker runtime on profiles | todo | — | — | `PLAN.md` M22 |
+| M22-T4 | Agents and naming on profiles | todo | — | — | `PLAN.md` M22 |
+| M22-T5 | Host authority and projections | todo | — | — | `PLAN.md` M22 |
+| M22-T6 | Settings: Model profiles tab and assignment pickers | todo | — | — | `PLAN.md` M22 |
+| M22-T7 | Onboarding profile review | todo | — | — | `PLAN.md` M22 |
+| M22-T8 | Composer, status line, fleet and logs | todo | — | — | `PLAN.md` M22 |
+| M22-T9 | Agents page and CLI | todo | — | — | `PLAN.md` M22 |
+| M22-T10 | Documents, identity guard and reconciliation | todo | — | — | `PLAN.md` M22 |
+| M22-T11 | Migration acceptance and release | todo | — | — | `PLAN.md` M22 |
+
+#### M22-T0 notes
+- 2026-09-21 claimed by codex-2026-09-21-model-profiles: the person settled that fallback chains and the proposed model tiers collapse into one unlimited, person-named Model Profile concept; write the binding contract with the full breaking-change inventory.
+- 2026-09-21 done: `docs/model-profiles.md` is binding (domain, assignments, per-session pin, runtime reuse of M15-T3/T8, migration, bounds, methods, affected-area inventory across protocol/worker/host/UI/CLI/persistence/docs); `PLAN.md` M22 index with the breaking-change summary and eleven dependency-ordered tasks; `docs/model-fallback-chains.md` carries the superseded banner and stays as the runtime record; D-346 recorded. Implementation not started; M22 precedes the built-in agent removal and Ask Oracle, which consume profile ids.
+
+### D-346 · 2026-09-21 · One model-routing concept: unlimited Model Profiles
+
+Decision: fallback chains (M15-T3), the proposed three model tiers and the raw
+`defaultModel`/`defaultProvider`/`defaultThinkingLevel` settings collapse into
+one concept, the **Model Profile**: a person-named, ordered list of connected
+models where the first is preferred and the rest are fallbacks in order. Laser
+seeds Smart, Balanced and Fast as ordinary editable profiles; the person may
+create any number more. Every surface that chose a model — new-session
+default, naming, consultation, agents, built-ins, composer — chooses a profile
+by stable id; a per-session pin to one model is the only raw-model path and
+disables fallback. Fallback never crosses profiles. The M15-T3/T8 runtime is
+kept with `chainKey` → `profileId`. Binding text: `docs/model-profiles.md`.
+
+Why: two overlapping abstractions (choose a model, then configure that model's
+chain; or choose a tier, then a primary, then its chain) made the person
+express the same intent twice and made fixed tiers a ceiling. One ordered list
+carries both workload intent and fallback order, and a person's own names
+("Deep Research", "Local Models") say more than Tier 1/2/3.
+
+Consequences: this is a breaking change to the global settings shape, the
+protocol (`FallbackChain` → `ModelProfile`, `AgentDefinition.model` →
+`profileId`, removed and added methods), the agent file format (`model:` →
+`profile:`), and every model-choosing surface, test and document; the full
+inventory is in `docs/model-profiles.md` and summarised in `PLAN.md` M22. A
+one-way, idempotent, previewed migration runs through `SettingsManager`; old
+keys stay one release. Existing sessions keep their model and show as pinned.
+`docs/model-fallback-chains.md` is superseded as a configuration contract and
+kept as the runtime record. M22 ships as its own minor release and precedes
+the built-in agent removal and Ask Oracle, which consume profile ids.
+
 ### D-345 · 2026-09-20 · Artifact revisions carry exact repository provenance
 
 Decision: `RepositoryLink` is a first-class, immutable supporting record joining
@@ -6168,6 +6262,39 @@ M21-T21 records repository publication. Missing or pruned Git objects preserve
 the historical identity without resolving to `HEAD`. Evidence used for an
 approval, accepted delivery or Task completion must remain reviewable from Git
 or bounded canonical captures; a full durable budget refuses the gate.
+
+### D-344 · 2026-09-20 · `AGENTS.md` is a contract, not a knowledge base
+
+Decision: the root `AGENTS.md` is cut from 776 lines to ~150 and holds only
+what every agent needs on every task: what the product is, the bar, the SDLC
+loop, the architecture invariants, the commands, commit rules and the do-nots.
+Every incident-derived regression list moved out, whole, to the document that
+sits beside the code it governs — the agent harness checks to `docs/agents.md`
+§11, release and packaging failure rules to `scripts/release/README.md`,
+packaged builds and running generations to a new `docs/packaging.md`, native
+reminders to a new `docs/notifications.md`, the allowance route rules to
+`docs/account-usage-research.md`, search and source disclosure to
+`docs/search-content.md`, provenance to `docs/prompt-provenance.md`, goal
+policy to `docs/pi-extension-modules.md`, live activity to
+`docs/transcript-reading.md`, extension surfaces and upstream contributions to
+`docs/product-boundary.md`, and the assistant-ui skill mandate to
+`docs/ux-elements.md`. Ledger and plan formats moved into the headers of
+`STATUS_DETAILED.md` and `PLAN.md`. Each package gained a short `AGENTS.md`
+saying what that package is for, deliberately free of detail that code changes
+can make stale. The invariants are renumbered: old 6a/6b collapse into
+invariant 6, and the companion-extension and harness rules become 11 and 12.
+
+Why: 40% of the file was per-area incident knowledge that no agent reads
+top-down, yet every agent paid for it in context on every task. Rules that are
+only true next to a specific file are read when that file is opened, not when
+a session starts.
+
+Consequences: the moved text is unchanged, so nothing was weakened, but the
+root file no longer enumerates it — the standing instruction is to read the
+document for the area being changed. Source comments that cited section
+numbers (`§4.6`, `§5a`, `§6a`, `§6b`, `§4.9`) were repointed to the new homes
+or to the surviving invariant numbers. Historical reports under `docs/leap/`
+and `docs/incidents/` keep their original citations as written.
 
 ### D-343 · 2026-09-20 · 0.11.0 shipped before its acceptance pass
 

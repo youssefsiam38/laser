@@ -1,9 +1,15 @@
 # Model fallback chains
 
+> **Superseded by [`model-profiles.md`](model-profiles.md) (M22, D-346).** The
+> configuration model below — one chain per starting model, activated by the
+> selected model — is replaced by person-named Model Profiles. Sections 3–6
+> (eligibility, continuity, persistence, fencing) remain the runtime record
+> M22 reuses with `chainKey` → `profileId`.
+
 Status: **binding design for M15-T3** (`PLAN.md` "M15 · After the MCP release";
 the person's specification is recorded verbatim in the `M15-T3` notes of
 `STATUS_DETAILED.md` and is the contract this document implements). Read
-[`AGENTS.md`](../AGENTS.md) §4 (invariants 1, 3, 6a, 6b), [`architecture.md`](architecture.md)
+[`AGENTS.md`](../AGENTS.md) invariants 1, 3 and 6, [`architecture.md`](architecture.md)
 and [`ux-fleet.md`](ux-fleet.md) first. Nothing here changes the engine's retry
 machinery; everything here begins where that machinery gives up.
 

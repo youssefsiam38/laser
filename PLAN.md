@@ -4,6 +4,12 @@ Dependency-ordered plan. No dates, no estimates. A milestone is a set of tasks
 with a "done when" that can be checked. Task IDs are permanent. Status lives in
 `STATUS.md` (summary) and `STATUS_DETAILED.md` (ledger). Read `AGENTS.md` first.
 
+Editing this file — allowed: adding a task (next free `T<n>` in that milestone),
+splitting a task (the first half keeps the old ID), dropping a task (state
+`dropped` in the ledger, citing a decision), adding a milestone at the end. Not
+allowed: reordering IDs, adding dates or estimates, deleting done-when criteria.
+Any structural change gets a `D-<n>` entry in `STATUS_DETAILED.md`.
+
 ## What laser is
 
 A visualization and control layer on top of the Pi coding agent:
@@ -933,3 +939,55 @@ M21 implementation starts after the person accepts M20's sandbox.
 | M21-T23 | Product-language and element reconciliation | M21-T6–M21-T19 | D-140/D-147/goal/fleet docs updated; M17-T11 absorbed; background work says Command on person surfaces; every claimed assistant-ui row installed/mapped or rejected with reason |
 | M21-T24 | End-to-end project lifecycle acceptance | M21-T1–M21-T23 | established React and non-React projects, greenfield project, backend-only skip, design revision during Build, multiple sessions and cross-project mention pass deterministic tests plus browser matrix |
 | M21-T25 | Release the project lifecycle leap | M21-T24 | staged identity/full/package gates, clean source CI, exact version/tag, user-authorized routine release, complete assets/digests/provenance/notes and Latest verification |
+
+## M22 · Model profiles
+
+Goal: one model-routing concept. A **Model Profile** is a person-named, ordered
+list of connected models: the first is preferred, the rest are fallbacks in
+order. Every surface that chose a model chooses a profile. Laser seeds Smart,
+Balanced and Fast; the person creates as many more as they like. Fallback
+chains, "tiers" and raw default-model settings are gone as separate ideas.
+
+The binding specification is [`docs/model-profiles.md`](docs/model-profiles.md);
+this table is the dependency-ordered index. Decision D-346.
+
+Done when: every task below is `done` with evidence, the migration has run on a
+real 0.11-era settings file without loss, and the release is public.
+
+Dependencies: M15-T3/M15-T8 runtime (reused), M13 agents and built-ins (their
+model choices become profile choices), M10-T6 onboarding (its model step is
+replaced). M22 lands before the built-in agent removal and Ask Oracle, both of
+which consume profile ids.
+
+### Breaking change — affected areas
+
+This is a breaking change to the settings shape, the protocol, the agent file
+format and every model-choosing surface. Tasks must clear the inventory in
+`docs/model-profiles.md` "Breaking change — affected areas"; the summary:
+
+| Layer | What breaks |
+| --- | --- |
+| Protocol | `FallbackChain`/`FALLBACK_CHAINS_SETTING` → `ModelProfile`/`MODEL_PROFILES_SETTING`; `SessionState` gains `profile`, keeps `model` as effective; `AgentDefinition.model` → `profileId`; `agents/builtin/set-model`, `agents/beam/choose-model`, `agents/namer/qualify` replaced; new `models/profiles/*`, `session/profile/set`, `session/model/pin`; `defaultModel`/`defaultProvider`/`defaultThinkingLevel`/`modelThinkingLevels` → `defaultProfileId`/`namingProfileId`/`oracleProfileId`; method-policy rows; telemetry attribution |
+| Worker | `settings.ts` descriptors and validation; `fallback/*` activation keyed by profile with start-time walk; `stable-sdk.ts` start/`setProfile`/pin; `SessionDriver` interface and `chord.ts` stub; agent session config and harness inheritance; `namer.ts`/`first-turn.ts` one-shot naming on the naming profile; thinking level from the profile entry; all fallback/settings/thinking tests |
+| Host | `builtins.ts` per-built-in profile; agent store/validate/file/watch `model:` → `profile:` with rewrite; router/server/worker-client methods and start-time migration; catalog and session projection columns |
+| UI | Fallback chains tab → Model profiles tab; Models/Settings defaults; onboarding model step → profile review; composer model selector and reasoning control; status line and badge copy; Agents page pickers; Beam model dialog; fleet, session list, phone surfaces, logs and usage attribution; store/provider; every test that names a chain or a default model |
+| CLI | `doctor` walks profile models; `runs`/`session` output |
+| Persistence | global settings keys (old kept one release), host built-in and onboarding state, agent files, new-session JSONL entries, migration preview record |
+| Docs and gates | `model-fallback-chains.md` superseded; `agents.md`, `product-boundary.md`, `settings-scope-audit.md`, `architecture.md`, `ux-fleet.md`, `mobile.md`; identity copy guard; packaged onboarding gate; own minor release with migration notes |
+
+### Dependency-ordered implementation
+
+| Task | Title | Depends on | Acceptance |
+| --- | --- | --- | --- |
+| M22-T0 | Binding contract and affected-area inventory | — | `docs/model-profiles.md` binding; D-346 recorded; `model-fallback-chains.md` carries the superseded banner; ledger and one-screen status updated |
+| M22-T1 | Protocol: profiles, assignments, methods, policy | M22-T0 | `ModelProfile`, bounds, validation, `SessionState.profile`, `AgentDefinition.profileId`, the three assignment settings, `models/profiles/*`, `session/profile/set`, `session/model/pin`; removed methods gone from messages, schemas and policy; round-trip samples; `pi/model/set` documented as the pin path; telemetry attribution field |
+| M22-T2 | Worker settings, migration and seeds | M22-T1 | `readModelProfiles`, descriptors, product-owned validation; one-way idempotent migration of chains, default model/thinking, built-in models and agent files through `SettingsManager` with a preview record; seeds created from connected models when none exist; fixtures for a 0.11 settings file, an empty file and a half-migrated file |
+| M22-T3 | Worker runtime on profiles | M22-T2 | controller activation keyed by profile with snapshot; start-time walk records skips; fallback never leaves the profile; pin disables fallback; edit-during-run rule; `lasercode/fallback` entries carry `profileId` and old `chainKey` entries still read; `SessionDriver.setProfile` on both drivers with the seam test green; M15-T3/T8 verification list re-run |
+| M22-T4 | Agents and naming on profiles | M22-T3 | agent files `profile:` with inherit and unknown-profile warning; `start_agent` children inherit or name a profile; built-ins hold profile ids; naming is a one-shot walk of `namingProfileId` with no qualification path; harness tests cover inheritance, warning and substitution |
+| M22-T5 | Host authority and projections | M22-T2, M22-T4 | methods routed, migration at start, first-provider prompt offers seeded profiles, catalog and session projection expose profile + effective model, delete-with-replacement enforced server-side |
+| M22-T6 | Settings: Model profiles tab and assignment pickers | M22-T5 | list/add/duplicate/rename/reorder/remove/used-by/delete-with-replacement; default, naming and consultation pickers; unavailable-model state; empty, loading and error states; both widths and themes; interaction tests |
+| M22-T7 | Onboarding profile review | M22-T5 | provider → review seeded profiles pre-filled from connected models → project; edit or skip; a new user reaches a working session on Balanced without a terminal; packaged onboarding gate updated |
+| M22-T8 | Composer, status line, fleet and logs | M22-T5 | profile + effective model in the selector; pin action and "Pinned · no fallback"; "moved to" badge and transcript record; fleet/session-list/phone/logs/usage attribution; copy never says chain or tier; tests replace the chain badge and selector tests |
+| M22-T9 | Agents page and CLI | M22-T5 | Agents editor and built-in panels choose profiles with warnings; `doctor` walks every profile model and names the profile; `runs`/`session` print profile and effective model |
+| M22-T10 | Documents, identity guard and reconciliation | M22-T6–M22-T9 | listed docs updated; identity guard flags "chain"/"tier" on person surfaces; `settings-scope-audit.md` rows re-dispositioned; every area in the inventory ticked or moved to a named follow-up |
+| M22-T11 | Migration acceptance and release | M22-T10 | migration run on the person's real settings file with a reviewed preview; pre-migration and post-migration sessions both open; staged gates, clean CI, exact tag, migration notes in the release, Latest verified |
