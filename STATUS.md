@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-20T13:51:00+03:00 · orchestrator-2026-09-20-new-session · HEAD: bfc118ae
-**Current focus:** M20 awaits the person's sandbox acceptance; M16-T95 New Session landing is merged.
+**Last updated:** 2026-09-20T19:45:00+03:00 · orchestrator-2026-09-20-config-root · HEAD: d92c5f6b
+**Current focus:** the person's acceptance pass on the transcript and the new-chat landing; M19-T6 T6B is the next build work.
 
 | Milestone | State |
 | --- | --- |
@@ -21,17 +21,17 @@
 | M12 Product experience | done |
 | M13 Agents Leap | in-progress |
 | M14 MCP servers | done |
-| M15 After MCP release | done |
+| M15 After MCP release | in-progress |
 | M16 Conversation experience | in-progress |
 | M17 Coding experience | todo |
 | M18 Resource containment | done |
-| M19 Runtime recovery/update activation | done |
+| M19 Runtime recovery/update activation | in-progress |
 | M20 Source-control leap | in-progress |
 | M21 Project lifecycle leap | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** none. M21 implementation is still dependency-gated on the person's M20 sandbox acceptance.
-**In flight:** M20 awaits acceptance from `docs/leap/uat.md`.
-**Published:** v0.9.4 (`6d50a050`) is Latest. Autonomous completion/commits/push require the established authorization and release gates.
-**Next up:** the person's M20 UAT; then M21-T1 protocol/domain work. Browser matrix for M16-T95 still open.
-**Recently done:** M16-T95 New Session is a landing (`bfc118ae`); M16-T96 unread follows message count (`ae958b29`); M21-T0 project lifecycle contract; M20-T6 git actions (`bc00695b`, `bb786d1c`); M20-T5 changes modal (`b3ced7f5`).
+**Blockers:** M19-T7 source work waits for M19-T6 to release shared `LaserPaths` and migration-storage ownership. M21 remains dependency-gated on the person's M20 sandbox acceptance.
+**In flight:** nothing building. M16-T97 and M16-T99 are merged and waiting on the person's browser acceptance (D-342: agents run no browser checks; the person tests the sandbox).
+**Published:** v0.10.1 is Latest (`09d68d51` candidate; 12 verified assets).
+**Next up:** M19-T6 T6B launcher/daemon/desktop binding; the UI half of M16-T98 once the window's contract is final; M19-T7 staging once the launch spine is released (D-339).
+**Recently done:** M16-T97 transcript paging + its review fixes and M16-T99 the local landing (`d92c5f6b`, UI 2992 passed / 1 skipped); the Changes overlay's diff and nested regions scroll (`a264e1ba`); M19-T6 T6A retained runtime store (`40177a72`); M16-T98 producer `{ versionsOf }` window with the host's live validator (`242c7b94`).

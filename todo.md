@@ -12,3 +12,22 @@
 - https://github.com/alphaXiv/OpenResearch
 - https://github.com/gastownhall/beads
 - ![old api requests got removed](image-1.png): user should have the choice! he navigate in the settings and the resources page give him the info about the size f the logs, and he have full dynamic
+
+
+
+=======================================
+
+## Steps to improve my coding harness
+
+- Agents
+  - move the md files to the ~/.laser
+- Core Instructions
+
+
+
+
+
+as u can see the user have alot of problems here with this view!
+
+- the user cannot read either the project name nor the branch/worktree! those should stack in two rows
+- 

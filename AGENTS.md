@@ -53,17 +53,27 @@ assistant-ui element owns each surface, and [`docs/ux-theme.md`](docs/ux-theme.m
 for the token system. A UI change that does not fit them is either a bug or a
 decision recorded in `STATUS_DETAILED.md` — never a quiet exception.
 
-Before any UI task is marked done, run it in the browser at a desktop width
-and a phone width, in both themes, and look at it the way a demanding
-designer would. "It builds" is not the bar. "I would show this to someone I
-respect" is.
+The bar for a UI task is still what it always was — a desktop width and a
+phone width, both themes, looked at the way a demanding designer would. "It
+builds" is not the bar. "I would show this to someone I respect" is.
 
-Use the shared browser harness for browser acceptance, not a hand-written stack:
-`node scripts/browser-check/run.mjs --target scripts/browser-check/targets/app.mjs --fixture long --matrix`.
-See `scripts/browser-check/README.md` for scripts, touch, artifacts and teardown.
-The engine is target-neutral: other projects supply their own startup and fixture
-adapters; this repository's host is one built-in example. Keep feature-specific
-interaction assertions in the script you pass with `--script`.
+**Acceptance in a browser belongs to the person, not to an agent.** No agent
+runs browser checks, browser tests, Playwright, or `scripts/browser-check/`
+in any form — no matrix, no touch variant, no screenshots, no acceptance
+script (D-342). When UI work is finished, the agent reports; the person starts
+the sandbox and tests it. The orchestrator hands over the link:
+
+```sh
+pnpm -r build && pnpm sandbox      # http://127.0.0.1:41441
+```
+
+The harness under `scripts/browser-check/` stays in the repository and keeps
+working; it is simply not an agent's to run. This removes a whole class of
+evidence from what an agent can claim, so the rest has to carry more: a
+behaviour an agent cannot prove from unit tests and from reading the code is
+reported as an open item for the person to verify, in the exact steps they
+would take. Never quietly claim it works, and never pass off a class-name or
+string assertion as behavioural proof without naming it as the proxy it is.
 
 Activity disclosures require interaction tests, not just summary/string tests.
 Reasoning is an independently collapsible action, not a static heading inside

@@ -2234,6 +2234,7 @@ lane T's own if both were written.
 | M15-T3 | Model fallback chains: settings, runtime, persistence, verification | done | worker fallback-chains (01a091e3-8b36-73a4-a484-ea6b0227d7dd) | merged `b29843e` (design `d0f5fe7` … fixes `6d24e62`); review REQUEST CHANGES then fixed; live browser pass `/tmp/m15-live/REPORT.md`: switch, return attempt, exhaustion, reload, manual override all pass with the real engine; four editor/presentation findings fixed by the orchestrator at `319ca52` | see notes |
 | M15-T4 | Sidebar activity indicators: one indicator, owned by the session itself | done | worker sidebar-and-slash-fixes (01a091e1-c6e5-73a4-a484-ea4576dad59a) | merged `bbbd908` (`87c675f`, `5eb2008`, `8559c96`); the person's rule: a child's failure never marks the parent, quiet ring on the failed child, no failed count on the fold | see notes |
 | M15-T5 | Slash completion completes, never sends | done | worker sidebar-and-slash-fixes | merged `bbbd908` (`0bd7be9`, `b5dd471`); real-browser Tab proof, chorded Tab and caret tests | see notes |
+| M15-T8 | Compact before rejecting a smaller fallback model | done | worker Fix fallback review gaps `01a0bef6-15fd-74ed-8c44-83c2a0276e9c` | integrated `af83b521`, `da06b079`, review fixes `daab90af`; independent review approved; fallback 68/68; worker 1193 passed/4 skipped; typecheck/build/identity | see notes; added by D-336 |
 | M16-T1 | Attached images and files inside the person's bubble | done | worker chat-files (01a093c5-4748-72f2-9371-7262eb6e9603) | merged `ffd74b0` (`024f19b`, `9e897c0`); review `/tmp/review-chat-files.md` REQUEST CHANGES (wrapper leaking into titles/sidebar/queue; per-delta parsing; failing chip unmounting under focus) → fixed at the store boundary, verified; UI 1286; `docs/attachments.md` (D-227) | follow-ups: images as real `image` parts; saved-history search vs file bodies |
 | M16-T2 | Files and images the model refers to | done | worker chat-files | merged `ffd74b0` (`0425292`, `9e897c0`); assistant links → chips opening the viewer, project images inline, bounded visible-image loading | see M16-T1 |
 | M16-T3 | Opening a session never looks like a new one | done | worker session-open-feel (01a093ec-fce0-72f2-9371-72a13255cc67) | merged `acc1de0` (`49cc42e`, `cf183e0`); review `/tmp/review-session-open.md` REQUEST CHANGES (background reopen/resync blanked a visible transcript; goal failure destroyed the conversation; fake skeleton on New session) → one canonical `sessionOpenPhase`, verified 12/12 lifecycle cases in a real host; UI 1318 | composer queue-until-ready declined (needs destination-owned drafts; own milestone); loopback reads ~20 ms, the felt cost is renderer teardown of the long transcript and cold `session/load` ~630 ms — profile next |
@@ -2403,6 +2404,9 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M16-T94 | Load-only test flakes wait for state | done | parent | six tests: a clock assertion replaced by a work assertion, five explicit timeouts; 0.9.5 attempt one abandoned on the first of them | see notes |
 | M16-T95 | New Session is immediately usable | done | worker Immediate new session `01a0be43-2193-736a-8f05-9c533273e005` | merge `bfc118ae` (`4acf58a6`); focused UI 80+17; review REQUEST CHANGES then parent fixes (resolveAgent, landing-draft adopt, callers do not await allocation) | see notes; added by D-334 |
 | M16-T96 | Unread means a new message, not a file flush | done | worker Unread dot truth `01a0be4a-cff3-736a-8f05-9c63676bf3df` | `ae958b29`; `pnpm -F @lasercode/host exec vitest run test/attention.test.ts` 11 passed; review APPROVE `01a0be4d-f916-736a-8f05-9c68fd610d05` | see notes; added by D-335 |
+| M16-T99 | A new chat is local until the person speaks | awaiting-acceptance | queued to worker Transcript fills itself `01a0bf2f-fce5-74ed-8c44-84b5f3305e8c` | — | see notes; added by D-341 |
+| M16-T97 | A long transcript fills itself | awaiting-acceptance | worker Transcript fills itself `01a0bf2f-fce5-74ed-8c44-84b5f3305e8c` | — | see notes; added by D-340 |
+| M16-T98 | Other versions without the whole transcript | in-progress | producer half worker Bounded versions window `01a0bf2f-2fc2-74ed-8c44-84a85fcd38a6`; UI half queued to the M16-T97 owner | — | see notes; added by D-340 |
 | M16-T92 | The client reads an image reference | done | worker `01a0b96b-fb4a-7105-b0ab-d2744316cf7f` | 2ffb7e20 (`9a69a23f`); `projected-page.test.tsx` renders a real projected page | see notes |
 | M16-T67 | Why a goal paused itself overnight | done | worker goal-pause-forensics `01a0b137-f012-771e-a9f0-3648759cdeee` | `8c44b20e` · `docs/incidents/goal-pause-investigation.md`; proven from session `2026-09-14T13-52-32-557Z…` lines 9574-9586 | see notes; added by D-281 |
 | M16-T69 | The live edge actually follows | done | worker autofollow-implementation + autofollow-review-fixes `01a0b1bb-2023-771e-a9f0-36e4f80eff45` | merged `76fe9e5c` (`4c635548`) and `73eec455`; 42 focused, 16 live-edge/batched cases + 2 negative-control matrices, clean-env verify 156.4 s | see notes; design settled by D-287, review fixes applied |
@@ -2427,6 +2431,13 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 
 #### M15-T7 notes
 - 2026-09-18 claimed by worker agent-model-fallback: the person reports a chain never activates when the model came from the agent definition, only when picked by hand. Hypothesis to confirm or refute: `activateIfUnset()` runs in `open()` (stable-sdk.ts:547) before/apart from where an agent definition's model reaches the engine session, so `engine.selectedModel()` (fallback/engine-port.ts:52) sees the wrong model. Activation rules from docs/model-fallback-chains.md unchanged; restored traversal still wins. Regression test must fail before the fix.
+
+#### M15-T8 notes
+- 2026-09-20 claimed on base `de6831b1`: a rate-limited active model exhausted with “Fallback could not help” because the replacement model's smaller context window failed eligibility. Implement one bounded fallback-aware compaction when auto-compaction is enabled, then continue the same accepted turn without replay or duplicate tools. Plan required before code; owner writes `/tmp/m15-t8-plan.md` and touches only the fallback/driver seam, focused tests and the fallback specification. Next handoff: parent approves or revises the plan, then the same owner implements.
+- 2026-09-20 plan revision requested: moving activation to the compacted candidate and then re-entering `nextCandidate` skips that candidate, so successful compaction would never continue it. Revised plan must attempt the compacted candidate directly through shared continuation/result handling, require a finite post-compact estimate, and consume the one-compaction budget only when compact actually starts.
+- 2026-09-20 revised plan approved for implementation with one correction: a successful compact that remains too large for B re-enters traversal from B with the frozen estimate so a later larger C can fit; no second compact. Same owner now implementing the bounded worker-only write set and tests.
+- 2026-09-20 implementation commit `c66b11ed` passed fallback 63/63 and worker 1188 passed/4 skipped plus typecheck/build/identity. Parent inspection found pre-review bookkeeping gaps: B’s size skip disappeared from later exhaustion, refused selections retained stale size descriptions, catalogue window was re-read after compact, and tail cleanup broadened beyond Pi’s one-message behavior. Completed owner could not resume; ownership transferred to `01a0bef6-15fd-74ed-8c44-83c2a0276e9c` to cherry-pick and correct the batch before independent review.
+- 2026-09-20 done at `af83b521`, `da06b079`, `daab90af`: one public compact under the selected oversized candidate, measurable frozen estimate, direct same-turn continuation, later larger-model traversal, cancellation fencing, truthful de-duplicated persisted skips, and failed-tail-only cleanup. Independent review approved the full milestone. Evidence: fallback 68/68 after review fixes; integrated worker suite 1193 passed/4 skipped; worker typecheck/build and identity green.
 
 #### M15-T3 notes
 - 2026-09-11 the person's specification, verbatim, so the eventual owner works from the source and not a summary:
@@ -2947,6 +2958,8 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M19-T3 | Migration snapshot and interrupted-restore recovery | done | m19-recovery-plan `01a0aa8f-8f82-714d-99c8-190890feefc7` | merge `2b9962db` (T3A `6e7c07e9`, T3B `fb75bf61`, T3C `877ed4f6`, review fixes `8734a6ae`); host 895, CLI 92, desktop 181/1 skipped, UI 2280/1 skipped, worker 1034/4 skipped, release tests 45, browser-check 104; `.deb` fixed-root success/failure/rollback/retry cycle `packages/desktop/scripts/migration-deb-cycle.mjs` | added by D-264; depends on M19-T2 |
 | M19-T4 | The desktop preflight accepts its own install | done | claude-2026-09-17-a | fix `78b3760d`; `packages/desktop/test/runtime-generation-electron.test.ts` (fails on 0.7.0 source); clean-machine claim 5a; CI run 35200049676; released v0.7.1 from `b5b427dd` (release run 35200780236) | see notes; added by D-273; hotfix for 0.7.0 |
 | M19-T5 | Every conversation opens, MCP stays quiet, removed projects leave, loading is not working | done | claude-2026-09-17-a | `213c9133`, `daeb64e1`, `6436c70a`, `a079fc9e`, `459c9717`; verify 98 s green; browser matrix `/tmp/browser-check/run-WGH8ZD`; released v0.7.2 from `ceb71b30` (release run 35205573838) | see notes; added by D-274 |
+| M19-T6 | An installed update does not disable the running generation | in-progress | orchestrator 2026-09-20 | — | see notes; added by D-337 |
+| M19-T7 | Public global configuration lives in `~/.laser` | blocked | — | approved plan `/tmp/m19-t7-plan.md` | see notes; added by D-338; unblocked by M19-T6 |
 
 #### M19-T1 notes
 - 2026-09-16 claimed after approved plan `/tmp/m19-plan.md` and D-266 on base `3d1027da`: T1A protocol launch/failure contract, T1B host/worker/CLI/desktop launch handshake, T1C repair ledger, safe mode, companion failure ownership and the G host-loss reconciliation; one review for T1.
@@ -2997,6 +3010,20 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 - 2026-09-17 projects (lane, `a079fc9e`): `state.open` keeps a record for every session a window showed and archiving never removes it; removal and the rail now count only unarchived views the view cache pins (on screen, question, running/queued work, draft).
 - 2026-09-17 loading mark: the sessions row showed the working sweep ("Loading the conversation") and the status line a working dot while a conversation opened, reading as the agent running. The sweep now means a running agent only; loading is the transcript skeleton and neutral status-line words. Tests fail before, pass after.
 - 2026-09-17 released v0.7.2 from `ceb71b30`: candidate CI 35204991035 attempt 1 failed a host timing assertion (`session-index` cold-scan ratio 92.5 < 78.4 ms; fixture has no goal records, same code green twice), attempt 2 green; release run 35205573838, 12 assets. Done.
+
+#### M19-T6 notes
+- 2026-09-20 claimed on base `de6831b1`: the fixed-root safety rule correctly prevents an old host from spawning a new worker from overwritten bytes, but that makes a newly opened conversation fail after an update lands. Preserve an immutable executable generation for the already-running app/host so ordinary work remains available until the person chooses a full restart. Plan required before code; owner writes `/tmp/m19-t6-plan.md`, including disk/startup bounds, cleanup, crash safety and a real fixed-root update test. Next handoff: parent approves or revises the architecture, then the same owner implements sequential milestones.
+- 2026-09-20 first architecture plan completed with no repository writes, but review found unverified supplemental files, PID-only cleanup, custom-path isolation, host-UI path, noexec/SELinux and startup-copy gaps. The completed owner could not be resumed; ownership transferred deliberately to `01a0bede-6dd3-74ed-8c44-83938081775e` for one corrected plan at the same `/tmp/m19-t6-plan.md`, still no source writes.
+- 2026-09-20 second plan closed B1–B7 but was not approved: supplement identity was self-authenticating inside writable T, lease/sweep could race and lose T across daemon crash, host/CLI process-identity layering was unsettled, and explicit retain-root propagation contradicted daemon-owned binding. That completed session could not be resumed; plan-only ownership transferred to `01a0beea-f015-74ed-8c44-83b1fddf2402` to close C1–C4 before any source implementation.
+- 2026-09-20 corrected architecture approved at `/tmp/m19-t6-plan.md` after parent amendments: fresh T reuse is checked against a source-R-derived envelope rather than T’s own writable metadata, Windows gains stable creation identity for lock recovery, and a stable launcher lease id is a mandatory daemon bind argument. Ownership transferred to `01a0bef8-cfd8-74ed-8c44-83c9f66c45b5` for T6A only: retain store, envelope verification, safe copy, leases/lock/sweep, process identity move, retain path derivation and focused tests; no launcher/daemon/desktop integration yet.
+- 2026-09-20 T6A complete and integrated at `40177a72` (store `1a029dfc`/`c6c58f66`, review fixes `8473e8c1`). The store lock is now the adopt/publish boundary: an existing `T` that fails verification is refused and never deleted, and only a tree this critical section just published can be removed by it; the supplement walk skips incidental symlinks (packaged `.bin`) while every inventory/supplement row still refuses one; digest ordering is by code unit; `O_NOFOLLOW` errors propagate; markerless staging is swept after a grace; the module is split into `retain-copy.ts` (432), `retain-store.ts` (517) and `runtime-generation-retain.ts` (430) with exports unchanged. Three interprocess races are proven with a real second process through vite-node, including the C2 delete: the loser of an overlapping publish reports `failed-changed` and leaves the winner's leased `T` intact. Parent revalidation after merge: host retain/identity/storage/runtime-generation 36/36, including the lock fixture that failed before the fix; worker confirmed it also passes with `packages/host/dist` renamed away. T6B launcher/daemon/desktop binding is still unwired.
+- 2026-09-20 T6A review returned approve-with-fixes (`/tmp/m19-t6a-review.md`): the store lock is not the publish/adopt boundary — `materialize` can delete a leased `T` on a verification failure it did not cause, and `reuseExisting` verifies outside the lock before leasing — and the supplement walk refuses any symlink, which a packaged tree has (`asarUnpack` ships `.bin` links). Smaller: code-unit digest ordering instead of `localeCompare`, rethrow unexpected `O_NOFOLLOW` errors, sweep markerless staging, a lock fixture that does not import gitignored `dist/`, an `expectedRetainedDigest` reuse test, and splitting the 1211-line module at the lock boundary. Reviewer cleared the retain-parent ownership gap, the fail-closed `unknown` lock holder and the Windows identity path. T6A merged as `c6c58f66` (it is inert until T6B wires it); fixes owned by `01a0bf37-ffec-74ed-8c44-84c848c8b6aa`. Parent revalidation after merge: 28/29, the one failure being the lock fixture proving finding 6 (`sweeper exited 1`, empty output, no built `dist`).
+- 2026-09-20 T6A returned commit `1a029dfc` for review: retained store/envelope, fd copy, leases/store lock/sweep, host-owned process identity, native parent/probe and `LaserPaths.runtimeRetainDir`. Host 999, focused CLI 25, builds/typechecks and identity pass; full CLI has four runtime-manifest drift failures because T6A rebuilt host dist without regenerating the out-of-scope inventory. Parent inspection and independent review are pending; T6B has not started.
+
+#### M19-T7 notes
+- 2026-09-20 claimed for architecture mapping on base `de6831b1`: implement the person’s binding public-config plan under D-338. `configDir` and schema 1→2 touch `packages/cli/src/config.ts` and `packages/host/src/migrations/storage.ts`, currently owned by M19-T6 T6A, so no source implementation starts until that owner hands those paths back. Worker `01a0bf01-0d9c-74ed-8c44-83dd6ca139e6` is read-only in the repository and writes `/tmp/m19-t7-plan.md` with exact readers/writers, migration units, launch/adoption contract, external-edit behavior, staged ownership and isolated validation.
+- 2026-09-20 first mapping found the complete launch/adoption and migration-engine coupling but left settings-baseline, semantic-conflict and secret-classification decisions open. Plan-only ownership transferred to `01a0bf14-cb28-74ed-8c44-8428e3ff9b67` for a parent-settled revision; repository remains read-only and source remains gated on M19-T6.
+- 2026-09-20 architecture approved at `/tmp/m19-t7-plan.md`: protocol owns one public-settings projection/validator; Pi sees a filtered private baseline through its own locked storage delegate; migration validates all read-only inputs before writing snapshotted destinations; strict empty/identical/conflict rules apply to settings, keybindings, MCP and the complete agent Markdown set; config-root existence/mode and integrity-bound rollback metadata are durable; actual account home never follows mutable `HOME`; secret-bearing MCP/proxy values refuse without disclosure; schema 2 and all four consumers switch atomically. Source is blocked until M19-T6 releases the launch spine.
 
 #### M13-T128 notes
 - 2026-09-18 done and merged at `96368930`. `packages/protocol/src/human-label.ts` holds the single conservative rule: a lone dash/underscore token becomes spaced sentence case, anything else only gains a leading capital, and code-shaped values (paths, URLs, a leading command word, identifiers with internal capitals or punctuation) are returned byte-for-byte. Applied at `start_agent` for new runs and at the worker/UI projection boundary for runs already recorded; fleet, map, session list, handoff and end-of-run surfaces all read sentences now. `agent_name`, stored history, worktree slugs and branch paths are untouched. Model guidance updated for both `subagent_name` and `activity_label`.
@@ -5575,6 +5602,31 @@ Supersedes: none; refines D-271 and RP-11.
 - 2026-09-19 worker `56b4214f`: the transcript is one `@legendapp/list` 3.3.5 (MIT, exact-pinned, pnpm patch carrying the three web hunks); `maintainVisibleContentPosition {data,size,shouldRestorePosition}` refuses to move content above the reader instead of correcting after it; `maintainScrollAtEnd` with `footerLayout: false`; notices, history controls and the placeholder are `ListHeaderComponent`; `ThreadPrimitive.Viewport` removed (two scrollers were two authorities). Deleted the head item, `measureRow`, `observeElementRect`, `writeScroll`, `scrollMargin`, `rangeExtractor` and `@tanstack/react-virtual`. Evidence `/tmp/t91-legend-list-evidence.md`.
 - 2026-09-19 trade recorded and pinned by a named test: growth *below* the reading line inside the row being read still moves the view by that much (the list restores the row whose top is on screen). It is the mirror of D-303's trade and the better half, since growth *above* the line happens continuously while reading upwards.
 
+#### Changes overlay scrolling notes
+- 2026-09-20 merged as `a264e1ba` (`4866e5f8` on `ec6b14ca`). `ec6b14ca` alone was not the whole fix: `h-full` inside a clipping flex host still lets the virtualizer size to its rows, so the host is now `flex flex-col` and the scroller `min-h-0 flex-1 overflow-auto overscroll-contain`. Pierre forwards no `tabIndex`, so `equipDiffScroller` stamps `data-slot="changes-diff-scroll"`, `tabIndex=0`, `role="region"` and a label on the virtualizer; `isOverlayScrollTarget` stops the overlay's ArrowUp/ArrowDown from stealing native scroll while a region has focus (`j`/`k` still change file); ArrowLeft/Right relay to Pierre's overflowing `[data-code]`. Rail, tab strip, image stack, phone sheet title, notices and the git dialog audited — only `overscroll-contain` and one `shrink-0` needed. UI 2977 passed / 1 skipped.
+- 2026-09-20 the browser proof was **not** delivered with the fix (the draft script was exercised and discarded), so the milestone's real acceptance criterion is still open: every committed assertion about this is a class-name proxy, because `test/source-control/diff-body.test.tsx` mocks the renderer. A harness script was dispatched and then **cancelled by the person** — the fix stands on its unit guards and on use. Left open deliberately: no committed browser assertion covers this surface, so a future change to `diff-body.tsx`'s layout classes or to Pierre's renderer can silently make a long diff unreadable again without any suite going red.
+- 2026-09-20 known and left: Pierre's hunk separators do not stick while scrolling a hunk; horizontal overflow lives in `[data-code]`; a `git init` in a project already resolved `no-git` stays invisible until a new worker (not an overlay bug).
+
+#### M16-T99 notes
+- 2026-09-20 delivered as `1d17f393`. (1) `EmptyState` no longer returns `null` in any phase: a new `landingWorkspaceOf(destination)` in `runtime/main-destination.ts` names the place from the destination alone, in every phase. (2) Its words come from the destination only — no `useSessionMeta()`, no `agents.snapshot` — with one sentence per tab, so nothing changes when the session lands. (3) `ConversationLoadingGate` is no longer keyed on `open.path`, so adopting the created session stops unmounting and remounting the transcript subtree; the gate's anti-flash timer follows `active` instead. (4) The microphone is present whenever dictation can work in this browser at all (`env.microphone && PhraseDictationAdapter.isSupported()` — local facts), and provider/credential/permission move to the transport's `check()` on the press; `pwa/transcription-availability.ts` lost its last reader and is deleted. The author also found a fifth: `TopBar` drew landing chrome and adopted-session chrome differently (bold vs italic muted "New session", plus a "Starting the agent" chip), so a `fresh` session now keeps the landing's chrome while a crashed worker still shows its chip.
+- 2026-09-20 tests pin frame-level identity rather than strings alone — the scroller DOM node must be the same object across adoption (`toBe(node)`), which is what fails on the old code. Open items the person must judge, since no agent runs a browser (D-342): actual pixel/layout stability on adoption, phone and touch rendering, the wording of the press-time microphone failure, and the composer's model/agent selectors, which still read the session once it exists and can change label on adoption.
+- 2026-09-20 the person, after M16-T95 shipped: a new chat still waits on the backend and then flickers when the answer lands. Parent located four causes in source rather than re-describing the symptom. (1) `EmptyState.tsx:76` renders **nothing** while `destination.phase === "resolving"`. (2) The same component derives its eyebrow, greeting and sentence from `session` and from `agents.snapshot.workspaces` (`:62-72`, `:100-106`), so the name and the copy change when responses land. (3) `Thread.tsx:139` keys `ConversationLoadingGate` on `open.path`, so adopting the real path after creation **remounts the whole transcript subtree** — that is the "it reloads the page" flicker. (4) `DictateButton.tsx:70-73` hides the microphone until either the session reports the `transcribe` capability or `useTranscriptionAvailable` returns from a per-cwd probe, so the control appears late. Queued to the M16-T97 owner because it writes the same files.
+
+#### M16-T97 notes
+- 2026-09-20 delivered as `92292dfe` (13 files, +434/−130, UI + browser scripts + docs only). Landing now pages itself: the `interacted.current &&` gate is gone from the layout effect and the scroll handler, the layout effect schedules the prefetch rAF on landing (the old `if (!anchor) return` was why nothing loaded before a gesture), and the burst is bounded by 16 pages OR 4 MiB OR a reserve ≥ 2 viewport heights above the reader OR the root, awaited in sequence. `HISTORY_TAIL` is deleted: read/reconcile ask `{ turns: 10 }`, earlier pages `{ before, turns: 20 }`. A stale base on a background refresh now accepts the replacement instead of raising a refusal, and the whole-conversation size refusal is rewritten into a sentence a person can act on. UI 2981 passed / 1 skipped; browser matrix landing shots at 1360/390 × dark/light show the transcript filling the viewport with no skeleton on screen (61/247 records loaded with no gesture), `scroll-up-repeat` reports `worstAnchorDelta: 0`. Not run: full `pnpm verify`, `--touch` matrix.
+- 2026-09-20 under independent review (`01a0bf78-b6db-74ed-8c44-859972496478`): the gesture was the old brake, so the review is aimed at runaway paging, D-302 geometry under resize, the module-level byte counter shared with Beam, the stale-base replacement, and whether the two edited browser scripts still prove anything — a weakened browser assertion is how the overlay scroll bug survived.
+- 2026-09-20 review fixes delivered as `17fe44c2`. Blocker 1: a background `refresh` whose base the producer cannot prove now dispatches **nothing** — window, `before`, anchor and blocks untouched, no `replaceWindow`, no refusal. The author deliberately did not merge the new tail (the UI cannot prove a suffix the producer just declined to prove: a fork moves the leaf, a gap past ten turns would leave a hole), and the next page the person actually asks for still gets the explicit re-read. Proven by a test that pages up to 60 rows, refreshes against a stale base, and asserts the same 60 ids, the same `blocks` reference, the same `before`/`anchor`; re-applying the old branch fails it as reviewed. Blocker 2: the budget is now cumulative per reading position in a ref, spent on every automatic page, and re-armed only by a real movement — `TranscriptViewport.gestureCount` from `attach()`'s `user()`, plus wheel/touch/key, the `ResizeObserver` and the explicit control; a raw `scroll` event never re-arms, because the list raises those itself after a prepend. Tiny pages now stop at exactly 16 and stay there across further frames and a synthetic scroll (old code walked forever); 1 MiB pages stop at 4. Non-blocking all closed: `earlier()`/`recoverEarlier()` return `EarlierPage { accepted, bytes }` and the module-level byte cell is gone, `interacted` deleted, `transcript-window.mjs` asserts honestly instead of swallowing. Find's "Load all messages" was dead by construction — it sent `{ all: true }`, which the producer refuses past 200 rows, i.e. for every conversation partial enough to show the button, and `guard()` swallowed the throw into a toast while the button stayed up; it now pages the on-screen branch to its root with the turn pager (cap 400 pages), which cannot be refused for size. UI 2990 passed / 1 skipped.
+- 2026-09-20 review returned **do not approve** (`/tmp/m16-t97-review.md`), two blocking. (1) `history-loader.ts:487-490` gave a background `refresh` the same `replaceWindow: true` as `recent`, which forces `retainTree` false, so `EntriesRefresh` at every turn end would snap the store back to the newest ten turns — with landing prefetch in place, a person who paged up during a turn loses the row under their eye, the exact D-302 violation the docs added by this same commit deny. The fix is that an unsolicited refresh keeps the held window: no replace, no refusal; a refusal belongs only to a page the person asked for. (2) The 16-page / 4 MiB budget is a yield, not a stop: `busy` clears, and the revision-dependent layout effect re-arms a frame later, so tiny split-turn pages can chain through the whole 8.1 MB conversation on landing. Budget is to become cumulative per reading position, re-arming only when the person moves. Non-blocking: `lastHistoryPageBytes()` is process-global and races Beam; `interacted` is dead; `transcript-window.mjs` now swallows the Find "Load all messages" defect. Cleared: turn windows, gestureless landing prefetch, the `{ all: true }` rewrite, `begin`/`finishEarlierPage` pairing, and the three-screen reserve replacing the 75% thumb assertion (a correct D-302 swap, not a relaxation). Batched to the author's session; merge waits for both fixes and M16-T99.
+- 2026-09-20 two defects carried out of this milestone: `interacted` is now written but never read, and Find's "Load all messages" does not load (the button stays up, observed in run-VABAWk). Both sent to the same owner with M16-T99 rather than left in the report.
+- 2026-09-20 claimed on base `daab90af` from a measured investigation of an 8.1 MB session (1283 entries, 18 user turns, last turn 909 rows/6 MB, four compactions, one fork). UI owner `01a0bf2f-fce5-74ed-8c44-84b5f3305e8c` takes F1 (auto-load the visible reserve, two-screen prefetch margin, explicit page/byte budget replacing the twelve-per-gesture cap), F2 (turn windows the protocol already serves: the UI still sends `tail: 40`/`limit: 40`, and the first page of that session carried zero user prompts, as did the next seven), F4's client half (a background refresh whose base went stale accepts the replacement rather than raising a refusal the person did not cause) and F5 copy. Versions/`{all:true}` removal is deliberately held back for M16-T98.
+
+#### M16-T98 notes
+- 2026-09-20 producer fixes integrated at `b02b6548` (`3505c411`): `window.mode` is now `"replace" | "delta" | "versions"`, so a page of siblings says what it is instead of looking like a transcript replacement; one `HistoryWindowIndex` (children + byId + branch) is built per nodes array and reused across the fit search, taking the 32k-sibling worst case from ~12.8M map inserts and 146 ms per fit to 32,001 inserts and 3.5 ms; the versions search folded into the existing `search()` and the sixth positional `versionLimit` is gone; the host's refusal sentence is true for versions; and a protocol fixture finally combines a 909-row turn with a fork plus 220 siblings, where `{ all: true }` refuses and the versions page shrinks to 200 while `total` stays 222. Parent then closed the one gap the worker correctly reported but could not touch (it was outside its permitted paths): `packages/host/src/session-revision.ts` listed only the two modes it knew, so a **live** worker answering `{ versionsOf }` was rejected as a foreign page while the durable projection already served it — fixed with a test at `242c7b94`. Host 1010/1010 after it; 109/109 on the three affected suites once protocol dist was rebuilt, a stale protocol build is what makes those suites fail with schema-shaped errors.
+- 2026-09-20 producer review returned approve-with-fixes (`/tmp/m16-t98-producer-review.md`), one blocking: the page is indistinguishable from an ordinary transcript window, so a consumer applying non-delta windows as the history snapshot would replace the transcript with off-branch siblings — `mode` must say `"versions"`, since optional `window.versions` is not a discriminator and `complete: false` with no cursor already describes a root-reaching page. Non-blocking: `leafOfNode` rebuilds a children map per sibling inside the fit search (~10⁸ inserts at 32k siblings), a duplicated binary search behind a sixth positional `versionLimit`, a host refusal sentence that still says "complete turn", and tests that never combine a fork with a 909-row turn. Cleared: centring on the named entry, `total` as the honesty signal, `InvalidParams` for an unknown id, and the 4096 ring (8,142,848 B against the 8 MiB budget). Merged as `55a78cc2` because nothing consumes it yet; fixes owned by `01a0bf4f-eac2-74ed-8c44-8520805677e0`.
+- 2026-09-20 producer half returned `d470416d`: `{ versionsOf }` carries the named entry's siblings in file order with `window.versions = { total, leaves }` (leaf = last child in file order, recursively), always `mode: "replace"`, shrinking around the named entry and then eliding bodies rather than refusing; unknown id is `InvalidParams` in a person's sentence. `CHECKPOINTS_MAX` and the host index ring go 512 → 4096 (one `RevisionState` measured at 131 B; the 909-row turn costs ~117 KB). Under independent review; the parent's own read flagged the off-branch `mode: "replace"` payload having only `window.versions` to stop a consumer replacing the transcript with siblings, `leafOfNode` rebuilding a children map per sibling inside a binary search, and the 4096 ring against the host index's 8 MiB budget.
+- 2026-09-20 the worker's "1 unrelated failure" in the full worker suite (`test/mcp/authorization.test.ts`) is a concurrency flake, not this change and not pre-existing breakage: the file passes 56/56 in isolation both on the parent checkout at the merge base and inside the author's worktree.
+- 2026-09-20 claimed on base `daab90af`. Producer half to worker `01a0bf2f-2fc2-74ed-8c44-84a85fcd38a6`: one bounded `{ versionsOf }` history window returning an entry's siblings with their branch leaves, obeying the existing entry/byte/`bodyLimit` ceilings, served by both the live worker and the durable host reader, with a schema round-trip sample and router coverage (AGENTS.md §6b); plus F4.2, raising the worker's 512 retained checkpoints so a 909-row turn no longer makes a current base stale while a compaction still does. The UI half — removing `{ all: true }` from versions, the message menu, Find, `ensure()` and refresh — is queued to the M16-T97 owner once the window exists, so one owner keeps the transcript files.
+
 #### M16-T92 notes
 - 2026-09-19 worker `9a69a23f`: `boundUserContent` branches on `image.ref`, `retainEntries` no longer lets an image decide retention, `McpToolRow` draws a referenced picture as the transcript's own tile, and the duplicated header parser in `view-measure.ts` delegates to the protocol's.
 - 2026-09-19 the fixture that closes the hole: `packages/ui/test/thread/projected-page.test.tsx` runs records through the real `elideOversizedEntries` and renders that page, which is what 2,619 hand-built image fixtures could not catch.
@@ -5634,7 +5686,7 @@ expressed: a ResizeObserver reports a box, not where inside it grew.
 | M20-T4 | The fleet and telemetry columns | done | orchestrator-2026-09-19-leap | fleet `9052cd45` + `175d2dfb`; telemetry `56f1614e` + `9d7b69cd`; reviews `run_796bd859`, `run_96997e49` | spec §3, §4; see notes |
 | M20-T5 | The overlay | done | orchestrator-2026-09-19-leap | `05daced9`, review `run_0802b2eb`, corrections `51b013e2`, fleet entry `6d2231bd` | spec §8; see notes |
 | M20-T6 | Git actions | done | orchestrator-2026-09-19-leap | engine `0c3b0ba4` + `bc00695b` (review `run_6a13e263`, rejected then corrected); toolbar `bb786d1c` | spec §9; see notes |
-| M20-T7 | Undo this turn uses the prompt's own snapshot | in-progress | orchestrator-2026-09-20-new-session | — | see notes |
+| M20-T7 | Undo this turn uses the prompt's own snapshot | done | orchestrator-2026-09-20-new-session | `e96b9ff4`, `737be19c`; worker source-control 25, UI undo 31 | see notes |
 
 #### M20-T0 notes
 - 2026-09-19 spike ran against the real library in `/tmp/pierre-spike`, nothing committed to the checkout. Theming from `var(--syntax-*)` recolours with zero shadow mutations; find paints across 9 open shadow roots (17 matches); copy is clean source. Partial: +449 KB main chunk, empty bodies for binary/mode-only/pure-rename, no auto-unify at 320px, expand-all is 20 000 nodes, worker pool needs an explicit `workerFactory`.
@@ -5660,6 +5712,7 @@ expressed: a ResizeObserver reports a box, not where inside it grew.
 
 #### M20-T7 notes
 - 2026-09-20 claimed: Undo was looking up checkpoint.turn === userOrdinal. Settles (including extra wakes) minted extra numbered snapshots, so prompt 6 restored checkpoint 6 from mid-session instead of the Send snapshot for that message. Fix: capture at user message_end keyed by entry id; lookup by id; lost files only if restore would overwrite them.
+- 2026-09-20 done: `e96b9ff4` + `737be19c`. An id miss does not fall back to the ordinal.
 
 #### M20-T1 notes
 - 2026-09-19 built, reviewed and corrected. `workspaceShape` resolves repo, monorepo, workspace-of-repos, nested repo and no-git over real fixtures; `pi/project/workspace` is answered by the host with no worker; `start_agent` never fails over shape and the choice reaches the run record, the result, `inspect_agent` and the fleet row.
@@ -6023,3 +6076,164 @@ Why: opening or leaving a session can rewrite the jsonl without adding a
 message; mtime then lies.
 Consequences: no new protocol method and no new unread flag. Terminal-written
 messages still mark unread because the catalog count rises.
+
+### D-336 · 2026-09-20 · Context fit is recoverable during fallback
+
+Decision: add M15-T8. If an access failure opens a model fallback and an
+otherwise usable candidate is blocked only because the current conversation is
+larger than its context window, Laser performs one bounded compaction under that
+candidate when auto-compaction is enabled, then retries the same traversal and
+continues the accepted turn. Compaction is part of the failover event: manual
+selection and cancellation still fence it, and it cannot replay completed tools
+or open a second request.
+
+Why: “Fallback could not help: … the conversation is longer than this model can
+hold” asks the person to recover from a condition Laser already knows how to
+repair. The current policy treats context fit as permanent eligibility even
+though compaction can change it.
+
+Consequences: `docs/model-fallback-chains.md` §2.5/2.7 is amended. The context
+reason remains truthful when auto-compaction is disabled or compaction cannot
+produce a usable context; other eligibility reasons and cooldown policy do not
+change.
+
+### D-337 · 2026-09-20 · An update may land without disabling the running version
+
+Decision: add M19-T6. A launched app/host must bind future worker launches to
+immutable retained bytes for its exact runtime generation. A self-consistent
+update replacing the fixed install root becomes pending and activates only on a
+full restart; it does not make the running generation's unopened conversations
+fail.
+
+Why: D-270 prevented mixed old-host/new-worker execution by refusing new worker
+spawns after the fixed root changed. That is safe but unnecessarily turns a
+ready update into an application outage and surfaces “This session didn’t
+load” for ordinary work.
+
+Consequences: narrowly supersedes D-266's rejection of retained executable
+bytes and D-270 where it says the old running host must refuse because prior
+bytes do not survive. Generation verification, the park and migration gates,
+explicit restart activation and refusal of genuinely missing/corrupt/drifted
+retained bytes remain. Retention must be bounded and must never silently fall
+back to the new root.
+
+### D-338 · 2026-09-20 · Public global configuration uses `~/.laser`
+
+Decision: add M19-T7. The account home’s `.laser` directory is the canonical
+root for human-facing global Laser settings, keybindings, non-secret MCP
+definitions and Markdown agent definitions. Platform-native data roots continue
+to own sessions, operational state, logs, caches, runtime data and secrets;
+project `.laser` configuration and Electron `userData` stay unchanged. A single
+forward-only schema 1→2 step uses the existing migration engine, preserves
+legacy sources for the first migrated release, refuses semantic destination
+conflicts or malformed inputs without overwrite, and makes older registries
+refuse schema 2.
+
+Why: the short, familiar path is the portable convention a person can edit,
+copy and version deliberately. It is clearer than exposing engine-private files
+under the managed data root, and it creates an enforceable boundary around
+secrets and host state.
+
+Consequences: this qualifies D-51 only for the public global configuration
+directory: machine/wire/data namespaces remain `lasercode`, while the person-
+facing directory is exactly `~/.laser`. `configDir` becomes part of launch and
+host-adoption identity. New binaries stop reading or writing migrated legacy
+public files after schema success; installers never inspect a home directory;
+unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
+
+### D-342 · 2026-09-20 · Browser acceptance belongs to the person
+
+Decision: no agent — orchestrator, worker or reviewer — runs browser checks,
+browser tests, Playwright, or anything under `scripts/browser-check/`. When UI
+work is finished the agent reports and stops; the person starts the sandbox
+(`pnpm -r build && pnpm sandbox`, http://127.0.0.1:41441) and performs user
+acceptance themselves. `AGENTS.md` carries the rule, and every UI brief repeats
+it, since a worker reads only its brief.
+
+Why: the person's instruction. They want acceptance in their own hands rather
+than mediated through an agent's screenshots and claims.
+
+Consequences: the harness stays in the repository and keeps working, but it is
+not an agent's to run, and no milestone may list a browser run as its
+acceptance evidence. Unit tests and code reading now carry the whole of an
+agent's case, so anything they cannot settle is reported as an explicit open
+item with the steps the person would take — never as a quiet claim, and never
+as a class-name assertion dressed up as behavioural proof. Two existing rules
+gain weight rather than losing it: a proxy assertion must be named as one, and
+the D-341/M16-T99 frame-level criteria become things the person checks.
+Supersedes the browser-harness acceptance paragraph in `AGENTS.md`.
+
+### D-341 · 2026-09-20 · An empty conversation is a local surface
+
+Decision: add M16-T99. A new session's landing is rendered from what this
+window already knows and is frozen until the person acts. The session request
+is sent silently; its response may not repaint, remount, re-key or re-word
+anything on screen. Controls are optimistic: the microphone is present and
+pressable at once, and its provider, credential and permission checks run when
+it is pressed, surfacing only a real failure in the person's language.
+
+Why: M16-T95 made the landing appear immediately but left it reading from
+backend state, so the name, the sentence and the microphone still arrived late
+and the adopted session path remounted the transcript subtree. The person
+reads that as flicker and as the app reloading under them. A person can never
+press a control faster than the request that is already in flight, so gating
+the control on that request buys nothing and costs the whole feel of the app.
+
+Consequences: the landing's identity comes from the destination the window
+already holds, not from a session summary; adopting a real session path is a
+silent identity change, never a remount; capability probes stop deciding
+whether a control exists and start deciding what happens when it is used.
+It does not weaken M16-T95's reuse (D-127/D-334), the Beam bubble's
+prepare-on-open, or any refusal the person genuinely needs to see.
+
+### D-340 · 2026-09-20 · The transcript pages itself, and versions are a window
+
+Decision: add M16-T97 and M16-T98. Upward paging no longer requires a pointer,
+wheel, touch or key gesture: the view keeps requesting older pages, in
+user-anchored turns rather than raw entries, until real rows stand at least two
+screens above the reading position. A background refresh that finds its base
+stale accepts the replacement page instead of refusing. Other versions of a
+prompt come from a bounded sibling window on that entry, and `{ all: true }`
+leaves every person-facing path.
+
+Why: measured on an 8.1 MB session whose last turn alone is 909 rows. The
+first page (`{tail: 40}`) held zero user prompts and folded into roughly one
+collapsed activity row, so the skeleton reserve was on screen with nothing
+fetching it; eight further pages still did not reach a prompt. "Load other
+versions" was `{ all: true }`, which any session over the 1 MiB page ceiling
+refuses — a control that is always visible once a single off-branch entry
+exists and always fails, carrying copy written for an API caller. A 909-row
+turn also exceeds the worker's 512 retained checkpoints, so an ordinary
+background refresh moved the view into a refusal the person never asked for.
+
+Consequences: supersedes the "no page without a gesture" rule introduced with
+`51d5a467` and the twelve-pages-per-gesture wording in `docs/transcript-reading.md`;
+D-302's bounded estimate ahead of a reader and the geometry invariants stand,
+and paging stays bounded by explicit page and byte budgets. `branchesUnloaded`
+stops driving a global control and only informs per-message version controls.
+The protocol gains one window variant with a schema round-trip sample and router
+coverage, served by the live worker and the durable host reader alike.
+
+### D-339 · 2026-09-20 · Public configuration migration is all-or-nothing
+
+Decision: M19-T7 uses one protocol-owned public-settings projection and validator.
+The worker filters those keys out of Pi's private global baseline while preserving
+the legacy file on Pi writes. Schema 1→2 first validates every read-only legacy
+input and destination, then writes only absent or semantically empty destinations;
+semantically identical content is a no-op and every other owned-content difference
+is a conflict. Writable destinations, the schema file, and integrity-bound config-
+root existence/mode metadata are the rollback boundary. Legacy inputs are never
+snapshotted or restored. The default root comes from the actual account home, not
+mutable `HOME`; existing roots must be non-link and current-user-owned. Inline MCP
+secrets and credential-bearing proxy URLs refuse without echoing their values.
+
+Why: moving editable configuration must not resurrect stale engine values, merge
+ambiguous documents, overwrite a concurrent source edit, leak credentials, or
+leave a created root or changed permissions after rollback.
+
+Consequences: malformed input or any destination conflict blocks startup through
+the existing migration-failure surface before destination mutation. Schema 2,
+all four consumer switches and their harness updates land atomically. Explicit
+purge removes the public root; ordinary uninstall and identity/data migration do
+not. M19-T7 implementation remains blocked until M19-T6 releases the shared
+launch and migration paths.

@@ -1,62 +1,36 @@
-# Laser 0.9.5 — long conversations, read properly
+# Laser 0.11.0 — long conversations open, new chats are instant, diffs scroll
 
-This release is about one thing: a long conversation with pictures in it now
-works. If you have a chat that would not scroll back, or that stopped showing
-older messages entirely, this is the release that fixes it.
+This release is about the three places the app made you wait, guess, or give up.
 
-## Older messages come back
+## A long conversation opens on what you were doing
 
-A conversation that had grown past a certain size stopped serving its older
-half. Scrolling up reached a point and stopped there, for ever — the messages
-were still on disk, but nothing could read them back.
+Opening a big session used to show you almost nothing: the last forty entries, which on a real 8 MB conversation is thirty-six rows and not a single one of your own prompts. Getting back to your work meant scrolling up, a page at a time, past estimated empty space.
 
-Two things caused it, and both are gone.
+Now the transcript fills its own screen and keeps about two screens loaded above the one you are reading, without a gesture. Pages are counted in turns, so a page is whole prompts and their answers rather than a fixed number of rows.
 
-**Pictures no longer travel inside a message.** A screenshot pasted into a chat,
-or one a tool returned, was carried inline as part of the message itself. A
-single screenshot is often two or three megabytes, which is larger than a whole
-page of conversation is allowed to be — so any page containing one could not be
-sent, and every page older than it was unreachable. Pictures are now sent as
-references and fetched when they are shown, at every size, in every kind of
-message. A page of conversation carrying two multi-megabyte screenshots went
-from 6.4 MB to under 4 KB.
+It stops when it should: two screens above you, the start of the conversation, or a budget for where you are sitting — whichever comes first. It picks up again when you move.
 
-**A page is now a number of turns, not a number of bytes.** Reading backwards
-loads the last ten exchanges, then twenty more each time you continue. One real
-27 MB conversation now reaches its very first message in 22 requests, taking
-under a second; it previously needed 56 and gave up partway.
+**Scrolling up during a live turn no longer loses your place.** When the turn finished, the app used to quietly replace what you were reading with the newest ten turns, taking the row under your eye with it. A background refresh now leaves your window exactly as it is.
 
-## Reading upwards no longer moves the text
+**"Load all messages" in Find works.** It never did: it asked for the whole conversation in one read, which is refused for anything large — that is, for every conversation big enough to show the button — and the failure went into a notification while the button sat there. It now pages the conversation you are looking at back to its beginning.
 
-While you read back through a conversation, things above you finish loading —
-images arrive, reasoning streams in, a tool result expands. Each of those used
-to shift the text under your eyes, so the line you were reading moved away from
-you.
+## A new chat is local
 
-The transcript is now built on a list that refuses to let content above you
-move, rather than correcting the scroll position afterwards. Folding a tool
-result open or closed keeps the row you clicked exactly where it was, and the
-composer growing taller no longer moves the conversation.
+Pressing New gives you the finished screen on the next frame: the name, the prompt, the suggestions, the composer, and the microphone. Nothing on it waits for an answer from the backend, and — this is the part that was wrong in 0.10.1 — nothing on it changes when that answer arrives. The conversation no longer reloads under you, the wording no longer swaps, and the header no longer redraws itself a second time.
 
-One honest limit: if the row you are *halfway through* grows below your reading
-line, the view still moves by that much.
+The microphone is there and pressable before the session exists. It checks the provider and asks for permission when you press it, and tells you in plain words if something is actually missing, instead of being invisible until a check comes back.
 
-## Every picture stays reachable
+You can type, dictate, pick a suggestion, and send before anything has settled. Send joins the session already being prepared.
 
-A picture that is not in the loaded window is now opened on demand rather than
-reported as missing, including pictures inside tool results and inside results
-from MCP servers. A picture reserves the right amount of space before its bytes
-arrive, so the conversation does not jump when it appears. Pictures whose file
-header does not state a size are the exception and still appear without a
-reserved box.
+## The Changes overlay scrolls
 
-## Mentions
+A diff longer than the window could not be scrolled at all — the content simply ran past the bottom and was clipped. It scrolls now, with the wheel, with a finger, and with the keyboard: Tab into the diff, then Page Down, End and the arrow keys. `j` and `k` still move between files, and a line too long to wrap can be reached sideways. The file list beside it scrolls on its own without dragging the page with it.
 
-Typing a space after `@something` now ends the file suggestion list, as you
-would expect. A path with a space in it still works if you quote it —
-`@"./my folder/notes.md"` — and the list stays open while the quote is open.
+## When a model is busy and the conversation is long
 
-## Upgrading
+Falling back to another model used to give up twice over: "Claude is being rate-limited. Fallback could not help: the conversation is longer than this model can hold." A conversation that does not fit the model taking over is now compacted once, and the turn you asked for continues on that model instead of failing.
 
-Nothing to do beyond installing. Existing conversations are read as they are:
-nothing is rewritten, migrated, or moved on disk.
+## Also in this release
+
+- The agents' shared preamble is shorter, so custom agents inherit less style and keep more of their own.
+- Groundwork for updates that land while the app is running: the generation you are running is retained and kept whole, so a future update cannot leave a half-replaced app behind. The rest of that work continues in the next release.
