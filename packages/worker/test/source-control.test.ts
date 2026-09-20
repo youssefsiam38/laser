@@ -353,7 +353,8 @@ describe.skipIf(!haveGit)("restore", () => {
     writeFileSync(join(dir, "danger.txt"), "uncommitted\n");
     const preview = await ctl.restore({ cwd: dir, path: SESSION, turn: 0, restore: "files" });
     expect(preview.restored).toBeUndefined();
-    expect(preview.preview.repos[0]!.uncommittedLost).toEqual(expect.arrayContaining(["a.txt", "danger.txt", "staged.txt"]));
+    expect(preview.preview.repos[0]!.files.sort()).toEqual(["a.txt", "danger.txt"]);
+    expect(preview.preview.repos[0]!.uncommittedLost.sort()).toEqual(["a.txt", "danger.txt"]);
     expect(preview.preview.hidden).not.toContain("files");
     expect(preview.preview.hidden).not.toContain("conversation");
     expect(preview.preview.staging).toBe("not_restored");
@@ -498,6 +499,26 @@ describe.skipIf(!haveGit)("agent-scope file_diff", () => {
 });
 
 describe.skipIf(!haveGit)("capture numbering", () => {
+  it("snapshots a prompt once by entry id and hides files when the tree matches", async () => {
+    const dir = temp("prompt-id");
+    initRepo(dir);
+    const ctl = service(dir);
+    await ctl.captureBaseline(SESSION, dir, "leaf-0");
+    await ctl.captureForPrompt(SESSION, dir, "user-1");
+    await ctl.captureForPrompt(SESSION, dir, "user-1");
+    await ctl.captureForPrompt(SESSION, dir, "user-2");
+    const listed = await ctl.list(SESSION, dir);
+    expect(listed.checkpoints.filter((row) => !row.failed).map((row) => row.entryId)).toEqual([
+      "leaf-0",
+      "user-1",
+      "user-2",
+    ]);
+    const preview = await ctl.restore({ cwd: dir, path: SESSION, turn: listed.checkpoints.find((row) => row.entryId === "user-2")!.turn, restore: "both" });
+    expect(preview.preview.repos[0]!.files).toEqual([]);
+    expect(preview.preview.repos[0]!.uncommittedLost).toEqual([]);
+    expect(preview.preview.hidden).toContain("files");
+  });
+
   it("keeps a whitespace-bearing entry id and does not reuse a failed turn number", async () => {
     const dir = temp("turns");
     initRepo(dir);

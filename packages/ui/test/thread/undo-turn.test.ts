@@ -19,6 +19,7 @@ import {
   repoTotalLabel,
   reposAffectedByFiles,
   restoreErrorText,
+  checkpointForPrompt,
   restoreTurnForPrompt,
   restoreWhatCopy,
   turnCheckpoint,
@@ -40,6 +41,19 @@ describe("restoreTurnForPrompt", () => {
   it("maps the prompt ordinal onto that turn's checkpoint, including the baseline", () => {
     expect(restoreTurnForPrompt(0)).toBe(0);
     expect(restoreTurnForPrompt(3)).toBe(3);
+  });
+});
+
+describe("checkpointForPrompt", () => {
+  it("prefers the snapshot tagged with this prompt's id over a drifted turn number", () => {
+    const rows = [
+      checkpoint(0, { entryId: "open" }),
+      checkpoint(6, { entryId: "old-settle" }),
+      checkpoint(10, { entryId: "explain-13" }),
+    ];
+    expect(checkpointForPrompt(rows, "explain-13", 6)?.turn).toBe(10);
+    expect(checkpointForPrompt(rows, "missing", 0)?.turn).toBe(0);
+    expect(checkpointForPrompt(rows, undefined, 6)?.turn).toBe(6);
   });
 });
 

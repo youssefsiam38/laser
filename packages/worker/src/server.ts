@@ -2659,11 +2659,15 @@ export class WorkerServer {
         // in the order they wrote it. Fire and forget — a delivery that fails
         // keeps its message and its reason in the tray, and says so there.
         if (update.kind === "agent_settled" && live.pending) void live.pending.drain();
-        if (update.kind === "agent_settled") {
-          const leafId = live.driver.entriesNow?.()?.leafId;
-          void this.sourceControl()
-            .captureAfterTurn(live.path, live.driver.state().cwd, typeof leafId === "string" ? leafId : undefined)
-            .catch(() => {});
+        // Snapshot at Send, keyed by this prompt's id. Settles (including extra
+        // wakes from children) must not mint another numbered checkpoint.
+        if (update.kind === "message_end" && update.entry?.id) {
+          const role = update.role ?? (update.message as { role?: string } | undefined)?.role;
+          if (role === "user") {
+            void this.sourceControl()
+              .captureForPrompt(live.path, live.driver.state().cwd, update.entry.id)
+              .catch(() => {});
+          }
         }
         return;
       }

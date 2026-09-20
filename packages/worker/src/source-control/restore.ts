@@ -30,7 +30,9 @@ export async function restorePreview(
     anyCheckpoint = true;
     if (checkpoint.entryId) entryId = checkpoint.entryId;
     const files = await restorePaths(repo, checkpoint.commit);
-    previews.push({ repo: repo.path, branch, files, uncommittedLost });
+    // Lost work is only what this restore would overwrite, not everything dirty vs HEAD.
+    const lost = uncommittedLost.filter((path) => files.includes(path));
+    previews.push({ repo: repo.path, branch, files, uncommittedLost: lost });
   }
   if (!anyCheckpoint) {
     throw new ProtocolError(ErrorCodes.InvalidParams, "That turn's checkpoint is no longer kept.");

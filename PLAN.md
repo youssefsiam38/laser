@@ -878,6 +878,7 @@ M17-T8 and M17-T16, which stay in their milestone marked absorbed.
 | M20-T4 | The fleet and telemetry columns | Spec §3, §4 and §10 L4. Rows that say what is happening; kind as a shape; Cost/Tokens tabs; at 320px in both themes |
 | M20-T5 | The overlay | Spec §8 and §10 L5, including the five mitigations in §8.3a |
 | M20-T6 | Git actions | Spec §9 and §10 L6. Commit, push, branch, PR create/read/checkout/merge for GitHub and Bitbucket through installed CLIs; prose from the session's model |
+| M20-T7 | Undo this turn uses the prompt's own snapshot | A checkpoint is taken at Send, keyed by that user message's entry id. Undo looks up that id, never a drifted settle-counter. Files is hidden when restoring would not change the worktree. Pre-existing dirty files are not this turn's work. Aborted turns still have the Send snapshot. Legacy numbered checkpoints remain a fallback. |
 
 ---
 

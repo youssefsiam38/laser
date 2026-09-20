@@ -57,7 +57,6 @@ import { toolGroupKey } from "./tool-groups.js";
 import { ToolRow } from "./ToolRow.js";
 import { AttachmentOverflow, usePromptAttachments, usePromptEdit, useHonestCopy } from "./prompt-actions.js";
 import { UndoTurn } from "./UndoTurn.js";
-import { restoreTurnForPrompt } from "./undo-turn.js";
 import { BodyOverflow } from "./BodyOverflow.js";
 import { useImageBodies } from "./use-image-bodies.js";
 import type { BodyRef } from "@/runtime/body-excerpt";
@@ -418,7 +417,7 @@ export function UserMessage() {
               }
             }}
           /> : null}
-          <UndoTurn turn={restoreTurnForPrompt(ordinal)} at={requestAt} className={hoverReveal} />
+          <UndoTurn turn={ordinal} entryId={entryId} at={requestAt} className={hoverReveal} />
           <MessageActions
             onLoadHistory={partialHistory && !wholeTranscript.paused ? () => void actions.loadAllEntries() : undefined}
             loadHistoryRefusal={partialHistory ? wholeTranscript.explanation : undefined}

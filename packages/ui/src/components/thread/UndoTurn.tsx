@@ -66,7 +66,7 @@ import {
   restoreSuccessCopy,
   restoreTargetLabel,
   restoreWhatCopy,
-  turnCheckpoint,
+  checkpointForPrompt,
   undoRepoRows,
   undoSummaryLine,
   visibleRestoreTargets,
@@ -74,20 +74,30 @@ import {
   type UndoRepoRows,
 } from "./undo-turn.js";
 
-export function UndoTurn({ turn, at, className }: { turn: number; at?: string | undefined; className?: string }) {
+export function UndoTurn({
+  turn,
+  entryId,
+  at,
+  className,
+}: {
+  turn: number;
+  entryId?: string | undefined;
+  at?: string | undefined;
+  className?: string;
+}) {
   const restore = useCapability("pi/project/restore");
   const path = useLaserState((s) => s.current);
   const cwd = useLaserState((s) => {
     if (!s.current) return undefined;
     return s.open[s.current]?.state.cwd ?? s.sessions.find((row) => row.path === s.current)?.cwd;
   });
-  const checkpoints = useSessionCheckpoints(path, cwd, restore.state === "available");
+  const checkpoints = useSessionCheckpoints(path, cwd, restore.state === "available", entryId);
   if (restore.state !== "available" || !path || !cwd) return null;
-  const checkpoint = turnCheckpoint(checkpoints, turn);
+  const checkpoint = checkpointForPrompt(checkpoints, entryId, turn);
   if (!checkpoint) return null;
   return (
     <UndoTurnControl
-      turn={turn}
+      turn={checkpoint.turn}
       path={path}
       cwd={cwd}
       at={at ?? checkpoint.createdAt}
@@ -100,6 +110,7 @@ function useSessionCheckpoints(
   path: string | undefined,
   cwd: string | undefined,
   enabled: boolean,
+  entryId?: string,
 ): CheckpointInfo[] | undefined {
   const { client } = useLaserStable();
   const [checkpoints, setCheckpoints] = useState<CheckpointInfo[] | undefined>(undefined);
@@ -125,7 +136,7 @@ function useSessionCheckpoints(
     return () => {
       cancelled = true;
     };
-  }, [client, cwd, enabled, path]);
+  }, [client, cwd, enabled, entryId, path]);
   return checkpoints;
 }
 

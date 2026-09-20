@@ -5634,6 +5634,7 @@ expressed: a ResizeObserver reports a box, not where inside it grew.
 | M20-T4 | The fleet and telemetry columns | done | orchestrator-2026-09-19-leap | fleet `9052cd45` + `175d2dfb`; telemetry `56f1614e` + `9d7b69cd`; reviews `run_796bd859`, `run_96997e49` | spec §3, §4; see notes |
 | M20-T5 | The overlay | done | orchestrator-2026-09-19-leap | `05daced9`, review `run_0802b2eb`, corrections `51b013e2`, fleet entry `6d2231bd` | spec §8; see notes |
 | M20-T6 | Git actions | done | orchestrator-2026-09-19-leap | engine `0c3b0ba4` + `bc00695b` (review `run_6a13e263`, rejected then corrected); toolbar `bb786d1c` | spec §9; see notes |
+| M20-T7 | Undo this turn uses the prompt's own snapshot | in-progress | orchestrator-2026-09-20-new-session | — | see notes |
 
 #### M20-T0 notes
 - 2026-09-19 spike ran against the real library in `/tmp/pierre-spike`, nothing committed to the checkout. Theming from `var(--syntax-*)` recolours with zero shadow mutations; find paints across 9 open shadow roots (17 matches); copy is clean source. Partial: +449 KB main chunk, empty bodies for binary/mode-only/pure-rename, no auto-unify at 320px, expand-all is 20 000 nodes, worker pool needs an explicit `workerFactory`.
@@ -5656,6 +5657,9 @@ expressed: a ResizeObserver reports a box, not where inside it grew.
 
 #### M20-T6 notes
 - 2026-09-19 claimed for the engine half (hosts, actions, prose, safety). The toolbar half is wired into T5's overlay once both have landed.
+
+#### M20-T7 notes
+- 2026-09-20 claimed: Undo was looking up checkpoint.turn === userOrdinal. Settles (including extra wakes) minted extra numbered snapshots, so prompt 6 restored checkpoint 6 from mid-session instead of the Send snapshot for that message. Fix: capture at user message_end keyed by entry id; lookup by id; lost files only if restore would overwrite them.
 
 #### M20-T1 notes
 - 2026-09-19 built, reviewed and corrected. `workspaceShape` resolves repo, monorepo, workspace-of-repos, nested repo and no-git over real fixtures; `pi/project/workspace` is answered by the host with no worker; `start_agent` never fails over shape and the choice reaches the run record, the result, `inspect_agent` and the fleet row.

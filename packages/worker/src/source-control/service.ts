@@ -174,6 +174,19 @@ export class SourceControlService {
     await this.kick(sessionPath);
   }
 
+  /** Snapshot the worktree at Send, once per user prompt id. Extra settles must not add another. */
+  async captureForPrompt(sessionPath: string, workdir: string, entryId: string): Promise<void> {
+    this.pendingTurn.set(sessionPath, async () => {
+      const repos = await sessionRepositories(workdir);
+      if (repos.length === 0) return;
+      const existing = await loadCheckpoints(repos, sessionPath);
+      if (existing.some((row) => !row.failed && row.entryId === entryId)) return;
+      const turn = this.takeTurn(sessionPath, existing);
+      await this.captureTurn(sessionPath, turn, entryId, repos);
+    });
+    await this.kick(sessionPath);
+  }
+
   async changes(params: ProjectChangesParams): Promise<ProjectChanges> {
     const workdir = this.workdir(params.path, params.workdir);
     const resolved = await this.resolveScope(workdir, params);

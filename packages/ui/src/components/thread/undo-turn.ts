@@ -36,6 +36,19 @@ export function turnCheckpoint(
   return checkpoints?.find((row) => row.turn === turn && !row.failed);
 }
 
+/** Prefer the snapshot tagged with this prompt's id; numbered turns are legacy. */
+export function checkpointForPrompt(
+  checkpoints: readonly CheckpointInfo[] | undefined,
+  entryId: string | undefined,
+  ordinal: number,
+): CheckpointInfo | undefined {
+  if (entryId) {
+    const byId = checkpoints?.find((row) => row.entryId === entryId && !row.failed);
+    if (byId) return byId;
+  }
+  return turnCheckpoint(checkpoints, restoreTurnForPrompt(ordinal));
+}
+
 /** Options the engine marked as no-ops — hidden, not disabled. */
 export function visibleRestoreTargets(hidden: readonly RestoreTarget[]): RestoreTarget[] {
   const hide = new Set(hidden);
