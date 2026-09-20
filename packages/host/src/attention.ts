@@ -10,15 +10,18 @@
  *   error              the last thing that happened was an extension error or a
  *                      worker crash, and nobody has looked since
  *   working            the agent is running (agent_start … agent_end/settled)
- *   finished_unread    the session file changed after the last time a client
- *                      said it had seen it
+ *   finished_unread    a new message after the last look, or a turn that
+ *                      ended while nobody was looking
  *   idle               none of the above
  *
  * "Seen" is persisted (a small JSON file next to the host's other state) so
  * `finished_unread` survives a host restart or a browser reload — the whole
  * point of the state. Sequence numbers do not survive: they are per worker
- * process and restart at 1, so the durable record is a timestamp and the
- * comparison is against the session file's mtime.
+ * process and restart at 1. The durable record is the time of the look and
+ * the catalog message count then. A later session-file mtime with the same
+ * count is a flush, not unread; a higher count (including a terminal write)
+ * or a turn that ended while nobody was looking (`finishedAt`) is. Old
+ * records without a count keep the mtime comparison until the next look.
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -41,6 +44,8 @@ interface Seen {
   at: string;
   /** Seq it had read up to, within the worker epoch that was live then. */
   seq?: number;
+  /** Catalog message count at that look. A later mtime with the same count is a flush. */
+  messageCount?: number;
 }
 
 export interface AttentionSnapshot {
@@ -63,6 +68,8 @@ export interface AttentionTrackerOptions {
    * here first. Wired to the catalog by the host.
    */
   modifiedAt?: (path: string) => string | undefined;
+  /** Catalog message count, so a flush that only retouches mtime is not unread. */
+  messageCount?: (path: string) => number | undefined;
   now?: () => Date;
 }
 
@@ -176,7 +183,12 @@ export class AttentionTracker {
   markSeen(path: string, cwd: string | undefined, seq?: number): void {
     const live = cwd ? this.ensure(path, cwd) : this.live.get(path);
     const at = this.now().toISOString();
-    this.seen.set(path, { at, ...(seq !== undefined ? { seq } : {}) });
+    const messageCount = this.options.messageCount?.(path);
+    this.seen.set(path, {
+      at,
+      ...(seq !== undefined ? { seq } : {}),
+      ...(messageCount !== undefined ? { messageCount } : {}),
+    });
     if (live) {
       delete live.error;
       delete live.finishedAt;
@@ -211,7 +223,7 @@ export class AttentionTracker {
    * Attention for one session. `modifiedAt` comes from the catalog, so a
    * session someone drove from a terminal also turns up unread.
    */
-  attentionOf(path: string, modifiedAt?: string): SessionAttention {
+  attentionOf(path: string, modifiedAt?: string, messageCount?: number): SessionAttention {
     const live = this.live.get(path);
     if (live) {
       if (live.dialogs.size > 0) return "waiting_for_input";
@@ -222,17 +234,27 @@ export class AttentionTracker {
     // history stays idle (marking every old session unread on first launch
     // would make the inbox useless) while anything that has changed since
     // still asks for a look.
-    const floor = this.seen.get(path)?.at ?? this.baseline;
+    const seen = this.seen.get(path);
+    const floor = seen?.at ?? this.baseline;
     if (floor === undefined) return "idle";
-    const changedAt = laterOf(live?.finishedAt, modifiedAt ?? this.options.modifiedAt?.(path));
-    return changedAt !== undefined && changedAt > floor ? "finished_unread" : "idle";
+    if (live?.finishedAt !== undefined && live.finishedAt > floor) return "finished_unread";
+    const changedAt = modifiedAt ?? this.options.modifiedAt?.(path);
+    if (changedAt === undefined || changedAt <= floor) return "idle";
+    // Opening or leaving a session can flush the jsonl without a new message.
+    // That retouches mtime; it is not something to read. A later real write
+    // raises the catalog count (including a terminal Pi) and becomes unread.
+    const count = messageCount ?? this.options.messageCount?.(path);
+    if (seen && seen.messageCount !== undefined && count !== undefined && count <= seen.messageCount) {
+      return "idle";
+    }
+    return "finished_unread";
   }
 
   /** Stamp `attention` (and `seenAt`) onto catalog rows. */
   decorate<T extends SessionSummary>(sessions: readonly T[]): T[] {
     return sessions.map((summary) => {
       const seenAt = this.seenAt(summary.path);
-      let attention = this.attentionOf(summary.path, summary.modifiedAt);
+      let attention = this.attentionOf(summary.path, summary.modifiedAt, summary.messageCount);
       // A session nobody has prompted has nothing that finished and nothing
       // to read: its file (or its unwritten row) changed only because it was
       // created. Stamping it unread made the launcher refuse to reuse an
@@ -296,7 +318,12 @@ export class AttentionTracker {
         const at = (value as { at?: unknown })?.at;
         const seq = (value as { seq?: unknown })?.seq;
         if (typeof at !== "string") continue;
-        this.seen.set(path, { at, ...(typeof seq === "number" ? { seq } : {}) });
+        const messageCount = (value as { messageCount?: unknown })?.messageCount;
+        this.seen.set(path, {
+          at,
+          ...(typeof seq === "number" ? { seq } : {}),
+          ...(typeof messageCount === "number" ? { messageCount } : {}),
+        });
       }
     } catch {
       /* first run, or a truncated file: start empty rather than fail to boot */
@@ -327,10 +354,4 @@ export class AttentionTracker {
       /* read-only home, full disk: attention is a convenience, not a blocker */
     }
   }
-}
-
-function laterOf(a: string | undefined, b: string | undefined): string | undefined {
-  if (a === undefined) return b;
-  if (b === undefined) return a;
-  return a > b ? a : b;
 }

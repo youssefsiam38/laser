@@ -1340,6 +1340,15 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     (path: string, seq: number, force = false) => {
       if (!force && (seenSeq.current.get(path) ?? -1) >= seq) return;
       seenSeq.current.set(path, seq);
+      const sessions = readState().sessions;
+      let changed = false;
+      const next = sessions.map((summary) => {
+        if (summary.path !== path) return summary;
+        if (summary.attention !== "finished_unread" && summary.attention !== "error") return summary;
+        changed = true;
+        return { ...summary, attention: "idle" as const };
+      });
+      if (changed) dispatch({ type: "sessions", sessions: next });
       // Fire and forget: attention is a convenience, and a failed mark is
       // corrected by the next one.
       client.request("pi/session/seen", { path, seq }).catch(() => {

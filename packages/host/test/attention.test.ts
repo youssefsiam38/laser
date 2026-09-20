@@ -110,6 +110,23 @@ describe("AttentionTracker", () => {
     expect(a.attentionOf("/sessions/never-opened.jsonl", after)).toBe<SessionAttention>("finished_unread");
   });
 
+  it("does not mark unread when the file is only retouched after a look", () => {
+    const counts: Record<string, number> = { [PATH]: 2 };
+    const a = new AttentionTracker({
+      now: () => new Date(clock),
+      messageCount: (path) => counts[path],
+    });
+    a.markSeen(PATH, CWD);
+    clock += 1000;
+    const later = iso(clock);
+    expect(a.attentionOf(PATH, later, 2)).toBe<SessionAttention>("idle");
+    expect(a.attentionOf(PATH, later, 3)).toBe<SessionAttention>("finished_unread");
+    a.observeUpdate(PATH, CWD, "agent_start", 1);
+    a.observeUpdate(PATH, CWD, "agent_end", 2);
+    expect(a.attentionOf(PATH, later, 2)).toBe<SessionAttention>("finished_unread");
+    a.close();
+  });
+
   it("puts every session of a crashed worker into error, and clears them when it comes back", () => {
     const a = tracker();
     a.observeUpdate(PATH, CWD, "agent_start", 1);
@@ -135,6 +152,48 @@ describe("AttentionTracker", () => {
     expect(second.seenAt(PATH)).toBe(iso(clock));
     expect(second.attentionOf(PATH, iso(clock - 1000))).toBe<SessionAttention>("idle");
     expect(second.attentionOf(PATH, iso(clock + 1000))).toBe<SessionAttention>("finished_unread");
+    second.close();
+  });
+
+  it("remembers the message count of a look, so a flush after restart stays idle", () => {
+    const store = join(dir, "attention-count.json");
+    const counts: Record<string, number> = { [PATH]: 4 };
+    const first = new AttentionTracker({
+      storePath: store,
+      now: () => new Date(clock),
+      messageCount: (path) => counts[path],
+    });
+    first.markSeen(PATH, CWD);
+    first.close();
+    const second = new AttentionTracker({
+      storePath: store,
+      now: () => new Date(clock),
+      messageCount: (path) => counts[path],
+    });
+    expect(second.attentionOf(PATH, iso(clock + 60_000), 4)).toBe<SessionAttention>("idle");
+    expect(second.attentionOf(PATH, iso(clock + 60_000), 5)).toBe<SessionAttention>("finished_unread");
+    second.close();
+  });
+
+  it("keeps mtime unread for a look that recorded no count, until the next look", () => {
+    const store = join(dir, "attention-legacy.json");
+    const first = new AttentionTracker({
+      storePath: store,
+      now: () => new Date(clock),
+    });
+    first.markSeen(PATH, CWD);
+    first.close();
+    const counts: Record<string, number> = { [PATH]: 2 };
+    const second = new AttentionTracker({
+      storePath: store,
+      now: () => new Date(clock),
+      messageCount: (path) => counts[path],
+    });
+    const later = iso(clock + 60_000);
+    expect(second.attentionOf(PATH, later, 2)).toBe<SessionAttention>("finished_unread");
+    second.markSeen(PATH, CWD);
+    expect(second.attentionOf(PATH, later, 2)).toBe<SessionAttention>("idle");
+    expect(second.attentionOf(PATH, later, 3)).toBe<SessionAttention>("finished_unread");
     second.close();
   });
 

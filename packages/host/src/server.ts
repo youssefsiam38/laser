@@ -492,6 +492,7 @@ export class HostServer {
     this.attention = new AttentionTracker({
       storePath: join(stateDir, "attention.json"),
       modifiedAt: (path) => this.catalog.get(path)?.modifiedAt,
+      messageCount: (path) => this.catalog.get(path)?.messageCount,
       onChange: ({ path, cwd, attention, at }) => {
         const agent = this.agentInfoOf(path);
         this.notify("pi/session/attention", { path, cwd, attention, at, ...(agent ? { agent } : {}) });
