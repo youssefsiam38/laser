@@ -67,7 +67,7 @@ import {
   useSessionMeta,
   type ActivityDetailLevel,
 } from "@/runtime";
-import { pendingSessionPath, sessionOpenPhase, sameSessionOpenPhase } from "@/runtime/main-destination";
+import { landingWorkspaceOf, pendingSessionPath, sessionOpenPhase, sameSessionOpenPhase } from "@/runtime/main-destination";
 import { currentView, samePresentationView } from "@/runtime/presentation-state";
 
 import { InlineRename } from "./InlineRename.js";
@@ -162,7 +162,18 @@ export function TopBar() {
       ? (open.path ? "Opening conversation" : "Preparing workspace")
     : open.phase === "failed" ? (open.path ? "Conversation unavailable" : "View unavailable")
     : view ? (summary ? sessionTitle(summary, view) : (view.state.name ?? view.title ?? firstUserLine(view) ?? "New session")) : "New session";
-  const untitled = view ? title === "New session" : false;
+  // A session nobody has spoken to yet is still the landing to the person
+  // looking at it. The host answering "New session" with a path must not turn
+  // the bar's eyebrow into a status dot, its bold title into an italic
+  // placeholder, or grow a "Starting the agent" chip: nothing they did asked
+  // for any of that (D-341). A crashed worker is news they need and still shows.
+  const fresh = view !== undefined && view.state.messageCount === 0 && !view.running && !view.history?.hasHistory
+    && title === "New session" && meta.worker?.status !== "crashed";
+  const untitled = view && !fresh ? title === "New session" : false;
+  // The landing's place, from the destination this window already holds — the
+  // same before and after the session exists.
+  const landing = landingWorkspaceOf(destination);
+  const landingProject = landing.kind === "project" ? landing.cwd : currentProject;
   // The fleet's own count — the open session's tree (M13-T51), plus work
   // whose session was deleted, which the fleet carries because nothing else can.
   const fleet = useFleet();
@@ -218,10 +229,10 @@ export function TopBar() {
       <div className="group flex min-w-0 flex-1 items-center gap-2 ps-1">
         {chatLanding ? (
           <span data-slot="topbar-workspace" className="eyebrow hidden sm:inline">{landingWorkspaceName}</span>
-        ) : view ? (
+        ) : view && !fresh ? (
           <StatusDot status={status} size="md" label={stateLabel} />
         ) : (
-          currentProject && <span data-slot="topbar-workspace" className="eyebrow hidden sm:inline">{shortCwd(currentProject)}</span>
+          landingProject && <span data-slot="topbar-workspace" className="eyebrow hidden sm:inline">{shortCwd(landingProject)}</span>
         )}
         <BeamSessionMark path={view?.path} />
 
@@ -256,7 +267,7 @@ export function TopBar() {
             composer (D-20 §5), where a phone and a desktop both find it in the
             same place. Here it is only the dot's accessible name. */}
 
-        {chip && workerCwd && (
+        {chip && workerCwd && !(fresh && meta.worker?.status === "starting") && (
           <span className="flex shrink-0 items-center gap-1">
             <Tooltip>
               <TooltipTrigger asChild>

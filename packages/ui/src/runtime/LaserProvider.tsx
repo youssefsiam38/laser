@@ -108,7 +108,7 @@ import { capabilityFor, type CapabilityDecision, type CapabilityRequirements } f
 import { tailCache } from "./tail-cache/index.js";
 import { sessionIdForPath } from "./provisional-paint.js";
 import { createProvisionalAuthority, sessionAuthorityRefusal } from "./provisional-authority.js";
-import { createHistoryLoader, type HistoryReads } from "./history-loader.js";
+import { createHistoryLoader, NO_EARLIER_PAGE, type EarlierPage, type HistoryReads } from "./history-loader.js";
 import { createHistoryWindows, MAIN_WINDOW_SCOPE, type HistoryWindowOwner, type HistoryWindows } from "./history-owners.js";
 import { sessionsList } from "../components/shell/session-groups.js";
 import { sessionFolds } from "../components/assistant-ui/elements/session-folds.js";
@@ -201,7 +201,8 @@ export interface LaserActions {
   allSessionSummaries(): Promise<SessionSummary[]>;
   expandCatalog(): () => void;
   refreshEntries(options?: { tail?: boolean }): Promise<void>;
-  loadEarlierEntries(): Promise<boolean>;
+  /** One earlier page: whether it added rows, and its size, for a caller pacing itself. */
+  loadEarlierEntries(): Promise<EarlierPage>;
   /** Explicitly accept a bounded current-tail re-read after an old page base is refused. */
   rereadHistory(): Promise<void>;
   loadAllEntries(): Promise<boolean>;
@@ -1713,7 +1714,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         const path = requireCurrent();
         const epoch = openEpochs.current.get(path);
         return history.earlier(path, () => !moving.current.has(path) && openEpochs.current.get(path) === epoch);
-      }).then(Boolean),
+      }).then((page) => page ?? NO_EARLIER_PAGE),
       rereadHistory: () => guard(async () => {
         const path = requireCurrent();
         const epoch = openEpochs.current.get(path);

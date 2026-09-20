@@ -7,7 +7,7 @@
  * through the ordinary bounded tail read — no new request, no new authority.
  */
 import { describe, expect, it, vi } from "vitest";
-import type { SessionState } from "@lasercode/protocol";
+import { HISTORY_FIRST_PAGE_TURNS, type SessionState } from "@lasercode/protocol";
 
 import { createHistoryLoader } from "../../src/runtime/history-loader.js";
 import { initialState, reduce, type Action, type AppState } from "../../src/store.js";
@@ -109,7 +109,7 @@ describe("releasing the older part of a conversation somebody is using", () => {
     // One ordinary bounded read, carrying the per-body limit this surface can
     // hold and the durable revision it still holds whole — so the host may
     // answer it as a proved suffix instead of a replacement (RP-9/RP-11).
-    expect(request).toHaveBeenCalledWith({ path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision: trimmed.validated!.revision });
+    expect(request).toHaveBeenCalledWith({ path, window: { turns: HISTORY_FIRST_PAGE_TURNS }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision: trimmed.validated!.revision });
     const after = store.open[path]!;
     expect(after.trimmed).toBeUndefined();
     // A fresh cursor came back with it, so paging further back works again.

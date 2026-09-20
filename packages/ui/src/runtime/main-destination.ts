@@ -70,6 +70,40 @@ export function mainCodeProject(destination: MainDestination): string | undefine
   return project.kind === "project-session" || project.kind === "project-landing" ? project.project : undefined;
 }
 
+/**
+ * What the landing can say about where it is, from the destination alone
+ * (D-341). A project by its directory; the Chat or Beam workspace by kind,
+ * whose display names are constants and need no directory; or nothing, when no
+ * project is open. Never read from a session or from the agents snapshot: the
+ * landing paints from this on its first frame and the backend's later answer
+ * must not change a word of it.
+ */
+export type LandingWorkspace =
+  | { readonly kind: "project"; readonly cwd: string }
+  | { readonly kind: "chat" }
+  | { readonly kind: "beam" }
+  | { readonly kind: "none" };
+
+export function landingWorkspaceOf(destination: MainDestination): LandingWorkspace {
+  const fromCode = (code: CodeDestination): LandingWorkspace =>
+    code.kind === "beam-session" ? { kind: "beam" }
+      : code.kind === "no-project-landing" ? { kind: "none" }
+        : { kind: "project", cwd: code.project };
+  if (destination.phase === "ready-chat") return { kind: "chat" };
+  if (destination.phase === "ready-code") return fromCode(destination.code);
+  // Resolving or unavailable: the target names the place before the host has
+  // answered, and the remembered destination stands in where it does not.
+  const target = destination.target;
+  switch (target.kind) {
+    case "chat-tab": return { kind: "chat" };
+    case "project":
+    case "startup-project": return { kind: "project", cwd: target.project };
+    case "code-tab": return fromCode(target.code);
+    case "session": return target.visibleTab === "chat" ? { kind: "chat" } : fromCode(destination.rememberedCode);
+    case "startup-code": return fromCode(destination.rememberedCode);
+  }
+}
+
 export function mainError(destination: MainDestination): string | undefined {
   return destination.phase === "unavailable" ? destination.error : undefined;
 }

@@ -196,6 +196,48 @@ describe("earlier-history requests", () => {
     const controller = new TranscriptViewport();
     controller.configure("/history");
     expect(controller.isReadingHistoryReserve()).toBe(false);
+    expect(controller.needsPrefetch()).toBe(false);
+    expect(controller.reserveDistance()).toBe(Infinity);
+  });
+
+  it("wants a prefetch while the reserve is within two screens of the reader, including off-screen", () => {
+    const controller = new TranscriptViewport();
+    controller.configure("/history");
+    const viewport = document.createElement("div");
+    const content = document.createElement("div");
+    const reserve = document.createElement("div");
+    reserve.setAttribute("data-slot", "history-reserve");
+    content.append(reserve);
+    viewport.append(content);
+    Object.defineProperties(viewport, {
+      clientHeight: { value: 900 },
+      getBoundingClientRect: { value: () => ({ top: 0, bottom: 900, height: 900, left: 0, right: 600, width: 600, x: 0, y: 0, toJSON: () => ({}) }) },
+    });
+    let reserveBottom = 100;
+    const reserveHeight = 288;
+    Object.defineProperty(reserve, "getBoundingClientRect", {
+      value: () => ({
+        top: reserveBottom - reserveHeight, bottom: reserveBottom, height: reserveHeight,
+        left: 0, right: 600, width: 600, x: 0, y: reserveBottom - reserveHeight, toJSON: () => ({}),
+      }),
+    });
+    const placeReserve = (bottom: number) => { reserveBottom = bottom; };
+    controller.setViewport(viewport);
+    controller.setHistoryWindow(40, "cursor");
+    expect(controller.placeholderTurns).toBeGreaterThan(0);
+    expect(controller.isReadingHistoryReserve()).toBe(true);
+    expect(controller.needsPrefetch()).toBe(true);
+    expect(controller.reserveDistance()).toBe(-100);
+    // One screen above the reader: no longer in the reserve, still within the prefetch margin.
+    placeReserve(-900);
+    expect(controller.isReadingHistoryReserve()).toBe(false);
+    expect(controller.needsPrefetch()).toBe(true);
+    expect(controller.reserveDistance()).toBe(900);
+    // More than two screens above: stop prefetching.
+    placeReserve(-2000);
+    expect(controller.isReadingHistoryReserve()).toBe(false);
+    expect(controller.needsPrefetch()).toBe(false);
+    expect(controller.reserveDistance()).toBe(2000);
   });
 });
 

@@ -6,6 +6,8 @@ import {
   creationTargetForDestination,
   destinationSessionForTab,
   isSessionInCodeProject,
+  landingWorkspaceOf,
+  type MainDestination,
 } from "../../src/runtime/main-destination.js";
 
 const item = (path: string, cwd: string, modifiedAt: string, agent?: SessionSummary["agent"]): SessionSummary => ({
@@ -73,5 +75,33 @@ describe("main destination model", () => {
       endedAt: "2026-09-10T00:00:00Z",
     };
     expect(codeProjectForSession(parentless, [parentless], { run }, "/other")).toBe("/actual-project");
+  });
+
+  /**
+   * D-341: the landing draws its place from the destination alone, and knows
+   * it in every phase — including while the host is still being asked, where
+   * the target or the remembered destination already names the project.
+   */
+  it("names the landing's workspace from the destination in every phase, before the host answers", () => {
+    const project = { kind: "project-landing" as const, project: "/project" };
+    const remembered = { kind: "project-session" as const, project: "/remembered", path: "/remembered/s.jsonl" };
+    const cases: [MainDestination, ReturnType<typeof landingWorkspaceOf>][] = [
+      [{ phase: "ready-code", intent: 1, code: project }, { kind: "project", cwd: "/project" }],
+      [{ phase: "ready-code", intent: 1, code: { kind: "project-session", project: "/project", path: "/project/new.jsonl" } }, { kind: "project", cwd: "/project" }],
+      [{ phase: "ready-code", intent: 1, code: { kind: "beam-session", path: "/b", returnTo: project } }, { kind: "beam" }],
+      [{ phase: "ready-code", intent: 1, code: { kind: "no-project-landing" } }, { kind: "none" }],
+      [{ phase: "ready-chat", intent: 1, chat: { kind: "landing" }, rememberedCode: project }, { kind: "chat" }],
+      [{ phase: "ready-chat", intent: 1, chat: { kind: "session", path: "/c" }, rememberedCode: project }, { kind: "chat" }],
+      // Resolving: the target names the place first, memory stands in after.
+      [{ phase: "resolving", intent: 1, target: { kind: "project", project: "/target" }, rememberedCode: remembered }, { kind: "project", cwd: "/target" }],
+      [{ phase: "resolving", intent: 1, target: { kind: "startup-project", project: "/target" }, rememberedCode: remembered }, { kind: "project", cwd: "/target" }],
+      [{ phase: "resolving", intent: 1, target: { kind: "code-tab", code: project }, rememberedCode: remembered }, { kind: "project", cwd: "/project" }],
+      [{ phase: "resolving", intent: 1, target: { kind: "chat-tab" }, rememberedCode: remembered }, { kind: "chat" }],
+      [{ phase: "resolving", intent: 1, target: { kind: "startup-code" }, rememberedCode: remembered }, { kind: "project", cwd: "/remembered" }],
+      [{ phase: "resolving", intent: 1, target: { kind: "session", path: "/s", visibleTab: "code" }, rememberedCode: remembered }, { kind: "project", cwd: "/remembered" }],
+      [{ phase: "resolving", intent: 1, target: { kind: "session", path: "/s", visibleTab: "chat" }, rememberedCode: remembered }, { kind: "chat" }],
+      [{ phase: "unavailable", intent: 1, target: { kind: "project", project: "/target" }, rememberedCode: remembered, error: "gone" }, { kind: "project", cwd: "/target" }],
+    ];
+    for (const [destination, expected] of cases) expect(landingWorkspaceOf(destination), JSON.stringify(destination)).toEqual(expected);
   });
 });

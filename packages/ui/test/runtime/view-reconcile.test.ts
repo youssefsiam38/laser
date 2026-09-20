@@ -4,6 +4,7 @@
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { HISTORY_FIRST_PAGE_TURNS } from "@lasercode/protocol";
 import { createHistoryLoader } from "../../src/runtime/history-loader.js";
 import { measureView } from "../../src/runtime/view-measure.js";
 import { initialState, reduce, type AppState, type SessionView } from "../../src/store.js";
@@ -138,7 +139,7 @@ describe("reconciling a trimmed view", () => {
     const { history, request } = loader(state, async () => ({ entries: kept, leafId: "u59", window: window() }));
     await history.reconcile(PATH);
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls[0]![0]).toEqual({ path: PATH, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
+    expect(request.mock.calls[0]![0]).toEqual({ path: PATH, window: { turns: HISTORY_FIRST_PAGE_TURNS }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
     const view = state.current.open[PATH]!;
     expect(view.trimmed).toBeUndefined();
     expect(view.history?.revision).toBe("r1.env.9");

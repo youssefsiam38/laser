@@ -16,22 +16,40 @@ export default async function sustainedNavigation(check) {
   const composer = page.getByRole('textbox', { name: 'Message', exact: true });
   await check.waitFor(`Checkpoint ${turns} is complete.`);
   assert.equal(await composer.isEnabled(), true);
+  // Landing prefetch fills the screen; Find for an older checkpoint may still
+  // need a whole-conversation read, but the estimated range must already be off screen.
+  await page.waitForFunction(() => {
+    const viewport = document.querySelector('[data-slot=thread-viewport]');
+    const reserve = document.querySelector('[data-slot="history-reserve"]');
+    if (!viewport) return false;
+    if (!reserve) return true;
+    const view = viewport.getBoundingClientRect();
+    const rect = reserve.getBoundingClientRect();
+    return rect.bottom < view.top + 0.5;
+  }, { timeout: 30000 });
+  const target = page.locator('[data-window-message] [data-message-id]').filter({ hasText: 'Checkpoint 12 is complete.' });
   await composer.click(); await composer.press('ControlOrMeta+f');
   const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
   await find.waitFor();
   await find.fill('Checkpoint 12 is complete.');
   assert.equal(await find.inputValue(), 'Checkpoint 12 is complete.');
+  // Checkpoint 12 is above the landing window. Find's "Load all messages"
+  // pages the branch on screen to its root (D-341); the control goes away
+  // when the branch is complete, and it must — a button that stays up after
+  // being pressed is a defect this script fails on, not one it waits out.
   const all = page.getByRole('button', { name: 'Load all messages', exact: true });
-  if (await all.count()) { await all.click(); await all.waitFor({ state: 'detached' }); }
-  const target = page.locator('[data-slot="thread-messages"] [data-message-id]').filter({ hasText: 'Checkpoint 12 is complete.' });
-  await target.waitFor({ state: 'visible' });
+  if (await all.count()) { await all.click(); await all.waitFor({ state: 'detached', timeout: 60000 }); }
+  await target.waitFor({ state: 'visible', timeout: 20000 });
+  // Find lands the match inside the thread: its top within the scroller and
+  // above the composer, which floats over the list beside the scroller.
   await page.waitForFunction(() => {
-    const viewport = document.querySelector('[data-slot="thread-viewport"]');
-    const target = [...viewport.querySelectorAll('[data-message-id]')].find(n => n.textContent.includes('Checkpoint 12 is complete.'));
-    if (!target) return false;
-    const rect = target.getBoundingClientRect(), view = viewport.getBoundingClientRect();
-    const footer = viewport.querySelector('[data-slot="thread-footer"]').getBoundingClientRect();
-    return rect.top >= view.top && rect.top < footer.top;
+    const main = document.querySelector('main');
+    const viewport = main?.querySelector('[data-slot="thread-viewport"]');
+    const match = [...(viewport?.querySelectorAll('[data-message-id]') ?? [])].find(n => n.textContent.includes('Checkpoint 12 is complete.'));
+    if (!viewport || !match) return false;
+    const rect = match.getBoundingClientRect(), view = viewport.getBoundingClientRect();
+    const footer = main.querySelector('[data-slot="thread-footer"]')?.getBoundingClientRect();
+    return rect.top >= view.top && rect.top < (footer?.top ?? view.bottom);
   });
   await find.press('Escape');
   await navigationPairs(check, entries, turns);
@@ -39,7 +57,8 @@ export default async function sustainedNavigation(check) {
   assert(mounted < 80, `mounted ${mounted} of ${canonical}`);
   const rhythm = await page.evaluate(() => {
     const row = document.querySelector('[data-window-message]');
-    const messages = document.querySelector('[data-slot="thread-messages"]');
+    // The rhythm above the first row is the list header's (docs/transcript-reading.md).
+    const messages = document.querySelector('[data-slot="thread-messages"]') ?? document.querySelector('[data-slot="transcript-head"]');
     return [getComputedStyle(row).paddingBottom, getComputedStyle(messages).paddingTop, getComputedStyle(row.querySelector('[data-message-id]')).contentVisibility];
   });
   assert.equal(rhythm[0], rhythm[1], 'mounted rows retain the token message rhythm');
@@ -95,13 +114,16 @@ async function open(check, title, text, record = false) {
       if (window.__cStart !== null) {
         const main = document.querySelector('main');
         const viewport = main?.querySelector('[data-slot="thread-viewport"]');
-        const footer = viewport?.querySelector('[data-slot="thread-footer"]');
+        // The composer and its footer float over the list, beside the scroller
+        // rather than inside it (docs/transcript-reading.md).
+        const footer = main?.querySelector('[data-slot="thread-footer"]');
         const message = [...(viewport?.querySelectorAll('[data-message-id]') ?? [])].find(n => n.textContent.includes(text));
         const rect = message?.getBoundingClientRect();
-        const correct = main?.querySelector('h1')?.textContent === title && rect && rect.bottom > viewport.getBoundingClientRect().top && rect.top < footer.getBoundingClientRect().top;
+        const limit = footer?.getBoundingClientRect().top ?? viewport?.getBoundingClientRect().bottom;
+        const correct = main?.querySelector('h1')?.textContent === title && rect && rect.bottom > viewport.getBoundingClientRect().top && rect.top < limit;
         if (correct) {
           window.__cVisible ??= performance.now() - window.__cStart;
-          const input = viewport.querySelector('textarea[aria-label="Message"]');
+          const input = main.querySelector('textarea[aria-label="Message"]');
           const inputRect = input?.getBoundingClientRect();
           const hit = inputRect && document.elementFromPoint(inputRect.x + inputRect.width / 2, inputRect.y + inputRect.height / 2);
           if (input && !input.disabled && inputRect.height && hit && input.contains(hit)) {
@@ -146,7 +168,8 @@ async function loadAll(check) {
   await composer.click(); await composer.press('ControlOrMeta+f');
   const input = check.page.getByRole('textbox', { name: 'Find in conversation', exact: true });
   const all = check.page.getByRole('button', { name: 'Load all messages', exact: true });
-  if (await all.count()) { await all.click(); await all.waitFor({ state: 'detached' }); }
+  // Pages the branch to its root (D-341); the control must go away when it has.
+  if (await all.count()) { await all.click(); await all.waitFor({ state: 'detached', timeout: 60000 }); }
   await input.press('Escape');
 }
 function stats(samples, field) {

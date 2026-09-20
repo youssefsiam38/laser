@@ -1,4 +1,12 @@
-import { ErrorCodes, type ClientRequests, type HistoryWindow, type HistoryWindowRequest, type SessionUpdateParams } from "@lasercode/protocol";
+import {
+  ErrorCodes,
+  HISTORY_EARLIER_PAGE_TURNS,
+  HISTORY_FIRST_PAGE_TURNS,
+  type ClientRequests,
+  type HistoryWindow,
+  type HistoryWindowRequest,
+  type SessionUpdateParams,
+} from "@lasercode/protocol";
 import type { applyUpdate, blocksFromEntries, modelNamesOf, stampNewBlocks, textOf, Action, Block, HistoryViewState, SessionView, ValidatedRevision } from "../store.js";
 import { awake } from "../view-summary.js";
 import { retainEntries, stubOfElided, mergeStubs, type EntryStub } from "./retained-entries.js";
@@ -387,9 +395,37 @@ let nextToken = 0;
 export type HistoryReads = ReturnType<typeof createHistoryLoader>;
 
 /** One request owner for tail/all reads, generation adoption and cursor recovery. */
-/** The window a reconciliation asks for: the conversation's recent tail. */
-const HISTORY_TAIL = 40;
 const STALE_BASE_MESSAGE = "This conversation changed since that page was read. Re-read recent messages to continue.";
+/** The worker's API-caller sentence for an indivisible `{ all }` / `{ from }` that cannot fit. */
+const WHOLE_CONVERSATION_TOO_LARGE =
+  "That part of this conversation is too large to send at once. Open it and read it a page at a time.";
+const WHOLE_CONVERSATION_TOO_LARGE_FOR_PERSON =
+  "This conversation is too large to load all at once. Load earlier messages a page at a time instead.";
+
+function rewriteHistoryError(error: unknown): unknown {
+  if (!error || typeof error !== "object" || !("message" in error)) return error;
+  if ((error as { message?: unknown }).message !== WHOLE_CONVERSATION_TOO_LARGE) return error;
+  (error as { message: string }).message = WHOLE_CONVERSATION_TOO_LARGE_FOR_PERSON;
+  return error;
+}
+
+/**
+ * What one earlier-history request came to: whether it added rows to the
+ * view, and how many serialized bytes the page carried. The bytes travel with
+ * the answer so a caller pacing itself can count them — there is one loader
+ * per surface (main, Beam's bubble), and a shared cell would let one surface's
+ * page be charged to another's budget.
+ */
+export interface EarlierPage { accepted: boolean; bytes: number }
+export const NO_EARLIER_PAGE: EarlierPage = Object.freeze({ accepted: false, bytes: 0 });
+
+function pageBytes(entries: readonly unknown[]): number {
+  try {
+    return new TextEncoder().encode(JSON.stringify(entries)).byteLength;
+  } catch {
+    return 0;
+  }
+}
 
 export function createHistoryLoader(deps: HistoryLoaderDeps) {
   const reads = new Map<string, Promise<void>>();
@@ -430,7 +466,7 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     /** A proved suffix the fold refused: the same read is spent again, once. */
     let refusedDelta = false;
     const work = (async () => {
-      const window: HistoryWindowRequest = all ? { all: true } : { tail: HISTORY_TAIL };
+      const window: HistoryWindowRequest = all ? { all: true } : { turns: HISTORY_FIRST_PAGE_TURNS };
       // The durable revision this view still holds, when it holds one whole
       // (RP-9): the host may then answer the tail as a proved suffix instead of
       // a replacement. A cache-painted view holds no window, so it asks for a
@@ -451,6 +487,15 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
         // Only a person's explicit re-read may replace a suffix whose base
         // moved while it was in flight. Background refresh leaves the window.
         if (deps.get(path)?.historyRevision !== token && (policy === "recent" || policy === "reread")) { refusedDelta = true; return; }
+      } else if (result.window && base !== undefined && policy === "refresh") {
+        // An unsolicited refresh whose base the producer could not prove a
+        // suffix against. Nobody asked for a page, so nobody is told one was
+        // refused, and nothing the person is reading is replaced: the held
+        // window — every page they scrolled up into, the cursor before it and
+        // the row under their eye — stays exactly as it is (D-302). Live
+        // updates keep arriving through the stream; the next page they ask for
+        // that the stale base cannot serve is answered with the explicit
+        // re-read, at the moment they ask.
       } else if (result.window && base !== undefined && policy !== "recent" && policy !== "reread") {
         deps.dispatch({ type: "historyPageRefused", path, cause: "stale-base", message: STALE_BASE_MESSAGE });
       } else if (result.window) {
@@ -461,7 +506,7 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
       deps.track(path, deps.get(path)?.lastSeq ?? 0);
     })();
     reads.set(path, work);
-    try { await work; } catch (error) { if (active()) throw error; } finally {
+    try { await work; } catch (error) { if (active()) throw rewriteHistoryError(error); } finally {
       deps.dispatch({ type: "historyEnd", path, token });
       if (reads.get(path) === work) reads.delete(path);
     }
@@ -498,38 +543,39 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     return result.entries.some(entry => !known.has(entryId(entry))) || (result.window?.elided ?? []).some(stub => !known.has(stub.id));
   };
   const refuseStaleBase = (path: string, error: unknown): void => {
-    const value = error as { message?: unknown } | null;
-    const message = typeof value?.message === "string" && value.message ? value.message : STALE_BASE_MESSAGE;
+    const rewritten = rewriteHistoryError(error) as { message?: unknown } | null;
+    const message = typeof rewritten?.message === "string" && rewritten.message ? rewritten.message : STALE_BASE_MESSAGE;
     deps.dispatch({ type: "historyPageRefused", path, cause: "stale-base", message });
   };
-  const recoverEarlier = async (path: string, accepting: () => boolean): Promise<boolean> => {
+  const recoverEarlier = async (path: string, accepting: () => boolean): Promise<EarlierPage> => {
     const view = deps.get(path);
     const history = view?.history;
     const anchor = history?.gapBefore ?? history?.anchor;
-    if (!view || !history || !anchor) return false;
+    if (!view || !history || !anchor) return NO_EARLIER_PAGE;
     const expectedBefore = history.before;
     const trimAt = view.trimmed?.at;
     const ownerRevision = view.historyRevision;
     const baseRevision = coveredBaselineOf(view);
     const active = fence(path, accepting);
-    if (!baseRevision || !active()) return false;
-    const result = await deps.request({ path, window: { beforeEntry: anchor, limit: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision }).catch(error => {
+    if (!baseRevision || !active()) return NO_EARLIER_PAGE;
+    const result = await deps.request({ path, window: { beforeEntry: anchor, turns: HISTORY_EARLIER_PAGE_TURNS }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision }).catch(error => {
       if (!active()) return undefined;
       const code = (error as { code?: number }).code;
       if (code === ErrorCodes.InvalidParams) return undefined;
       if (code === ErrorCodes.RevisionUnavailable) { refuseStaleBase(path, error); return undefined; }
       throw error;
     });
-    if (!result?.window || !active()) return false;
+    if (!result?.window || !active()) return NO_EARLIER_PAGE;
     const current = deps.get(path);
-    if (!current) return false;
+    if (!current) return NO_EARLIER_PAGE;
     const added = pageAddsRecords(current, result);
     deps.dispatch({ type: "historyRecover", path, anchor, baseRevision, ownerRevision, entries: result.entries, window: result.window,
       ...(expectedBefore !== undefined ? { expectedBefore } : {}), ...(trimAt !== undefined ? { trimAt } : {}) });
-    return added && deps.get(path) !== current;
+    const accepted = added && deps.get(path) !== current;
+    return accepted ? { accepted, bytes: pageBytes(result.entries) } : NO_EARLIER_PAGE;
   };
-  const earlier = async (path: string, accepting: () => boolean): Promise<boolean> => {
-    if (!accepting()) return false;
+  const earlier = async (path: string, accepting: () => boolean): Promise<EarlierPage> => {
+    if (!accepting()) return NO_EARLIER_PAGE;
     const view = deps.get(path);
     // A trim releases the producer-owned cursor with the older rows. Recover
     // directly before the retained anchor; asking for its suffix can exceed a
@@ -540,23 +586,24 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     const anchor = view?.history?.anchor;
     const ownerRevision = view?.historyRevision;
     const baseRevision = coveredBaselineOf(view);
-    if (!before || !anchor || !baseRevision || !active()) return false;
+    if (!before || !anchor || !baseRevision || !active()) return NO_EARLIER_PAGE;
     let result: ClientRequests["pi/session/entries"]["result"] | undefined;
     try {
-      result = await deps.request({ path, window: { before, limit: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision });
+      result = await deps.request({ path, window: { before, turns: HISTORY_EARLIER_PAGE_TURNS }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision });
     } catch (error) {
-      if (!active()) return false;
+      if (!active()) return NO_EARLIER_PAGE;
       const code = (error as { code?: number }).code;
-      if (code === ErrorCodes.InvalidParams) return false;
-      if (code === ErrorCodes.RevisionUnavailable) { refuseStaleBase(path, error); return false; }
+      if (code === ErrorCodes.InvalidParams) return NO_EARLIER_PAGE;
+      if (code === ErrorCodes.RevisionUnavailable) { refuseStaleBase(path, error); return NO_EARLIER_PAGE; }
       throw error;
     }
-    if (!result.window || !active()) return false;
+    if (!result.window || !active()) return NO_EARLIER_PAGE;
     const current = deps.get(path);
-    if (!current) return false;
+    if (!current) return NO_EARLIER_PAGE;
     const added = pageAddsRecords(current, result);
     deps.dispatch({ type: "historyPrepend", path, before, anchor, baseRevision, ownerRevision, entries: result.entries, window: result.window });
-    return added && deps.get(path) !== current;
+    const accepted = added && deps.get(path) !== current;
+    return accepted ? { accepted, bytes: pageBytes(result.entries) } : NO_EARLIER_PAGE;
   };
   const metadata = (path: string, accepting: () => boolean): Promise<void> =>
     deps.get(path)?.hydrated ? read(path, false, accepting, undefined, "refresh") : Promise.resolve();
@@ -608,7 +655,7 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     // canonical fold rather than lost.
     deps.dispatch({ type: "historyBegin", path, token });
     try {
-      const result = await deps.request({ path, window: { tail: HISTORY_TAIL }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
+      const result = await deps.request({ path, window: { turns: HISTORY_FIRST_PAGE_TURNS }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
       if (!active() || deps.get(path)?.trimmed?.at !== at || deps.get(path)?.historyPending?.token !== token) {
         deps.dispatch({ type: "historyEnd", path, token });
         return;

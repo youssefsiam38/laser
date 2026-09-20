@@ -195,6 +195,48 @@ describe("connected top-bar identity", () => {
     expect(container.textContent).not.toContain("New session");
   });
 
+  /**
+   * D-341: the host answering a landing with a created session must not
+   * change the bar. The eyebrow stays the project, the title stays the same
+   * words in the same weight, and "Starting the agent" is not news a person
+   * who has sent nothing asked for. A crashed worker still is.
+   */
+  it("keeps the landing's chrome when the created session is adopted, until the person speaks", async () => {
+    const fresh = "/project/fresh.jsonl";
+    stable.destination = { phase: "ready-code", intent: 1, code: { kind: "project-landing", project: "/project" } };
+    const store = createStateStore({ ...seed(), current: undefined, open: {} });
+    await mountTopBar(store);
+    const eyebrow = container.querySelector('[data-slot="topbar-workspace"]');
+    expect(eyebrow?.textContent).toBe("project");
+    const heading = container.querySelector("h1")!;
+    expect(heading.textContent).toBe("New session");
+    const landingClass = heading.className;
+    expect(container.querySelector('[data-slot="status-dot"], [aria-label="Idle"]')).toBeNull();
+
+    // The answer: a session, empty, adopted as the destination, its worker still starting.
+    stable.destination = { phase: "ready-code", intent: 1, code: { kind: "project-session", project: "/project", path: fresh } };
+    await act(async () => {
+      store.dispatch({ type: "opened", state: sessionState({ path: fresh, cwd: "/project", messageCount: 0 }) });
+      store.dispatch({ type: "hydrate", path: fresh, entries: [] });
+      store.dispatch({ type: "notification", method: "pi/worker/status", params: { cwd: "/project", status: "starting", mode: "normal", restarts: 0, since: "2026-01-01T00:00:00.000Z", canRestart: false } });
+      store.dispatch({ type: "destination", destination: stable.destination });
+    });
+    expect(store.getSnapshot().current).toBe(fresh);
+    expect(container.querySelector('[data-slot="topbar-workspace"]')).toBe(eyebrow);
+    expect(eyebrow?.textContent).toBe("project");
+    expect(container.querySelector("h1")).toBe(heading);
+    expect(heading.textContent).toBe("New session");
+    expect(heading.className).toBe(landingClass);
+    expect(container.textContent).not.toContain("Starting the agent");
+
+    // Real news still arrives: a crashed worker is shown.
+    await act(async () => store.dispatch({ type: "notification", method: "pi/worker/status", params: {
+      cwd: "/project", status: "crashed", mode: "normal", restarts: 1, since: "2026-01-01T00:00:00.000Z", canRestart: true,
+      repair: { state: "exhausted", automaticAttempts: 2 }, message: "This project’s agent couldn’t start.",
+    } }));
+    expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Try again")).toBe(true);
+  });
+
   it("keeps the requested title while its view does not exist, never New session", async () => {
     stable.destination = { phase: "resolving", intent: 1, target: { kind: "session", path: B, visibleTab: "code" }, rememberedCode: { kind: "project-landing", project: "/project" } };
     const store = createStateStore({ ...seed(), current: undefined, open: {} });

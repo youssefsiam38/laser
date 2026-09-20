@@ -11,10 +11,11 @@ import {
   EmptyStateSuggestions,
 } from "@/components/assistant-ui/elements/empty-state";
 import { useShellOptional } from "@/components/shell/shell-context";
-import { groupNameOf, workspaceKindOf } from "@/components/shell/session-groups";
+import { groupNameOf } from "@/components/shell/session-groups";
 import { Button } from "@/components/ui/button";
 import { shortCwd } from "@/format";
-import { mainTab, useLaserStable, useLaserState, useSessionMeta } from "@/runtime";
+import { useLaserStable } from "@/runtime";
+import { landingWorkspaceOf } from "@/runtime/main-destination";
 
 const CODE_SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
   {
@@ -46,10 +47,22 @@ const CHAT_SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
   },
 ];
 
+/** One sentence per kind of landing, true before the session exists and after. */
+export const LANDING_DESCRIPTION = {
+  code: "What should the agent work on?",
+  chat: "What’s on your mind?",
+} as const;
+
 /**
- * First-run state of a thread (the `empty-state` element, fed from the open
- * session): the project name in display type, one line of context, three
- * suggested prompts as hairline rows. Left-aligned like the transcript.
+ * First-run state of a thread (the `empty-state` element): the project name
+ * in display type, one line of context, three suggested prompts as hairline
+ * rows. Left-aligned like the transcript.
+ *
+ * Everything here is drawn from what this window already knows — the
+ * destination it holds — on the first frame, and nothing the backend later
+ * says changes a word of it (D-341). The session the landing is quietly
+ * allocating, the agents snapshot, the workspace directories: none of them
+ * are read. A new chat is local until the person speaks.
  *
  * With no project there is no session to start — `threadList.initialize`
  * refuses, and the refusal used to go nowhere: the screen said "Send a message
@@ -58,28 +71,16 @@ const CHAT_SUGGESTIONS: ReadonlyArray<{ title: string; prompt: string }> = [
  * the composer beside it is disabled with the same sentence as its placeholder.
  */
 export function EmptyState() {
-  const { currentProject, destination } = useLaserStable();
-  const { session } = useSessionMeta();
+  const { destination } = useLaserStable();
   const shell = useShellOptional();
   const disabled = useAuiState((s) => s.thread.isDisabled);
-  const workspaces = useLaserState((s) => s.agents.snapshot?.workspaces);
-  const tab = mainTab(destination);
-  const cwd = session?.cwd ?? (tab === "chat" ? workspaces?.chat : currentProject);
-  const workspaceKind =
-    session?.agent?.kind === "beam" || session?.agent?.kind === "chat"
-      ? session.agent.kind
-      : workspaceKindOf(cwd, workspaces ?? {});
-  const name = workspaceKind && cwd ? groupNameOf(cwd, workspaceKind) : cwd ? shortCwd(cwd) : PRODUCT_DISPLAY_NAME;
+  const landing = landingWorkspaceOf(destination);
 
-  // Loading and failure belong to the thread's loading/error surfaces, never
-  // to the welcome for an actually empty conversation.
-  if (destination.phase === "resolving" || destination.phase === "unavailable") return null;
-
-  if (!cwd) {
+  if (landing.kind === "none") {
     return (
       <EmptyStateRoot>
         <div className="flex flex-col gap-2">
-          <EmptyStateGreeting>{name}</EmptyStateGreeting>
+          <EmptyStateGreeting>{PRODUCT_DISPLAY_NAME}</EmptyStateGreeting>
           <EmptyStateDescription>
             Open a project to start. A project is a folder on this computer the agent works in; every session you start
             there, and every session already saved for it, shows up in the sessions list.
@@ -96,14 +97,16 @@ export function EmptyState() {
     );
   }
 
+  const tab = landing.kind === "chat" ? "chat" : "code";
+  const cwd = landing.kind === "project" ? landing.cwd : undefined;
+  // The workspace names are constants of their kind; a project is its directory.
+  const name = cwd !== undefined ? shortCwd(cwd) : groupNameOf("", landing.kind);
   return (
     <EmptyStateRoot>
       <div className="flex flex-col gap-2">
-        <EmptyStateEyebrow {...(workspaceKind ? {} : { title: cwd })}>{workspaceKind ? "Private workspace" : cwd}</EmptyStateEyebrow>
+        <EmptyStateEyebrow {...(cwd !== undefined ? { title: cwd } : {})}>{cwd ?? "Private workspace"}</EmptyStateEyebrow>
         <EmptyStateGreeting>{name}</EmptyStateGreeting>
-        <EmptyStateDescription>
-          {session ? "New session. What should the agent work on?" : "No session open. Send a message to start one."}
-        </EmptyStateDescription>
+        <EmptyStateDescription>{LANDING_DESCRIPTION[tab]}</EmptyStateDescription>
       </div>
       <EmptyStateSuggestions>
         {(tab === "chat" ? CHAT_SUGGESTIONS : CODE_SUGGESTIONS).map((s, i) => (

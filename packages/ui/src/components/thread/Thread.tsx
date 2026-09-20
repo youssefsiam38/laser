@@ -24,7 +24,15 @@ import { ThreadSlotsProvider, type ThreadSlots } from "./thread-slots.js";
 import { useConversationFind } from "./use-conversation-find.js";
 import { WholeTranscriptRefusalProvider, useThreadWholeTranscriptRefusal } from "./whole-transcript-refusal.js";
 import { FindQueryContext, FindSelectionContext } from "./search-state.js";
-import { TranscriptViewportProvider, TranscriptViewportBinding, WindowedMessages, useTranscriptViewport } from "./transcript-viewport.js";
+import {
+  HISTORY_PREFETCH_BYTE_BUDGET,
+  HISTORY_PREFETCH_PAGE_BUDGET,
+  TranscriptViewportProvider,
+  TranscriptViewportBinding,
+  WindowedMessages,
+  useTranscriptViewport,
+} from "./transcript-viewport.js";
+import type { EarlierPage } from "@/runtime/history-loader.js";
 
 /**
  * The assistant-ui thread column (DESIGN.md "Layout" 3): transcript at max
@@ -60,6 +68,14 @@ const FOLLOW_UPS = AuiConfig({
     { title: "Commit", label: "git commit", prompt: "Commit the changes from this session with a clear, conventional commit message." },
   ]),
 });
+
+/**
+ * The most turn pages one press of Find's "Load all messages" walks before
+ * giving the branch back as it stands: at twenty turns a page this is eight
+ * thousand turns, far past any conversation that has been seen, and a bound
+ * rather than a loop that only the producer's root can end.
+ */
+const FIND_LOAD_ALL_PAGE_CAP = 400;
 
 export function Thread(props: ThreadProps = {}) {
   // The conversation on screen, which during a navigation is the row that was
@@ -103,9 +119,22 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
     const target = visibleSessionPath(s);
     return target ? s.open[target]?.state.toolLabelParams : undefined;
   });
+  // Find searches the branch on screen, so "Load all messages" is that branch
+  // paged back to its root with the ordinary turn pager. The whole-conversation
+  // read (`{ all: true }`) is indivisible and the producer refuses it past
+  // HISTORY_PAGE_ENTRY_LIMIT rows — which is every conversation partial enough
+  // to offer the button — with a toast nobody is looking at while the control
+  // stayed up. Paging cannot be refused for size, terminates at the root, and
+  // the pressure policy that pauses whole reads explicitly allows it.
+  const loadWholeBranch = useCallback(async () => {
+    for (let pages = 0; pages < FIND_LOAD_ALL_PAGE_CAP; pages += 1) {
+      if (!(await actions.loadEarlierEntries()).accepted) break;
+    }
+    return true;
+  }, [actions]);
   const find = useConversationFind({
     partial: partialHistory,
-    loadAll: actions.loadAllEntries,
+    loadAll: loadWholeBranch,
     refusal: wholeTranscript.explanation,
     toolLabelParams,
   });
@@ -136,7 +165,13 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
                 {/* A crashed worker is content: it is the answer to “why is
                     nothing arriving”, and it now lives in the transcript's
                     header, so the loader must not stand in front of it. */}
-                <ConversationLoadingGate key={open.path} active={loading} hasContent={open.hasTranscript || loadError || !open.expectsTranscript || worker?.status === "crashed"}>
+                {/* Not keyed on the path. A landing starts with no path and
+                    adopts the created session's when the host answers; a key
+                    there unmounted and remounted the whole transcript subtree
+                    on that answer, which is the "it reloads the page" flicker
+                    (D-341). Identity changes underneath; the pixels do not. The
+                    gate's own anti-flash timer follows `active`, not the path. */}
+                <ConversationLoadingGate active={loading} hasContent={open.hasTranscript || loadError || !open.expectsTranscript || worker?.status === "crashed"}>
                   {/* Everything above the conversation is the list's header, so
                       a notice appearing or going is a size change the list
                       restores the reading position through, rather than a push
@@ -279,7 +314,34 @@ export function HistoryControls() {
   const pending = useRef<{ focused?: Element | null; page: boolean } | undefined>(undefined);
   const busy = useRef(false);
   const requestedHistory = useRef(false);
-  const interacted = useRef(false);
+  /**
+   * What automatic paging has spent since the person last moved. The budget
+   * is cumulative per reading position, not per burst: an accepted page
+   * re-runs the layout effect below, so a per-burst count would only be a
+   * yield between bursts, and a chain of tiny split-turn pages could walk the
+   * whole of an 8 MB conversation on landing. Exhausted, the transcript stops
+   * and does not re-arm until the person actually moves — a scroll, a wheel, a
+   * swipe, a key, a resize, or the explicit control — which is `rearm()`.
+   */
+  const budget = useRef({ pages: 0, bytes: 0, exhausted: false });
+  const rearm = useCallback(() => { budget.current = { pages: 0, bytes: 0, exhausted: false }; }, []);
+  const spend = useCallback((page: EarlierPage) => {
+    const spent = budget.current;
+    spent.pages += 1;
+    spent.bytes += page.bytes;
+    if (spent.pages >= HISTORY_PREFETCH_PAGE_BUDGET || spent.bytes >= HISTORY_PREFETCH_BYTE_BUDGET) spent.exhausted = true;
+  }, []);
+  // A scroll event is not the person: the list's own position keeping after a
+  // prepend raises them too, and a page taking the place of a taller reserve
+  // can even make one read as upward. The controller counts the movements that
+  // are the person's, and the scroll handler re-arms on that count alone.
+  const armedAt = useRef(controller.gestureCount);
+  const rearmIfMoved = useCallback(() => {
+    if (controller.gestureCount === armedAt.current) return false;
+    armedAt.current = controller.gestureCount;
+    rearm();
+    return true;
+  }, [controller, rearm]);
   const [loading, setLoading] = useState<"earlier" | "all" | null>(null);
   const [rereading, setRereading] = useState(false);
   const [announcement, setAnnouncement] = useState("");
@@ -299,16 +361,30 @@ export function HistoryControls() {
     pending.current = { focused: root.current?.contains(document.activeElement) ? document.activeElement : null, page: !all };
     let loaded = false;
     try {
-      loaded = all ? await actions.loadAllEntries() : await actions.loadEarlierEntries();
+      if (all) loaded = await actions.loadAllEntries();
+      else {
+        const page = await actions.loadEarlierEntries();
+        loaded = page.accepted;
+        if (continuous) spend(page);
+      }
       if (loaded) setAnnouncement(all ? "Other versions loaded." : "Earlier messages loaded.");
-      // Reading into unloaded history keeps paging while the reading position
-      // is still in front of the loaded rows: one page of a long conversation
-      // rarely reaches the person. The explicit control stays one page.
+      // Fill the screen, then two screens above the reader. One page of a long
+      // conversation rarely does that — and a page that returns two rows is a
+      // normal split turn, not a reason to stop. The explicit control stays one
+      // page. Continuous paging stops at two screens of real rows above the
+      // reader, at the root, or when the budget for this reading position is
+      // spent: HISTORY_PREFETCH_PAGE_BUDGET pages or HISTORY_PREFETCH_BYTE_BUDGET
+      // bytes in total since the person last moved, across every burst the
+      // layout effect chains. Awaited sequence, never parallel. D-302's
+      // estimate ahead of a reader still holds: the reading position never
+      // moves backwards, no row arrives under the eye.
       if (loaded && !all && continuous) {
-        for (let page = 0; page < 12 && controller.isReadingHistoryReserve(); page += 1) {
+        while (!budget.current.exhausted && controller.needsPrefetch()) {
           controller.finishEarlierPage();
           controller.beginEarlierPage();
-          if (!(await actions.loadEarlierEntries())) break;
+          const page = await actions.loadEarlierEntries();
+          spend(page);
+          if (!page.accepted) break;
         }
       }
     } catch {
@@ -326,62 +402,67 @@ export function HistoryControls() {
         }
       }
     }
-  }, [actions, controller, deferred, history?.before, history?.branchesUnloaded, refusal]);
+  }, [actions, controller, deferred, history?.before, history?.branchesUnloaded, refusal, spend]);
   useLayoutEffect(() => {
     const anchor = pending.current;
-    if (!anchor) return;
-    pending.current = undefined;
-    controller.committed();
-    if (anchor.focused && !anchor.focused.isConnected && document.activeElement === document.body) root.current?.querySelector("button")?.focus({ preventScroll: true });
-    // Reading into unloaded history pages continuously: one page per gesture
-    // would leave a person travelling through estimated space they can already
-    // see past. Each page is awaited, so this is a sequence, never a burst, and
-    // it stops the moment a loaded row is back under the reading position.
-    const frame = requestAnimationFrame(() => { if (interacted.current && controller.isReadingHistoryReserve()) void load(false, true); });
+    if (anchor) {
+      pending.current = undefined;
+      controller.committed();
+      if (anchor.focused && !anchor.focused.isConnected && document.activeElement === document.body) root.current?.querySelector("button")?.focus({ preventScroll: true });
+    }
+    // On landing, and after every accepted page, keep paging while the reserve
+    // is within two screens of the reader and this reading position's budget
+    // is not spent: a person should not see estimated space they did not
+    // scroll into. Each page is awaited. No gesture is required to start; only
+    // one re-arms a spent budget.
+    const frame = requestAnimationFrame(() => { if (!budget.current.exhausted && controller.needsPrefetch()) void load(false, true); });
     return () => cancelAnimationFrame(frame);
-  }, [controller, history?.anchor, history?.before, history?.complete, history?.userOffset, load]);
+  }, [controller, history?.anchor, history?.before, history?.complete, history?.revision, history?.userOffset, load]);
   useEffect(() => {
     const viewport = root.current?.closest<HTMLElement>("[data-slot=thread-viewport]");
     if (!viewport || (!history?.before && !deferred)) return;
     let lastTop = viewport.scrollTop;
-    const note = () => { interacted.current = true; };
+    // Everything below is the person moving, and each one re-arms the budget.
+    const prefetch = () => { rearm(); if (controller.needsPrefetch()) void load(false, true); };
     const scroll = () => {
       const top = viewport.scrollTop;
       const upwards = top < lastTop;
       lastTop = top;
-      if (interacted.current && upwards && (controller.isReadingHistoryReserve() || (deferred && top < viewport.clientHeight / 2))) void load(false, true);
+      rearmIfMoved();
+      if (upwards && (controller.needsPrefetch() || (deferred && top < viewport.clientHeight / 2))) void load(false, true);
     };
     // Already at the top, the viewport cannot scroll, so no scroll event
     // arrives: reading upwards there produces only the wheel (or a swipe, or
     // the keys). That is the person asking for what comes before.
-    const wheel = (event: WheelEvent) => { note(); if (event.deltaY < 0 && (controller.isReadingHistoryReserve() || viewport.scrollTop <= 0)) void load(false, true); };
+    const wheel = (event: WheelEvent) => { rearm(); if (event.deltaY < 0 && (controller.needsPrefetch() || viewport.scrollTop <= 0)) void load(false, true); };
     let touchY: number | undefined;
     const touchstart = (event: TouchEvent) => { touchY = event.touches?.[0]?.clientY; };
     const touchmove = (event: TouchEvent) => {
-      note();
       const y = event.touches?.[0]?.clientY;
-      if (y !== undefined && touchY !== undefined && y > touchY + 8 && (controller.isReadingHistoryReserve() || viewport.scrollTop <= 0)) void load(false, true);
+      rearm();
+      if (y !== undefined && touchY !== undefined && y > touchY + 8 && (controller.needsPrefetch() || viewport.scrollTop <= 0)) void load(false, true);
       touchY = y;
     };
     const keydown = (event: KeyboardEvent) => {
-      note();
-      if ((event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home") && (controller.isReadingHistoryReserve() || viewport.scrollTop <= 0)) void load(false, true);
+      rearm();
+      if ((event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home") && (controller.needsPrefetch() || viewport.scrollTop <= 0)) void load(false, true);
     };
-    viewport.addEventListener("pointerdown", note, { passive: true });
     viewport.addEventListener("wheel", wheel, { passive: true });
     viewport.addEventListener("touchstart", touchstart, { passive: true });
     viewport.addEventListener("touchmove", touchmove, { passive: true });
     viewport.addEventListener("keydown", keydown);
     viewport.addEventListener("scroll", scroll, { passive: true });
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(prefetch) : undefined;
+    observer?.observe(viewport);
     return () => {
-      viewport.removeEventListener("pointerdown", note);
+      observer?.disconnect();
       viewport.removeEventListener("wheel", wheel);
       viewport.removeEventListener("touchstart", touchstart);
       viewport.removeEventListener("touchmove", touchmove);
       viewport.removeEventListener("keydown", keydown);
       viewport.removeEventListener("scroll", scroll);
     };
-  }, [controller, deferred, history?.before, load]);
+  }, [controller, deferred, history?.before, load, rearm, rearmIfMoved]);
   const reread = useCallback(async () => {
     if (rereading) return;
     setRereading(true);
@@ -406,7 +487,7 @@ export function HistoryControls() {
             {rereading ? "Reloading recent messages…" : "Reload recent messages"}
           </Button>
         </span>
-      : (deferred || history?.before) && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => void load()}>
+      : (deferred || history?.before) && <Button variant="ghost" size="sm" className="[@media(pointer:coarse)]:min-h-11" aria-disabled={loading !== null} onClick={() => { rearm(); void load(); }}>
         {loading === "earlier" ? "Loading earlier messages…" : "Load earlier messages"}
       </Button>}
     {/* Earlier messages arrive by scrolling up (and through the button above,

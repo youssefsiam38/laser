@@ -61,12 +61,25 @@ export default async function scrollUpRepeat(check) {
     const contentHeight = document.querySelector('[data-slot="thread-messages"]')?.scrollHeight ?? 0;
     return {
       height: el.scrollHeight,
+      client: el.clientHeight,
       loadedHeight: Math.max(0, contentHeight - reserveHeight),
       reserveHeight,
       gap: el.scrollHeight - el.clientHeight - el.scrollTop,
     };
   });
   assert.ok(initialGeometry.gap <= 2, `recent tail opened ${initialGeometry.gap}px from the bottom`);
+  // A long conversation fills its own screen: the estimated range must leave
+  // the viewport without a gesture, and stay at least two screens above the
+  // reader (or disappear at the root).
+  await page.waitForFunction(() => {
+    const viewport = document.querySelector('[data-slot=thread-viewport]');
+    const reserve = document.querySelector('[data-slot="history-reserve"]');
+    if (!viewport) return false;
+    if (!reserve) return true;
+    const view = viewport.getBoundingClientRect();
+    const rect = reserve.getBoundingClientRect();
+    return rect.bottom < view.top - 2 * viewport.clientHeight + 1;
+  }, { timeout: 30000 });
   // A page arriving is nothing the person watches: the unloaded range is
   // placeholder rows with no words, and a page replaces those pixels in place.
   // Observe the semantic signals in the page for the whole journey: the
@@ -140,11 +153,17 @@ export default async function scrollUpRepeat(check) {
       await check.cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     } else await page.mouse.wheel(0, -amount);
   };
-  // Every mounted message, in DOM order: its id, and for the synthetic fixture its checkpoint number.
-  const rows = async () => page.locator('[data-window-message]').evaluateAll((els, inspectCheckpoints) => els.map(el => ({
-    id: el.getAttribute('data-window-message'),
-    n: inspectCheckpoints ? /Review checkpoint (\d+):/.exec(el.innerText)?.[1] : undefined,
-  })), !real);
+  // Every mounted message in the order the person sees it: the list positions
+  // its containers absolutely and sorts them back into index order on a
+  // debounce, so DOM order is not reading order between one page and the next.
+  const rows = async () => page.locator('[data-window-message]').evaluateAll((els, inspectCheckpoints) => els
+    .map(el => ({
+      id: el.getAttribute('data-window-message'),
+      n: inspectCheckpoints ? /Review checkpoint (\d+):/.exec(el.innerText)?.[1] : undefined,
+      top: el.getBoundingClientRect().top,
+    }))
+    .sort((a, b) => a.top - b.top)
+    .map(({ id, n }) => ({ id, n })), !real);
   const problems = [];
   let oldest;
   // The checkpoint the person is actually looking at: the first user row whose bottom is below the viewport's top.
@@ -349,11 +368,19 @@ export default async function scrollUpRepeat(check) {
     assert.equal(finalGeometry.top, 0, 'the scrollbar reaches the real beginning');
     assert.equal(finalGeometry.reserve, 0, 'no unloaded range remains at the real beginning');
     assert.equal(finalGeometry.statusSeen, true, 'earlier-page loading exposed an accessible busy status');
-    assert.ok(initialGeometry.height > finalGeometry.height * 0.75, `initial thumb range ${initialGeometry.height}px did not represent ${finalGeometry.height}px of history`);
-    assert.ok(initialGeometry.height < finalGeometry.height * 1.35, `initial thumb range ${initialGeometry.height}px overstated ${finalGeometry.height}px of history`);
+    // D-302: the estimate ahead of a reader is bounded to a few screens and
+    // grows back as pages arrive, so the initial range is loaded rows plus a
+    // bounded reserve — never an estimate of the whole conversation, and never
+    // more than the history it later resolved to.
+    assert.ok(initialGeometry.reserveHeight > 0, 'a long conversation opened without any unloaded-history range');
+    assert.ok(initialGeometry.reserveHeight <= initialGeometry.client * 3 + 300,
+      `initial reserve ${Math.round(initialGeometry.reserveHeight)}px exceeds the three-screen bound (${initialGeometry.client}px screens)`);
+    assert.ok(initialGeometry.height < finalGeometry.height, `initial thumb range ${initialGeometry.height}px overstated ${finalGeometry.height}px of history`);
   }
-  assert.ok(placeholderShot, 'the unloaded-history placeholder was never on screen');
-  await placeholderShot;
+  // With prefetch running ahead of the reader, the estimated range reaches the
+  // screen only when a page is late. Against a local host that is rarely, and
+  // never is the better outcome; when it did, the shot is the evidence.
+  if (placeholderShot) await placeholderShot;
   assert.deepEqual(finalGeometry.visibleCopy, [], `arriving history showed visible copy: ${finalGeometry.visibleCopy.join('; ')}`);
   for (const mark of finalGeometry.indicator) {
     assert.equal(mark.text, '', 'the overdue mark carries no copy');

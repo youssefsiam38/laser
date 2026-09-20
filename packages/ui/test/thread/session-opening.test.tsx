@@ -6,13 +6,15 @@ import { beforeEach, afterEach, expect, it, vi } from "vitest";
 vi.mock("../../src/client.js", async original => ({ ...await original<typeof import("../../src/client.js")>(), HostClient: (await import("../beam/fake-host.js")).FakeHostClient }));
 // Unrelated transcript tools/find are covered by their own integration suites.
 vi.mock("../../src/components/thread/messages.js", () => ({ ThreadMessage: () => <MessagePrimitive.Root><MessagePrimitive.Parts /></MessagePrimitive.Root> }));
-vi.mock("../../src/components/thread/use-conversation-find.js", () => ({ useConversationFind: () => ({ open: false, root: undefined, bar: null }) }));
+const findOptions = vi.hoisted(() => ({ current: undefined as { loadAll?: () => Promise<boolean>; partial?: boolean } | undefined }));
+vi.mock("../../src/components/thread/use-conversation-find.js", () => ({ useConversationFind: (options: { loadAll?: () => Promise<boolean>; partial?: boolean }) => { findOptions.current = options; return { open: false, root: undefined, bar: null }; } }));
 vi.mock("../../src/components/thread/Composer.js", () => ({ Composer: () => <ComposerPrimitive.Root><ComposerPrimitive.Input /><ComposerPrimitive.Send>Send</ComposerPrimitive.Send></ComposerPrimitive.Root> }));
 import { Thread } from "../../src/components/thread/Thread.js";
 import type { AppState } from "../../src/store.js";
 import { WorkbenchProvider } from "../../src/components/workbench/workbench-context.js";
 import { LaserProvider, useLaserStable, useLaserState, type LaserActions } from "../../src/runtime/LaserProvider.js";
 import { addSession, createWorld, FakeHostClient, settle as settleReal, type World } from "../beam/fake-host.js";
+import { historyWindow } from "@lasercode/protocol";
 import { seedProject, seedRememberedSessions } from "../../test/runtime/environment-fixture.js";
 
 const path = "/p/history.jsonl";
@@ -77,7 +79,79 @@ it("failed load offers keyboard-focusable Retry, and successful empty hydration 
   delete world.overrides["session/load"];
   await act(async () => { retry.click(); await settle(40); });
   expect(container.querySelector('[role="alert"]')).toBeNull();
-  expect(container.textContent).toContain("New session. What should the agent work on?");
+  expect(container.textContent).toContain("What should the agent work on?");
+});
+
+/**
+ * D-341: a new chat is local until the person speaks. The landing paints
+ * complete from what this window knows, and the host's answer — the created
+ * session's path — changes identity underneath and not one pixel: no remount
+ * of the transcript subtree, no word of the welcome, no control appearing.
+ */
+it("adopts the created session without remounting the transcript or changing a word of the landing", async () => {
+  await visibleHistory();
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  world.overrides["session/new"] = async (params) => {
+    await hold;
+    delete world.overrides["session/new"];
+    return FakeHostClient.current.request("session/new", params);
+  };
+  let creation!: Promise<string>;
+  await act(async () => { creation = actions.newSession("/p"); await settle(180); });
+
+  // The first frame is the finished landing, from the destination alone: the
+  // project's directory as the eyebrow, its name as the greeting, one sentence,
+  // the suggestions. No blank, no skeleton, no session yet.
+  expect(state.current).toBeUndefined();
+  expect(container.querySelector('[data-slot="conversation-skeleton"]')).toBeNull();
+  const empty = container.querySelector('[data-slot="empty-state"]');
+  expect(empty).not.toBeNull();
+  expect(container.querySelector('[data-slot="empty-state-eyebrow"]')?.textContent).toBe("/p");
+  expect(container.querySelector('[data-slot="empty-state-greeting"]')?.textContent).toBe("p");
+  expect(container.querySelector('[data-slot="empty-state-description"]')?.textContent).toBe("What should the agent work on?");
+  expect(container.querySelectorAll('[data-slot="empty-state-suggestions"] li').length).toBe(3);
+  const viewport = container.querySelector('[data-slot="thread-viewport"]');
+  const head = container.querySelector('[data-slot="transcript-head"]');
+  expect(viewport).not.toBeNull();
+  const words = container.textContent;
+
+  await act(async () => { release(); await creation; await settle(60); });
+
+  // The answer landed: the destination now names the session…
+  expect(state.current).toBe(await creation);
+  expect(state.open[await creation]?.hydrated).toBe(true);
+  // …and nothing on the glass moved for it. The same DOM nodes, the same text.
+  expect(container.querySelector('[data-slot="thread-viewport"]')).toBe(viewport);
+  expect(container.querySelector('[data-slot="transcript-head"]')).toBe(head);
+  expect(container.querySelector('[data-slot="empty-state"]')).toBe(empty);
+  expect(container.textContent).toBe(words);
+  expect(container.querySelector('[data-slot="conversation-skeleton"]')).toBeNull();
+  expect(container.querySelector("textarea")?.disabled).toBe(false);
+});
+
+/**
+ * Cause 3 of D-341 on its own, with no words involved: the gate around the
+ * transcript was keyed on the open path, which starts undefined on a landing
+ * and becomes the created session's when the host answers — so React threw the
+ * whole subtree away and built it again. The scroller must be the same node.
+ */
+it("keeps the same transcript scroller node when the created path is adopted", async () => {
+  await visibleHistory();
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  world.overrides["session/new"] = async (params) => {
+    await hold;
+    delete world.overrides["session/new"];
+    return FakeHostClient.current.request("session/new", params);
+  };
+  let creation!: Promise<string>;
+  await act(async () => { creation = actions.newSession("/p"); await settle(180); });
+  const viewport = container.querySelector('[data-slot="thread-viewport"]');
+  expect(viewport).not.toBeNull();
+  await act(async () => { release(); await creation; await settle(60); });
+  expect(state.current).toBe(await creation);
+  expect(container.querySelector('[data-slot="thread-viewport"]')).toBe(viewport);
 });
 
 /**
@@ -236,6 +310,34 @@ it("New session is a landing while session/new is held, and a worker-start failu
   expect(container.textContent).not.toContain("This session didn’t load.");
   expect(state.destination.phase === "unavailable").toBe(false);
   expect(container.querySelector("textarea")?.disabled).toBe(false);
+});
+
+/**
+ * Find searches the branch on screen, so "Load all messages" pages that branch
+ * to its root with the turn pager. It used to send the indivisible whole-
+ * conversation read, which the producer refuses past two hundred rows — every
+ * conversation partial enough to offer the button — leaving the control up and
+ * the refusal in a toast nobody was looking at.
+ */
+it("pages the branch to its root for Find's Load all messages, never the indivisible whole read", async () => {
+  const many = Array.from({ length: 80 }, (_, i) => ({ type: "message", id: `m${i}`, parentId: i ? `m${i - 1}` : null,
+    message: { role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: `Message ${i}` }] } }));
+  const scope = { sessionId: "s", epoch: "one", seq: 0, revision: "r1.test", environmentKey: "e1.test" };
+  world.overrides["pi/session/entries"] = (params: { window?: Parameters<typeof historyWindow>[1] }) =>
+    historyWindow({ entries: many, leafId: "m79" }, params.window ?? { all: true }, scope);
+  await act(async () => { await actions.openSession(path); await settle(30); });
+  expect(state.open[path]?.history?.complete).toBe(false);
+  expect(findOptions.current?.partial).toBe(true);
+  world.calls.length = 0;
+
+  await act(async () => { await findOptions.current!.loadAll!(); await settle(30); });
+
+  expect(state.open[path]?.history?.complete).toBe(true);
+  expect(state.open[path]?.entries).toHaveLength(80);
+  const windows = world.calls.filter(call => call.method === "pi/session/entries").map(call => (call.params as { window?: Record<string, unknown> }).window);
+  expect(windows.length).toBeGreaterThan(1);
+  expect(windows.every(window => window !== undefined && "before" in window && "turns" in window)).toBe(true);
+  expect(windows.some(window => window !== undefined && "all" in window)).toBe(false);
 });
 
 /**
