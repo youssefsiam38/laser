@@ -31,6 +31,17 @@ const LOCATE_FRAME_BUDGET = 180;
 const LATEST_ATTEMPTS = 60;
 /** How far from the end the list still keeps following, in screens. */
 const FOLLOW_THRESHOLD = 1;
+/** Prefetch earlier history while the reserve is within this many screens of the reader. */
+export const HISTORY_PREFETCH_SCREENS = 2;
+/**
+ * One prefetch burst never asks for more than this many pages. Awaited
+ * sequence, never parallel. Combined with the byte budget so a conversation
+ * of tiny pages still fills the screen, and a conversation of megabyte pages
+ * cannot pin the network. The producer already caps a page at 1 MB / 200 rows.
+ */
+export const HISTORY_PREFETCH_PAGE_BUDGET = 16;
+/** A few megabytes for one burst: four producer-capped pages, or many small ones. */
+export const HISTORY_PREFETCH_BYTE_BUDGET = 4 * 1024 * 1024;
 /** Frames a fold may take to change a row's height before the hold lapses. */
 const DISCLOSURE_FRAME_BUDGET = 12;
 const COMPONENTS = { Message: ThreadMessage };
@@ -114,6 +125,8 @@ export class TranscriptViewport {
   private disposed = false;
   /** What a row of each kind has measured, so an unmeasured one guesses better. */
   private types = new Map<string, string>();
+  /** Last measured scroller height, so a first layout that grew from zero republishes. */
+  private lastHeight = 0;
 
   getSnapshot = () => this.revision;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -274,6 +287,7 @@ export class TranscriptViewport {
     this.historyBefore = undefined;
     this.prepended = false;
     this.pages = 0;
+    this.lastHeight = 0;
     // A conversation opens at its newest turn. The list cannot know that: to
     // it this is a list that grew from nothing, so the placement is an
     // explicit intent, made once, in the commit that has the rows.
@@ -409,6 +423,30 @@ export class TranscriptViewport {
     return rect.bottom > viewport.getBoundingClientRect().top + 0.5;
   }
 
+  /**
+   * Distance from the top of the viewport to the bottom of the unloaded-history
+   * reserve. Infinity when there is no reserve: nothing to prefetch.
+   */
+  reserveDistance(): number {
+    const viewport = this.viewport, rect = this.reserveRect();
+    if (!viewport || !rect) return Infinity;
+    return viewport.getBoundingClientRect().top - rect.bottom;
+  }
+
+  /**
+   * True while the reserve is within `screens` viewport heights of the reading
+   * position — including while it is on screen (a negative distance). Paging
+   * continues until at least this much real transcript stands above the reader,
+   * rather than stopping the moment the reserve leaves the viewport.
+   */
+  needsPrefetch(screens = HISTORY_PREFETCH_SCREENS): boolean {
+    const viewport = this.viewport;
+    if (!viewport || viewport.clientHeight <= 0) return false;
+    const distance = this.reserveDistance();
+    if (!Number.isFinite(distance)) return false;
+    return distance < screens * viewport.clientHeight;
+  }
+
   // ── Rows ──────────────────────────────────────────────────────────────
 
   /**
@@ -506,6 +544,8 @@ export class TranscriptViewport {
   committed() {
     if (this.disposed) return;
     let changed = this.readLayout();
+    const height = this.viewport?.clientHeight ?? 0;
+    if (height !== this.lastHeight) { this.lastHeight = height; changed = true; }
     if (this.pendingLatest) this.placeToLatest();
     const before = this.place;
     this.capture();

@@ -26,7 +26,7 @@ import { projectMessages } from "../../src/runtime/projection.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { ThreadMessage } from "../../src/components/thread/messages.js";
 import { HistoryControls } from "../../src/components/thread/Thread.js";
-import { TranscriptViewportBinding, TranscriptViewportProvider, WindowedMessages, useTranscriptViewport } from "../../src/components/thread/transcript-viewport.js";
+import { HISTORY_PREFETCH_PAGE_BUDGET, TranscriptViewport, TranscriptViewportBinding, TranscriptViewportProvider, WindowedMessages, useTranscriptViewport } from "../../src/components/thread/transcript-viewport.js";
 import { createViewCache, VIEW_CACHE_LIMITS } from "../../src/runtime/view-cache.js";
 import { resetAnchoredMessages, standingRows } from "../../src/runtime/anchored-messages.js";
 import { MessageEditPresentation, TranscriptPresentation } from "../../src/runtime/transcript-presentation.js";
@@ -57,6 +57,7 @@ vi.mock("@/dialogs", () => ({ ToolRowDialog: () => null, useRegisterToolRow: () 
 let root: Root;
 let container: HTMLDivElement;
 let restoreGeometry: (() => void) | undefined;
+let prefetchSpy: ReturnType<typeof vi.spyOn> | undefined;
 
 /**
  * The only stub, and only at the seam where a DOM would measure: happy-dom
@@ -73,6 +74,14 @@ function track(): HTMLElement {
 
 function stubGeometry(): () => void {
   const original = Element.prototype.getBoundingClientRect;
+  const originalClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+    configurable: true,
+    get(this: HTMLElement) {
+      if (this.dataset?.slot === "thread-viewport") return 900;
+      return originalClientHeight?.get?.call(this) ?? 0;
+    },
+  });
   Element.prototype.getBoundingClientRect = function rect(this: Element): DOMRect {
     // The scroller itself is a window nine hundred pixels tall.
     if ((this as HTMLElement).dataset?.slot === "thread-viewport") {
@@ -96,7 +105,10 @@ function stubGeometry(): () => void {
     const start = top(Number.parseFloat(item.style.top) || 0);
     return { x: 0, y: start, top: start, left: 0, right: 600, bottom: start + ROW, width: 600, height: ROW, toJSON: () => ({}) } as DOMRect;
   };
-  return () => { Element.prototype.getBoundingClientRect = original; };
+  return () => {
+    Element.prototype.getBoundingClientRect = original;
+    if (originalClientHeight) Object.defineProperty(HTMLElement.prototype, "clientHeight", originalClientHeight);
+  };
 }
 let scrolled = 0;
 
@@ -108,6 +120,9 @@ beforeEach(() => {
   document.body.append(container);
   root = createRoot(container);
   restoreGeometry = stubGeometry();
+  // Existing tests pin gesture-driven loads. Landing prefetch is restored in
+  // the tests that prove the new contract.
+  prefetchSpy = vi.spyOn(TranscriptViewport.prototype, "needsPrefetch").mockReturnValue(false);
 });
 
 afterEach(async () => {
@@ -115,7 +130,11 @@ afterEach(async () => {
   container.remove();
   restoreGeometry?.();
   resetAnchoredMessages();
+  prefetchSpy?.mockRestore();
+  prefetchSpy = undefined;
   vi.clearAllMocks();
+  stable.actions.loadEarlierEntries.mockImplementation(async () => true);
+  stable.actions.loadAllEntries.mockImplementation(async () => true);
 });
 
 const entry = (index: number) => ({
@@ -234,6 +253,36 @@ function cacheFor(store: ReturnType<typeof createStateStore>, viewBytes: number)
 }
 
 describe("a trim while somebody is reading", () => {
+  it("pages earlier history on landing without a gesture", async () => {
+    prefetchSpy?.mockRestore();
+    prefetchSpy = undefined;
+    stable.actions.loadEarlierEntries.mockResolvedValue(false);
+    const store = createStateStore(opened());
+    hydrateThrough(store, undefined);
+    const controller = await mount(store, store.presentation);
+    await act(async () => {
+      controller.committed();
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      await Promise.resolve();
+    });
+    expect(stable.actions.loadEarlierEntries).toHaveBeenCalled();
+  });
+
+  it("keeps paging through a tiny page until the burst budget, not the old twelve-page cap", async () => {
+    prefetchSpy?.mockRestore();
+    prefetchSpy = vi.spyOn(TranscriptViewport.prototype, "needsPrefetch").mockReturnValue(true);
+    const store = createStateStore(opened());
+    hydrateThrough(store, undefined);
+    const controller = await mount(store, store.presentation);
+    await act(async () => {
+      controller.committed();
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      await vi.waitFor(() => {
+        expect(stable.actions.loadEarlierEntries).toHaveBeenCalledTimes(HISTORY_PREFETCH_PAGE_BUDGET);
+      });
+    });
+  });
+
   it("offers the next earlier page immediately whenever the window has a cursor", async () => {
     const store = createStateStore(opened());
     hydrateThrough(store, undefined);
@@ -503,6 +552,7 @@ describe("a trim while somebody is reading", () => {
     const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]')!;
     Object.defineProperty(viewport, "scrollTop", { value: 0, configurable: true, writable: true });
     const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages")!;
+    stable.actions.loadEarlierEntries.mockClear();
     await act(async () => { button.dispatchEvent(new MouseEvent("click", { bubbles: true })); await Promise.resolve(); });
     await act(async () => { viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true })); await Promise.resolve(); });
     await act(async () => { viewport.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })); await Promise.resolve(); });

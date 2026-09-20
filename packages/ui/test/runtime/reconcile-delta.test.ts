@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { historyWindow, type ClientRequests, type SessionState } from "@lasercode/protocol";
+import { historyWindow, HISTORY_FIRST_PAGE_TURNS, type ClientRequests, type SessionState } from "@lasercode/protocol";
 
 import { BODY_EXCERPT_MAX_BYTES } from "../../src/runtime/body-excerpt.js";
 import { createHistoryLoader } from "../../src/runtime/history-loader.js";
@@ -60,17 +60,19 @@ describe("reconciling a re-entry with its authority", () => {
     const f = fixture(async (params) => replaceReply(params, "r1.env.40"));
     await f.loader.recent(state.path, () => true);
     // Nothing was held before this read, so nothing could be proved against.
-    expect(f.request.mock.calls[0]![0]).toEqual({ path: state.path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
+    expect(f.request.mock.calls[0]![0]).toEqual({ path: state.path, window: { turns: HISTORY_FIRST_PAGE_TURNS }, bodyLimit: BODY_EXCERPT_MAX_BYTES });
     expect(f.view().validated).toMatchObject({ revision: "r1.env.40", environmentKey: ENVIRONMENT });
 
     await f.loader.recent(state.path, () => true);
-    expect(f.request.mock.calls[1]![0]).toMatchObject({ window: { tail: 40 }, baseRevision: "r1.env.40" });
+    expect(f.request.mock.calls[1]![0]).toMatchObject({ window: { turns: HISTORY_FIRST_PAGE_TURNS }, baseRevision: "r1.env.40" });
 
     // Older pages carry the held producer revision; whole-tree reads remain independent.
-    await f.loader.earlier(state.path, () => true);
-    await f.loader.all(state.path, () => true);
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
     expect(f.request.mock.calls[2]![0].baseRevision).toBe("r1.env.40");
-    expect(f.request).toHaveBeenCalledTimes(3);
+    while (f.view().history?.before) expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    const count = f.request.mock.calls.length;
+    await f.loader.all(state.path, () => true);
+    expect(f.request).toHaveBeenCalledTimes(count);
   });
 
   it("appends a proved suffix, keeps the cached cursor and never claims the delta's own page", async () => {
@@ -90,7 +92,7 @@ describe("reconciling a re-entry with its authority", () => {
 
     const after = f.view();
     expect(after.entries.map((value) => (value as { id: string }).id).slice(-3)).toEqual(["e79", "e80", "e81"]);
-    expect(after.entries).toHaveLength(42);
+    expect(after.entries).toHaveLength(before.entries.length + 2);
     expect(after.blocks).toHaveLength(blocksBefore + 2);
     expect(after.leafId).toBe("e81");
     expect(after.validated).toMatchObject({ revision: "r1.env.42", seq: 42 });

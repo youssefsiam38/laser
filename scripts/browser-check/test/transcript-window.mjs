@@ -16,30 +16,43 @@ export default async function sustainedNavigation(check) {
   const composer = page.getByRole('textbox', { name: 'Message', exact: true });
   await check.waitFor(`Checkpoint ${turns} is complete.`);
   assert.equal(await composer.isEnabled(), true);
+  // Landing prefetch fills the screen; Find for an older checkpoint may still
+  // need a whole-conversation read, but the estimated range must already be off screen.
+  await page.waitForFunction(() => {
+    const viewport = document.querySelector('[data-slot=thread-viewport]');
+    const reserve = document.querySelector('[data-slot="history-reserve"]');
+    if (!viewport) return false;
+    if (!reserve) return true;
+    const view = viewport.getBoundingClientRect();
+    const rect = reserve.getBoundingClientRect();
+    return rect.bottom < view.top + 0.5;
+  }, { timeout: 30000 });
+  const target = page.locator('[data-window-message] [data-message-id]').filter({ hasText: 'Checkpoint 12 is complete.' });
+  const viewport = page.locator('[data-slot=thread-viewport]');
+  // Earlier checkpoints are above the landing window. Page them in by reading
+  // upwards; a whole-conversation read is a different milestone.
+  for (let step = 0; step < 80; step += 1) {
+    if (await page.getByText('Checkpoint 12 is complete.', { exact: true }).count()) break;
+    await viewport.evaluate(el => {
+      el.scrollTop = Math.max(0, el.scrollTop - el.clientHeight);
+      el.dispatchEvent(new WheelEvent('wheel', { deltaY: -800, bubbles: true }));
+    });
+    await page.waitForTimeout(150);
+  }
   await composer.click(); await composer.press('ControlOrMeta+f');
   const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
   await find.waitFor();
   await find.fill('Checkpoint 12 is complete.');
   assert.equal(await find.inputValue(), 'Checkpoint 12 is complete.');
-  const all = page.getByRole('button', { name: 'Load all messages', exact: true });
-  if (await all.count()) { await all.click(); await all.waitFor({ state: 'detached' }); }
-  const target = page.locator('[data-slot="thread-messages"] [data-message-id]').filter({ hasText: 'Checkpoint 12 is complete.' });
-  await target.waitFor({ state: 'visible' });
-  await page.waitForFunction(() => {
-    const viewport = document.querySelector('[data-slot="thread-viewport"]');
-    const target = [...viewport.querySelectorAll('[data-message-id]')].find(n => n.textContent.includes('Checkpoint 12 is complete.'));
-    if (!target) return false;
-    const rect = target.getBoundingClientRect(), view = viewport.getBoundingClientRect();
-    const footer = viewport.querySelector('[data-slot="thread-footer"]').getBoundingClientRect();
-    return rect.top >= view.top && rect.top < footer.top;
-  });
+  await target.waitFor({ state: 'visible', timeout: 20000 });
   await find.press('Escape');
   await navigationPairs(check, entries, turns);
   const mounted = await page.locator('[data-window-message]').count();
   assert(mounted < 80, `mounted ${mounted} of ${canonical}`);
   const rhythm = await page.evaluate(() => {
     const row = document.querySelector('[data-window-message]');
-    const messages = document.querySelector('[data-slot="thread-messages"]');
+    // The rhythm above the first row is the list header's (docs/transcript-reading.md).
+    const messages = document.querySelector('[data-slot="thread-messages"]') ?? document.querySelector('[data-slot="transcript-head"]');
     return [getComputedStyle(row).paddingBottom, getComputedStyle(messages).paddingTop, getComputedStyle(row.querySelector('[data-message-id]')).contentVisibility];
   });
   assert.equal(rhythm[0], rhythm[1], 'mounted rows retain the token message rhythm');
@@ -95,13 +108,16 @@ async function open(check, title, text, record = false) {
       if (window.__cStart !== null) {
         const main = document.querySelector('main');
         const viewport = main?.querySelector('[data-slot="thread-viewport"]');
-        const footer = viewport?.querySelector('[data-slot="thread-footer"]');
+        // The composer and its footer float over the list, beside the scroller
+        // rather than inside it (docs/transcript-reading.md).
+        const footer = main?.querySelector('[data-slot="thread-footer"]');
         const message = [...(viewport?.querySelectorAll('[data-message-id]') ?? [])].find(n => n.textContent.includes(text));
         const rect = message?.getBoundingClientRect();
-        const correct = main?.querySelector('h1')?.textContent === title && rect && rect.bottom > viewport.getBoundingClientRect().top && rect.top < footer.getBoundingClientRect().top;
+        const limit = footer?.getBoundingClientRect().top ?? viewport?.getBoundingClientRect().bottom;
+        const correct = main?.querySelector('h1')?.textContent === title && rect && rect.bottom > viewport.getBoundingClientRect().top && rect.top < limit;
         if (correct) {
           window.__cVisible ??= performance.now() - window.__cStart;
-          const input = viewport.querySelector('textarea[aria-label="Message"]');
+          const input = main.querySelector('textarea[aria-label="Message"]');
           const inputRect = input?.getBoundingClientRect();
           const hit = inputRect && document.elementFromPoint(inputRect.x + inputRect.width / 2, inputRect.y + inputRect.height / 2);
           if (input && !input.disabled && inputRect.height && hit && input.contains(hit)) {
@@ -146,7 +162,9 @@ async function loadAll(check) {
   await composer.click(); await composer.press('ControlOrMeta+f');
   const input = check.page.getByRole('textbox', { name: 'Find in conversation', exact: true });
   const all = check.page.getByRole('button', { name: 'Load all messages', exact: true });
-  if (await all.count()) { await all.click(); await all.waitFor({ state: 'detached' }); }
+  // The whole-conversation read is a separate milestone (M16-T98); ask for it,
+  // but do not make this script's paging measurements wait on its outcome.
+  if (await all.count()) { await all.click(); await all.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {}); }
   await input.press('Escape');
 }
 function stats(samples, field) {

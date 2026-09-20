@@ -148,10 +148,17 @@ How many turns:
 What the person sees while a page arrives: the rows they already had do not
 move, and the history they are scrolling towards arrives in the grey they are
 looking at. A page cannot appear *between* them and a row they were already
-reading. Continuous paging is unchanged and still belongs to the history
-controls: while the reading position has not reached the oldest loaded row,
-each accepted page asks for the next one, up to twelve per gesture.
-`history-loader.ts` and its fences are untouched (M16-T81/T85).
+reading. Continuous paging belongs to the history controls and does not wait
+for a gesture: on landing, and whenever the unloaded reserve is within two
+screens of the reading position, each accepted page asks for the next one until
+two screens of real rows stand above the reader, the transcript reaches its
+root, or one burst hits its page or byte budget (sixteen pages or four
+megabytes). A page that returns only a couple of rows is a normal split turn
+and does not stop the burst. Pages are awaited in sequence, never in parallel.
+`history-loader.ts` asks for turn windows (`HISTORY_FIRST_PAGE_TURNS` on the
+first page, `HISTORY_EARLIER_PAGE_TURNS` earlier); a background refresh whose
+base has gone stale accepts the replacement rather than flipping the view into
+a refusal the person did not cause.
 
 ## Destinations
 
@@ -199,7 +206,9 @@ person has to act.
 
 A compaction or a branch can move the conversation past the base a window is
 holding. The producer then refuses its earlier pages, and `history.refusal`
-carries the sentence for the person. The transcript keeps every row it has;
+carries the sentence for the person. A background refresh whose base went stale
+is not that case: it accepts the replacement, keeps the rows and the reading
+position, and leaves scroll-up working. The transcript keeps every row it has;
 upward reading stops asking the question that was just refused; and the history
 controls replace "Load earlier messages" with that sentence and one action,
 "Reload recent messages", which performs the bounded current-tail re-read. The

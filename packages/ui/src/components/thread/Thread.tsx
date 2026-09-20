@@ -24,7 +24,15 @@ import { ThreadSlotsProvider, type ThreadSlots } from "./thread-slots.js";
 import { useConversationFind } from "./use-conversation-find.js";
 import { WholeTranscriptRefusalProvider, useThreadWholeTranscriptRefusal } from "./whole-transcript-refusal.js";
 import { FindQueryContext, FindSelectionContext } from "./search-state.js";
-import { TranscriptViewportProvider, TranscriptViewportBinding, WindowedMessages, useTranscriptViewport } from "./transcript-viewport.js";
+import {
+  HISTORY_PREFETCH_BYTE_BUDGET,
+  HISTORY_PREFETCH_PAGE_BUDGET,
+  TranscriptViewportProvider,
+  TranscriptViewportBinding,
+  WindowedMessages,
+  useTranscriptViewport,
+} from "./transcript-viewport.js";
+import { lastHistoryPageBytes } from "@/runtime/history-loader.js";
 
 /**
  * The assistant-ui thread column (DESIGN.md "Layout" 3): transcript at max
@@ -301,14 +309,26 @@ export function HistoryControls() {
     try {
       loaded = all ? await actions.loadAllEntries() : await actions.loadEarlierEntries();
       if (loaded) setAnnouncement(all ? "Other versions loaded." : "Earlier messages loaded.");
-      // Reading into unloaded history keeps paging while the reading position
-      // is still in front of the loaded rows: one page of a long conversation
-      // rarely reaches the person. The explicit control stays one page.
+      // Fill the screen, then two screens above the reader. One page of a long
+      // conversation rarely does that — and a page that returns two rows is a
+      // normal split turn, not a reason to stop. The explicit control stays one
+      // page; continuous paging is a bounded burst: sixteen pages or 4 MB, the
+      // producer already capping each page at 1 MB / 200 rows. Awaited sequence,
+      // never parallel. D-302's estimate ahead of a reader still holds: the
+      // reading position never moves backwards, no row arrives under the eye.
       if (loaded && !all && continuous) {
-        for (let page = 0; page < 12 && controller.isReadingHistoryReserve(); page += 1) {
+        let pages = 1;
+        let bytes = lastHistoryPageBytes();
+        while (
+          pages < HISTORY_PREFETCH_PAGE_BUDGET
+          && bytes < HISTORY_PREFETCH_BYTE_BUDGET
+          && controller.needsPrefetch()
+        ) {
           controller.finishEarlierPage();
           controller.beginEarlierPage();
           if (!(await actions.loadEarlierEntries())) break;
+          pages += 1;
+          bytes += lastHistoryPageBytes();
         }
       }
     } catch {
@@ -329,43 +349,46 @@ export function HistoryControls() {
   }, [actions, controller, deferred, history?.before, history?.branchesUnloaded, refusal]);
   useLayoutEffect(() => {
     const anchor = pending.current;
-    if (!anchor) return;
-    pending.current = undefined;
-    controller.committed();
-    if (anchor.focused && !anchor.focused.isConnected && document.activeElement === document.body) root.current?.querySelector("button")?.focus({ preventScroll: true });
-    // Reading into unloaded history pages continuously: one page per gesture
-    // would leave a person travelling through estimated space they can already
-    // see past. Each page is awaited, so this is a sequence, never a burst, and
-    // it stops the moment a loaded row is back under the reading position.
-    const frame = requestAnimationFrame(() => { if (interacted.current && controller.isReadingHistoryReserve()) void load(false, true); });
+    if (anchor) {
+      pending.current = undefined;
+      controller.committed();
+      if (anchor.focused && !anchor.focused.isConnected && document.activeElement === document.body) root.current?.querySelector("button")?.focus({ preventScroll: true });
+    }
+    // On landing, and after every accepted page, keep paging while the reserve
+    // is within two screens of the reader: a person should not see estimated
+    // space they did not scroll into. Each page is awaited. A gesture is not
+    // required — note() still records pointer/wheel/touch/key for everything
+    // else that reads it.
+    const frame = requestAnimationFrame(() => { if (controller.needsPrefetch()) void load(false, true); });
     return () => cancelAnimationFrame(frame);
-  }, [controller, history?.anchor, history?.before, history?.complete, history?.userOffset, load]);
+  }, [controller, history?.anchor, history?.before, history?.complete, history?.revision, history?.userOffset, load]);
   useEffect(() => {
     const viewport = root.current?.closest<HTMLElement>("[data-slot=thread-viewport]");
     if (!viewport || (!history?.before && !deferred)) return;
     let lastTop = viewport.scrollTop;
     const note = () => { interacted.current = true; };
+    const prefetch = () => { if (controller.needsPrefetch()) void load(false, true); };
     const scroll = () => {
       const top = viewport.scrollTop;
       const upwards = top < lastTop;
       lastTop = top;
-      if (interacted.current && upwards && (controller.isReadingHistoryReserve() || (deferred && top < viewport.clientHeight / 2))) void load(false, true);
+      if (upwards && (controller.needsPrefetch() || (deferred && top < viewport.clientHeight / 2))) void load(false, true);
     };
     // Already at the top, the viewport cannot scroll, so no scroll event
     // arrives: reading upwards there produces only the wheel (or a swipe, or
     // the keys). That is the person asking for what comes before.
-    const wheel = (event: WheelEvent) => { note(); if (event.deltaY < 0 && (controller.isReadingHistoryReserve() || viewport.scrollTop <= 0)) void load(false, true); };
+    const wheel = (event: WheelEvent) => { note(); if (event.deltaY < 0 && (controller.needsPrefetch() || viewport.scrollTop <= 0)) void load(false, true); };
     let touchY: number | undefined;
     const touchstart = (event: TouchEvent) => { touchY = event.touches?.[0]?.clientY; };
     const touchmove = (event: TouchEvent) => {
       note();
       const y = event.touches?.[0]?.clientY;
-      if (y !== undefined && touchY !== undefined && y > touchY + 8 && (controller.isReadingHistoryReserve() || viewport.scrollTop <= 0)) void load(false, true);
+      if (y !== undefined && touchY !== undefined && y > touchY + 8 && (controller.needsPrefetch() || viewport.scrollTop <= 0)) void load(false, true);
       touchY = y;
     };
     const keydown = (event: KeyboardEvent) => {
       note();
-      if ((event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home") && (controller.isReadingHistoryReserve() || viewport.scrollTop <= 0)) void load(false, true);
+      if ((event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home") && (controller.needsPrefetch() || viewport.scrollTop <= 0)) void load(false, true);
     };
     viewport.addEventListener("pointerdown", note, { passive: true });
     viewport.addEventListener("wheel", wheel, { passive: true });
@@ -373,7 +396,10 @@ export function HistoryControls() {
     viewport.addEventListener("touchmove", touchmove, { passive: true });
     viewport.addEventListener("keydown", keydown);
     viewport.addEventListener("scroll", scroll, { passive: true });
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(prefetch) : undefined;
+    observer?.observe(viewport);
     return () => {
+      observer?.disconnect();
       viewport.removeEventListener("pointerdown", note);
       viewport.removeEventListener("wheel", wheel);
       viewport.removeEventListener("touchstart", touchstart);

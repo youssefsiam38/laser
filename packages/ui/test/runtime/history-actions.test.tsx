@@ -70,7 +70,7 @@ beforeEach(async () => {
     <ComposerPrimitive.Root><ComposerPrimitive.Input data-test="composer" /></ComposerPrimitive.Root>
   </ThreadPrimitive.Root></TooltipProvider></LaserProvider>));
   await flush();
-  expect(view?.blocks).toHaveLength(40);
+  expect(view?.blocks).toHaveLength(20);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
@@ -116,7 +116,7 @@ it("keeps known versions through Previous and Next, without a full-history read"
 });
 
 it("numbers three versions in persisted tree order after earlier pages, metadata refresh and version switches", async () => {
-  for (let size = 80; size <= 240; size += 40) {
+  for (const size of [60, 100, 140, 180, 220, 240]) {
     await act(async () => { await actions.loadEarlierEntries(); }); await flush();
     expect(view?.blocks).toHaveLength(size);
   }

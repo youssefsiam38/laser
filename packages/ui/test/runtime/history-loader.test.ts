@@ -1,6 +1,6 @@
 import { BODY_EXCERPT_MAX_BYTES } from "@/runtime/body-excerpt";
 import { describe, expect, it, vi } from "vitest";
-import { ErrorCodes, boundedHistoryWindow, historyWindow, withElidedBodies, type ClientRequests, type SessionState } from "@lasercode/protocol";
+import { ErrorCodes, boundedHistoryWindow, historyWindow, withElidedBodies, HISTORY_EARLIER_PAGE_TURNS, HISTORY_FIRST_PAGE_TURNS, isLiveEdgeWindow, type ClientRequests, type SessionState } from "@lasercode/protocol";
 import { initialState, reduce, type Action } from "../../src/store.js";
 import { createHistoryLoader } from "../../src/runtime/history-loader.js";
 
@@ -27,14 +27,15 @@ describe("history request ownership", () => {
     await f.loader.read(state.path, true);
     expect(f.view().blocks).toHaveLength(80);
     await f.loader.read(state.path, false, () => true, undefined, "recent");
-    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision: scope.revision });
-    const expected = historyWindow(source, { tail: 40 }, scope);
+    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { turns: HISTORY_FIRST_PAGE_TURNS }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision: scope.revision });
+    const expected = historyWindow(source, { turns: HISTORY_FIRST_PAGE_TURNS }, scope);
     expect(f.view().entries).toEqual(expected.entries);
     expect(f.view().history).toEqual(expected.window);
     expect(f.view().historyRevision).toBeDefined();
-    expect(f.view().blocks).toHaveLength(40);
-    expect(f.view().history).toMatchObject({ complete: false, userOffset: 20 });
+    expect(f.view().blocks).toHaveLength(20);
+    expect(f.view().history).toMatchObject({ complete: false, userOffset: 30 });
     const revision = f.view().historyRevision;
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
     expect(f.view().entries).toEqual(entries);
     expect(new Set(f.view().blocks.map(block => block.id)).size).toBe(80);
@@ -52,11 +53,11 @@ describe("history request ownership", () => {
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
 
     expect(request.mock.calls.map(([params]) => params.window)).toEqual([
-      { tail: 40 },
-      { beforeEntry: "e79", limit: 40 },
+      { turns: HISTORY_FIRST_PAGE_TURNS },
+      { beforeEntry: "e79", turns: HISTORY_EARLIER_PAGE_TURNS },
     ]);
     expect(f.view().trimmed).toBeUndefined();
-    expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.slice(38).map(row => row.id));
+    expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.slice(40).map(row => row.id));
     expect(f.view().history?.before).toBeDefined();
     const recovered = f.view();
     await f.loader.reconcile(state.path);
@@ -75,7 +76,7 @@ describe("history request ownership", () => {
 
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
 
-    expect(request.mock.calls[1]![0]).toMatchObject({ window: { beforeEntry: "e10", limit: 40 }, baseRevision: scope.revision });
+    expect(request.mock.calls[1]![0]).toMatchObject({ window: { beforeEntry: "e10", turns: HISTORY_EARLIER_PAGE_TURNS }, baseRevision: scope.revision });
     expect(f.view().blocks.some(block => "entryId" in block && block.entryId === "e10")).toBe(true);
     expect(f.view().entries.some(row => (row as { id?: string }).id === "e10")).toBe(true);
     expect(f.view().history).toMatchObject({ anchor: "e0", gapBefore: "e79", complete: false });
@@ -93,28 +94,28 @@ describe("history request ownership", () => {
     // The page used to be dropped on the way in, the same cursor was asked for
     // again for ever, and the top of the conversation stayed a skeleton while
     // the person scrolled (D-302).
-    const oversized = { ...entries[40]!, message: { role: "user", content: [{ type: "text", text: "x".repeat(4096) }] } };
-    const elidedSource = { entries: entries.map((entry, index) => (index === 40 ? oversized : entry)), leafId: "e79" };
+    const oversized = { ...entries[60]!, message: { role: "user", content: [{ type: "text", text: "x".repeat(4096) }] } };
+    const elidedSource = { entries: entries.map((entry, index) => (index === 60 ? oversized : entry)), leafId: "e79" };
     const request = vi.fn(async (params: Params) => withElidedBodies(historyWindow(elidedSource, params.window!, scope), 512, text => `digest-${text.length}`));
     const f = fixture(request);
     await f.loader.read(state.path);
     const held = f.view();
-    expect(held.history?.anchor).toBe("e40");
-    expect(held.entries.some(entry => (entry as { id?: string }).id === "e40")).toBe(false);
-    expect(held.stubs?.some(stub => stub.id === "e40")).toBe(true);
+    expect(held.history?.anchor).toBe("e60");
+    expect(held.entries.some(entry => (entry as { id?: string }).id === "e60")).toBe(false);
+    expect(held.stubs?.some(stub => stub.id === "e60")).toBe(true);
     const before = held.history!.before!;
 
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    while (f.view().history?.before) expect(await f.loader.earlier(state.path, () => true)).toBe(true);
 
     // The page landed at the front, whole, and the cursor moved on.
     expect(f.view().entries.map(entry => (entry as { id: string }).id))
-      .toEqual([...entries.slice(0, 40), ...entries.slice(41)].map(entry => entry.id));
+      .toEqual([...entries.slice(0, 60), ...entries.slice(61)].map(entry => entry.id));
     expect(f.view().history?.before).not.toBe(before);
     expect(f.view().history?.complete).toBe(true);
     expect(f.view().blocks.some(block => "entryId" in block && block.entryId === "e0")).toBe(true);
     // And the loader is not asking the producer the same question again.
     expect(await f.loader.earlier(state.path, () => true)).toBe(false);
-    expect(request).toHaveBeenCalledTimes(2);
     expect(request.mock.calls[1]![0].window).toMatchObject({ before });
   });
 
@@ -128,10 +129,10 @@ describe("history request ownership", () => {
       baseRevision: scope.revision, ownerRevision: held.historyRevision, entries: root.entries,
       window: { ...root.window, complete: false } });
 
-    expect(f.view().history).toMatchObject({ anchor: "e0", gapBefore: "e40", complete: false });
+    expect(f.view().history).toMatchObject({ anchor: "e0", gapBefore: "e60", complete: false });
     expect(f.view().history?.before).toBeUndefined();
-    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
-    expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ window: { beforeEntry: "e40", limit: 40 }, baseRevision: scope.revision }));
+    while (f.view().history?.gapBefore || f.view().history?.before) expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ window: { beforeEntry: "e60", turns: HISTORY_EARLIER_PAGE_TURNS }, baseRevision: scope.revision }));
     expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.map(row => row.id));
     expect(f.view().history?.complete).toBe(true);
   });
@@ -148,12 +149,14 @@ describe("history request ownership", () => {
     f.dispatch({ type: "historyPrepend", path: state.path, before: held.history!.before!, anchor: held.history!.anchor!,
       baseRevision: scope.revision, ownerRevision: held.historyRevision, entries: root.entries,
       window: { ...root.window, complete: false, priorGoalIds: ["held-goal"] } });
-    expect(f.view().history).toMatchObject({ anchor: "g0", gapBefore: "g120", userOffset: 0, priorGoalIds: ["held-goal"] });
+    expect(f.view().history).toMatchObject({ anchor: "g0", gapBefore: "g140", userOffset: 0, priorGoalIds: ["held-goal"] });
 
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
-    expect(f.view().history).toMatchObject({ anchor: "g0", gapBefore: "g80", userOffset: 0, priorGoalIds: ["held-goal"] });
+    expect(f.view().history).toMatchObject({ anchor: "g0", gapBefore: "g100", userOffset: 0, priorGoalIds: ["held-goal"] });
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
-    expect(f.view().history).toMatchObject({ anchor: "g0", gapBefore: "g40", userOffset: 0, priorGoalIds: ["held-goal"] });
+    expect(f.view().history).toMatchObject({ anchor: "g0", gapBefore: "g60", userOffset: 0, priorGoalIds: ["held-goal"] });
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    expect(f.view().history).toMatchObject({ anchor: "g0", gapBefore: "g20", userOffset: 0, priorGoalIds: ["held-goal"] });
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
     expect(f.view().history).toMatchObject({ anchor: "g0", complete: true, userOffset: 0, priorGoalIds: ["held-goal"] });
     expect(f.view().history?.gapBefore).toBeUndefined();
@@ -192,7 +195,7 @@ describe("history request ownership", () => {
 
     expect(request.mock.calls.map(([params]) => params.window)).not.toContainEqual({ from: "heavy-40" });
     expect(request.mock.calls.map(([params]) => params.window)).not.toContainEqual({ tail: 40 });
-    expect(request.mock.calls[0]![0].window).toEqual({ beforeEntry: "heavy-40", limit: 40 });
+    expect(request.mock.calls[0]![0].window).toEqual({ beforeEntry: "heavy-40", turns: HISTORY_EARLIER_PAGE_TURNS });
     const afterIds = f.view().entries.map(row => (row as { id: string }).id);
     for (const id of retainedIds) expect(afterIds).toContain(id);
     expect(afterIds).toContain("heavy-0");
@@ -213,8 +216,8 @@ describe("history request ownership", () => {
     expect(await f.loader.earlier(state.path, () => true)).toBe(false);
 
     expect(request.mock.calls.map(([params]) => params.window)).toEqual([
-      { tail: 40 },
-      { before: expect.any(String), limit: 40 },
+      { turns: HISTORY_FIRST_PAGE_TURNS },
+      { before: expect.any(String), turns: HISTORY_EARLIER_PAGE_TURNS },
     ]);
     expect(f.view()).toBe(retained);
   });
@@ -231,8 +234,8 @@ describe("history request ownership", () => {
     expect(await f.loader.earlier(state.path, () => true)).toBe(false);
 
     expect(request.mock.calls.map(([params]) => params.window)).toEqual([
-      { tail: 40 },
-      { before: expect.any(String), limit: 40 },
+      { turns: HISTORY_FIRST_PAGE_TURNS },
+      { before: expect.any(String), turns: HISTORY_EARLIER_PAGE_TURNS },
     ]);
     expect(f.view().entries).toBe(retained.entries);
     expect(f.view().blocks).toBe(retained.blocks);
@@ -297,7 +300,7 @@ describe("history request ownership", () => {
 
     phase = "reread";
     await f.loader.reread(state.path, () => true);
-    expect(request.mock.calls[2]![0]).toMatchObject({ window: { tail: 40 }, baseRevision: scope.revision });
+    expect(request.mock.calls[2]![0]).toMatchObject({ window: { turns: HISTORY_FIRST_PAGE_TURNS }, baseRevision: scope.revision });
     expect(f.view().history).toMatchObject({ revision: compacted.revision });
     expect(f.view().history?.refusal).toBeUndefined();
   });
@@ -336,6 +339,7 @@ describe("history request ownership", () => {
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
     expect(request.mock.calls[1]![0]).toMatchObject({ baseRevision: scope.revision });
     expect(request.mock.calls[2]![0]).toMatchObject({ baseRevision: scope.revision });
+    while (f.view().history?.before) expect(await f.loader.earlier(state.path, () => true)).toBe(true);
     expect(f.view().entries).toEqual(baseEntries);
     expect(f.view().validated?.revision).toBe(scope.revision);
     expect(f.view().historyRevision).toBe(ownerRevision);
@@ -344,7 +348,7 @@ describe("history request ownership", () => {
     phase = "recent";
     await f.loader.recent(state.path, () => true);
 
-    expect(request.mock.calls[3]![0]).toMatchObject({ window: { tail: 40 }, baseRevision: scope.revision });
+    expect(request.mock.calls.at(-1)![0]).toMatchObject({ window: { turns: HISTORY_FIRST_PAGE_TURNS }, baseRevision: scope.revision });
     expect(f.view().entries).toEqual(twice.entries);
     expect(f.view().validated?.revision).toBe(pageTwo.revision);
     expect(f.view().blocks.some(block => block.kind === "user" && block.optimistic && block.text === "unsent local prompt")).toBe(true);
@@ -372,12 +376,12 @@ describe("history request ownership", () => {
     holdOlder = false;
     expect(await f.loader.earlier(state.path, () => true)).toBe(true);
     expect(f.view().trimmed).toBeUndefined();
-    expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.slice(38).map(row => row.id));
+    expect(f.view().entries.map(row => (row as { id?: string }).id)).toEqual(entries.slice(40).map(row => row.id));
   });
 
   it("keeps the loaded transcript on screen until the recent one replaces it, and replays what arrives meanwhile", async () => {
     const pending = deferred<Result>();
-    const f = fixture(async params => params.window && "tail" in params.window && f.view().hydrated
+    const f = fixture(async params => params.window && isLiveEdgeWindow(params.window) && f.view().hydrated
       ? pending.promise : historyWindow(source, params.window!, scope));
     await f.loader.read(state.path, true);
     expect(f.view().blocks).toHaveLength(80);
@@ -392,13 +396,13 @@ describe("history request ownership", () => {
     expect(f.view().hydrated).toBe(true);
     expect(f.view().history).toBeDefined();
     f.dispatch({ type: "notification", method: "session/update", params: { sessionPath: state.path, epoch: scope.epoch, seq: 9, at: "2026-01-01T00:00:00Z", update: { kind: "agent_start" } } });
-    pending.resolve(historyWindow(source, { tail: 40 }, { ...scope, seq: 8 }));
+    pending.resolve(historyWindow(source, { turns: HISTORY_FIRST_PAGE_TURNS }, { ...scope, seq: 8 }));
     await replacement;
     // One transaction replaced it: the older page is gone, the tail is here,
     // and the unsent message and the update that overtook the read both stand.
     expect(f.view().hydrated).toBe(true);
-    expect(f.view().entries).toHaveLength(40);
-    expect(f.view().blocks).toHaveLength(41);
+    expect(f.view().entries).toHaveLength(20);
+    expect(f.view().blocks).toHaveLength(21);
     expect(f.view().blocks.at(-1)).toMatchObject({ id: "sending", optimistic: true });
     expect(f.view().lastSeq).toBe(9);
   });
@@ -408,20 +412,20 @@ describe("history request ownership", () => {
     const f = fixture(request);
     await f.loader.recent(state.path, () => true);
     const first = f.view().historyRevision;
-    expect(f.view().blocks).toHaveLength(40);
+    expect(f.view().blocks).toHaveLength(20);
     await f.loader.all(state.path, () => true);
     expect(f.view().blocks).toHaveLength(80);
     // The second return has a revision of its own to replace; retiring that
     // window must not make the read refuse its own answer.
     await f.loader.recent(state.path, () => true);
     expect(f.view()).toMatchObject({ hydrated: true });
-    expect(f.view().blocks).toHaveLength(40);
-    expect(f.view().entries).toHaveLength(40);
+    expect(f.view().blocks).toHaveLength(20);
+    expect(f.view().entries).toHaveLength(20);
     expect(f.view().historyRevision).not.toBe(first);
     // One authoritative read per return, and nothing rescued it afterwards.
-    expect(request.mock.calls.map(([params]) => params.window)).toEqual([{ tail: 40 }, { all: true }, { tail: 40 }]);
+    expect(request.mock.calls.map(([params]) => params.window)).toEqual([{ turns: HISTORY_FIRST_PAGE_TURNS }, { all: true }, { turns: HISTORY_FIRST_PAGE_TURNS }]);
     await f.loader.recent(state.path, () => true);
-    expect(f.view().blocks).toHaveLength(40);
+    expect(f.view().blocks).toHaveLength(20);
     expect(request).toHaveBeenCalledTimes(4);
   });
 
@@ -432,20 +436,20 @@ describe("history request ownership", () => {
     await f.loader.read(state.path);
     const expanding = f.loader.all(state.path, () => true);
     const resetting = f.loader.read(state.path, false, () => true, undefined, "recent");
-    expect(request.mock.calls.map(([p]) => p.window)).toEqual([{ tail: 40 }, { all: true }, { tail: 40 }]);
+    expect(request.mock.calls.map(([p]) => p.window)).toEqual([{ turns: HISTORY_FIRST_PAGE_TURNS }, { all: true }, { turns: HISTORY_FIRST_PAGE_TURNS }]);
     await resetting;
     const accepted = f.view();
     old.resolve(historyWindow(source, { all: true }, scope));
     expect(await expanding).toBe(false);
     expect(f.view()).toBe(accepted);
-    expect(f.view().blocks).toHaveLength(40);
+    expect(f.view().blocks).toHaveLength(20);
     expect(f.view().historyPending).toBeUndefined();
   });
 
   it.each(["earlier", "metadata"] as const)("fences an old %s response even when the new tail has the same cursor and epoch", async kind => {
     const old = deferred<Result>();
     let hold = false;
-    const request = vi.fn(async (params: Params) => hold && !(params.window && "tail" in params.window)
+    const request = vi.fn(async (params: Params) => hold && !(params.window && isLiveEdgeWindow(params.window))
       ? old.promise : historyWindow(source, params.window!, { ...scope, seq: 2 }));
     const f = fixture(request);
     await f.loader.read(state.path);
@@ -460,7 +464,7 @@ describe("history request ownership", () => {
       : historyWindow({ entries: [...entries, obsolete], leafId: "obsolete" }, { from: "e79" }, { ...scope, seq: 1 }));
     await stale;
     expect(f.view()).toBe(accepted);
-    expect(f.view().entries).toHaveLength(40);
+    expect(f.view().entries).toHaveLength(20);
     expect(f.view().leafId).toBe("e79");
   });
 
@@ -530,7 +534,7 @@ describe("history request ownership", () => {
     const f = fixture(request);
     await f.loader.read(state.path);
     expect(f.view().history).toMatchObject({ complete: false, branchesUnloaded: true });
-    await f.loader.earlier(state.path, () => true);
+    while (f.view().history?.before) expect(await f.loader.earlier(state.path, () => true)).toBe(true);
     expect(f.view().history).toMatchObject({ complete: true, branchesUnloaded: true });
     expect(f.view().history?.before).toBeUndefined();
     expect(f.view().blocks).toHaveLength(80);
@@ -544,7 +548,7 @@ describe("history request ownership", () => {
     await f.loader.read(state.path);
     expect(f.view().history).toMatchObject({ complete: true, branchesUnloaded: false });
     expect(f.view().entries).toHaveLength(81);
-    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision: scope.revision });
+    expect(request).toHaveBeenLastCalledWith({ path: state.path, window: { turns: HISTORY_FIRST_PAGE_TURNS }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision: scope.revision });
   });
 
   it("keeps an active tree when a bounded refresh cannot prove its base, then explicit reread replaces it", async () => {
@@ -559,7 +563,7 @@ describe("history request ownership", () => {
 
     await f.loader.read(state.path);
 
-    expect(request.mock.calls[1]![0]).toMatchObject({ window: { tail: 40 }, baseRevision: scope.revision });
+    expect(request.mock.calls[1]![0]).toMatchObject({ window: { turns: HISTORY_FIRST_PAGE_TURNS }, baseRevision: scope.revision });
     expect(f.view().entries).toBe(held.entries);
     expect(f.view().blocks).toBe(held.blocks);
     expect(f.view().history?.refusal?.cause).toBe("stale-base");
@@ -583,8 +587,8 @@ describe("history request ownership", () => {
     await f.loader.read(state.path);
 
     expect(request.mock.calls.map(([params]) => params)).toEqual([
-      { path: state.path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES },
-      { path: state.path, window: { tail: 40 }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision: scope.revision },
+      { path: state.path, window: { turns: HISTORY_FIRST_PAGE_TURNS }, bodyLimit: BODY_EXCERPT_MAX_BYTES },
+      { path: state.path, window: { turns: HISTORY_FIRST_PAGE_TURNS }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision: scope.revision },
     ]);
     expect(f.view().entries).toEqual(held);
     expect(f.view().history?.refusal).toBeUndefined();
@@ -599,7 +603,7 @@ describe("history request ownership", () => {
     await f.loader.read(state.path);
     const held = f.view();
     await expect(f.loader.read(state.path, true)).rejects.toMatchObject({ code: ErrorCodes.RevisionUnavailable });
-    expect(request.mock.calls.map(([params]) => params.window)).toEqual([{ tail: 40 }, { all: true }]);
+    expect(request.mock.calls.map(([params]) => params.window)).toEqual([{ turns: HISTORY_FIRST_PAGE_TURNS }, { all: true }]);
     expect(f.view().entries).toBe(held.entries);
     expect(f.view().blocks).toBe(held.blocks);
     expect(f.view().historyPending).toBeUndefined();
@@ -609,7 +613,7 @@ describe("history request ownership", () => {
     const f = fixture(async params => historyWindow(source, params.window!, scope));
     await f.loader.read(state.path);
     const held = f.view();
-    const duplicate = historyWindow(source, { tail: 40 }, scope);
+    const duplicate = historyWindow(source, { turns: HISTORY_FIRST_PAGE_TURNS }, scope);
     f.dispatch({ type: "historyPrepend", path: state.path, before: held.history!.before!, anchor: held.history!.anchor!,
       baseRevision: scope.revision, ownerRevision: held.historyRevision, entries: duplicate.entries, window: duplicate.window });
     expect(f.view()).toBe(held);
@@ -665,6 +669,54 @@ describe("history request ownership", () => {
     expect(f.track).toHaveBeenLastCalledWith(state.path, 2);
     expect(f.view().blocks.at(-1)).toMatchObject({ text: "before after" });
   });
+
+  it("asks for turn windows, never a 40-entry tail or limit", async () => {
+    const request = vi.fn(async (params: Params) => historyWindow(source, params.window!, scope));
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    expect(request.mock.calls.map(([params]) => params.window)).toEqual([
+      { turns: HISTORY_FIRST_PAGE_TURNS },
+      { before: expect.any(String), turns: HISTORY_EARLIER_PAGE_TURNS },
+    ]);
+    expect(request.mock.calls.some(([params]) => params.window && ("tail" in params.window || ("limit" in params.window && !("turns" in params.window))))).toBe(false);
+  });
+
+  it("accepts a replacement on a background refresh when the base went stale, without refusing", async () => {
+    const grown = {
+      entries: [...entries, { type: "message", id: "e80", parentId: "e79", message: { role: "user", content: "later" } }],
+      leafId: "e80",
+    };
+    let first = true;
+    const request = vi.fn(async (params: Params) => {
+      if (first) { first = false; return historyWindow(source, params.window!, scope); }
+      return historyWindow(grown, params.window!, { ...scope, revision: "r1.test.grown", seq: 1, selection: { kind: "replace" } });
+    });
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    const held = f.view();
+    await f.loader.metadata(state.path, () => true);
+    expect(f.view().history?.refusal).toBeUndefined();
+    expect(f.view().history?.revision).toBe("r1.test.grown");
+    expect(f.view().blocks.some(block => block.id === held.blocks.at(-1)!.id)).toBe(true);
+    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    expect(f.view().history?.refusal).toBeUndefined();
+  });
+
+  it("rewrites a whole-conversation size refusal into a person-facing sentence", async () => {
+    const request = vi.fn(async (params: Params) => {
+      if (params.window && "all" in params.window) {
+        throw { code: ErrorCodes.RevisionUnavailable, message: "That part of this conversation is too large to send at once. Open it and read it a page at a time." };
+      }
+      return historyWindow(source, params.window!, scope);
+    });
+    const f = fixture(request);
+    await f.loader.read(state.path);
+    await expect(f.loader.read(state.path, true)).rejects.toMatchObject({
+      message: "This conversation is too large to load all at once. Load earlier messages a page at a time instead.",
+    });
+    expect(f.view().history?.refusal).toBeUndefined();
+  });
 });
 
 describe("a read whose transcript was released while it was in flight (RP-5)", () => {
@@ -673,7 +725,7 @@ describe("a read whose transcript was released while it was in flight (RP-5)", (
     const f = fixture(async params => params.window && "all" in params.window
       ? pending.promise : historyWindow(source, params.window!, scope));
     await f.loader.read(state.path, false);
-    expect(f.view().blocks).toHaveLength(40);
+    expect(f.view().blocks).toHaveLength(20);
 
     const expanding = f.loader.all(state.path, () => true);
     // The bound released this conversation's transcript while the worker was
@@ -691,7 +743,7 @@ describe("a read whose transcript was released while it was in flight (RP-5)", (
   it("refuses an older page and a metadata refresh for the same reason", async () => {
     const f = fixture(async params => historyWindow(source, params.window!, scope));
     await f.loader.read(state.path, false);
-    expect(f.view().blocks).toHaveLength(40);
+    expect(f.view().blocks).toHaveLength(20);
     f.dispatch({ type: "views/evict", paths: [state.path], reason: "bytes", at: "2026-09-15T02:00:00.000Z" });
 
     expect(await f.loader.earlier(state.path, () => true)).toBe(false);
