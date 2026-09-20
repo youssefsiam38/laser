@@ -26,23 +26,27 @@ import { projectMessages } from "../../src/runtime/projection.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
 import { ThreadMessage } from "../../src/components/thread/messages.js";
 import { HistoryControls } from "../../src/components/thread/Thread.js";
-import { HISTORY_PREFETCH_PAGE_BUDGET, TranscriptViewport, TranscriptViewportBinding, TranscriptViewportProvider, WindowedMessages, useTranscriptViewport } from "../../src/components/thread/transcript-viewport.js";
+import { HISTORY_PREFETCH_BYTE_BUDGET, HISTORY_PREFETCH_PAGE_BUDGET, TranscriptViewport, TranscriptViewportBinding, TranscriptViewportProvider, WindowedMessages, useTranscriptViewport } from "../../src/components/thread/transcript-viewport.js";
 import { createViewCache, VIEW_CACHE_LIMITS } from "../../src/runtime/view-cache.js";
 import { resetAnchoredMessages, standingRows } from "../../src/runtime/anchored-messages.js";
 import { MessageEditPresentation, TranscriptPresentation } from "../../src/runtime/transcript-presentation.js";
 import { sessionState } from "../agents/fixtures.js";
 import { motionMs } from "../../src/motion.js";
+import type { EarlierPage } from "../../src/runtime/history-loader.js";
 
 const SESSION = "/project/session.jsonl";
 /** One line of the transcript, for the geometry seam below. */
 const LINE = 24;
 const ROW = LINE * 4;
 
+/** One accepted earlier page, small, and the answer when nothing more exists. */
+const PAGE: EarlierPage = { accepted: true, bytes: 2048 };
+const NO_PAGE: EarlierPage = { accepted: false, bytes: 0 };
 const stable = vi.hoisted(() => ({
   client: { request: vi.fn(async () => ({})) },
   actions: {
     listModels: vi.fn(async () => []), send: vi.fn(), openSession: vi.fn(),
-    loadEarlierEntries: vi.fn(async () => true), loadAllEntries: vi.fn(async () => true),
+    loadEarlierEntries: vi.fn(async (): Promise<EarlierPage> => ({ accepted: true, bytes: 2048 })), loadAllEntries: vi.fn(async () => true),
     rereadHistory: vi.fn(async () => {}),
   },
 }));
@@ -133,7 +137,7 @@ afterEach(async () => {
   prefetchSpy?.mockRestore();
   prefetchSpy = undefined;
   vi.clearAllMocks();
-  stable.actions.loadEarlierEntries.mockImplementation(async () => true);
+  stable.actions.loadEarlierEntries.mockImplementation(async () => PAGE);
   stable.actions.loadAllEntries.mockImplementation(async () => true);
 });
 
@@ -256,7 +260,7 @@ describe("a trim while somebody is reading", () => {
   it("pages earlier history on landing without a gesture", async () => {
     prefetchSpy?.mockRestore();
     prefetchSpy = undefined;
-    stable.actions.loadEarlierEntries.mockResolvedValue(false);
+    stable.actions.loadEarlierEntries.mockResolvedValue(NO_PAGE);
     const store = createStateStore(opened());
     hydrateThrough(store, undefined);
     const controller = await mount(store, store.presentation);
@@ -268,12 +272,33 @@ describe("a trim while somebody is reading", () => {
     expect(stable.actions.loadEarlierEntries).toHaveBeenCalled();
   });
 
-  it("keeps paging through a tiny page until the burst budget, not the old twelve-page cap", async () => {
+  /**
+   * Every page is two rows and the root is never reached, so nothing but the
+   * budget can end the chain. The budget is per reading position: an accepted
+   * page re-runs the layout effect, and that must not start another burst; a
+   * scroll event the list raised while keeping the reader's row must not
+   * re-arm it either. Only the person moving does.
+   */
+  it("stops a chain of tiny pages at the page budget, not at the root, until the person moves", async () => {
     prefetchSpy?.mockRestore();
     prefetchSpy = vi.spyOn(TranscriptViewport.prototype, "needsPrefetch").mockReturnValue(true);
     const store = createStateStore(opened());
     hydrateThrough(store, undefined);
+    // Each page the pager accepts also moves the window it reads, as a real
+    // page does: that is what re-runs the layout effect between pages.
+    let revision = 0;
+    stable.actions.loadEarlierEntries.mockImplementation(async () => {
+      revision += 1;
+      const view = store.getSnapshot().open[SESSION]!;
+      store.dispatch({ type: "historyBegin", path: SESSION, token: `p${revision}` } as never);
+      store.dispatch({ type: "historySnapshot", path: SESSION, token: `p${revision}`, leafId: "e23",
+        entries: Array.from({ length: 24 }, (_, index) => entry(index)), window: {
+          ...view.history!, revision: `r${revision}.env`, seq: 24 + revision, userOffset: 400 - revision, before: `cursor-${revision}`,
+        } } as never);
+      return { accepted: true, bytes: 512 };
+    });
     const controller = await mount(store, store.presentation);
+    const viewport = container.querySelector<HTMLElement>('[data-slot="thread-viewport"]')!;
     await act(async () => {
       controller.committed();
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
@@ -281,6 +306,40 @@ describe("a trim while somebody is reading", () => {
         expect(stable.actions.loadEarlierEntries).toHaveBeenCalledTimes(HISTORY_PREFETCH_PAGE_BUDGET);
       });
     });
+    // The layout effect has re-run for every page and the reserve is still
+    // within reach; the budget is spent, so nothing more is asked for.
+    await act(async () => {
+      for (let frame = 0; frame < 3; frame += 1) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      await new Promise(resolve => setTimeout(resolve, 20));
+    });
+    expect(stable.actions.loadEarlierEntries).toHaveBeenCalledTimes(HISTORY_PREFETCH_PAGE_BUDGET);
+    // A scroll event is not the person: the list raises them keeping the
+    // reader's row through a prepend. It re-arms nothing.
+    await act(async () => { viewport.dispatchEvent(new Event("scroll")); await Promise.resolve(); await Promise.resolve(); });
+    expect(stable.actions.loadEarlierEntries).toHaveBeenCalledTimes(HISTORY_PREFETCH_PAGE_BUDGET);
+    // The person's wheel is, and it spends a fresh budget.
+    await act(async () => {
+      viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+      await vi.waitFor(() => {
+        expect(stable.actions.loadEarlierEntries).toHaveBeenCalledTimes(HISTORY_PREFETCH_PAGE_BUDGET * 2);
+      });
+    });
+  });
+
+  it("stops a chain of large pages at the byte budget", async () => {
+    prefetchSpy?.mockRestore();
+    prefetchSpy = vi.spyOn(TranscriptViewport.prototype, "needsPrefetch").mockReturnValue(true);
+    stable.actions.loadEarlierEntries.mockImplementation(async () => ({ accepted: true, bytes: HISTORY_PREFETCH_BYTE_BUDGET / 4 }));
+    const store = createStateStore(opened());
+    hydrateThrough(store, undefined);
+    const controller = await mount(store, store.presentation);
+    await act(async () => {
+      controller.committed();
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      await vi.waitFor(() => { expect(stable.actions.loadEarlierEntries).toHaveBeenCalledTimes(4); });
+      await new Promise(resolve => setTimeout(resolve, 20));
+    });
+    expect(stable.actions.loadEarlierEntries).toHaveBeenCalledTimes(4);
   });
 
   it("offers the next earlier page immediately whenever the window has a cursor", async () => {
@@ -305,8 +364,8 @@ describe("a trim while somebody is reading", () => {
     try {
       const store = createStateStore(opened());
       hydrateThrough(store, undefined);
-      let settle!: (loaded: boolean) => void;
-      stable.actions.loadEarlierEntries.mockImplementationOnce(() => new Promise<boolean>(resolve => { settle = resolve; }));
+      let settle!: (loaded: EarlierPage) => void;
+      stable.actions.loadEarlierEntries.mockImplementationOnce(() => new Promise<EarlierPage>(resolve => { settle = resolve; }));
       const controller = await mount(store, store.presentation);
       const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages")!;
 
@@ -334,7 +393,7 @@ describe("a trim while somebody is reading", () => {
       expect(indicator).not.toBeNull();
       expect(indicator!.getAttribute("aria-hidden")).toBe("true");
       expect(indicator!.textContent?.trim()).toBe("");
-      await act(async () => { settle(false); await Promise.resolve(); await Promise.resolve(); });
+      await act(async () => { settle(NO_PAGE); await Promise.resolve(); await Promise.resolve(); });
       expect(container.querySelector('[data-slot="history-reserve-indicator"]')).toBeNull();
       expect(container.querySelector('[data-slot="thread-viewport"]')!.getAttribute("aria-busy")).toBeNull();
     } finally { vi.useRealTimers(); }
@@ -346,7 +405,7 @@ describe("a trim while somebody is reading", () => {
     const controller = await mount(store, store.presentation);
     const button = [...container.querySelectorAll("button")].find(node => node.textContent?.trim() === "Load earlier messages")!;
 
-    stable.actions.loadEarlierEntries.mockResolvedValueOnce(false);
+    stable.actions.loadEarlierEntries.mockResolvedValueOnce(NO_PAGE);
     await act(async () => { button.click(); await Promise.resolve(); await Promise.resolve(); });
     expect(controller.loadingEarlier).toBe(false);
 

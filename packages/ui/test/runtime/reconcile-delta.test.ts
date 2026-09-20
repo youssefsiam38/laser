@@ -67,9 +67,9 @@ describe("reconciling a re-entry with its authority", () => {
     expect(f.request.mock.calls[1]![0]).toMatchObject({ window: { turns: HISTORY_FIRST_PAGE_TURNS }, baseRevision: "r1.env.40" });
 
     // Older pages carry the held producer revision; whole-tree reads remain independent.
-    expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    expect(await f.loader.earlier(state.path, () => true)).toMatchObject({ accepted: true });
     expect(f.request.mock.calls[2]![0].baseRevision).toBe("r1.env.40");
-    while (f.view().history?.before) expect(await f.loader.earlier(state.path, () => true)).toBe(true);
+    while (f.view().history?.before) expect(await f.loader.earlier(state.path, () => true)).toMatchObject({ accepted: true });
     const count = f.request.mock.calls.length;
     await f.loader.all(state.path, () => true);
     expect(f.request).toHaveBeenCalledTimes(count);

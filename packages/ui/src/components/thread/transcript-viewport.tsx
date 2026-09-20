@@ -99,6 +99,14 @@ export class TranscriptViewport {
   private place: Place = { following: true };
   /** The person moved the view themselves since the last reading sample. */
   private gestured = false;
+  /**
+   * How many times the person has moved the view, ever, on this surface. A
+   * scroll event is not this — the list's own position keeping raises those
+   * too — so a pager that must re-arm only when the person moves reads this
+   * count rather than the scroller.
+   */
+  private gestures = 0;
+  get gestureCount() { return this.gestures; }
   /** Unloaded earlier history, as placeholder turns inside the list's header. */
   private placeholder = new HistoryPlaceholder();
   private historyUserOffset = 0;
@@ -756,6 +764,7 @@ export class TranscriptViewport {
      */
     const user = (direction: "up" | "down" | "either") => {
       if (!canMove(direction)) return;
+      this.gestures++;
       this.cancel();
       this.pendingLatest = false;
       this.gestured = true;

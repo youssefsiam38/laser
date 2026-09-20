@@ -409,18 +409,21 @@ function rewriteHistoryError(error: unknown): unknown {
   return error;
 }
 
-let lastPageBytes = 0;
+/**
+ * What one earlier-history request came to: whether it added rows to the
+ * view, and how many serialized bytes the page carried. The bytes travel with
+ * the answer so a caller pacing itself can count them — there is one loader
+ * per surface (main, Beam's bubble), and a shared cell would let one surface's
+ * page be charged to another's budget.
+ */
+export interface EarlierPage { accepted: boolean; bytes: number }
+export const NO_EARLIER_PAGE: EarlierPage = Object.freeze({ accepted: false, bytes: 0 });
 
-/** Serialized size of the last earlier/recovery page the loader accepted. */
-export function lastHistoryPageBytes(): number {
-  return lastPageBytes;
-}
-
-function notePageBytes(entries: readonly unknown[]): void {
+function pageBytes(entries: readonly unknown[]): number {
   try {
-    lastPageBytes = new TextEncoder().encode(JSON.stringify(entries)).byteLength;
+    return new TextEncoder().encode(JSON.stringify(entries)).byteLength;
   } catch {
-    lastPageBytes = 0;
+    return 0;
   }
 }
 
@@ -484,10 +487,19 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
         // Only a person's explicit re-read may replace a suffix whose base
         // moved while it was in flight. Background refresh leaves the window.
         if (deps.get(path)?.historyRevision !== token && (policy === "recent" || policy === "reread")) { refusedDelta = true; return; }
-      } else if (result.window && base !== undefined && policy !== "recent" && policy !== "reread" && policy !== "refresh") {
+      } else if (result.window && base !== undefined && policy === "refresh") {
+        // An unsolicited refresh whose base the producer could not prove a
+        // suffix against. Nobody asked for a page, so nobody is told one was
+        // refused, and nothing the person is reading is replaced: the held
+        // window — every page they scrolled up into, the cursor before it and
+        // the row under their eye — stays exactly as it is (D-302). Live
+        // updates keep arriving through the stream; the next page they ask for
+        // that the stale base cannot serve is answered with the explicit
+        // re-read, at the moment they ask.
+      } else if (result.window && base !== undefined && policy !== "recent" && policy !== "reread") {
         deps.dispatch({ type: "historyPageRefused", path, cause: "stale-base", message: STALE_BASE_MESSAGE });
       } else if (result.window) {
-        deps.dispatch({ type: "historySnapshot", path, token, ...result, window: result.window, ...(policy === "recent" || policy === "refresh" ? { replaceWindow: true } : {}) });
+        deps.dispatch({ type: "historySnapshot", path, token, ...result, window: result.window, ...(policy === "recent" ? { replaceWindow: true } : {}) });
       } else {
         deps.dispatch({ type: "hydrate", path, entries: result.entries, leafId: result.leafId, expectSeq, ...(legacySeq !== undefined ? { seq: legacySeq } : {}) });
       }
@@ -535,17 +547,17 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     const message = typeof rewritten?.message === "string" && rewritten.message ? rewritten.message : STALE_BASE_MESSAGE;
     deps.dispatch({ type: "historyPageRefused", path, cause: "stale-base", message });
   };
-  const recoverEarlier = async (path: string, accepting: () => boolean): Promise<boolean> => {
+  const recoverEarlier = async (path: string, accepting: () => boolean): Promise<EarlierPage> => {
     const view = deps.get(path);
     const history = view?.history;
     const anchor = history?.gapBefore ?? history?.anchor;
-    if (!view || !history || !anchor) return false;
+    if (!view || !history || !anchor) return NO_EARLIER_PAGE;
     const expectedBefore = history.before;
     const trimAt = view.trimmed?.at;
     const ownerRevision = view.historyRevision;
     const baseRevision = coveredBaselineOf(view);
     const active = fence(path, accepting);
-    if (!baseRevision || !active()) return false;
+    if (!baseRevision || !active()) return NO_EARLIER_PAGE;
     const result = await deps.request({ path, window: { beforeEntry: anchor, turns: HISTORY_EARLIER_PAGE_TURNS }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision }).catch(error => {
       if (!active()) return undefined;
       const code = (error as { code?: number }).code;
@@ -553,18 +565,17 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
       if (code === ErrorCodes.RevisionUnavailable) { refuseStaleBase(path, error); return undefined; }
       throw error;
     });
-    if (!result?.window || !active()) return false;
+    if (!result?.window || !active()) return NO_EARLIER_PAGE;
     const current = deps.get(path);
-    if (!current) return false;
+    if (!current) return NO_EARLIER_PAGE;
     const added = pageAddsRecords(current, result);
     deps.dispatch({ type: "historyRecover", path, anchor, baseRevision, ownerRevision, entries: result.entries, window: result.window,
       ...(expectedBefore !== undefined ? { expectedBefore } : {}), ...(trimAt !== undefined ? { trimAt } : {}) });
     const accepted = added && deps.get(path) !== current;
-    if (accepted) notePageBytes(result.entries);
-    return accepted;
+    return accepted ? { accepted, bytes: pageBytes(result.entries) } : NO_EARLIER_PAGE;
   };
-  const earlier = async (path: string, accepting: () => boolean): Promise<boolean> => {
-    if (!accepting()) return false;
+  const earlier = async (path: string, accepting: () => boolean): Promise<EarlierPage> => {
+    if (!accepting()) return NO_EARLIER_PAGE;
     const view = deps.get(path);
     // A trim releases the producer-owned cursor with the older rows. Recover
     // directly before the retained anchor; asking for its suffix can exceed a
@@ -575,25 +586,24 @@ export function createHistoryLoader(deps: HistoryLoaderDeps) {
     const anchor = view?.history?.anchor;
     const ownerRevision = view?.historyRevision;
     const baseRevision = coveredBaselineOf(view);
-    if (!before || !anchor || !baseRevision || !active()) return false;
+    if (!before || !anchor || !baseRevision || !active()) return NO_EARLIER_PAGE;
     let result: ClientRequests["pi/session/entries"]["result"] | undefined;
     try {
       result = await deps.request({ path, window: { before, turns: HISTORY_EARLIER_PAGE_TURNS }, bodyLimit: BODY_EXCERPT_MAX_BYTES, baseRevision });
     } catch (error) {
-      if (!active()) return false;
+      if (!active()) return NO_EARLIER_PAGE;
       const code = (error as { code?: number }).code;
-      if (code === ErrorCodes.InvalidParams) return false;
-      if (code === ErrorCodes.RevisionUnavailable) { refuseStaleBase(path, error); return false; }
+      if (code === ErrorCodes.InvalidParams) return NO_EARLIER_PAGE;
+      if (code === ErrorCodes.RevisionUnavailable) { refuseStaleBase(path, error); return NO_EARLIER_PAGE; }
       throw error;
     }
-    if (!result.window || !active()) return false;
+    if (!result.window || !active()) return NO_EARLIER_PAGE;
     const current = deps.get(path);
-    if (!current) return false;
+    if (!current) return NO_EARLIER_PAGE;
     const added = pageAddsRecords(current, result);
     deps.dispatch({ type: "historyPrepend", path, before, anchor, baseRevision, ownerRevision, entries: result.entries, window: result.window });
     const accepted = added && deps.get(path) !== current;
-    if (accepted) notePageBytes(result.entries);
-    return accepted;
+    return accepted ? { accepted, bytes: pageBytes(result.entries) } : NO_EARLIER_PAGE;
   };
   const metadata = (path: string, accepting: () => boolean): Promise<void> =>
     deps.get(path)?.hydrated ? read(path, false, accepting, undefined, "refresh") : Promise.resolve();

@@ -28,23 +28,29 @@ export default async function sustainedNavigation(check) {
     return rect.bottom < view.top + 0.5;
   }, { timeout: 30000 });
   const target = page.locator('[data-window-message] [data-message-id]').filter({ hasText: 'Checkpoint 12 is complete.' });
-  const viewport = page.locator('[data-slot=thread-viewport]');
-  // Earlier checkpoints are above the landing window. Page them in by reading
-  // upwards; a whole-conversation read is a different milestone.
-  for (let step = 0; step < 80; step += 1) {
-    if (await page.getByText('Checkpoint 12 is complete.', { exact: true }).count()) break;
-    await viewport.evaluate(el => {
-      el.scrollTop = Math.max(0, el.scrollTop - el.clientHeight);
-      el.dispatchEvent(new WheelEvent('wheel', { deltaY: -800, bubbles: true }));
-    });
-    await page.waitForTimeout(150);
-  }
   await composer.click(); await composer.press('ControlOrMeta+f');
   const find = page.getByRole('textbox', { name: 'Find in conversation', exact: true });
   await find.waitFor();
   await find.fill('Checkpoint 12 is complete.');
   assert.equal(await find.inputValue(), 'Checkpoint 12 is complete.');
+  // Checkpoint 12 is above the landing window. Find's "Load all messages"
+  // pages the branch on screen to its root (D-341); the control goes away
+  // when the branch is complete, and it must — a button that stays up after
+  // being pressed is a defect this script fails on, not one it waits out.
+  const all = page.getByRole('button', { name: 'Load all messages', exact: true });
+  if (await all.count()) { await all.click(); await all.waitFor({ state: 'detached', timeout: 60000 }); }
   await target.waitFor({ state: 'visible', timeout: 20000 });
+  // Find lands the match inside the thread: its top within the scroller and
+  // above the composer, which floats over the list beside the scroller.
+  await page.waitForFunction(() => {
+    const main = document.querySelector('main');
+    const viewport = main?.querySelector('[data-slot="thread-viewport"]');
+    const match = [...(viewport?.querySelectorAll('[data-message-id]') ?? [])].find(n => n.textContent.includes('Checkpoint 12 is complete.'));
+    if (!viewport || !match) return false;
+    const rect = match.getBoundingClientRect(), view = viewport.getBoundingClientRect();
+    const footer = main.querySelector('[data-slot="thread-footer"]')?.getBoundingClientRect();
+    return rect.top >= view.top && rect.top < (footer?.top ?? view.bottom);
+  });
   await find.press('Escape');
   await navigationPairs(check, entries, turns);
   const mounted = await page.locator('[data-window-message]').count();
@@ -162,9 +168,8 @@ async function loadAll(check) {
   await composer.click(); await composer.press('ControlOrMeta+f');
   const input = check.page.getByRole('textbox', { name: 'Find in conversation', exact: true });
   const all = check.page.getByRole('button', { name: 'Load all messages', exact: true });
-  // The whole-conversation read is a separate milestone (M16-T98); ask for it,
-  // but do not make this script's paging measurements wait on its outcome.
-  if (await all.count()) { await all.click(); await all.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {}); }
+  // Pages the branch to its root (D-341); the control must go away when it has.
+  if (await all.count()) { await all.click(); await all.waitFor({ state: 'detached', timeout: 60000 }); }
   await input.press('Escape');
 }
 function stats(samples, field) {
