@@ -253,6 +253,16 @@ The Spec is both the lifecycle root and the evolving requirements document. Its
 Brief revision is deliberately small; after Research and Design, a full Spec
 revision records the agreed behavior and acceptance criteria.
 
+**The full path is the maximum, not the minimum** (D-352). Research and Design
+are complete products on their own: `/research` and `/design` work from any
+session, including a projectless Chat, need no Spec, Plan or prior step, and
+produce artifacts that never wait on a gate to be useful. The gates and the
+order above bind only when a person chooses to run a Spec through them; a
+standalone Research or Design can be linked into a Spec later, or never. When
+no project is selected the artifact belongs to the person's own workspace and
+moves into a project the way a Chat session does (M13-T58) — never copied,
+never session-owned.
+
 There are three hard gates:
 
 | Gate | Required revisions | Outcomes |
@@ -287,14 +297,21 @@ revision, package, licence and the code or concept proposed for reuse. A
 Research revision can be mentioned or reused by any later session.
 
 The Research body, its sources and adapters, the model-facing tools, the
-retrieval loop the agent runs, budgets, entry points (`/research`, Research…
-on a Spec or Design, the Research tab) and the person's surfaces are fixed in
-[`research-phase.md`](research-phase.md) (D-351). Note: the loop is run by the
+retrieval loop the agent runs, budgets, entry points (`/research` from any
+chat, Research… on a Spec or Design, the Research tab) and the person's
+surfaces are fixed in [`research-phase.md`](research-phase.md) (D-351,
+standalone-first per D-352). Note: the loop is run by the
 session's own model through single-purpose tools; retrieval is never delegated
 to a child agent, confidence is assigned by rule rather than by the model, and
 no free-text research document exists — the body is built from cited findings.
 
 ## Design contract
+
+Design is usable alone (D-352): `/design` from any session, including a
+projectless Chat, opens or creates a Design with no Spec and no gate; the
+Design gate below applies only when a Spec is run through the lifecycle. A
+standalone Design in the personal workspace has no project design system to
+discover and works in greenfield mode until it is moved into a project.
 
 React is the implementation engine for Laser's embedded design workspace. It
 is not the target application's framework and never changes the framework a
@@ -552,9 +569,12 @@ Approval Card above the composer. Enter never approves. Full reading and editing
 happen in the embedded workspace. This preserves D-147's rule against an
 extension panel bus and the fleet's closed work model.
 
-Laser-owned slash commands `/spec`, `/design` and `/plan` create or open the
-corresponding project workspace destination; they do not become engine commands.
-If no project is selected, they open project choice. Command-palette and pointer
+Laser-owned slash commands `/spec`, `/research`, `/design` and `/plan` create
+or open the corresponding workspace destination; they do not become engine
+commands. `/research` and `/design` also work without a project: the artifact
+lands in the person's workspace (D-352). `/spec` and `/plan` open project
+choice when no project is selected, since a Plan's Tasks execute in a
+checkout. Command-palette and pointer
 paths perform the same action.
 
 AI-assisted authoring is always session-backed and visible. **Draft with agent**
@@ -620,7 +640,7 @@ with the decisions already taken.
 | Plain Chat and built-in agent removal | [`plain-chat.md`](plain-chat.md) | binding (M23, D-347) | Beam, Chat and Namer stop being `AgentDefinition`s; Chat is a `sessionKind: "chat"` session on `defaultProfileId` whose whole instruction template is `{{availableTools}}`, `{{toolGuidelines}}`, `{{availableSkills}}`; naming is a one-shot request on `namingProfileId`; Beam and its spark are removed |
 | Ask Oracle | [`ask-oracle.md`](ask-oracle.md) | binding (M24, D-348) | `ask_oracle` is a one-shot, tool-less consultation on `oracleProfileId` with the caller's agent instructions and trust policy, explicit bounded `text`/`work`/`repo` context only, no history, no session, no fleet row, no model switch; usage and logs attribute it as a consultation |
 | External work links (Jira) | [`external-work-links.md`](external-work-links.md) | binding (M25, D-349) | `ExternalWorkLink` records the exact revision exported to a Jira issue; creation, update and transition are explicit and previewed, never automatic sync; Jira never approves, completes or mutates Laser work; issue property carries Laser identity, remote link points back; least-privilege OAuth in the keychain, host-only calls |
-| Research phase | [`research-phase.md`](research-phase.md) | binding (M21-T7, M21-T26, D-351) | Research body as a question tree resolved by cited findings; `SourceRef` with digest, licence and trust; confidence assigned by rule (`declared`/`observed`/`inferred`/`proposed`); one adapter per source kind (`web`, `project`, `repository`, `package`, `document`, then `scholarly`, `tracker`), no undocumented endpoints; `search_sources`/`read_source`/`record_finding`/`resolve_question` under the tool contract; the agent ranks itself and never delegates retrieval; visible budgets; no free-text research document |
+| Research | [`research-phase.md`](research-phase.md) | binding (M21-T7, M21-T26, D-351, D-352) | standalone `/research` from any chat, no Spec required, personal-workspace owner when projectless; Research body as a question tree resolved by cited findings; `SourceRef` with digest, licence and trust; confidence assigned by rule (`declared`/`observed`/`inferred`/`proposed`); one adapter per source kind (`web`, `project`, `repository`, `package`, `document`, then `scholarly`, `tracker`), no undocumented endpoints; `search_sources`/`read_source`/`record_finding`/`resolve_question` under the tool contract; the agent ranks itself and never delegates retrieval; visible budgets; no free-text research document |
 | Agent-facing tool contract | [`agent-tool-contract.md`](agent-tool-contract.md) | binding (M26, D-350) | one standard for every Laser-owned tool: intent-named, single-purpose, closed schemas, opaque ids, exact revisions with digests, annotations, reads separated from mutations, `expectedRevisionId` and idempotency keys, previews for external or destructive writes, host-side authorization, summary-by-default with pagination and references, actionable errors; `toolContract()` lint and an evaluation harness across every configured profile |
 
 Every companion is binding through its own document, plan milestone and

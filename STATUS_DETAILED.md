@@ -6012,6 +6012,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-20 correction claimed: move the binding contract into its own document and reduce `PLAN.md` M21 to the repository's dependency index.
 - 2026-09-20 correction done: `docs/project-lifecycle-leap.md` is the binding contract; `PLAN.md` retains only the stable milestone summary and dependency-ordered task index.
 - 2026-09-20 correction claimed by codex-2026-09-20-git-revisions: make artifact-revision ↔ repository-state provenance a typed, exact, many-to-many contract rather than leaving commits and diffs as generic evidence.
+- 2026-09-21 loosened: Research and Design are standalone-first (D-352) — `/research` and `/design` from any chat, no Spec, personal-workspace owner when projectless; leap gates/design/commands text and `docs/research-phase.md` updated.
 - 2026-09-21 addition by codex-2026-09-21-model-profiles: `docs/research-phase.md` binds the Research phase (body, sources/adapters, tools, loop, budgets, entry points, surfaces, security); indexed in the leap document and its Research contract; M21-T7 acceptance extended and M21-T26 added; D-351 recorded. OpenResearch reviewed and rejected as a base (peer Rust product for ML experiments); its retrieval-ranker and evidence-in-logs ideas are adopted.
 - 2026-09-20 correction done: `RepositoryLink`, stable repository identity, exact state/change targets, durable gate evidence and the four relation semantics are binding in `docs/project-lifecycle-leap.md`; M21-T1/T2/T18/T20/T21 acceptance carries the implementation work; D-345 records the decision; documentation diff check passes.
 
@@ -6271,6 +6272,27 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 #### M26-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/agent-tool-contract.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M26 tasks added; D-350 recorded. Implementation not started.
+
+### D-352 · 2026-09-21 · Research and Design stand alone; the lifecycle is the maximum path
+
+Decision: `/research` and `/design` are ordinary chat commands. They need no
+Spec, Plan, gate or prior step, work from any session including a projectless
+Chat, and produce artifacts that are complete on their own. The full
+Brief → Research → Design → Plan → Build path binds only when a person runs a
+Spec through it. An artifact created with no project selected belongs to the
+person's own workspace and can be moved into a project the way a Chat session
+moves (M13-T58), never copied and never session-owned. `/spec` and `/plan`
+still require a project because Tasks execute in a checkout.
+
+Why: the person's instruction — research and design are things people do on
+their own, in chat, far more often than as a phase; a contract that made a
+Spec the price of admission would push people back to ad-hoc prose.
+
+Consequences: the leap's "Lifecycle and gates" and "Design contract" carry the
+standalone rule; `docs/research-phase.md` is standalone-first with optional
+`supports` links; a personal-workspace owner is added to M21-T2's store and
+identity work and to M21-T20's relocation cases; the workspace's Research and
+Design tabs show standalone and lifecycle artifacts together.
 
 ### D-351 · 2026-09-21 · Research is a question tree resolved by cited findings
 

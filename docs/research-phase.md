@@ -1,4 +1,4 @@
-# The Research phase
+# Research
 
 Status: **binding design** (decision D-351; implemented under `PLAN.md`
 M21-T7 and M21-T26). A companion contract of
@@ -13,18 +13,38 @@ first.
 
 ## The idea in one paragraph
 
-Research in Laser answers **questions a Spec or Design cannot proceed
-without**, and answers them with **evidence a person can check**. A Research
+Research in Laser answers **a question the person or the model needs settled**
+— on its own, from any chat, or as one step of the lifecycle — with
+**evidence a person can check**. A Research
 artifact is a tree of questions, each resolved by findings, each finding
 pinned to a source the reader can open, with an excerpt, a digest, a licence
 class and a confidence. The agent runs the retrieval loop itself — search,
 read, rank, follow up — through narrow tools that each do one thing; it never
 delegates the loop to a child. Research ends when every open question is
 either answered, marked unanswerable with why, or handed to a person. Nothing
-found on the web is an instruction, and nothing found is a decision: Research
-supports a Spec or Design revision; a person approves that revision.
+found on the web is an instruction, and nothing found is a decision. A
+Research may stand alone forever; when a Spec or Design decision cites it, it
+supports that decision and a person approves the decision, not the Research.
+
+## Standalone first
+
+`/research` is an ordinary chat command. It needs no Spec, no Design, no Plan
+and no prior lifecycle step. "Compare three PDF libraries for Node", "what
+changed in React 19 forms", "is this repo's licence compatible with ours" are
+complete uses. The lifecycle is one consumer of Research, not its owner:
+
+- In a project session, the artifact belongs to that project.
+- In a projectless Chat, the artifact belongs to the person's own workspace
+  (D-352) and can be moved into a project later, the same way a Chat session
+  moves (M13-T58). Nothing is copied or converted; only the owner changes.
+- `supports[]` links are optional. A Research with none is complete, not
+  pending.
+- The Research tab lists standalone Research beside lifecycle Research with
+  no second-class treatment; filters separate them if wanted.
 
 ## What Research is for
+
+Any of these, alone or together:
 
 | Question type | Typical sources | Output |
 | --- | --- | --- |
@@ -32,7 +52,8 @@ supports a Spec or Design revision; a person approves that revision.
 | **Feasibility** — can it be done in this project | the project's own code and history, dependency trees, platform docs | constraints, blockers, cost of change |
 | **Options** — which approach, library, protocol, API | official docs, specs, RFCs, benchmarks, issue trackers | option matrix with trade-offs and a recommended default |
 | **Facts** — what exactly does X do / require / cost | primary documentation, source code, standards, scholarly indexes | declared behaviour with the exact citation |
-| **Users and domain** — what people need, what the domain requires | the Spec, project instructions, existing Research, external references the person supplies | domain rules and open questions for the person |
+| **Users and domain** — what people need, what the domain requires | a Spec when one exists, project instructions, existing Research, external references the person supplies | domain rules and open questions for the person |
+| **Anything the person asks** — a one-off question worth keeping | whichever adapters apply | a small tree, often one question, still cited |
 
 Research is not: an experiment runner, a literature manager, a bookmark list,
 or a place for opinions without a source. Experiments are Task attempts with
@@ -134,8 +155,9 @@ findings and answers so every sentence traces to a source.
 
 The engine instructions for a research session/run say, in this order:
 
-1. **Frame**: read the Spec/Design and existing Research; write the question
-   tree before searching; put facts the person already supplied in as
+1. **Frame**: read whatever context exists (a Spec or Design when linked,
+   project instructions, earlier Research; in a bare chat, the question alone)
+   and write the question tree before searching; put facts the person already supplied in as
    `person` findings.
 2. **Retrieve**: per question, ≥ 2 adapters where they apply; short exact
    terms first, then a semantic phrasing; date bounds only when the question
@@ -157,9 +179,13 @@ shown in the fleet row.
 
 ## Starting research
 
+Research starts from wherever the question is; none of these requires the
+others or any lifecycle state.
+
 | Entry | Effect |
 | --- | --- |
-| `/research <question>` in any session | creates a Research artifact in the current project (project choice if none) with the root question, links it to the session, and starts the loop in this session |
+| `/research <question>` in any session, including projectless Chat | creates a Research artifact owned by the current project, or by the person's workspace when there is none (D-352), with the root question; links it to the session; starts the loop in this session. No Spec is required or created |
+| Plain question in chat | the model may propose "Keep this as Research?" when it starts a retrieval loop; nothing is recorded unless the person or the model calls the writers |
 | **Research…** on a Spec or Design | pre-fills the question tree from the brief's open questions and constraints; links `supports` to the Spec/Design |
 | **Draft with agent** on the Research tab | same as above with a chosen session or a new one (leap rule: always session-backed and visible) |
 | Command palette `New research` | same as the tab |
@@ -184,16 +210,18 @@ person writes may pin a profile and narrow adapters.
   attention stream.
 - Progress is the question tree's states and the budget spent; no percentages,
   no invented ETA.
-- Empty state: "No research yet — ask a question this Spec cannot proceed
-  without." with the three entry points. Offline: adapters that need the
+- Empty state: "No research yet — ask a question worth keeping the answer
+  to." with the entry points. Offline: adapters that need the
   network show why and keep `project`/`document` working.
 - Phone: read-only tree, findings and sources; resolve/hand-off actions
   available; no new runs from the relay unless method policy allows.
 
 ## Gates and lifecycle
 
-- Research has no approval gate of its own; a Research revision becomes
-  meaningful when a Spec or Design decision links it via `supports`.
+- Research has no approval gate and no prerequisite; it is complete when its
+  questions are resolved. Linking it from a Spec or Design decision via
+  `supports` is optional and can happen at any time, before or after the
+  decision.
 - Revising a source-backed Spec/Design decision does not stale the Research;
   a Research revision that changes a finding a decision cites marks that
   decision stale (leap stale propagation).
