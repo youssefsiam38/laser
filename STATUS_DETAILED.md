@@ -6003,6 +6003,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T23 | Product-language and element reconciliation | todo | — | — | `PLAN.md` M21 |
 | M21-T24 | End-to-end project lifecycle acceptance | todo | — | — | `PLAN.md` M21 |
 | M21-T25 | Release the project lifecycle leap | todo | — | — | `PLAN.md` M21 |
+| M21-T26 | Research phase: adapters, tools and loop | todo | — | — | `PLAN.md` M21; `docs/research-phase.md` |
 
 #### M21-T0 notes
 - 2026-09-20 claimed: define the complete project-owned lifecycle for Specs, Research, Designs, Plans and Tasks; keep every entity independent of sessions and referenceable from any session; specify the embedded Laser workspace, framework-neutral design contract, storage, protocol, approvals, execution and verification before implementation starts.
@@ -6011,6 +6012,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-20 correction claimed: move the binding contract into its own document and reduce `PLAN.md` M21 to the repository's dependency index.
 - 2026-09-20 correction done: `docs/project-lifecycle-leap.md` is the binding contract; `PLAN.md` retains only the stable milestone summary and dependency-ordered task index.
 - 2026-09-20 correction claimed by codex-2026-09-20-git-revisions: make artifact-revision ↔ repository-state provenance a typed, exact, many-to-many contract rather than leaving commits and diffs as generic evidence.
+- 2026-09-21 addition by codex-2026-09-21-model-profiles: `docs/research-phase.md` binds the Research phase (body, sources/adapters, tools, loop, budgets, entry points, surfaces, security); indexed in the leap document and its Research contract; M21-T7 acceptance extended and M21-T26 added; D-351 recorded. OpenResearch reviewed and rejected as a base (peer Rust product for ML experiments); its retrieval-ranker and evidence-in-logs ideas are adopted.
 - 2026-09-20 correction done: `RepositoryLink`, stable repository identity, exact state/change targets, durable gate evidence and the four relation semantics are binding in `docs/project-lifecycle-leap.md`; M21-T1/T2/T18/T20/T21 acceptance carries the implementation work; D-345 records the decision; documentation diff check passes.
 
 ### D-329 · 2026-09-20 · Project lifecycle artifacts belong to projects, not sessions
@@ -6269,6 +6271,34 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 #### M26-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/agent-tool-contract.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M26 tasks added; D-350 recorded. Implementation not started.
+
+### D-351 · 2026-09-21 · Research is a question tree resolved by cited findings
+
+Decision: the Research phase is bound by `docs/research-phase.md`. A Research
+body is a question tree; each answered question cites findings; each finding
+carries one claim, a `SourceRef` with digest, licence and trust class, a
+verbatim bounded excerpt and a confidence assigned by rule
+(`declared`/`observed`/`inferred`/`proposed`), never by the model's say-so.
+Sources are reached through single-purpose adapters (`web`, `project`,
+`repository`, `package`, `document` first; `scholarly` via documented OpenAlex
+and `tracker` second); no adapter is built on an undocumented endpoint. The
+model-facing tools are `search_sources`, `read_source`, `record_finding` and
+`resolve_question` under the tool contract; there is no free-text research
+document. The agent runs the retrieval loop itself and never delegates it to a
+child; budgets are per run and visible. Entry points are `/research`,
+Research… on a Spec or Design, the Research tab and the palette.
+
+Why: the person asked for a research phase good enough to build on. Reviewing
+alphaXiv's OpenResearch showed a peer product for ML experiments in Rust that
+wraps other coding agents — not a base — but two of its disciplines are right:
+the main agent ranks retrieval itself, and evidence that is not recorded at the
+moment it is read cannot be inspected later. Rule-assigned confidence and
+cited-only answers make Research evidence a person can check instead of prose.
+
+Consequences: M21-T7 renders the tree/findings/source detail; new M21-T26
+implements adapters, tools, loop and rules and gates M21-T25; the leap's
+Research contract cross-references the document; M24's `ask_oracle` may take a
+Research revision as `work` context.
 
 ### D-350 · 2026-09-21 · One contract for every Laser-owned tool
 
