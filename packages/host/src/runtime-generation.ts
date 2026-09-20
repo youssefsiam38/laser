@@ -55,6 +55,7 @@ export interface RuntimeGenerationManifest {
 
 export interface RuntimeGenerationReference {
   generationId: string;
+  /** Package root R in the pointer; execution root T after a retain bind. */
   installRoot: string;
   manifestDigest: string;
 }
@@ -129,7 +130,7 @@ export function runtimeManifestDigest(bytes: string | Buffer): string {
   return sha256(bytes);
 }
 
-function safeRelativePath(value: unknown): value is string {
+export function safeRuntimeRelativePath(value: unknown): value is string {
   return typeof value === "string"
     && value.length > 0
     && value.length <= 1_024
@@ -145,7 +146,7 @@ function fileDigest(path: string): string {
 function rowFor(installRoot: string, absolute: string): RuntimeInventoryRow {
   const path = realpathSync(absolute);
   const rel = posix(relative(realpathSync(installRoot), path));
-  if (!safeRelativePath(rel) || rel.startsWith("../")) throw new Error(`runtime inventory path escapes its install root: ${absolute}`);
+  if (!safeRuntimeRelativePath(rel) || rel.startsWith("../")) throw new Error(`runtime inventory path escapes its install root: ${absolute}`);
   const stat = statSync(path);
   if (!stat.isFile()) throw new Error(`runtime inventory entry is not a file: ${absolute}`);
   return { path: rel, length: stat.size, sha256: fileDigest(path), mtimeMs: stat.mtimeMs };
@@ -197,7 +198,7 @@ function parseManifest(raw: string): RuntimeGenerationManifest {
     || typeof manifest.entries !== "object") throw new RuntimeGenerationError("corrupt");
   const seen = new Set<string>();
   for (const row of manifest.inventory) {
-    if (!safeRelativePath(row?.path)
+    if (!safeRuntimeRelativePath(row?.path)
       || seen.has(row.path)
       || !Number.isSafeInteger(row.length)
       || row.length < 0
@@ -208,11 +209,11 @@ function parseManifest(raw: string): RuntimeGenerationManifest {
   }
   if (runtimeGenerationId(manifest.inventory) !== manifest.generationId) throw new RuntimeGenerationError("corrupt");
   for (const [name, path] of Object.entries(manifest.entries)) {
-    if (!["cli", "worker", "node", "app"].includes(name) || !safeRelativePath(path) || !seen.has(path)) {
+    if (!["cli", "worker", "node", "app"].includes(name) || !safeRuntimeRelativePath(path) || !seen.has(path)) {
       throw new RuntimeGenerationError("corrupt");
     }
   }
-  if (!safeRelativePath(manifest.entries.cli) || !safeRelativePath(manifest.entries.worker)) throw new RuntimeGenerationError("corrupt");
+  if (!safeRuntimeRelativePath(manifest.entries.cli) || !safeRuntimeRelativePath(manifest.entries.worker)) throw new RuntimeGenerationError("corrupt");
   return manifest as RuntimeGenerationManifest;
 }
 
@@ -394,7 +395,7 @@ function validVerification(value: unknown): value is RuntimeGenerationVerificati
   const verification = value as Partial<RuntimeGenerationVerification> | undefined;
   if (!verification || typeof verification.verifiedAt !== "string" || !Number.isFinite(Date.parse(verification.verifiedAt))
     || !verification.rows || typeof verification.rows !== "object") return false;
-  if (!Object.entries(verification.rows).every(([path, row]) => safeRelativePath(path) && validFileVerification(row))) return false;
+  if (!Object.entries(verification.rows).every(([path, row]) => safeRuntimeRelativePath(path) && validFileVerification(row))) return false;
   return verification.node === undefined || validFileVerification(verification.node);
 }
 
