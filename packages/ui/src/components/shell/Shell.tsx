@@ -144,6 +144,9 @@ function ShellFrame() {
   const view = useLaserState(currentView, samePresentationView);
   const connection = useLaserState((s) => s.connection);
   const sessions = useLaserState((s) => s.sessions);
+  const destination = useLaserState((s) => s.destination);
+  const destinationRef = useRef(destination);
+  destinationRef.current = destination;
 
   const [prefs, setPrefs] = useState<ColumnPrefs>(readPrefs);
   const [sheets, setSheets] = useState({ sessions: false, telemetry: false });
@@ -245,13 +248,15 @@ function ShellFrame() {
       actions.toast("warning", "Not connected to the host yet.");
       return;
     }
-    try {
-      await actions.newSession(cwd);
-      // A new session is a navigation to its chat: nothing keeps covering it.
-      showChat();
-    } catch (error) {
-      actions.toast("error", errorText(error));
-    }
+    // Close covering chrome now. Do not wait on worker/`session/new` — the
+    // landing is already the destination, and a late settle must not steal focus.
+    showChat();
+    void actions.newSession(cwd).catch((error: unknown) => {
+      const next = destinationRef.current;
+      if (next.phase === "ready-code" && next.code.kind === "project-landing" && next.code.project === cwd) {
+        actions.toast("error", errorText(error));
+      }
+    });
   }, [actions, connection, createSession.state, currentProject, showChat, view?.state.cwd]);
 
   // Keyboard: [ ] toggle rails, Cmd/Ctrl+N new session, Cmd/Ctrl+K the

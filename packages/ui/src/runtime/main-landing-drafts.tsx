@@ -16,7 +16,10 @@ interface MainLandingDraft {
 export interface MainLandingDraftStore {
   composer: ThreadComposerRuntime | undefined;
   readonly drafts: Map<string, MainLandingDraft>;
+  pendingAdopt: { key: string; path: string } | undefined;
   captureBeforeTransition(destination: MainDestination): void;
+  /** The landing at `key` is becoming this session; restore the draft onto it. */
+  adopt(key: string, path: string): void;
 }
 
 /**
@@ -60,10 +63,21 @@ const capture = (composer: ThreadComposerRuntime): MainLandingDraft => {
   };
 };
 
+const applyDraft = async (composer: ThreadComposerRuntime, draft: MainLandingDraft, cancelled: () => boolean): Promise<void> => {
+  composer.setText(draft.text);
+  composer.setRunConfig(draft.runConfig);
+  composer.setQuote(draft.quote);
+  for (const attachment of draft.attachments) {
+    if (cancelled()) return;
+    await composer.addAttachment(attachment);
+  }
+};
+
 export function createMainLandingDraftStore(): MainLandingDraftStore {
   return {
     composer: undefined,
     drafts: new Map(),
+    pendingAdopt: undefined,
     captureBeforeTransition(destination) {
       const key = mainLandingKey(destination);
       if (!key || !this.composer) return;
@@ -71,6 +85,9 @@ export function createMainLandingDraftStore(): MainLandingDraftStore {
       this.drafts.set(key, draft);
       writeLandingDraft(key, draft.text.trim() ? draft.text : undefined);
       void this.composer.reset();
+    },
+    adopt(key, path) {
+      this.pendingAdopt = { key, path };
     },
   };
 }
@@ -88,6 +105,32 @@ export function useMainLandingDrafts(destination: MainDestination, store: MainLa
   useLayoutEffect(() => {
     const composer = aui.composer as unknown as ThreadComposerRuntime;
     store.composer = composer;
+    const pending = store.pendingAdopt;
+    if (pending && physicalPath !== undefined && physicalPath !== pending.path) {
+      store.pendingAdopt = undefined;
+    } else if (pending) {
+      if (physicalPath !== pending.path) {
+        return () => {
+          if (store.composer === composer) store.composer = undefined;
+        };
+      }
+      store.pendingAdopt = undefined;
+      previousKey.current = undefined;
+      const draft = store.drafts.get(pending.key);
+      store.drafts.delete(pending.key);
+      writeLandingDraft(pending.key, undefined);
+      if (!draft || (draft.text.trim() === "" && draft.attachments.length === 0 && !draft.quote)) {
+        return () => {
+          if (store.composer === composer) store.composer = undefined;
+        };
+      }
+      let cancelled = false;
+      void applyDraft(composer, draft, () => cancelled || store.composer !== composer);
+      return () => {
+        cancelled = true;
+        if (store.composer === composer) store.composer = undefined;
+      };
+    }
     if (previousKey.current === key) return () => {
       if (store.composer === composer) store.composer = undefined;
     };
@@ -104,19 +147,13 @@ export function useMainLandingDrafts(destination: MainDestination, store: MainLa
         if (stored !== undefined) composer.setText(stored);
         return;
       }
-      composer.setText(draft.text);
-      composer.setRunConfig(draft.runConfig);
-      composer.setQuote(draft.quote);
-      for (const attachment of draft.attachments) {
-        if (cancelled || store.composer !== composer) return;
-        await composer.addAttachment(attachment);
-      }
+      await applyDraft(composer, draft, () => cancelled || store.composer !== composer);
     })();
     return () => {
       cancelled = true;
       if (store.composer === composer) store.composer = undefined;
     };
-  }, [aui, key, store]);
+  }, [aui, key, physicalPath, store]);
 
   // What is on screen, kept where a reload can find it. Debounced while typing,
   // flushed on the way out; emptying the composer under the same landing (a

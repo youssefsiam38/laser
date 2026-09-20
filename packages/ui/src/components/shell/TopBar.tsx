@@ -158,7 +158,8 @@ export function TopBar() {
   const chip = workerChip(meta.worker);
   const title = chatLanding ? "New chat"
     : pendingSummary ? sessionTitle(pendingSummary)
-    : open.phase === "opening" || open.phase === "preparing" ? (open.path ? "Opening conversation" : "Preparing workspace")
+    : (open.phase === "opening" || open.phase === "preparing") && open.expectsTranscript
+      ? (open.path ? "Opening conversation" : "Preparing workspace")
     : open.phase === "failed" ? (open.path ? "Conversation unavailable" : "View unavailable")
     : view ? (summary ? sessionTitle(summary, view) : (view.state.name ?? view.title ?? firstUserLine(view) ?? "New session")) : "New session";
   const untitled = view ? title === "New session" : false;

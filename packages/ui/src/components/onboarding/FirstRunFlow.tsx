@@ -188,7 +188,7 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
     setStarting(true);
     setStartError(undefined);
     try {
-      await actions.newSession(target);
+      void actions.newSession(target);
       await finish();
     } catch (sessionError) {
       setStartError(sessionError instanceof Error ? sessionError.message : String(sessionError));

@@ -2,7 +2,7 @@ import type { SessionState } from "@lasercode/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Action, AppState } from "../store.js";
-import type { NewSessionOptions, SessionLaunchOptions } from "./new-session.js";
+import { isUnstartedSession, type NewSessionOptions, type SessionLaunchOptions } from "./new-session.js";
 import {
   codeDestinationForSession,
   creationTargetForDestination,
@@ -11,6 +11,7 @@ import {
   isMainReady,
   isSessionInCodeProject,
   mainCodeProject,
+  mainLandingKey,
   mainPath,
   mainTab,
   pendingSessionPath,
@@ -155,6 +156,10 @@ export interface MainDestinationControllerDeps {
   archived(path: string): boolean;
   onError(error: unknown): void;
   beforeTransition(destination: MainDestination): void;
+  /** The landing at `key` is becoming this session; restore the draft onto it. */
+  onLandingAdopted?(key: string, path: string): void;
+  /** True while this landing already has a Send in flight. */
+  sendInFlight?(): boolean;
 }
 
 export interface MainDestinationController {
@@ -204,6 +209,12 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
   const environmentKey = state.environment?.environmentKey;
   const previousEnvironmentKey = useRef<string | undefined>(environmentKey);
   const initializingRef = useRef(0);
+  const landingLaunch = useRef<{
+    intent: number;
+    cwd: string;
+    agentName: string | undefined;
+    returnTo: CodeDestination;
+  } | undefined>(undefined);
   const heldPath = useRef<string | undefined>(mainPath(state.destination));
   if (initializing === 0) heldPath.current = mainPath(state.destination);
   const transition = useCallback((destination: MainDestination): boolean => {
@@ -349,27 +360,6 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     await resolveSession(path, intent);
   }, [begin, resolveSession]);
 
-  const newSession = useCallback(async (cwd: string, options: NewSessionOptions = {}): Promise<string> => {
-    if (options.select === false) return depsRef.current.launchSession(cwd, { ...options, select: false });
-    const visibleTab: MainTab = options.agentName === "chat" ? "chat" : "code";
-    const target: MainTarget = visibleTab === "chat" ? { kind: "chat-tab" } : { kind: "project", project: cwd };
-    const intent = begin(target);
-    let path: string | undefined;
-    try {
-      path = await depsRef.current.launchSession(cwd, { ...options, select: false, landing: true });
-      if (intent !== intentRef.current) return path;
-      const current = depsRef.current.readState().destination;
-      if (current.phase === "resolving" && current.intent === intent) transition({ ...current, target: { kind: "session", path, visibleTab } });
-      await resolveSession(path, intent);
-      return path;
-    } catch (error) {
-      if (intent === intentRef.current) fail(intent, error);
-      throw error;
-    } finally {
-      if (path !== undefined) depsRef.current.releaseLanding(path);
-    }
-  }, [begin, fail, resolveSession, transition]);
-
   const retry = useCallback(async (): Promise<void> => {
     const current = depsRef.current.readState().destination;
     if (current.phase !== "unavailable") return;
@@ -443,7 +433,13 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
 
   const creationTarget = useCallback(() => {
     const snapshot = depsRef.current.readState();
-    return creationTargetForDestination(snapshot.destination, snapshot.agents.snapshot?.workspaces.chat);
+    const target = creationTargetForDestination(snapshot.destination, snapshot.agents.snapshot?.workspaces.chat);
+    if (!target) return undefined;
+    const pending = landingLaunch.current;
+    if (pending && pending.intent === target.intent && pending.cwd === target.cwd && pending.agentName !== undefined) {
+      return { ...target, agentName: pending.agentName };
+    }
+    return target;
   }, []);
 
   const beginInitialization = useCallback((target: MainCreationTarget): MainInitializationToken => {
@@ -452,7 +448,8 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     return { id: ++initializationId.current, intent: target.intent, target };
   }, []);
   const finishInitialization = useCallback((token: MainInitializationToken, path: string) => {
-    const current = depsRef.current.readState().destination;
+    const snapshot = depsRef.current.readState();
+    const current = snapshot.destination;
     if (token.intent !== intentRef.current || current.intent !== token.intent) return;
     if (token.target.agentName === "chat") {
       if (current.phase !== "ready-chat" || current.chat.kind !== "landing") return;
@@ -462,12 +459,94 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
       return;
     }
     if (current.phase !== "ready-code" || current.code.kind !== "project-landing" || current.code.project !== token.target.cwd) return;
-    transition({ phase: "ready-code", intent: token.intent, code: { kind: "project-session", project: token.target.cwd, path } });
+    const sessions = mergeSessions(snapshot.sessions, snapshot.open);
+    const session = sessions.find((item) => item.path === path);
+    const previous = landingLaunch.current?.intent === token.intent
+      ? landingLaunch.current.returnTo
+      : current.code;
+    const code = session
+      ? codeDestinationForSession(session, sessions, snapshot.agents.runs, previous)
+      : { kind: "project-session" as const, project: token.target.cwd, path };
+    transition({ phase: "ready-code", intent: token.intent, code });
   }, [transition]);
   const endInitialization = useCallback((_token: MainInitializationToken) => {
     initializingRef.current = Math.max(0, initializingRef.current - 1);
     setInitializing((value) => Math.max(0, value - 1));
   }, []);
+
+  const newSession = useCallback(async (cwd: string, options: NewSessionOptions = {}): Promise<string> => {
+    if (options.select === false) return depsRef.current.launchSession(cwd, { ...options, select: false });
+    const visibleTab: MainTab = options.agentName === "chat" ? "chat" : "code";
+    const snapshot = depsRef.current.readState();
+    const current = snapshot.destination;
+    const currentPath = mainPath(current);
+    const currentView = currentPath ? snapshot.open[currentPath] : undefined;
+    const currentSession = currentPath
+      ? mergeSessions(snapshot.sessions, snapshot.open).find((item) => item.path === currentPath)
+      : undefined;
+    const resolveAgent = (name: string | undefined) => name ?? snapshot.agents.snapshot?.defaultAgent;
+    const onUnstarted = !!(currentPath && currentView && currentSession
+      && isUnstartedSession(currentView)
+      && !depsRef.current.archived(currentPath)
+      && currentSession.cwd === cwd
+      && resolveAgent(currentSession.agent?.agentName) === resolveAgent(options.agentName)
+      && mainTab(current) === visibleTab);
+    const pending = landingLaunch.current;
+    const onMatchingLanding = visibleTab === "chat"
+      ? current.phase === "ready-chat" && current.chat.kind === "landing"
+      : current.phase === "ready-code" && current.code.kind === "project-landing" && current.code.project === cwd
+        && resolveAgent(pending?.agentName) === resolveAgent(options.agentName);
+    let intent = current.intent;
+    if (!onUnstarted && !onMatchingLanding) {
+      depsRef.current.beforeTransition(current);
+      explicitIntent.current = true;
+      intent = ++intentRef.current;
+      if (visibleTab === "chat") {
+        transition({
+          phase: "ready-chat",
+          intent,
+          chat: { kind: "landing" },
+          rememberedCode: rememberedCodeOf(current),
+        });
+      } else {
+        transition({
+          phase: "ready-code",
+          intent,
+          code: { kind: "project-landing", project: cwd },
+        });
+      }
+    } else {
+      explicitIntent.current = true;
+    }
+    landingLaunch.current = { intent, cwd, agentName: options.agentName, returnTo: rememberedCodeOf(current) };
+    if (onUnstarted) {
+      return depsRef.current.launchSession(cwd, { ...options, select: false, landing: true });
+    }
+    let path: string | undefined;
+    try {
+      path = await depsRef.current.launchSession(cwd, { ...options, select: false, landing: true });
+      if (intent !== intentRef.current) return path;
+      // First Send already joined this launch: its initialize() adopts the path
+      // onto the landing composer. Adopting here would reset that composer.
+      // The initialize bracket increments after an await, so also skip when a
+      // send is already waiting on this landing.
+      if (initializingRef.current > 0 || depsRef.current.sendInFlight?.()) return path;
+      const after = depsRef.current.readState().destination;
+      const landingKey = mainLandingKey(after);
+      if (!landingKey) return path;
+      depsRef.current.beforeTransition(after);
+      finishInitialization({
+        id: 0,
+        intent,
+        target: { cwd, intent, ...(options.agentName !== undefined ? { agentName: options.agentName } : {}) },
+      }, path);
+      depsRef.current.onLandingAdopted?.(landingKey, path);
+      return path;
+    } finally {
+      if (path !== undefined) depsRef.current.releaseLanding(path);
+      if (landingLaunch.current?.intent === intent && intent !== intentRef.current) landingLaunch.current = undefined;
+    }
+  }, [finishInitialization, transition]);
 
   const onAssistantThreadChange = useCallback((path: string | undefined) => {
     const current = depsRef.current.readState().destination;

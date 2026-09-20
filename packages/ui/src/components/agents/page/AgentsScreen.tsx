@@ -35,7 +35,7 @@ import { SettingsScopeControls, useWorkbench, type AgentsTarget } from "@/compon
 import { useIsMobile } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { deviceStore } from "@/runtime/device-storage";
-import { useCapability, useLaserStable } from "@/runtime";
+import { useCapability, useLaserStable, useLaserState } from "@/runtime";
 
 import type { EditorFocus } from "./AgentEditor.js";
 import { AgentsEditorColumn, ReadonlyIntro } from "./AgentsEditorColumn.js";
@@ -64,6 +64,9 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
   const status = useAgentsStatus();
   const agents = useAgentsActions();
   const { actions, projects } = useLaserStable();
+  const destination = useLaserState((s) => s.destination);
+  const destinationRef = useRef(destination);
+  destinationRef.current = destination;
   const workbench = useWorkbench();
   const mobile = useIsMobile();
   const device = useSyncExternalStore(deviceStore.subscribe, deviceStore.status, deviceStore.status);
@@ -200,17 +203,18 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
     const navigationGuard = guardRef.current;
     if (navigationGuard && !(await navigationGuard())) return;
     const environmentKey = device.environmentKey;
-    try {
-      await actions.newSession(projectCwd, { agentName: name });
-      if (
-        previousScopeKey.current === scopeKey
-        && deviceStore.status().environmentKey === environmentKey
-      ) {
-        workbench.close();
-      }
-    } catch (error) {
-      actions.toast("error", messageOf(error));
+    if (
+      previousScopeKey.current === scopeKey
+      && deviceStore.status().environmentKey === environmentKey
+    ) {
+      workbench.close();
     }
+    void actions.newSession(projectCwd, { agentName: name }).catch((error: unknown) => {
+      const next = destinationRef.current;
+      if (next.phase === "ready-code" && next.code.kind === "project-landing" && next.code.project === projectCwd) {
+        actions.toast("error", messageOf(error));
+      }
+    });
   }, [actions, device.environmentKey, projectCwd, scopeKey, workbench]);
 
   const startNew = useCallback(() => {

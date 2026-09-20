@@ -151,7 +151,7 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
                        store already has the transcript, and that frame must
                        not read as "new session". */
                     empty={<AuiIf condition={(s) => s.thread.isEmpty}>
-                      {(open.phase === "idle" || (open.phase === "ready" && !open.expectsTranscript)) && (emptyState ?? <EmptyState />)}
+                      {(open.phase === "idle" || (open.phase !== "failed" && !open.expectsTranscript)) && (emptyState ?? <EmptyState />)}
                     </AuiIf>}
                     head={<>
                     {cwd && (
