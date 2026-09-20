@@ -9,10 +9,11 @@ the programmatic tests; **every visual and manual judgement is yours** (spec
 
 **<http://127.0.0.1:41477>** — built from the reviewed source, gated with a full
 `pnpm verify`, seeded, and left open for you. Its four directories live under
-`/tmp/laser-sandbox-cH0eHZ/` (`project`, `monorepo`, `workspace-of-repos`,
-`no-git`) and its private `HOME` under `/tmp/leap-sandbox-home`. The session
-**“Please change the greeter…”** already has two turns of real work, three
-checkpoints and a live background command.
+`/tmp/laser-sandbox-FnXJR6/` (`project`, `monorepo`, `workspace-of-repos`,
+`no-git`) and its private `HOME` under `/tmp/leap-sandbox-home`. Open the **Code** tab in the sessions sidebar: the session **“Please change the
+greeter…”** already has two turns of real work, three checkpoints and a live
+background command. `logo.png` in the Uncommitted scope is a real 64×64 image
+that changed colour, so the picture path has something to show.
 
 If it is gone by the time you read this, start it again as below.
 
