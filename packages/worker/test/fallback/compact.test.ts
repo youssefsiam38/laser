@@ -3,6 +3,7 @@
  * blocked only by context size, then the shared continuation path.
  */
 import { expect, it } from "vitest";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
   SESSION_FALLBACK_ENTRY_TYPE,
   modelKey,
@@ -14,6 +15,7 @@ import {
 } from "@lasercode/protocol";
 
 import { FallbackController, type FallbackEngine } from "../../src/fallback/controller.js";
+import { dropTrailingErrorAssistant } from "../../src/fallback/engine-port.js";
 import { CONTEXT_TOO_LONG_REASON, type CandidateModel } from "../../src/fallback/policy.js";
 
 const A: FallbackModelRef = { provider: "stub", id: "a" };
@@ -78,6 +80,7 @@ function harness(over: {
   setModel?: (model: FallbackModelRef) => Promise<void>;
   continueTurn?: (options: { retries: "none" | "normal"; signal: AbortSignal }) => Promise<void>;
   afterContinueFailure?: () => ProviderFailureSignal | undefined;
+  catalogue?: () => ReadonlyMap<string, CandidateModel> | Promise<ReadonlyMap<string, CandidateModel>>;
 }): Harness {
   const models = over.models ?? [A, B, C];
   const chains: FallbackChain[] = [{ models }];
@@ -92,7 +95,7 @@ function harness(over: {
   const engine: FallbackEngine = {
     chains: () => chains,
     selectedModel: () => selected,
-    catalogue: () => Promise.resolve(catalogue(models, over.windows ?? {}, over.extras)),
+    catalogue: async () => over.catalogue ? over.catalogue() : catalogue(models, over.windows ?? {}, over.extras),
     names: () => namesOf(models),
     contextTokens: () => (over.tokens === undefined ? 50_000 : over.tokens),
     lastFailure: () => failure,
@@ -253,7 +256,11 @@ it("records B's size skip and keeps other reasons when the estimate still exceed
   expect(await h.settle()).toBe(false);
   expect(h.continues).toEqual([]);
   expect(h.entries.some((entry) => entry.failover?.attempts.some((attempt) => attempt.model === modelKey(B) && attempt.outcome === "skipped" && attempt.reason === CONTEXT_TOO_LONG_REASON))).toBe(true);
-  expect(fallbacks(h.updates).at(-1)?.detail).toContain("Stub C not signed in");
+  const exhausted = fallbacks(h.updates).at(-1)!;
+  expect(exhausted.phase).toBe("exhausted");
+  expect(exhausted.detail).toContain(`Stub B ${CONTEXT_TOO_LONG_REASON}`);
+  expect(exhausted.detail).toContain("Stub C not signed in");
+  expect((exhausted.detail?.match(new RegExp(CONTEXT_TOO_LONG_REASON, "g")) ?? []).length).toBe(1);
 });
 
 it("does not compact when a later model already fits", async () => {
@@ -351,4 +358,54 @@ it("re-enters traversal when the compact estimate still exceeds B but fits C", a
   expect(h.continues).toEqual([{ retries: "normal" }]);
   expect(h.entries.some((entry) => entry.failover?.attempts.some((attempt) => attempt.model === modelKey(B) && attempt.outcome === "skipped" && attempt.reason === CONTEXT_TOO_LONG_REASON))).toBe(true);
   expect(h.entries.some((entry) => entry.failover?.attempts.some((attempt) => attempt.model === modelKey(C) && attempt.outcome === "succeeded"))).toBe(true);
+});
+
+it("does not claim B was merely too large after its selection was refused", async () => {
+  const h = harness({
+    windows: { b: 8_000, c: 8_000 },
+    tokens: 50_000,
+    setModel: async (model) => {
+      if (model.id === "b") throw new Error("gone");
+    },
+    compact: async () => { throw new Error("Nothing to compact"); },
+  });
+  expect(await h.settle()).toBe(false);
+  expect(h.compacts).toBe(1);
+  expect(h.setModels.map((model) => model.id)).toEqual(["b", "c"]);
+  expect(h.entries.some((entry) => entry.failover?.attempts.some((attempt) => attempt.model === modelKey(B) && attempt.outcome === "failed" && attempt.class === "credential"))).toBe(true);
+  const exhausted = fallbacks(h.updates).at(-1)!;
+  expect(exhausted.phase).toBe("exhausted");
+  expect(exhausted.detail).not.toContain(`Stub B ${CONTEXT_TOO_LONG_REASON}`);
+  expect(exhausted.detail).toContain(`Stub C ${CONTEXT_TOO_LONG_REASON}`);
+  expect((exhausted.detail?.match(new RegExp(CONTEXT_TOO_LONG_REASON, "g")) ?? []).length).toBe(1);
+});
+
+it("uses the catalogue snapshot that classified B, not a later one", async () => {
+  const models = [A, B, C];
+  const initiating = catalogue(models, { a: 200_000, b: 1_000, c: 8_000 });
+  const later = catalogue(models, { a: 200_000, b: 200_000, c: 8_000 });
+  let calls = 0;
+  const h = harness({
+    tokens: 50_000,
+    compact: async () => ({ estimatedTokensAfter: 4_000 }),
+    catalogue: () => {
+      calls += 1;
+      return calls === 1 ? initiating : later;
+    },
+  });
+  expect(await h.settle()).toBe(true);
+  expect(h.compacts).toBe(1);
+  expect(h.setModels.map((model) => model.id)).toEqual(["b", "c"]);
+  expect(h.continues).toEqual([{ retries: "normal" }]);
+  expect(h.entries.some((entry) => entry.failover?.attempts.some((attempt) => attempt.model === modelKey(B) && attempt.outcome === "skipped" && attempt.reason === CONTEXT_TOO_LONG_REASON))).toBe(true);
+  expect(h.entries.some((entry) => entry.failover?.attempts.some((attempt) => attempt.model === modelKey(C) && attempt.outcome === "succeeded"))).toBe(true);
+});
+
+it("retains a preceding successful assistant when dropping the trailing error", () => {
+  const ok = { role: "assistant", stopReason: "stop" };
+  const err = { role: "assistant", stopReason: "error" };
+  const retry = { role: "assistant", stopReason: "error" };
+  const session = { agent: { state: { messages: [{ role: "user" }, ok, err, retry] } } } as unknown as AgentSession;
+  dropTrailingErrorAssistant(session);
+  expect(session.agent.state.messages).toEqual([{ role: "user" }, ok]);
 });

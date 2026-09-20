@@ -66,11 +66,32 @@ type RecoverResult =
   | { kind: "stopped" }
   | { kind: "exhausted" }
   | { kind: "none" }
-  | { kind: "reenter"; tokens: number }
+  | { kind: "reenter"; tokens: number; skipped: readonly SkippedCandidate[] }
   | { kind: "failed"; failure: ProviderFailure; candidate: FallbackModelRef; tokens: number };
 
-function visibleSkips(skipped: readonly SkippedCandidate[]): SkippedCandidate[] {
-  return skipped.filter((entry) => entry.reason !== ALREADY_TRIED).map((entry) => ({ model: entry.model, reason: entry.reason }));
+/**
+ * Person-facing exhaustion reasons: drop bookkeeping, drop a size skip that a
+ * later non-skipped attempt superseded, and keep each model once.
+ */
+function personFacingSkips(
+  skipped: readonly SkippedCandidate[],
+  failover: FallbackEvent | null | undefined,
+): SkippedCandidate[] {
+  const attempted = new Set(
+    (failover?.attempts ?? [])
+      .filter((attempt) => attempt.outcome !== "skipped")
+      .map((attempt) => attempt.model),
+  );
+  const seen = new Set<string>();
+  const out: SkippedCandidate[] = [];
+  for (const entry of skipped) {
+    if (entry.reason === ALREADY_TRIED) continue;
+    const key = modelKey(entry.model);
+    if (attempted.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ model: entry.model, reason: entry.reason });
+  }
+  return out;
 }
 
 /** Everything the controller needs from the live session, and nothing more. */
@@ -236,6 +257,9 @@ export class FallbackController {
     // it, never against a blind attempt.
     let tokensForTraversal: number | null | undefined;
     let compactedThisEvent = false;
+    // Size skips recorded while B is selected vanish from the next traversal
+    // (B is the active model). Carry them so later exhaustion still names them.
+    let carriedSkips: SkippedCandidate[] = [];
     try {
       if (!failed) return false;
       this.openEvent(failed, failure);
@@ -251,11 +275,14 @@ export class FallbackController {
       for (;;) {
         if (this.stale(generation, abort)) return this.closeEvent("aborted");
         const live = this.state.activation ?? activation;
+        // One snapshot per traversal step. Recovery uses this same map — compact
+        // must not re-read the catalogue and chase a window that has since moved.
+        const catalogue = await this.engine.catalogue();
         const traversal = nextCandidate({
           activation: live,
           memory: this.state.models,
           event: this.event(),
-          catalogue: await this.engine.catalogue(),
+          catalogue,
           contextTokens: tokensForTraversal !== undefined ? tokensForTraversal : this.engine.contextTokens(),
           now: this.engine.now(),
         });
@@ -265,6 +292,7 @@ export class FallbackController {
             const recovered = await this.recoverOversized({
               sizeBlocked,
               allSkipped: traversal.skipped,
+              catalogue,
               exhaustionPosition: live.position,
               models: live.models,
               origin: failed,
@@ -282,6 +310,9 @@ export class FallbackController {
             if (recovered.kind === "succeeded") return true;
             if (recovered.kind === "reenter" || recovered.kind === "failed") {
               tokensForTraversal = recovered.tokens;
+              if (recovered.kind === "reenter") {
+                carriedSkips = [...carriedSkips, ...recovered.skipped];
+              }
               if (recovered.kind === "failed") {
                 standing = recovered.candidate;
                 standingFailure = recovered.failure;
@@ -294,13 +325,7 @@ export class FallbackController {
           }
           for (const skipped of traversal.skipped) this.recordAttempt(skipped.model, { outcome: "skipped", reason: skipped.reason });
           if (this.stale(generation, abort)) return this.closeEvent("aborted");
-          this.exhausted(
-            standing ?? failed,
-            standingFailure,
-            // "already tried in this switch" is bookkeeping, not a reason a
-            // person needs; the attempt it refers to already had its say.
-            visibleSkips(traversal.skipped),
-          );
+          this.exhausted(standing ?? failed, standingFailure, [...carriedSkips, ...traversal.skipped]);
           return false;
         }
 
@@ -417,6 +442,7 @@ export class FallbackController {
   private async recoverOversized(options: {
     sizeBlocked: SkippedCandidate[];
     allSkipped: SkippedCandidate[];
+    catalogue: ReadonlyMap<string, CandidateModel>;
     exhaustionPosition: number;
     models: readonly FallbackModelRef[];
     origin: FallbackModelRef;
@@ -444,18 +470,18 @@ export class FallbackController {
       } catch {
         if (this.stale(options.generation, options.abort)) return { kind: "aborted" };
         this.recordAttempt(entry.model, { outcome: "skipped", reason: CONTEXT_TOO_LONG_REASON });
-        this.exhausted(options.standing, options.standingFailure, visibleSkips(options.allSkipped));
+        this.exhausted(options.standing, options.standingFailure, options.allSkipped);
         return { kind: "exhausted" };
       }
       if (!Number.isFinite(estimate) || estimate < 0) {
         this.recordAttempt(entry.model, { outcome: "skipped", reason: CONTEXT_TOO_LONG_REASON });
-        this.exhausted(options.standing, options.standingFailure, visibleSkips(options.allSkipped));
+        this.exhausted(options.standing, options.standingFailure, options.allSkipped);
         return { kind: "exhausted" };
       }
-      const window = (await this.engine.catalogue()).get(modelKey(entry.model))?.contextWindow;
+      const window = options.catalogue.get(modelKey(entry.model))?.contextWindow;
       if (window !== undefined && estimate > window) {
         this.recordAttempt(entry.model, { outcome: "skipped", reason: CONTEXT_TOO_LONG_REASON });
-        return { kind: "reenter", tokens: estimate };
+        return { kind: "reenter", tokens: estimate, skipped: [entry] };
       }
       const result = await this.finishAttempt({
         origin: options.origin,
@@ -562,7 +588,7 @@ export class FallbackController {
     const at = this.iso();
     this.closeEvent("exhausted");
     this.write("exhausted", { from: failed, failure: { class: failure.class, at } });
-    const detail = `${this.name(failed)} ${failureWording(failure.class)}. ${exhaustionDetail(skipped, (model) => this.name(model))}`;
+    const detail = `${this.name(failed)} ${failureWording(failure.class)}. ${exhaustionDetail(personFacingSkips(skipped, this.state.failover), (model) => this.name(model))}`;
     this.engine.emit({
       kind: "model_fallback",
       phase: "exhausted",

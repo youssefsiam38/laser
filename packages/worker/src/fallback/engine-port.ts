@@ -229,23 +229,27 @@ async function continueTurn(
 }
 
 /**
- * Remove a failed attempt from agent state, leaving it in the session file.
+ * Remove trailing failed attempts from agent state, leaving them in the session file.
  *
  * This is the engine's own move, in the two places it continues an interrupted
  * turn (`_prepareRetry`, and the overflow-recovery branch of `_checkCompaction`
  * in `core/agent-session.js`): `agent.continue()` rejects a transcript whose
  * last message is an assistant message, and the error is history, not context.
+ * Those call sites drop one. Public `compact()` then rebuilds from
+ * `buildSessionContext()`, which restores every persisted retry error still in
+ * the keep-recent window — two trailing `error` assistants after `maxRetries: 1`.
+ * Drop each trailing failed/aborted/length assistant, and stop at a successful
+ * one: a preceding `stop` answer is context, not a failed attempt.
  */
 export function dropTrailingErrorAssistant(session: AgentSession): void {
-  // The engine's `_prepareRetry` drops a trailing assistant: `agent.continue()`
-  // rejects that transcript. After compact the tail can be a kept successful
-  // assistant plus the error that opened failover, so drop every trailing
-  // assistant, not only the error.
   let messages = session.agent.state.messages;
-  while (messages[messages.length - 1]?.role === "assistant") {
+  for (;;) {
+    const last = messages[messages.length - 1] as { role?: unknown; stopReason?: unknown } | undefined;
+    if (last?.role !== "assistant") return;
+    if (last.stopReason !== "error" && last.stopReason !== "aborted" && last.stopReason !== "length") return;
     messages = messages.slice(0, -1);
+    session.agent.state.messages = messages;
   }
-  session.agent.state.messages = messages;
 }
 
 /** The last assistant message in agent state, failed ones included. */

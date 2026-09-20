@@ -308,10 +308,14 @@ same accepted turn on that candidate (no second `setModel`, no second
 traversal for it). If the estimate is still larger than that window, it
 records the size skip once, freezes the estimate, and re-enters traversal
 from that position so a later larger-window model can take the turn without
-another compact. Compact throw, a missing estimate, cancel, and manual
-selection abort or exhaust immediately. Auto-compaction off leaves today's
-size sentence. One actual compact call per failover; a `setModel` refuse does
-not consume it.
+another compact. The window comparison uses the catalogue snapshot that
+classified the candidate as size-blocked — compact does not read the
+catalogue again. Carried recovery skips merge into later exhaustion
+(de-duplicated); a non-skipped attempt for that model supersedes a stale
+size skip, matching ordinary traversal. Compact throw, a missing estimate,
+cancel, and manual selection abort or exhaust immediately. Auto-compaction
+off leaves today's size sentence. One actual compact call per failover; a
+`setModel` refuse does not consume it.
 
 The "one bounded attempt" for an earlier model is not a health check and not a
 synthetic prompt: it is **the pending agent work, through the normal request
