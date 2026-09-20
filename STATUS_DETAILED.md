@@ -2401,6 +2401,8 @@ tmp/review-chat-loading.md`: PARTLY MISAIMED — cut to A+B, C/D/E dropped from 
 | M16-T91 | The list keeps the reader's position | done | worker `01a0b96b-fb4a-7105-b0ab-d2744316cf7f` | 2ffb7e20 (`56b4214f`); `@legendapp/list@3.3.5` patched, `@tanstack/react-virtual` removed; UI 2,631 passed | see notes |
 | M16-T93 | A prompt behind 200 marker rows stays reachable | todo | — | — | review N2, /tmp/review-turn-paging.md |
 | M16-T94 | Load-only test flakes wait for state | done | parent | six tests: a clock assertion replaced by a work assertion, five explicit timeouts; 0.9.5 attempt one abandoned on the first of them | see notes |
+| M16-T95 | New Session is immediately usable | in-progress | worker Immediate new session `01a0be43-2193-736a-8f05-9c533273e005` | — | see notes; added by D-334 |
+| M16-T96 | Unread means a new message, not a file flush | done | worker Unread dot truth `01a0be4a-cff3-736a-8f05-9c63676bf3df` | `ae958b29`; `pnpm -F @lasercode/host exec vitest run test/attention.test.ts` 11 passed; review APPROVE `01a0be4d-f916-736a-8f05-9c68fd610d05` | see notes; added by D-335 |
 | M16-T92 | The client reads an image reference | done | worker `01a0b96b-fb4a-7105-b0ab-d2744316cf7f` | 2ffb7e20 (`9a69a23f`); `projected-page.test.tsx` renders a real projected page | see notes |
 | M16-T67 | Why a goal paused itself overnight | done | worker goal-pause-forensics `01a0b137-f012-771e-a9f0-3648759cdeee` | `8c44b20e` · `docs/incidents/goal-pause-investigation.md`; proven from session `2026-09-14T13-52-32-557Z…` lines 9574-9586 | see notes; added by D-281 |
 | M16-T69 | The live edge actually follows | done | worker autofollow-implementation + autofollow-review-fixes `01a0b1bb-2023-771e-a9f0-36e4f80eff45` | merged `76fe9e5c` (`4c635548`) and `73eec455`; 42 focused, 16 live-edge/batched cases + 2 negative-control matrices, clean-env verify 156.4 s | see notes; design settled by D-287, review fixes applied |
@@ -5551,6 +5553,17 @@ Supersedes: none; refines D-271 and RP-11.
 #### M16-T93 notes
 - 2026-09-19 raised from review N2: more than 200 non-message rows before a prompt (a long goal run) make a page unservable and unshrinkable at `packages/protocol/src/history-window.ts:268-269`. Same "unreachable for ever" class as M16-T88; predates M16-T90.
 
+#### M16-T96 notes
+- 2026-09-20 claimed: `finished_unread` was mtime vs last look; jsonl flush without a new message brought the hollow dot back. First pass already uncommitted in the parent tree (`attention.ts`, `server.ts`, `attention.test.ts`, `LaserProvider.tsx` markSeen). Worker reviews/finishes that pass against D-335.
+- 2026-09-20 owner: worker Unread dot truth `01a0be4a-cff3-736a-8f05-9c63676bf3df` run `run_a806fb1f` · shared checkout · host attention + LaserProvider `markSeen` only. M16-T95 must not edit that callback.
+- 2026-09-20 worker done: kept first pass; module comment; dropped unused `laterOf`; legacy no-count test. Host `test/attention.test.ts` 11 passed. Uncommitted. Review next.
+- 2026-09-20 review APPROVE (`01a0be4d-f916-736a-8f05-9c68fd610d05`): count is a flush veto on mtime, not a miss; `laterOf` removal safe; no UI test required. Parent integrating.
+- 2026-09-20 done, evidence: `ae958b29`; host attention 11/11.
+
+#### M16-T95 notes
+- 2026-09-20 claimed: main-window New Session lands immediately; worker/session preparation runs in the background and first Send joins it. Investigation: cold `session/new` 761–768 ms (worker start ~585–593 ms); `newSession()` awaits `launchSession()` then `resolveSession()`/`session/load`; copy in TopBar/StatusLine. Beam bubble out of scope.
+- 2026-09-20 owner: worker Immediate new session `01a0be43-2193-736a-8f05-9c533273e005` run `run_e666d53a` · worktree `.worktrees/immediate-new-session-e666d53a` · branch `agents/immediate-new-session-e666d53a` · base `03b6230f` · permitted: UI destination/launcher/LaserProvider/TopBar/StatusLine/Thread + matching tests + optional browser-check script. Not planning files, not Beam bubble, not protocol/host/worker.
+
 #### M16-T94 notes
 - 2026-09-19 fixed: `image-reference.test.ts` asserted `performance.now()` under 200 ms and measured 214.7 ms inside the release's own verify — replaced by asserting what pricing *does* (the text a price is taken from carries twelve references and no payload). `tool-diff`, `identity`, `entry-range.live`, `mcp/authorization` and two `host.e2e` cases now declare explicit timeouts with the reason, since each is bounded work on an unbounded machine. No assertion weakened.
 - 2026-09-19 raised after a merge gate at load average 26 failed 12 tests that all pass alone: protocol `shared diff reuse > measures repeated disclosure/search computation` (no timing assertion, burns 472 ms of a 5 s timeout) and `the repository > agrees with product.json everywhere` (shells out to a whole-repo scan), worker `a body read from the owning worker > reassembles…` and `MCP authorization identities and durable generations > fences another process`, two host end-to-end startup checks. Repo rule: wait for state, never weaken the assertion. A release attempt abandons on any of them.
@@ -5971,3 +5984,35 @@ components.
 Consequences: every preview is labelled Native, Mapped or Proposed. Mapped is
 never called Native. React-specific OSS such as Puck or react-grab may sit
 behind replaceable adapters but cannot shape protocol or canonical storage.
+
+### D-334 · 2026-09-20 · New Session is a landing, not a load
+
+Decision: add M16-T95. Main-window New Session (sidebar/project `+`, Chat `+`,
+Cmd/Ctrl+N, command palette, `/new`, Agents, first-run) transitions immediately
+to the existing project/Chat landing with an editable focused composer. Empty-session
+reuse, `session/new` and worker preparation run in the background. First Send
+joins that in-flight work. A newly created session is adopted without
+`session/load`. Failure leaves the draft and keeps Send retryable. A late result
+after navigation does not steal the destination. D-127 reuse is preserved.
+Existing-history opening is unchanged. Beam bubble prepare-on-open (M13-T84,
+D-143) is unchanged; Beam group `+` in the sessions sidebar is a main-window New
+Session and follows this landing contract.
+Why: cold worker start is ~0.75 s and the UI currently blocks itself in
+`resolving` then reloads an already-authoritative empty `session/new` result.
+The landing runtime already drafts, dictates and creates on first Send.
+Consequences: New Session never shows “Preparing workspace”, “Opening
+conversation” or “loading the conversation”. No new placeholder architecture.
+
+### D-335 · 2026-09-20 · Unread is a new message, not a file flush
+
+Decision: add M16-T96. `finished_unread` compares catalog `messageCount` (and
+`finishedAt` for a turn that ended while nobody was looking) to the count
+recorded at `markSeen`. A later jsonl mtime with the same count is a flush and
+stays idle. The UI sets that row idle immediately on acknowledgement. Do not
+hide `waiting_for_input`. Hidden, unfocused, or Settings-covered transcripts
+stay unread (`use-session-seen.ts` unchanged). Old `attention.json` without a
+count keeps mtime behaviour until the next look writes the count.
+Why: opening or leaving a session can rewrite the jsonl without adding a
+message; mtime then lies.
+Consequences: no new protocol method and no new unread flag. Terminal-written
+messages still mark unread because the catalog count rises.
