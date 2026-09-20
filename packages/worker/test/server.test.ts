@@ -525,7 +525,7 @@ describe("WorkerServer", () => {
       expect(page.leafId).toBe("a39");
       expect(page.window).toMatchObject({
         authority: "live",
-        mode: "replace",
+        mode: "versions",
         versions: { total: 2, leaves: [{ id: "u11", leafId: "a39" }, { id: "fork", leafId: "fork-a" }] },
       });
       const missing = await h.call(3, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { versionsOf: "gone" } });

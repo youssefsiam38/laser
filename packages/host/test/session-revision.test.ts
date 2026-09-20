@@ -90,16 +90,16 @@ describe("the host's own answer", () => {
     }
   });
 
-  it("keeps a prefix across a turn of more than 512 entries, and still invalidates on compaction", async () => {
+  it("keeps a prefix across a 909-row turn, and still invalidates on compaction", async () => {
     const lines = [header(), message("e0", null, "one"), message("e1", "e0", "two")];
     const { path, cleanup } = fixture(lines);
     try {
       const service = revisions();
       const cached = (await answer(service, path)).revision;
-      const extra = Array.from({ length: 600 }, (_, i) => message(`t${i}`, i ? `t${i - 1}` : "e1", `step ${i}`));
+      const extra = Array.from({ length: 909 }, (_, i) => message(`t${i}`, i ? `t${i - 1}` : "e1", `step ${i}`));
       appendFileSync(path, `${extra.join("\n")}\n`);
       expect((await answer(service, path, cached)).base).toBe("prefix");
-      appendFileSync(path, `${JSON.stringify({ type: "compaction", id: "compact-1", parentId: "t599", timestamp: "2026-01-01T00:00:02.000Z", summary: "Earlier context summarized", tokensBefore: 1000 })}\n`);
+      appendFileSync(path, `${JSON.stringify({ type: "compaction", id: "compact-1", parentId: "t908", timestamp: "2026-01-01T00:00:02.000Z", summary: "Earlier context summarized", tokensBefore: 1000 })}\n`);
       const after = await answer(service, path, cached);
       expect(after.base).toBe("stale");
     } finally {

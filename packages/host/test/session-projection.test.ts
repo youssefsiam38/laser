@@ -788,7 +788,7 @@ describe("worker-free session projection", () => {
       expect(stableWindow(durable.window!)).toEqual(stableWindow(live.window));
       expect(durable.window).toMatchObject({
         authority: "durable",
-        mode: "replace",
+        mode: "versions",
         versions: { total: 2, leaves: [{ id: "e2", leafId: "e11" }, { id: "fork", leafId: "fork-a" }] },
       });
       await expect(projection.read(f.path, { versionsOf: "gone" })).rejects.toMatchObject({

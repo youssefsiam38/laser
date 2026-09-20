@@ -279,7 +279,8 @@ describe("the versions of one message", () => {
     const page = historyWindow({ entries: forked, leafId: "a2" }, { versionsOf: "e1" }, replace);
     expect(ids(page)).toEqual(["e1", "e2"]);
     expect(page.leafId).toBe("a2");
-    expect(page.window.mode).toBe("replace");
+    expect(page.window.mode).toBe("versions");
+    expect(JSON.parse(JSON.stringify(page.window)).mode).toBe("versions");
     expect(page.window.versions).toEqual({
       total: 2,
       leaves: [{ id: "e1", leafId: "r3" }, { id: "e2", leafId: "a2" }],
@@ -318,7 +319,7 @@ describe("the versions of one message", () => {
     const page = historyWindow({ entries: forked, leafId: "a2" }, { versionsOf: "e1" }, {
       ...replace, selection: { kind: "delta", after: "e1" },
     });
-    expect(page.window.mode).toBe("replace");
+    expect(page.window.mode).toBe("versions");
     expect(ids(page)).toEqual(["e1", "e2"]);
   });
 
@@ -391,7 +392,56 @@ describe("the versions of one message", () => {
     expect(fitted?.entryIndices.map(index => (entries[index] as { id: string }).id)).toContain("v3");
     expect(fitted?.entryIndices).toHaveLength(2);
     expect(fitted?.window.versions?.total).toBe(8);
+    expect(fitted?.window.mode).toBe("versions");
     expect(plans).toBeGreaterThan(1);
+  });
+
+  it("shrinks a fork under a 909-row turn rather than refusing", () => {
+    const entries: unknown[] = [msg("u1", null, "user", "run the fleet")];
+    let parent = "u1";
+    for (let step = 0; step < 908; step++) {
+      const id = `t${step}`;
+      entries.push(msg(id, parent, step % 2 ? "toolResult" : "assistant", "x".repeat(2_000)));
+      parent = id;
+    }
+    entries.push(msg("fork", null, "user", "other version"));
+    entries.push(msg("fork-a", "fork", "assistant", "abandoned"));
+    for (let extra = 0; extra < 220; extra++) {
+      entries.push(msg(`v${extra}`, null, "user", `version ${extra}`));
+    }
+    const snapshot = { entries, leafId: parent };
+    expect(historyContentSerializedBytes(entries, [])).toBeGreaterThan(HISTORY_PAGE_BYTE_LIMIT);
+    expect(boundedHistoryWindow(snapshot, { all: true }, replace)).toBeUndefined();
+
+    const page = boundedHistoryWindow(snapshot, { versionsOf: "u1" }, replace, { digest });
+    expect(page).toBeDefined();
+    expect(page!.window.mode).toBe("versions");
+    expect(ids(page!)).toContain("u1");
+    expect(ids(page!)).toContain("fork");
+    expect(page!.entries).toHaveLength(HISTORY_PAGE_ENTRY_LIMIT);
+    expect(page!.window.versions?.total).toBe(222);
+    expect(page!.window.versions?.leaves).toHaveLength(HISTORY_PAGE_ENTRY_LIMIT);
+    expect(page!.window.versions?.leaves.find(row => row.id === "u1")).toEqual({ id: "u1", leafId: parent });
+    expect(page!.window.versions?.leaves.find(row => row.id === "fork")).toEqual({ id: "fork", leafId: "fork-a" });
+  });
+
+  it("fits thousands of siblings with one children map per plan", () => {
+    const total = 8_192;
+    const entries = Array.from({ length: total }, (_, i) => msg(`v${i}`, null, "user", `v${i}`));
+    const nodes = entries.map(historyWindowNode);
+    let plans = 0;
+    const started = performance.now();
+    const fitted = fitHistoryWindowPlan(nodes, `v${total - 1}`, { versionsOf: "v0" }, replace, plan => {
+      plans++;
+      return plan.entryIndices.length <= 2;
+    });
+    const elapsed = performance.now() - started;
+    expect(fitted?.window.mode).toBe("versions");
+    expect(fitted?.window.versions?.total).toBe(total);
+    expect(fitted?.entryIndices).toHaveLength(2);
+    expect(fitted?.entryIndices.map(index => (entries[index] as { id: string }).id)).toContain("v0");
+    expect(plans).toBeLessThanOrEqual(16);
+    expect(elapsed).toBeLessThan(2_000);
   });
 });
 

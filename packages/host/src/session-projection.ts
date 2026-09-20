@@ -103,7 +103,9 @@ export class SessionProjection {
       if (!plan) {
         const detail = "all" in request || "from" in request
           ? "The requested history range is too large to transfer safely. Ask for a bounded page instead."
-          : "No bounded history page can represent this complete turn.";
+          : "versionsOf" in request
+            ? "No bounded history page can represent these versions."
+            : "No bounded history page can represent this complete turn.";
         return { kind: "refuse", error: unavailable(detail) };
       }
 
@@ -147,7 +149,14 @@ export class SessionProjection {
           candidate => withinServedBounds(index.entries, candidate.entryIndices, candidate.contextIndices, budget));
       }
       if (bounded && !attemptPlan) {
-        return { kind: "refuse", error: unavailable("No bounded history page can represent this complete turn.") };
+        return {
+          kind: "refuse",
+          error: unavailable(
+            "versionsOf" in request
+              ? "No bounded history page can represent these versions."
+              : "No bounded history page can represent this complete turn.",
+          ),
+        };
       }
     }
     return { kind: "refuse", error: changed() };

@@ -33,9 +33,9 @@ export interface SessionIndexLimits {
 
 /**
  * The entry cap is intentionally below the 8 MiB accounted-identity budget.
- * With UUID-sized ids, 32k identity rows plus a 4096-deep checkpoint ring
- * (long enough that one long turn cannot drop a still-current prefix) stay
- * inside it. Unusually long ids bind on `indexBytes` first.
+ * With UUID-sized ids, 32k identity rows plus a 4096-deep checkpoint ring stay
+ * inside it. The ring covers a 909-row turn; a longer turn can still drop a
+ * still-current prefix. Unusually long ids bind on `indexBytes` first.
  */
 export const DEFAULT_SESSION_INDEX_LIMITS: SessionIndexLimits = {
   /**
