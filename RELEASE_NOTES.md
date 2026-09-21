@@ -1,23 +1,31 @@
-# Laser 0.11.1 — a long conversation is all there, every time
+# Laser 0.12.0 — Model profiles
 
-Two things 0.11.0 still got wrong on a real ten-megabyte conversation, and one thing it should never have shown you.
+One idea replaces three. A **Model profile** is a list of models you name and order: the first is the one it prefers, the rest take over, in order, when that one stops answering. Everything that used to pick a model — new sessions, session naming, agents, the composer, onboarding — now picks a profile. Fallback chains, default-model settings and per-model thinking levels are gone as separate ideas; they became profiles.
 
-## You can always scroll to the start
+## What you get
 
-Leaving a long conversation and coming back could leave it stuck partway: scrolling up did nothing, and everything older than a certain row was simply unreachable until you reloaded. The app frees memory when you leave a session and picks the transcript back up from where it was cut; the bookkeeping for that pickup could anchor itself on a record at the very start of the conversation and conclude there was nothing more to load, while thousands of rows were missing. Fixed. Leave, come back, scroll — it keeps loading, back to the first message, every time.
+- **Settings → Providers and models → Model profiles.** Add, duplicate, rename, reorder, remove. Each profile shows who uses it. Deleting one that is in use asks you what should take its place, in the same dialog, so nothing is ever left pointing at a profile that no longer exists.
+- **Three to start with.** Smart, Balanced and Fast are seeded from the models you have connected. They are ordinary profiles: edit them, rename them, delete them.
+- **Assignments.** New sessions start on your default profile; titles are written on the naming profile; consultation and design work have their own. All four are pickers in Settings.
+- **The composer control shows two lines:** the profile, and beneath it the model actually answering right now. Pick a profile to re-anchor the conversation; pick a single model to pin it — the control says "Pinned · no fallback" and means it.
+- **When a profile moves a conversation** to its next model you see "Moved to …" in the transcript and in the status line, with the reason. A profile never moves to a model outside itself.
+- **Agents choose a profile** in their file (`profile:`), or inherit your default. A file that names a profile that no longer exists still runs, on the default, and the fleet row shows the substitution.
+- **Onboarding** connects a provider, shows the three seeded profiles pre-filled from what just connected, and goes on to your first project. You can edit them or skip.
+- **Fleet, session list, logs and usage** show the profile as what was intended and the model as what answered. A captured request in the logs inspector names the profile it ran on.
+- `laser doctor` checks every model of every profile and names the profile in its report; `laser runs` and `laser session` print both.
 
-## An oversized message stays where it belongs
+## Migration
 
-A prompt too large to travel inside a page could turn up at the very top of the conversation — above your first message — as an empty bubble with "Show full message". It was a bug in where a page of history was placed when its boundary happened to be one of those oversized messages. It now sits in its own place, and it shows its real time instead of the moment you opened the session.
+The first start after updating rewrites your settings once, through the app, and writes a preview record of what it did into the app's state directory:
 
-## Nothing asks for the whole conversation any more
+- each fallback chain becomes a profile named after its first model ("Sonnet 4.5 profile"), which you can rename;
+- your default model becomes the default profile — the profile that starts with it, or a new "Default" profile holding just that model;
+- default and per-model thinking levels fold into the matching profile entries;
+- the models you chose for Beam, Chat and the namer become their profile choices;
+- agent files that said `model: provider/id` are rewritten to `profile:`, once, and the record lists each file.
 
-There is no "Load other versions" control, no "Load history and versions" menu item, and no sentence telling you the conversation is too large to load at once. Every one of those asked for the whole conversation in one read, which is refused for exactly the conversations big enough to show them. Other versions of a message are reached from the message itself — the ‹ 1 / 3 › picker beside a prompt now knows every version, including ones on branches you have not scrolled into, and takes you straight there.
-
-## Your own first message stopped appearing twice
-
-On the first turn of a conversation, the message you sent could be left behind a second time at the very bottom of the transcript, dimmed — a copy of your own words that never went away and came back after every refresh. The app keeps what you have sent on screen until the engine has written it down; it recognised the written one by an identifier the two copies never share, so it kept the temporary one for ever. It now recognises the words. Nothing was ever sent twice, and nothing was missing from the conversation.
+The old settings keys are left in place for one release, so going back to 0.11 reads them unchanged. Conversations from before this release keep the model and thinking level they had and show as pinned; they are not moved onto a profile behind your back.
 
 ## Also
 
-- Once you have scrolled up to read, nothing scrolls you back down but you: a new row arriving, a smooth scroll that has not finished, or a row that shrank no longer counts as "back at the end". The Jump to latest pill carries a quiet mark when new rows have arrived below you.
+- The product's own copy never says "chain" or "tier" any more, and a check in the build keeps it that way.
