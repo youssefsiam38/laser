@@ -6212,8 +6212,8 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | M22-T7 | Onboarding profile review | done | claude-2026-09-21-leap | `69f7bf9c`; `pnpm -F @lasercode/ui test` (3008 passed) | see notes |
 | M22-T8 | Composer, status line, fleet and logs | done | claude-2026-09-21-leap | `60671df9`; `pnpm -F @lasercode/ui test` (3008 passed) | see notes |
 | M22-T9 | Agents page and CLI | done | claude-2026-09-21-leap | `1e2c031c`; `pnpm -F @lasercode/ui test` (3008 passed) | see notes |
-| M22-T10 | Documents, identity guard and reconciliation | todo | — | — | `PLAN.md` M22 |
-| M22-T11 | Migration acceptance and release | todo | — | — | `PLAN.md` M22 |
+| M22-T10 | Documents, identity guard and reconciliation | done | claude-2026-09-21-leap | `1a1efdcd` (code), `05fbb7aa` (docs), `8095f43f` (review fixes); `pnpm verify` at `f14a152f`; `pnpm identity:check` | see notes |
+| M22-T11 | Migration acceptance and release | in-progress | claude-2026-09-21-leap | — | see notes |
 
 #### M22-T1 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap (goal `docs/goal-project-lifecycle-leap.md`): add `ModelProfile`/`MODEL_PROFILES_SETTING`/validation, `SessionState.profile`, `AgentDefinition.profileId`, assignment settings, `models/profiles/*`, `session/profile/set`, `session/model/pin`; remove `agents/builtin/set-model`, `agents/beam/choose-model`, `agents/namer/qualify`. Delegated to a worker in an isolated worktree; the same owner continues through M22-T5.
@@ -6222,6 +6222,14 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 #### M22-T2–T5 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: backend worker session continues from M22-T1 on branch `agents/model-profiles-backend-819b3a73` (worker → host), one commit per task; plan and checkpoints in `docs/leap/m22-backend-plan.md`.
 - 2026-09-21 done, merged at `076b5af7`: T2 `packages/worker/src/profiles/{migrate,seeds}.ts` + settings descriptors, fixtures for a 0.11 file, an empty file and a half-migrated file; T3 activation keyed by profile with snapshot, start-time walk, pin, edit-during-run, legacy `chainKey` history, `SessionDriver.setProfile` on both drivers (seam green), M15-T3/T8 list re-run (76 passed in `test/fallback/*`); T4 agent `profile:` inherit/unknown-profile warning/substitution, one-shot naming on `namingProfileId`; T5 methods routed, migration at host start via new host→worker `models/profiles/migrate` (native reach, settings scope), `models/profiles/seeded` prompt, `SessionSummary.profileId`, delete-with-replacement refused server-side. Worker decisions D-e (migrated lists named "<Model> profile", never "chain"), D-f (naming needs an explicit `namingProfileId`), D-g (catalog projection carries profile) in the plan file. Host tests need a scrubbed environment when run from inside Laser (`pnpm verify` scrubs it itself).
+
+#### M22-T10 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap. Code half done directly (`1a1efdcd`): `ProviderRequestContext.profileId` stamped by the worker on every capture (engine test "stamps the profile in force on every captured provider request"), the logs inspector's profile row (`request-dialog.test.tsx`), `clean-machine.mjs` seeds `modelProfiles` + `defaultProfileId`/`namingProfileId`, identity check 3 flags "chain"/"tier" in string literals under `packages/{ui,cli,host,worker,desktop}/src` (proved by a probe file). Docs half by a worker (`05fbb7aa`): `agents.md`, `product-boundary.md`, `settings-scope-audit.md`, `architecture.md`, `ux-fleet.md`, `mobile.md` on profile vocabulary; the inventory in `model-profiles.md` ticked `✓`/`≠` per row.
+- 2026-09-21 independent review of M22-T1–T9 (`docs/leap/m22-review.md`): two blocking (legacy built-in model choices dropped; `model:` agent files failing to parse instead of being rewritten), three should-fix (no start-time walk at open/first turn; silent dangling id on a failed rewrite during delete; old default model skipped when profiles exist). All fixed in `8095f43f` with tests (`host/test/agents/legacy-model-migration.test.ts`, `profiles-migration.test.ts`, `router.test.ts`, `worker/test/profiles/migrate.test.ts`, `fallback/{activation,engine}.test.ts`, `first-turn.test.ts`); `models/profiles/migrate` gained `legacyChoices`/`resolved` (D-i in the backend plan). Re-verified: `pnpm verify` green at `f14a152f`.
+
+#### M22-T11 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap. Migration run on the person's real settings file: an exact copy (D-356), through a real host and real worker; preview in `docs/leap/m22-real-migration-preview.json`. Result: the two saved lists became "Claude Fable 5.1 profile" and "GPT-6 Astra profile" with `high` folded into every entry; `defaultProvider/defaultModel` → profile "Default" (`defaultProfileId`, and naming/oracle/design-index assignments); the Namer's chosen model → profile "Namer" held by `builtinProfiles.namer` with a real `from`/`to` in the record; Beam/Chat (no model) inherit the default; old keys kept. A pre-M22 session with `chainKey` fallback history opened with `profile: null`, `pinned: true`, its own model and thinking level; a post-migration `session/new` opened on "Default" with the effective model. Second migrate: `ran: false`. Observation for M23-T3: `namingProfileId` was assigned the default profile while the Namer built-in holds its own profile; when the built-in goes, its profile must become `namingProfileId`.
+- 2026-09-21 release notes written (`RELEASE_NOTES.md`, 0.12.0 with migration notes); next: merge `main`, regenerate `STATUS.md`, run `release.mjs` read-only then `--publish`.
 
 #### M22-T6–T9 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI/CLI worker on branch `agents/model-profiles-ui-and-cli-0d93c72c` based on `e692e4b9`, in parallel with the backend (write sets disjoint: packages/ui, packages/cli); plan and host assumptions in `docs/leap/m22-ui-plan.md`.
@@ -6287,6 +6295,11 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 #### M26-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/agent-tool-contract.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M26 tasks added; D-350 recorded. Implementation not started.
+
+### D-356 · 2026-09-21 · Real-file migration acceptance runs on an exact copy
+Decision: M22-T11's "migration run on the person's real settings file" is satisfied by running the real host + real worker over a byte-exact copy of the person's global settings file, host agents state and a real pre-M22 session, and reviewing the preview it writes; the in-place rewrite happens on the person's first start of the released build.
+Why: the person's live Laser holds a worker on the real project and owns the real files while agents work (AGENTS.md invariants 5 and 8, and the sandbox rule); a second host over the same state directory would be exactly the two-writer situation the invariants forbid.
+Consequences: the preview and the two session states are recorded in `docs/leap/m22-real-migration-preview.json`; the release notes tell the person what the first start will do; the record file the app writes on that start is the same shape.
 
 ### D-355 · 2026-09-21 · The workspace borrows the tracker's shape, not its lies
 

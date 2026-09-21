@@ -1,0 +1,293 @@
+{
+  "how": "packages/host scratch test (not committed): HostServer + real worker over an exact copy of ~/.local/share/lasercode/agent/{settings,auth,models-store}.json, state/agents.json and one real pre-M22 session (2026-09-12 \u2026e9e2904ca235, carries lasercode/fallback chainKey history) re-homed to a scratch project; the person's live host owns the real files (AGENTS.md invariant 5), so the copy is the file the migration ran on. A second `models/profiles/migrate` on the same worker answered ran=false.",
+  "before": {
+    "defaultProvider": "anthropic",
+    "defaultModel": "claude-opus-5",
+    "defaultThinkingLevel": "high",
+    "fallbackChains": [
+      {
+        "models": [
+          {
+            "provider": "anthropic",
+            "id": "claude-fable-5-1"
+          },
+          {
+            "provider": "anthropic",
+            "id": "claude-opus-5"
+          },
+          {
+            "provider": "openai-codex",
+            "id": "gpt-5.6-sol"
+          }
+        ]
+      },
+      {
+        "models": [
+          {
+            "provider": "openai-codex",
+            "id": "gpt-6-astra"
+          },
+          {
+            "provider": "anthropic",
+            "id": "claude-fable-5-1"
+          },
+          {
+            "provider": "anthropic",
+            "id": "claude-opus-5"
+          },
+          {
+            "provider": "openai-codex",
+            "id": "gpt-5.6-sol"
+          }
+        ]
+      }
+    ]
+  },
+  "after": {
+    "modelProfiles": [
+      {
+        "id": "mp_01M31379PGSB3QANRYEZ4P4X3J",
+        "name": "Claude Fable 5.1 profile",
+        "models": [
+          {
+            "provider": "anthropic",
+            "id": "claude-fable-5-1",
+            "thinking": "high"
+          },
+          {
+            "provider": "anthropic",
+            "id": "claude-opus-5",
+            "thinking": "high"
+          },
+          {
+            "provider": "openai-codex",
+            "id": "gpt-5.6-sol",
+            "thinking": "high"
+          }
+        ],
+        "origin": "person",
+        "updatedAt": "2026-09-21T04:22:40.079Z"
+      },
+      {
+        "id": "mp_01M31379PG8TC13MD5S35ZHQCS",
+        "name": "GPT-6 Astra profile",
+        "models": [
+          {
+            "provider": "openai-codex",
+            "id": "gpt-6-astra",
+            "thinking": "high"
+          },
+          {
+            "provider": "anthropic",
+            "id": "claude-fable-5-1",
+            "thinking": "high"
+          },
+          {
+            "provider": "anthropic",
+            "id": "claude-opus-5",
+            "thinking": "high"
+          },
+          {
+            "provider": "openai-codex",
+            "id": "gpt-5.6-sol",
+            "thinking": "high"
+          }
+        ],
+        "origin": "person",
+        "updatedAt": "2026-09-21T04:22:40.079Z"
+      },
+      {
+        "id": "mp_01M31379PG0S7T331XCEY4HEXJ",
+        "name": "Default",
+        "models": [
+          {
+            "provider": "anthropic",
+            "id": "claude-opus-5",
+            "thinking": "high"
+          }
+        ],
+        "origin": "person",
+        "updatedAt": "2026-09-21T04:22:40.079Z"
+      },
+      {
+        "id": "mp_01M31379PG77XNE7SACH980FVY",
+        "name": "Namer",
+        "models": [
+          {
+            "provider": "openrouter",
+            "id": "deepseek/deepseek-v4.1-flash",
+            "thinking": "high"
+          }
+        ],
+        "origin": "person",
+        "updatedAt": "2026-09-21T04:22:40.079Z"
+      }
+    ],
+    "defaultProfileId": "mp_01M31379PG0S7T331XCEY4HEXJ",
+    "namingProfileId": "mp_01M31379PG0S7T331XCEY4HEXJ",
+    "oracleProfileId": "mp_01M31379PG0S7T331XCEY4HEXJ",
+    "designIndexProfileId": "mp_01M31379PG0S7T331XCEY4HEXJ"
+  },
+  "oldKeysKept": {
+    "defaultProvider": true,
+    "defaultModel": true,
+    "defaultThinkingLevel": true,
+    "fallbackChains": true
+  },
+  "record": {
+    "version": 1,
+    "at": "2026-09-21T04:22:40.082Z",
+    "settings": {
+      "ran": true,
+      "profiles": [
+        {
+          "id": "mp_01M31379PGSB3QANRYEZ4P4X3J",
+          "name": "Claude Fable 5.1 profile",
+          "models": [
+            {
+              "provider": "anthropic",
+              "id": "claude-fable-5-1",
+              "thinking": "high"
+            },
+            {
+              "provider": "anthropic",
+              "id": "claude-opus-5",
+              "thinking": "high"
+            },
+            {
+              "provider": "openai-codex",
+              "id": "gpt-5.6-sol",
+              "thinking": "high"
+            }
+          ],
+          "origin": "person",
+          "updatedAt": "2026-09-21T04:22:40.079Z"
+        },
+        {
+          "id": "mp_01M31379PG8TC13MD5S35ZHQCS",
+          "name": "GPT-6 Astra profile",
+          "models": [
+            {
+              "provider": "openai-codex",
+              "id": "gpt-6-astra",
+              "thinking": "high"
+            },
+            {
+              "provider": "anthropic",
+              "id": "claude-fable-5-1",
+              "thinking": "high"
+            },
+            {
+              "provider": "anthropic",
+              "id": "claude-opus-5",
+              "thinking": "high"
+            },
+            {
+              "provider": "openai-codex",
+              "id": "gpt-5.6-sol",
+              "thinking": "high"
+            }
+          ],
+          "origin": "person",
+          "updatedAt": "2026-09-21T04:22:40.079Z"
+        },
+        {
+          "id": "mp_01M31379PG0S7T331XCEY4HEXJ",
+          "name": "Default",
+          "models": [
+            {
+              "provider": "anthropic",
+              "id": "claude-opus-5",
+              "thinking": "high"
+            }
+          ],
+          "origin": "person",
+          "updatedAt": "2026-09-21T04:22:40.079Z"
+        },
+        {
+          "id": "mp_01M31379PG77XNE7SACH980FVY",
+          "name": "Namer",
+          "models": [
+            {
+              "provider": "openrouter",
+              "id": "deepseek/deepseek-v4.1-flash",
+              "thinking": "high"
+            }
+          ],
+          "origin": "person",
+          "updatedAt": "2026-09-21T04:22:40.079Z"
+        }
+      ],
+      "assignments": {
+        "defaultProfileId": "mp_01M31379PG0S7T331XCEY4HEXJ",
+        "namingProfileId": "mp_01M31379PG0S7T331XCEY4HEXJ",
+        "oracleProfileId": "mp_01M31379PG0S7T331XCEY4HEXJ",
+        "designIndexProfileId": "mp_01M31379PG0S7T331XCEY4HEXJ"
+      },
+      "notes": [
+        "Your 2 saved model lists became profiles.",
+        "The model new conversations started on became the profile \u201cDefault\u201d.",
+        "\u201cNamer\u201d kept the model it was on, as the profile \u201cNamer\u201d."
+      ],
+      "resolved": {
+        "builtin:namer": "mp_01M31379PG77XNE7SACH980FVY"
+      }
+    },
+    "builtins": [
+      {
+        "name": "namer",
+        "from": "openrouter/deepseek/deepseek-v4.1-flash",
+        "to": "mp_01M31379PG77XNE7SACH980FVY"
+      }
+    ]
+  },
+  "builtinProfiles": {
+    "beam": "mp_01M31379PG0S7T331XCEY4HEXJ",
+    "chat": "mp_01M31379PG0S7T331XCEY4HEXJ",
+    "namer": "mp_01M31379PG77XNE7SACH980FVY"
+  },
+  "sessions": {
+    "firstBeforeRecord": {
+      "profile": {
+        "id": "mp_01M31379PG0S7T331XCEY4HEXJ",
+        "name": "Default"
+      },
+      "model": {
+        "provider": "anthropic",
+        "id": "claude-opus-5",
+        "name": "Claude Opus 5",
+        "contextWindow": 1000000,
+        "reasoning": true,
+        "vision": true
+      }
+    },
+    "fresh": {
+      "profile": {
+        "id": "mp_01M31379PG0S7T331XCEY4HEXJ",
+        "name": "Default"
+      },
+      "model": {
+        "provider": "anthropic",
+        "id": "claude-opus-5",
+        "name": "Claude Opus 5",
+        "contextWindow": 1000000,
+        "reasoning": true,
+        "vision": true
+      },
+      "thinking": "high"
+    },
+    "old": {
+      "profile": null,
+      "model": {
+        "provider": "anthropic",
+        "id": "claude-opus-5",
+        "name": "Claude Opus 5",
+        "contextWindow": 1000000,
+        "reasoning": true,
+        "vision": true
+      },
+      "pinned": true,
+      "thinking": "low"
+    }
+  }
+}
