@@ -7,6 +7,15 @@ import { ErrorCodes, ProtocolError, toolError, type ToolError } from "@lasercode
  * defaults in `registerLaserTool`; one that knows better — because it already
  * changed something, or because the way forward is a different tool — says so
  * at the throw site.
+ *
+ * The mutating tools' own sites use it (`harness.ts`): `start_agent` when a
+ * worktree or a child session survives a failed start, `stop_agent` before
+ * and after the abort is signalled, `remove_agent_worktree` for a removal git
+ * only half did, and `send_agent_message` for an agent that is not there or
+ * no longer open. Those are the paths where `committed` is a fact rather than
+ * a default, and where one `*_failed` code for every failure of a tool would
+ * tell a model nothing. Read-only tools never set it: the helper forces their
+ * `committed` to false whatever a refusal claims.
  */
 export interface HarnessErrorRecovery {
   code: string;

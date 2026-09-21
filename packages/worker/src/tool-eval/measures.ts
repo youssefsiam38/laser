@@ -25,8 +25,17 @@ import { validateArguments } from "./schema-check.js";
 /** A result at least this large counts as truncated when a fixture says nothing. */
 export const DEFAULT_TRUNCATION_BYTES = 2_000;
 
-/** Phrases a Laser tool uses when it has left something out (contract §3). */
-const NARROWING_MARKERS = ["were left out", "was released", "output before byte", "omitted", "nextOffset", "nextCursor"];
+/**
+ * Phrases a Laser tool uses when it has left something out (contract §3).
+ *
+ * Whole sentences, not words: `omitted` on its own matched any result that
+ * happened to contain the word — a build log, a diff, a tool's own
+ * description quoted back — and called it truncated. Every entry here is
+ * text one of the tools really prints (`fleet.ts`'s row note,
+ * `background-work`'s released-window note) or a field a paged result really
+ * carries.
+ */
+const NARROWING_MARKERS = ["were left out", "was left out", "was released", "output before byte", "were omitted", "was omitted", "nextOffset", "nextCursor"];
 
 export interface MeasureResult {
   id: ToolEvalMeasureId;
@@ -349,17 +358,27 @@ function isTruncated(call: ObservedCall, bytes: number): boolean {
   return NARROWING_MARKERS.some((marker) => call.text.includes(marker));
 }
 
+/**
+ * Every truncated result of the run, not the first one.
+ *
+ * A fixture with two truncated pages used to be judged on one of them and
+ * pass on its strength: the loop returned inside its first iteration, and the
+ * line after it could never run. Now each truncated call has to have been
+ * narrowed, the first violation is what the report says, and the measure
+ * passes only when all of them were.
+ */
 function truncationMeasure(run: ToolEvalRun, fixture: ToolEvalFixture): MeasureResult {
   const bytes = fixture.truncationBytes ?? DEFAULT_TRUNCATION_BYTES;
   const truncated = run.calls.filter((call) => isTruncated(call, bytes));
   if (truncated.length === 0) {
     return { id: "truncation", pass: false, detail: `no result reached ${String(bytes)} bytes or said anything was left out, so the fixture proved nothing about narrowing.` };
   }
+  const narrowings: string[] = [];
   for (const call of truncated) {
     const asked = pageSizes(call);
     const later = run.calls.filter((entry) => entry.index > call.index && entry.tool === call.tool);
     const repeated = later.find((entry) => argsKey(entry) === argsKey(call));
-    if (repeated) return { id: "truncation", pass: false, detail: `${call.tool} asked for the same page again after a truncated result.` };
+    if (repeated) return { id: "truncation", pass: false, detail: `${call.tool} asked for the same page again after a truncated result (call ${String(call.index + 1)}).` };
     const narrower = later.find((entry) => {
       const sizes = pageSizes(entry);
       if (sizes.size === 0) return false;
@@ -369,13 +388,9 @@ function truncationMeasure(run: ToolEvalRun, fixture: ToolEvalFixture): MeasureR
       });
     });
     if (!narrower) {
-      return { id: "truncation", pass: false, detail: `${call.tool} returned a truncated result and nothing narrowed the next request.` };
+      return { id: "truncation", pass: false, detail: `${call.tool} returned a truncated result (call ${String(call.index + 1)}) and nothing narrowed the next request.` };
     }
-    return {
-      id: "truncation",
-      pass: true,
-      detail: `${call.tool} returned ${String(call.text.length)} bytes and the next call asked for less (${[...pageSizes(narrower).entries()].map(([name, value]) => `${name} ${String(value)}`).join(", ")}).`,
-    };
+    narrowings.push(`${call.tool} returned ${String(call.text.length)} bytes and the next call asked for less (${[...pageSizes(narrower).entries()].map(([name, value]) => `${name} ${String(value)}`).join(", ")})`);
   }
-  return { id: "truncation", pass: false, detail: "nothing was measured." };
+  return { id: "truncation", pass: true, detail: `${count(narrowings.length, "truncated result", "truncated results")}, every one of them narrowed: ${narrowings.join("; ")}.` };
 }

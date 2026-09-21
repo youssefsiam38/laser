@@ -15,7 +15,7 @@
  * schema that grows past this file fails loudly instead of quietly passing
  * every call.
  */
-import type { JsonSchemaNode } from "@lasercode/protocol";
+import { isRecord, type JsonSchemaNode } from "@lasercode/protocol";
 
 /** One thing wrong with one call, said where it is wrong. */
 export interface ArgumentViolation {
@@ -23,8 +23,6 @@ export interface ArgumentViolation {
   path: string;
   message: string;
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 
 const typeName = (value: unknown): string => (value === null ? "null" : Array.isArray(value) ? "array" : typeof value);
 

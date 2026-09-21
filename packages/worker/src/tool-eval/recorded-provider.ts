@@ -54,8 +54,11 @@ interface ProviderRequestBody {
 
 const sse = (value: unknown): string => `data: ${JSON.stringify(value)}\n\n`;
 
+/** The estimate's one constant, so a caller counting bytes can use it without building a string. */
+export const CHARACTERS_PER_TOKEN = 4;
+
 /** A rough, stable token estimate: four characters to a token. */
-export const estimateTokens = (text: string): number => Math.ceil(text.length / 4);
+export const estimateTokens = (text: string): number => Math.ceil(text.length / CHARACTERS_PER_TOKEN);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
