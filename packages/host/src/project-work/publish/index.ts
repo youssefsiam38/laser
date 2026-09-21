@@ -23,9 +23,14 @@
  *    same item is superseded, never deleted.
  *
  * An export that is not committed can still be published — a person may want
- * the state recorded before they commit — but only by naming the checkpoint
- * that identifies those bytes. Without one it is a refusal, because "published
- * at some uncommitted state" is exactly the provenance the leap forbids.
+ * the state recorded before they commit — but only by naming the M20
+ * checkpoint that holds those exact bytes. A checkpoint **is a commit object**
+ * (leap, "Repository provenance"), so naming one does not relax the proof: the
+ * ref is resolved in this repository, its commit is read, and every exported
+ * file's blob is proved against that commit exactly as it would be against a
+ * commit the person made. An id that resolves to nothing, or a state that does
+ * not carry the export, is a refusal — "published at some state nobody can
+ * point at" is exactly the provenance the leap forbids.
  */
 import { relative } from "node:path";
 import {
@@ -42,10 +47,10 @@ import {
 
 import { ProjectWorkRefusedError } from "../errors.js";
 import { canonicalJson, sha256 } from "../ids.js";
-import { insideProject, projectDirectory, readTextFile } from "../export/paths.js";
+import { insideProject, insideProjectAt, projectDirectory, readTextFile } from "../export/paths.js";
 import { ProjectWorkExport, type ComputedExport } from "../export/index.js";
 import type { ProjectWorkStore } from "../store.js";
-import { blobObjectId, repositoryAt, resolveCommit, treeAt, type GitRepository } from "./git.js";
+import { blobObjectId, checkpointCommit, repositoryAt, resolveCommit, treeAt, type GitRepository } from "./git.js";
 
 interface PublishPlan {
   root: string;
@@ -108,7 +113,7 @@ export class ProjectWorkPublish {
       ...(complete
         ? {}
         : {
-            refusal: `${String(ready.uncommitted.length)} exported file${ready.uncommitted.length === 1 ? " is" : "s are"} not committed yet. Commit them, or name the checkpoint that identifies this state, before recording where this work is published.`,
+            refusal: `${String(ready.uncommitted.length)} exported file${ready.uncommitted.length === 1 ? " is" : "s are"} not committed yet. Commit them, or name the checkpoint whose commit carries these exact files, before recording where this work is published.`,
           }),
     };
   }
@@ -124,14 +129,24 @@ export class ProjectWorkPublish {
       );
     }
 
-    const commitObjectId = resolveCommit(plan.repository.toplevel, params.commit);
-    if (!commitObjectId) {
+    // The one state this publication is about: the checkpoint's commit when a
+    // checkpoint was named, and the commit itself otherwise. Never both, and
+    // never a commit whose bytes were not read.
+    const checkpoint = params.checkpointId === undefined ? undefined : checkpointCommit(plan.repository.toplevel, params.checkpointId);
+    if (params.checkpointId !== undefined && !checkpoint) {
+      throw new ProjectWorkRefusedError(
+        "That is not a checkpoint this repository still has, so nothing was recorded. Publish the commit the export was written in, or name a checkpoint that is still there.",
+      );
+    }
+    const namedCommit = resolveCommit(plan.repository.toplevel, params.commit);
+    if (!checkpoint && !namedCommit) {
       throw new ProjectWorkRefusedError(
         params.commit === "HEAD"
           ? "This repository has no commit yet, so there is no state to publish this export at. Commit the export first."
           : "That commit is not in this repository, so nothing was recorded. Publish the commit the export was written in.",
       );
     }
+    const commitObjectId = checkpoint ? checkpoint.commitObjectId : namedCommit!;
 
     const tree = treeAt(plan.repository.toplevel, commitObjectId, plan.repositoryRoot);
     const missing: string[] = [];
@@ -144,9 +159,11 @@ export class ProjectWorkPublish {
       if (tree.get(repositoryPath) === expected) blobs.set(file.path, expected);
       else missing.push(repositoryPath);
     }
-    if (missing.length > 0 && params.checkpointId === undefined) {
+    if (missing.length > 0) {
       throw new ProjectWorkRefusedError(
-        `That commit does not carry ${String(missing.length)} of this export's files (${missing.slice(0, 3).join(", ")}). Commit the export, or name the checkpoint that identifies this state.`,
+        checkpoint
+          ? `That checkpoint does not carry ${String(missing.length)} of this export's files (${missing.slice(0, 3).join(", ")}). Export again, take a checkpoint of that state, and publish it — or commit the export.`
+          : `That commit does not carry ${String(missing.length)} of this export's files (${missing.slice(0, 3).join(", ")}). Commit the export, or name the checkpoint whose commit carries these exact files.`,
       );
     }
 
@@ -155,14 +172,17 @@ export class ProjectWorkPublish {
     for (const [index, entity] of plan.entities.entries()) {
       const document = `${entity.key}.md`;
       const contents = plan.computed.contents.get(document);
-      if (contents === undefined) continue;
+      const blob = blobs.get(document);
+      if (contents === undefined || blob === undefined) continue;
       const state: RepositoryStateRef = {
         vcs: "git",
         objectFormat: plan.repository.objectFormat,
         commitObjectId,
-        ...(params.checkpointId !== undefined ? { checkpointId: params.checkpointId } : {}),
+        ...(checkpoint ? { checkpointId: checkpoint.ref } : {}),
         path: entity.publishedPath,
-        ...(blobs.has(document) ? { blobObjectId: blobs.get(document)! } : {}),
+        // Proved above against this commit's tree, never computed into the
+        // record from bytes git was not holding.
+        blobObjectId: blob,
         contentDigest: sha256(contents),
       };
       const previous = this.previousPublication(params.projectId, entity.entityId);
@@ -202,7 +222,7 @@ export class ProjectWorkPublish {
         vcs: "git",
         objectFormat: plan.repository.objectFormat,
         commitObjectId,
-        ...(params.checkpointId !== undefined ? { checkpointId: params.checkpointId } : {}),
+        ...(checkpoint ? { checkpointId: checkpoint.ref } : {}),
         path: plan.repositoryRoot,
         contentDigest: plan.computed.manifestDigest,
       },
@@ -275,7 +295,7 @@ export class ProjectWorkPublish {
       const computed = this.exporter.compute(projectId, root, includeArchived);
       const projectRoot = projectDirectory(this.store, projectId);
       const absolute = insideProject(projectRoot, root);
-      const onDisk = readAll(absolute, computed);
+      const onDisk = readAll(projectRoot, absolute, computed);
       if (onDisk) return computed;
     }
     return undefined;
@@ -318,11 +338,11 @@ export class ProjectWorkPublish {
 }
 
 /** Is every computed file on disk, byte for byte? */
-function readAll(absoluteRoot: string, computed: ComputedExport): boolean {
+function readAll(projectRoot: string, absoluteRoot: string, computed: ComputedExport): boolean {
   for (const file of computed.files) {
     const expected = computed.contents.get(file.path);
     if (expected === undefined) continue;
-    const actual = readTextFile(insideProject(absoluteRoot, file.path), 16 * 1024 * 1024);
+    const actual = readTextFile(insideProjectAt(projectRoot, absoluteRoot, file.path), 16 * 1024 * 1024);
     if (actual !== expected) return false;
   }
   return true;

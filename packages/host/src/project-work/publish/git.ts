@@ -14,6 +14,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { parseCheckpointRef } from "@lasercode/protocol";
 
 const GIT_TIMEOUT_MS = 15_000;
 const GIT_MAX_BUFFER = 8 * 1024 * 1024;
@@ -73,6 +74,37 @@ export function repositoryAt(cwd: string): GitRepository | undefined {
 export function resolveCommit(cwd: string, commit: string): string | undefined {
   const resolved = gitRead(cwd, ["rev-parse", "--verify", "--quiet", `${commit}^{commit}`])?.trim();
   return resolved && /^[0-9a-f]{7,64}$/.test(resolved) ? resolved : undefined;
+}
+
+/**
+ * A checkpoint a caller named, resolved to the commit object it points at.
+ *
+ * Three things are proved before publication may use it, and any one of them
+ * failing is `undefined`:
+ *
+ * - it is an **M20 checkpoint ref** — the worker's own namespace and layout
+ *   (`parseCheckpointRef`), not an arbitrary ref name, not a branch, not a
+ *   free-text id a caller invented;
+ * - that ref is **in this repository right now, under exactly that name**.
+ *   `for-each-ref` takes its argument as a *pattern*, and a pattern matches
+ *   whole path components: `…/checkpoints/<key>` would answer for every turn
+ *   under it. So the name is read back with the object id and compared, and
+ *   anything but one exact match — a descendant, several refs, a different
+ *   name — is no checkpoint at all;
+ * - what it points at is a **commit object**, which is what a checkpoint is
+ *   and what a state may be recorded against.
+ */
+export function checkpointCommit(cwd: string, checkpointId: string): { ref: string; commitObjectId: string } | undefined {
+  if (!parseCheckpointRef(checkpointId)) return undefined;
+  const listed = gitRead(cwd, ["for-each-ref", "--format=%(refname)%00%(objectname)", checkpointId]);
+  const lines = (listed ?? "").split(/\r?\n/).filter((line) => line.trim() !== "");
+  if (lines.length !== 1) return undefined;
+  const [refname, objectname] = lines[0]!.split("\0");
+  if (refname !== checkpointId) return undefined;
+  const objectId = (objectname ?? "").trim();
+  if (!/^[0-9a-f]{7,64}$/.test(objectId)) return undefined;
+  const commitObjectId = resolveCommit(cwd, objectId);
+  return commitObjectId ? { ref: checkpointId, commitObjectId } : undefined;
 }
 
 /**

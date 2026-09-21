@@ -45,6 +45,7 @@ import { attachmentsOf, buildManifest, manifestBytes, type ManifestEntityInput }
 import {
   DEFAULT_EXPORT_ROOT,
   insideProject,
+  insideProjectAt,
   kindOf,
   normaliseRelative,
   projectDirectory,
@@ -140,9 +141,9 @@ export class ProjectWorkExport {
     for (const file of placed.files) {
       const contents = placed.contents.get(file.path);
       if (contents === undefined) continue;
-      writeFileAtomic(insideProject(absoluteRoot, file.path), contents);
+      writeFileAtomic(insideProjectAt(projectRoot, absoluteRoot, file.path), contents, { within: projectRoot });
     }
-    for (const stale of removes) removeFile(insideProject(absoluteRoot, stale));
+    for (const stale of removes) removeFile(insideProjectAt(projectRoot, absoluteRoot, stale));
 
     return {
       root: placed.root,
@@ -259,7 +260,7 @@ export class ProjectWorkExport {
     const projectRoot = projectDirectory(this.store, projectId);
     const absolute = insideProject(projectRoot, root);
     if (kindOf(absolute) !== "directory") return undefined;
-    const manifestText = readTextFile(insideProject(absolute, MANIFEST_FILE), 8 * 1024 * 1024);
+    const manifestText = readTextFile(insideProjectAt(projectRoot, absolute, MANIFEST_FILE), 8 * 1024 * 1024);
     if (manifestText === undefined) {
       const walked = walkFiles(absolute, { max: WORK_EXPORT_FILES_LISTED_MAX });
       if (walked.files.length === 0) return undefined;
@@ -270,7 +271,7 @@ export class ProjectWorkExport {
     const unchanged =
       digest === computed.manifestDigest &&
       computed.files.every((file) => {
-        const text = readTextFile(insideProject(absolute, file.path), WORK_EXPORT_MAX_BYTES);
+        const text = readTextFile(insideProjectAt(projectRoot, absolute, file.path), WORK_EXPORT_MAX_BYTES);
         return text !== undefined && sha256(text) === file.digest;
       });
     return { root, files: walked.files.length, manifestDigest: digest, unchanged };
@@ -285,7 +286,7 @@ export class ProjectWorkExport {
   private staleFiles(projectId: string, root: string, computed: ComputedExport): string[] {
     const projectRoot = projectDirectory(this.store, projectId);
     const absolute = insideProject(projectRoot, root);
-    const manifestText = readTextFile(insideProject(absolute, MANIFEST_FILE), 8 * 1024 * 1024);
+    const manifestText = readTextFile(insideProjectAt(projectRoot, absolute, MANIFEST_FILE), 8 * 1024 * 1024);
     if (manifestText === undefined) return [];
     let previous: ProjectWorkManifest;
     try {
@@ -298,7 +299,16 @@ export class ProjectWorkExport {
     for (const entity of previous.entities ?? []) {
       for (const path of [entity.document, entity.body]) {
         if (typeof path !== "string" || written.has(path)) continue;
-        if (kindOf(insideProject(absolute, path)) !== "file") continue;
+        // A manifest is a file a person can edit. One that names a path this
+        // export may not touch is not a reason to refuse the whole export:
+        // that path is simply not one of this export's leftovers.
+        let absolutePath: string;
+        try {
+          absolutePath = insideProjectAt(projectRoot, absolute, path);
+        } catch {
+          continue;
+        }
+        if (kindOf(absolutePath) !== "file") continue;
         stale.add(path);
       }
     }
