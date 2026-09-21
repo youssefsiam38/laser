@@ -131,6 +131,7 @@ export function evidence(over: Partial<ProjectWorkEvidence> & { evidenceId: stri
     at: over.at ?? "2026-02-02T09:00:00.000Z",
     origin: over.origin ?? ORIGIN,
     ...(over.detail ? { detail: over.detail } : {}),
+    ...(over.blobId ? { blobId: over.blobId } : {}),
     ...(over.repositoryLinkId ? { repositoryLinkId: over.repositoryLinkId } : {}),
     evidenceId: over.evidenceId,
   };

@@ -175,9 +175,13 @@ export async function attemptRepositoryFacts(
 async function repositoryFacts(row: IdentifiedRepository, query: AttemptFactsQuery): Promise<AttemptRepositoryRecord | undefined> {
   const opened = query.previous?.find((record) => record.repositoryId === row.repositoryId);
   const claimed = opened?.base.commitObjectId ?? query.baseCommitObjectId;
-  const baseCommit =
-    claimed && (await commitExists(row.repository, claimed)) ? claimed : (opened?.base.commitObjectId ?? row.head);
+  // A base somebody supplied is kept as identity whether or not git still has
+  // it: this record exists to replace guesses, and "the commit it started
+  // from" quietly becoming `HEAD` is the guess (review F6). `HEAD` is the base
+  // only when nobody named one at all.
+  const baseCommit = claimed ?? row.head;
   if (!baseCommit) return undefined;
+  const baseMissing = claimed !== undefined && !(await commitExists(row.repository, claimed));
   const base: RepositoryStateRef = { vcs: "git", objectFormat: row.objectFormat, commitObjectId: baseCommit };
 
   const all = (await listCheckpointRefs(row.repository, query.sessionKey)).filter((checkpoint) => !checkpoint.failed);
@@ -215,7 +219,9 @@ async function repositoryFacts(row: IdentifiedRepository, query: AttemptFactsQue
     }
   }
 
-  const commits = row.head ? await commitsBetween(row.repository, baseCommit, row.head, ATTEMPT_COMMITS_MAX) : [];
+  // A base git cannot resolve has no commits after it to list, and listing
+  // them from `HEAD` instead would describe a history this attempt never had.
+  const commits = row.head && !baseMissing ? await commitsBetween(row.repository, baseCommit, row.head, ATTEMPT_COMMITS_MAX) : [];
   return {
     repositoryId: row.repositoryId,
     name: row.repository.name,
@@ -225,7 +231,7 @@ async function repositoryFacts(row: IdentifiedRepository, query: AttemptFactsQue
     ...(change ? { change } : {}),
     changedPaths,
     commits,
-    ...(unavailable ? { unavailable: true } : {}),
+    ...(unavailable || baseMissing ? { unavailable: true } : {}),
   };
 }
 
