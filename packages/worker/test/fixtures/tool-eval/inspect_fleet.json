@@ -1,0 +1,52 @@
+{
+  "tool": "inspect_fleet",
+  "task": "What is going on under you right now?",
+  "expectedTool": "inspect_fleet",
+  "allowedTools": [
+    "inspect_fleet"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 1,
+    "inputTokens": 20000,
+    "outputTokens": 200
+  },
+  "measures": [],
+  "world": {
+    "role": "root",
+    "agents": [
+      {
+        "agentName": "reviewer",
+        "subagentName": "Review login flow",
+        "sessionId": "ses_review",
+        "runId": "run_review",
+        "status": "running",
+        "task": "Review the login flow and report every problem you find.",
+        "messageCount": 3
+      },
+      {
+        "agentName": "worker",
+        "subagentName": "Port settings screen",
+        "sessionId": "ses_port",
+        "runId": "run_port",
+        "status": "needs_input",
+        "task": "Port the settings screen to the new layout tokens.",
+        "messageCount": 4,
+        "question": {
+          "text": "Which spacing token replaces the old 12px gap?"
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "inspect_fleet",
+        "args": {}
+      }
+    },
+    {
+      "text": "Two agents: the login-flow review is working, and the settings port is asking which spacing token replaces the old gap."
+    }
+  ]
+}

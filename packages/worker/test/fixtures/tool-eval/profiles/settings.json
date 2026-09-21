@@ -1,0 +1,22 @@
+{
+  "//": "The profile matrix the recorded evaluation runs. Read by readModelProfiles, the product's own reader. Two profiles, because one profile proves nothing about a matrix. No credential, no provider address and no person's data is in this file: a recorded run answers as these model ids from a replay server it starts itself.",
+  "modelProfiles": [
+    {
+      "id": "mp_evaluationfast0000000000",
+      "name": "Fast",
+      "description": "The quick profile of the evaluation matrix.",
+      "models": [{ "provider": "recorded", "id": "recorded-fast" }],
+      "origin": "person",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "mp_evaluationsmart000000000",
+      "name": "Smart",
+      "description": "The careful profile of the evaluation matrix.",
+      "models": [{ "provider": "recorded", "id": "recorded-smart" }],
+      "origin": "person",
+      "updatedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "defaultProfileId": "mp_evaluationfast0000000000"
+}
