@@ -18,6 +18,7 @@ import {
   ErrorCodes,
   PROJECT_DIR_NAME,
   WORK_EXPORT_DIR,
+  checkpointRef,
   projectWorkManifestSchema,
   type ProjectWorkGetResult,
   type ProjectWorkListResult,
@@ -96,12 +97,32 @@ async function create(harness: ProjectWorkHarness, kind: "spec" | "plan" | "task
   );
 }
 
-function git(cwd: string, args: string[]): string {
+function git(cwd: string, args: string[], env: Record<string, string> = {}): string {
   return execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-C", cwd, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
+    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", ...env },
   }).trim();
+}
+
+/**
+ * A checkpoint, the way the worker makes one: the whole working tree written
+ * to a temporary index, that tree committed, and the commit put under the
+ * checkpoint ref namespace. Nothing here is a product code path — it is the
+ * fixture that lets publication be tested against a checkpoint that really
+ * holds bytes, rather than against a string.
+ */
+function writeCheckpoint(harness: ProjectWorkHarness, sessionKey: string, turn: number): { ref: string; commit: string } {
+  const indexFile = join(harness.dir, `checkpoint-index-${sessionKey}-${String(turn)}`);
+  const environment = { GIT_INDEX_FILE: indexFile };
+  git(harness.projectRoot, ["read-tree", "HEAD"], environment);
+  git(harness.projectRoot, ["add", "-A"], environment);
+  const tree = git(harness.projectRoot, ["write-tree"], environment);
+  const parent = git(harness.projectRoot, ["rev-parse", "HEAD"]);
+  const commit = git(harness.projectRoot, ["commit-tree", tree, "-p", parent, "-m", `checkpoint ${String(turn)}`]);
+  const ref = checkpointRef(sessionKey, turn);
+  git(harness.projectRoot, ["update-ref", ref, commit]);
+  return { ref, commit };
 }
 
 // ---------------------------------------------------------------------------
@@ -703,11 +724,16 @@ describe("publication", () => {
     expect(detail.repositoryLinks.filter((link) => link.relation === "published_as")).toHaveLength(2);
   });
 
-  it("records an uncommitted publication only when a checkpoint names the state", async () => {
+  it("records an uncommitted publication against the checkpoint commit that really holds the bytes", async () => {
     h = await repositoryHarness();
     await create(h, "spec", "Phone review", "c1");
     await exportOnce(h, { key: "e1" });
+    // The export is on disk and uncommitted; the checkpoint is the commit
+    // object that carries it (leap: a checkpoint *is* a commit).
+    const checkpoint = writeCheckpoint(h, "a1b2c3", 4);
     const preview = ok<WorkPublishPreviewResult>(await h.call("project/work/publish/preview", { projectId: h.projectId }));
+    expect(preview.ready).toBe(false);
+    expect(preview.refusal).toContain("name the checkpoint whose commit carries these exact files");
 
     const applied = ok<WorkPublishApplyResult>(
       await h.call("project/work/publish/apply", {
@@ -715,20 +741,78 @@ describe("publication", () => {
         previewDigest: preview.previewDigest,
         confirm: true,
         commit: "HEAD",
-        checkpointId: "ckpt_17",
+        checkpointId: checkpoint.ref,
         idempotencyKey: "pub1",
       }),
     );
-    expect(applied.state.checkpointId).toBe("ckpt_17");
+    // The state recorded is the checkpoint's own commit, not the HEAD that was
+    // named beside it and does not carry these files.
+    expect(applied.state.checkpointId).toBe(checkpoint.ref);
+    expect(applied.commitObjectId).toBe(checkpoint.commit);
+    expect(applied.commitObjectId).not.toBe(git(h.projectRoot, ["rev-parse", "HEAD"]));
 
     const detail = ok<ProjectWorkGetResult>(await h.call("project/work/get", { projectId: h.projectId, key: "SPEC-1" }));
     const link = detail.repositoryLinks[0]!;
+    expect("state" in link.target).toBe(true);
     if ("state" in link.target) {
-      expect(link.target.state.checkpointId).toBe("ckpt_17");
-      // Uncommitted bytes have no blob in that commit, and none is invented.
-      expect(link.target.state.blobObjectId).toBeUndefined();
+      expect(link.target.state.checkpointId).toBe(checkpoint.ref);
+      expect(link.target.state.commitObjectId).toBe(checkpoint.commit);
+      // The blob the checkpoint really holds at that path, proved and recorded.
+      expect(link.target.state.blobObjectId).toBe(git(h.projectRoot, ["rev-parse", `${checkpoint.commit}:${EXPORT_ROOT}/SPEC-1.md`]));
       expect(link.target.state.contentDigest).toMatch(/^[0-9a-f]{64}$/);
     }
+  });
+
+  it("refuses a checkpoint id that is not a checkpoint this repository has, and records nothing", async () => {
+    h = await repositoryHarness();
+    await create(h, "spec", "Phone review", "c1");
+    await exportOnce(h, { key: "e1" });
+    const preview = ok<WorkPublishPreviewResult>(await h.call("project/work/publish/preview", { projectId: h.projectId }));
+
+    // An invented id, a ref outside the checkpoint namespace, and a checkpoint
+    // ref that this repository simply does not have.
+    for (const [index, checkpointId] of ["ckpt_17", "HEAD", "refs/heads/main", checkpointRef("a1b2c3", 4)].entries()) {
+      const refusal = failed(
+        await h.call("project/work/publish/apply", {
+          projectId: h.projectId,
+          previewDigest: preview.previewDigest,
+          confirm: true,
+          commit: "HEAD",
+          checkpointId,
+          idempotencyKey: `pub-${String(index)}`,
+        }),
+      );
+      expect(refusal.message).toContain("not a checkpoint this repository still has");
+    }
+
+    const list = ok<ProjectWorkListResult>(await h.call("project/work/list", { projectId: h.projectId }));
+    expect(list.items[0]?.linkCounts.repository).toBe(0);
+  });
+
+  it("refuses a real checkpoint whose commit does not carry the export, and records nothing", async () => {
+    h = await repositoryHarness();
+    await create(h, "spec", "Phone review", "c1");
+    // A checkpoint taken before the export exists: a real ref, a real commit,
+    // and not this export's bytes.
+    const stale = writeCheckpoint(h, "a1b2c3", 1);
+    await exportOnce(h, { key: "e1" });
+    const preview = ok<WorkPublishPreviewResult>(await h.call("project/work/publish/preview", { projectId: h.projectId }));
+
+    const refusal = failed(
+      await h.call("project/work/publish/apply", {
+        projectId: h.projectId,
+        previewDigest: preview.previewDigest,
+        confirm: true,
+        commit: "HEAD",
+        checkpointId: stale.ref,
+        idempotencyKey: "pub1",
+      }),
+    );
+    expect(refusal.message).toContain("That checkpoint does not carry");
+    expect(refusal.message).toContain(`${EXPORT_ROOT}/SPEC-1.md`);
+
+    const list = ok<ProjectWorkListResult>(await h.call("project/work/list", { projectId: h.projectId }));
+    expect(list.items[0]?.linkCounts.repository).toBe(0);
   });
 
   it("refuses when there is no export, and when the export is out of date", async () => {
@@ -763,5 +847,31 @@ describe("publication", () => {
     h = harnessWithProjectFolder();
     const refusal = failed(await h.call("project/work/export/preview", { projectId: h.projectId, path: "../outside" }));
     expect(refusal.code).toBe(ErrorCodes.InvalidParams);
+  });
+
+  it("refuses to export into a repository's storage or this project's settings, and leaves them alone", async () => {
+    h = harnessWithProjectFolder();
+    await create(h, "spec", "Phone review", "c1");
+    writeFile(h.projectRoot, `${PROJECT_DIR_NAME}/settings.json`, '{"kept":true}\n');
+    writeFile(h.projectRoot, `${PROJECT_DIR_NAME}/design/index.json`, '{"design":true}\n');
+
+    for (const path of [".git", ".git/hooks", PROJECT_DIR_NAME, `${PROJECT_DIR_NAME}/design`, `${PROJECT_DIR_NAME}/settings.json`]) {
+      const refusal = failed(await h.call("project/work/export/preview", { projectId: h.projectId, path }));
+      expect(refusal.message).toMatch(/repository's own storage|this project's own settings/);
+    }
+
+    // Nothing there moved, and the one folder exports do use still works.
+    expect(readFileSync(join(h.projectRoot, PROJECT_DIR_NAME, "settings.json"), "utf8")).toBe('{"kept":true}\n');
+    expect(readFileSync(join(h.projectRoot, PROJECT_DIR_NAME, "design", "index.json"), "utf8")).toBe('{"design":true}\n');
+    const exported = await exportOnce(h, { key: "e1" });
+    expect(exported.root).toBe(EXPORT_ROOT);
+  });
+
+  it("refuses to import from a repository's storage or this project's settings", async () => {
+    h = harnessWithProjectFolder();
+    for (const path of [".git", `${PROJECT_DIR_NAME}/design`]) {
+      const refusal = failed(await h.call("project/work/import/preview", { projectId: h.projectId, adapter: "markdown", path }));
+      expect(refusal.message).toMatch(/repository's own storage|this project's own settings/);
+    }
   });
 });

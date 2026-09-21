@@ -596,6 +596,43 @@ Registration edits only, elsewhere: `messages.ts`, `schemas.ts`,
     previewed, never-syncing record of an exported revision, not a file an
     adapter parses.
 
+### Corrections
+
+**Decision 5 is corrected; the root contract wins.** As written above,
+decision 5 let a checkpoint id *stand in for* the proof: an apply whose commit
+did not carry the exported bytes was accepted whenever any `checkpointId`
+string was supplied, and recorded a state with that string, the commit that
+does not hold the bytes, and no blob id — "nothing is invented for bytes git
+does not hold". The premise was wrong. `docs/project-lifecycle-leap.md`
+("Repository provenance") says an M20 checkpoint **is a commit object**, which
+is exactly why uncommitted work may be linked through it. Git therefore does
+hold those bytes, and naming a checkpoint cannot be a way of skipping the
+proof.
+
+So publication now resolves the checkpoint id as an M20 checkpoint ref in this
+repository, reads the commit it points at, and proves **every** exported file's
+blob against that commit's tree, exactly as it does for a commit a person made.
+The recorded state is that checkpoint's commit, its `checkpointId` is the
+resolved ref, and its `blobObjectId` is the id git really holds — proved, never
+computed into the record from bytes nobody can point at. An unresolvable id and
+a state that does not carry the export are both refusals.
+
+**Decision 13 is extended.** Containment in `export/paths.ts` was lexical:
+every filesystem call under it followed links, so a link at the export root or
+at any ancestor took a read, a write or a delete out of the project, and
+nothing refused an export root inside `.git` or the project's own settings
+directory. Containment is now decided against the filesystem in the shape the
+host already uses for a command's log file (`tasks/register.ts#isInsideRoot`):
+the project directory and the deepest existing part of every target are
+resolved through `realpath`, a project folder that cannot be resolved fails
+closed, the final component is never followed (`O_NOFOLLOW` reads, exclusive
+temporary file plus rename for writes, regular-file-only unlink), and `.git`
+and the settings directory apart from its export area are refused for reads as
+well as writes.
+
+Both corrections, their residual platform limitation and their tests are
+recorded in [`m21-interop-followup.md`](m21-interop-followup.md).
+
 ### Wire shapes the workspace consumes
 
 | Method | Shape (abridged) |
