@@ -69,6 +69,12 @@ export interface ProjectWorkBridgeAttempt {
   workspace: "worktree" | "shared";
   /** The directory the attempt ran in. Stored; never returned to a model. */
   checkout: string;
+  /**
+   * The session file the attempt runs in (M21-T18). The host derives the
+   * checkpoint ref namespace from it and stores the derived key only; like
+   * the checkout, the path itself is never returned to a model.
+   */
+  sessionPath?: string;
 }
 
 export interface ProjectWorkBridgeParams {
@@ -127,6 +133,7 @@ const bridgeAttemptSchema = z
   .object({
     workspace: z.enum(["worktree", "shared"]),
     checkout: z.string().min(1).max(4096),
+    sessionPath: z.string().min(1).max(4096).optional(),
   })
   .strict();
 

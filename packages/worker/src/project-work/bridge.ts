@@ -18,6 +18,7 @@ import {
   isRecord,
   toolError,
   type ClientRequests,
+  type ProjectWorkBridgeAttempt,
   type ProjectWorkBridgeParams,
   type ProjectWorkBridgeResult,
   type ProjectWorkMethod,
@@ -47,6 +48,16 @@ export interface ProjectWorkExecutionShape {
   baseCommitObjectId?: string;
   /** The Model Profile the session runs on. Intent, never a raw model name. */
   profileId?: string;
+  /**
+   * The session file this attempt runs in (M21-T18).
+   *
+   * The host derives the checkpoint ref namespace from it, so the attempt
+   * records **this** session's checkpoints rather than every checkpoint in the
+   * checkout. Like the checkout, it is sent to the host and never returned to
+   * a model. Absent, the attempt still records the checkpoints in its own time
+   * window and each one still says which session's ref it came from.
+   */
+  sessionPath?: string;
 }
 
 /** A refusal in the contract's shape, thrown by every handler in this area. */
@@ -83,10 +94,19 @@ export interface ProjectWorkBridge {
   call<M extends ProjectWorkMethod>(
     method: M,
     params: ClientRequests[M]["params"],
-    extras?: { research?: ResearchOperation; attempt?: { workspace: "worktree" | "shared"; checkout: string } },
+    extras?: { research?: ResearchOperation; attempt?: ProjectWorkBridgeAttempt },
   ): Promise<ClientRequests[M]["result"]>;
   /** The last research write's after-effects, when the last call was one. */
   lastResearchResult(): ProjectWorkBridgeResult["researchResult"] | undefined;
+}
+
+/** What an attempt envelope carries. The host stores it; a model never sees it. */
+export function attemptEnvelope(shape: ProjectWorkExecutionShape): ProjectWorkBridgeAttempt {
+  return {
+    workspace: shape.workspace,
+    checkout: shape.checkout,
+    ...(shape.sessionPath ? { sessionPath: shape.sessionPath } : {}),
+  };
 }
 
 export interface HostProjectWorkBridgeOptions {
@@ -137,7 +157,7 @@ export class HostProjectWorkBridge implements ProjectWorkBridge {
   async call<M extends ProjectWorkMethod>(
     method: M,
     params: ClientRequests[M]["params"],
-    extras?: { research?: ResearchOperation; attempt?: { workspace: "worktree" | "shared"; checkout: string } },
+    extras?: { research?: ResearchOperation; attempt?: ProjectWorkBridgeAttempt },
   ): Promise<ClientRequests[M]["result"]> {
     const envelope: ProjectWorkBridgeParams = {
       agent: this.options.identity(),

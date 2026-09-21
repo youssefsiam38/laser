@@ -35,6 +35,15 @@ import { basename } from "node:path";
 import {
   applyResearchOperation,
   ErrorCodes,
+  type ProjectWorkGetParams,
+  type ProjectWorkGetResult,
+  type ProjectWorkLinkParams,
+  type ProjectWorkLinkResult,
+  type ProjectTaskLinkExecutionParams,
+  type ProjectWorkWriteResult,
+  type RepositoryLink,
+  type RepositoryLinkAvailability,
+  type AttemptRepositoryRecord,
   PROJECT_WORK_ATTENTION_ITEMS_MAX,
   PROJECT_WORK_CONFLICT_CODE,
   PROJECT_WORK_QUOTA_CODE,
@@ -61,6 +70,16 @@ import {
 import { projectRootOf } from "../paths.js";
 import { canonical } from "../trust.js";
 import type { LogInput } from "../logstore.js";
+import { checkpointSessionKey, diffBetween, type HostRepository } from "../source-control/read.js";
+import {
+  attemptRepositoryFacts,
+  currentStates,
+  identifyRepositories,
+  linkAvailability,
+  repositoryFor,
+  type IdentifiedRepository,
+} from "./delivery.js";
+import { buildCapture, captureReadable, evidenceUnreviewable, storeCapture, type StoredCapture } from "./captures.js";
 import {
   ProjectWorkConflictError,
   ProjectWorkNotFoundError,
@@ -92,6 +111,15 @@ export interface ProjectWorkCaller {
   source: ProjectWorkSource;
   /** Provenance the worker bridge supplies for an agent's call (M21-T17). */
   agent?: { label: string; sessionId?: string; runId?: string } | undefined;
+  /**
+   * The checkout this call is being made from (M21-T18).
+   *
+   * The worker bridge sets it to the directory the attempt runs in — which is
+   * a worktree of its own for an agent run. It is what git is read *in*, and
+   * never what decides which project may be changed: that is resolved from the
+   * directory this host spawned the worker for (D-356.c) and nothing else.
+   */
+  cwd?: string | undefined;
 }
 
 /** What a project's folder is trusted with. Mirrors the project registry. */
@@ -132,9 +160,9 @@ export class ProjectWorkMethods {
    * shape. Every store refusal leaves through {@link toProtocolError}, so a
    * caller sees one vocabulary of errors whichever method it called.
    */
-  handle(request: ProjectWorkRequest, caller: ProjectWorkCaller): ProjectWorkResult {
+  async handle(request: ProjectWorkRequest, caller: ProjectWorkCaller): Promise<ProjectWorkResult> {
     try {
-      return this.route(request, caller);
+      return await this.route(request, caller);
     } catch (error) {
       throw toProtocolError(error);
     }
@@ -165,7 +193,10 @@ export class ProjectWorkMethods {
    *   workspace shape and the checkout, which is how an attempt stays readable
    *   after its session is gone (D-356.e).
    */
-  handleBridge(rawParams: unknown, caller: { actor: { class: ActorClass; id: string }; cwd: string }): ProjectWorkBridgeResult {
+  async handleBridge(
+    rawParams: unknown,
+    caller: { actor: { class: ActorClass; id: string }; cwd: string },
+  ): Promise<ProjectWorkBridgeResult> {
     let params: ProjectWorkBridgeParams;
     try {
       params = parseProjectWorkBridgeParams(rawParams);
@@ -176,18 +207,49 @@ export class ProjectWorkMethods {
       );
     }
     const projectId = this.projectOf(caller.cwd);
-    const bridgeCaller: ProjectWorkCaller = { actor: caller.actor, source: "worker", agent: params.agent };
-    const request = this.fenceProject(params.request, projectId);
+    const bridgeCaller: ProjectWorkCaller = {
+      actor: caller.actor,
+      source: "worker",
+      agent: params.agent,
+      // Git is read where the attempt runs. An agent run in a worktree of its
+      // own checkpoints itself, so its own directory is the one whose refs and
+      // commits describe what it did.
+      cwd: params.attempt?.checkout ?? caller.cwd,
+    };
+    const request = this.attemptSession(this.fenceProject(params.request, projectId), params);
     try {
-      if (params.research) return this.researchWrite(params, request, projectId, bridgeCaller);
-      const result = this.handle(request, bridgeCaller);
+      if (params.research) return await this.researchWrite(params, request, projectId, bridgeCaller);
+      const result = await this.handle(request, bridgeCaller);
       if (request.method === "project/task/link-execution" && params.attempt) {
-        this.recordAttemptShape(request.params.projectId, request.params.entityId, result as ProjectTaskLinkExecutionResult, params, bridgeCaller);
+        await this.recordAttemptShape(
+          request.params.projectId,
+          request.params.entityId,
+          result as ProjectTaskLinkExecutionResult,
+          params,
+          bridgeCaller,
+        );
       }
       return { method: request.method, result, projectId };
     } catch (error) {
       throw toProtocolError(error);
     }
+  }
+
+  /**
+   * Let an attempt say which session its checkpoints belong to (M21-T18).
+   *
+   * The worker knows the session file; the host derives the checkpoint ref
+   * namespace from it and keeps only the derived key. The path never reaches a
+   * model, a client or a log — it is used here and dropped.
+   */
+  private attemptSession(request: ProjectWorkRequest, params: ProjectWorkBridgeParams): ProjectWorkRequest {
+    const sessionPath = params.attempt?.sessionPath;
+    if (request.method !== "project/task/link-execution" || !sessionPath) return request;
+    if (request.params.execution.sessionPath !== undefined) return request;
+    return {
+      method: request.method,
+      params: { ...request.params, execution: { ...request.params.execution, sessionPath } },
+    };
   }
 
   /** What is waiting on a person in this project right now, for a notifier. */
@@ -204,22 +266,12 @@ export class ProjectWorkMethods {
 
   // ------------------------------------------------------------------ routing
 
-  private route(request: ProjectWorkRequest, caller: ProjectWorkCaller): ProjectWorkResult {
+  private async route(request: ProjectWorkRequest, caller: ProjectWorkCaller): Promise<ProjectWorkResult> {
     switch (request.method) {
       case "project/work/list":
         return this.list(request.params);
-      case "project/work/get": {
-        const params = request.params;
-        this.requireProject(params.projectId);
-        return this.store.get({
-          projectId: params.projectId,
-          ...(params.entityId !== undefined ? { entityId: params.entityId } : {}),
-          ...(params.key !== undefined ? { key: params.key } : {}),
-          ...(params.revisionId !== undefined ? { revisionId: params.revisionId } : {}),
-          ...(params.body ? { body: params.body } : {}),
-          ...(params.include ? { include: params.include } : {}),
-        });
-      }
+      case "project/work/get":
+        return this.get(request.params, caller);
       case "project/work/search": {
         const params = request.params;
         if (params.projectId !== undefined) this.requireProject(params.projectId);
@@ -237,7 +289,7 @@ export class ProjectWorkMethods {
         const params = request.params;
         const origin = this.originFor(params.origin, caller);
         this.requireWritable(params.projectId);
-        return this.store.create({
+        const result = this.store.create({
           projectId: params.projectId,
           kind: params.kind,
           title: params.title,
@@ -246,12 +298,13 @@ export class ProjectWorkMethods {
           origin,
           idempotencyKey: params.idempotencyKey,
         });
+        return this.recordBasedOn(result, params.projectId, params.idempotencyKey, caller);
       }
       case "project/work/revise": {
         const params = request.params;
         const origin = this.originFor(params.origin, caller);
         this.requireWritable(params.projectId);
-        return this.store.revise({
+        const result = this.store.revise({
           projectId: params.projectId,
           entityId: params.entityId,
           expectedRevisionId: params.expectedRevisionId,
@@ -261,6 +314,7 @@ export class ProjectWorkMethods {
           origin,
           idempotencyKey: params.idempotencyKey,
         });
+        return this.recordBasedOn(result, params.projectId, params.idempotencyKey, caller);
       }
       case "project/work/archive": {
         const params = request.params;
@@ -365,6 +419,15 @@ export class ProjectWorkMethods {
         const params = request.params;
         const origin = this.originFor(params.origin, caller);
         this.requireWritable(params.projectId);
+        // A decision that rests on a repository change keeps that change
+        // reviewable, before the decision exists (leap, "Repository
+        // provenance"). A full durable budget refuses the gate here — with
+        // nothing approved — rather than accepting a digest and losing the
+        // evidence to the next pruning.
+        if (params.decision === "approved") {
+          const covered = [params.entityId, ...params.covers.map((revision) => revision.entityId)];
+          await this.keepEvidenceReviewable(params.projectId, covered, "This approval", caller);
+        }
         const result = this.store.approve({
           projectId: params.projectId,
           entityId: params.entityId,
@@ -417,6 +480,7 @@ export class ProjectWorkMethods {
         const params = request.params;
         const origin = this.originFor(params.origin, caller);
         this.requireWritable(params.projectId);
+        if (params.link.type === "delivery") return this.acceptDelivery(params, caller, origin);
         return this.store.link({
           projectId: params.projectId,
           expectedRevisionId: params.expectedRevisionId,
@@ -442,6 +506,12 @@ export class ProjectWorkMethods {
         const params = request.params;
         const origin = this.originFor(params.origin, caller);
         this.requireWritable(params.projectId);
+        // Done rests on evidence, and evidence that cannot be read is not
+        // evidence: everything this Task's delivery links name is captured
+        // before the Task can be completed.
+        if (params.action === "complete") {
+          await this.keepEvidenceReviewable(params.projectId, [params.entityId], "Marking this task done", caller);
+        }
         return this.store.taskAction({
           projectId: params.projectId,
           entityId: params.entityId,
@@ -457,15 +527,297 @@ export class ProjectWorkMethods {
         const params = request.params;
         const origin = this.originFor(params.origin, caller);
         this.requireWritable(params.projectId);
-        return this.store.linkExecution({
+        const { sessionPath: _sessionPath, ...execution } = params.execution;
+        void _sessionPath;
+        const facts = await this.attemptFacts(params, caller);
+        const result = this.store.linkExecution({
           projectId: params.projectId,
           entityId: params.entityId,
           expectedRevisionId: params.expectedRevisionId,
-          execution: params.execution,
+          execution,
+          ...(facts.repositories ? { repositories: facts.repositories } : {}),
+          ...(facts.checkpointKey ? { checkpointKey: facts.checkpointKey } : {}),
           origin,
           idempotencyKey: params.idempotencyKey,
         });
+        const repositories = result.link.repositories;
+        return repositories && repositories.length > 0 ? { ...result, attemptRepositories: repositories } : result;
       }
+    }
+  }
+
+  // ------------------------------------------------------- repository facts
+
+  /**
+   * One detail read, plus — when it was asked for — what git still has.
+   *
+   * `repositoryStatus` is opt-in because it spawns git per repository, and
+   * because the answer it gives is never needed to *read* a link: a link says
+   * what it always said. It is needed to say whether that can still be looked
+   * at, which is a different question and gets a different field.
+   */
+  private async get(params: ProjectWorkGetParams, caller: ProjectWorkCaller): Promise<ProjectWorkGetResult> {
+    this.requireProject(params.projectId);
+    const detail = this.store.get({
+      projectId: params.projectId,
+      ...(params.entityId !== undefined ? { entityId: params.entityId } : {}),
+      ...(params.key !== undefined ? { key: params.key } : {}),
+      ...(params.revisionId !== undefined ? { revisionId: params.revisionId } : {}),
+      ...(params.body ? { body: params.body } : {}),
+      ...(params.include ? { include: params.include } : {}),
+    });
+    if (params.include?.repositoryStatus !== true || detail.repositoryLinks.length === 0) return detail;
+    const repositories = await this.repositoriesOf(params.projectId, caller);
+    const status: RepositoryLinkAvailability[] = [];
+    for (const link of detail.repositoryLinks) {
+      status.push(
+        await linkAvailability(
+          link,
+          repositoryFor(repositories, link.repositoryId)?.repository,
+          captureReadable(this.store, params.projectId, link),
+        ),
+      );
+    }
+    return { ...detail, repositoryStatus: status };
+  }
+
+  /**
+   * The checkout git is read in for this call.
+   *
+   * The worker bridge names the directory the attempt runs in; a client call
+   * is answered from the project's own current folder. Neither one decides
+   * *which* project may be changed — that is resolved before this runs.
+   */
+  private checkoutOf(projectId: string, caller: ProjectWorkCaller): string | undefined {
+    return caller.cwd ?? this.store.projectPaths(projectId)[0];
+  }
+
+  private async repositoriesOf(projectId: string, caller: ProjectWorkCaller): Promise<IdentifiedRepository[]> {
+    const checkout = this.checkoutOf(projectId, caller);
+    if (!checkout) return [];
+    return identifyRepositories(this.store, projectId, checkout);
+  }
+
+  /**
+   * What this attempt's repositories did, read from git (M21-T18).
+   *
+   * Never fatal: a checkout that is not a repository, a git that will not run
+   * or a workspace that has moved leaves the attempt with its identity, its
+   * profile and its outcome, and no repository record — which is honest. What
+   * it must never do is guess.
+   */
+  private async attemptFacts(
+    params: ProjectTaskLinkExecutionParams,
+    caller: ProjectWorkCaller,
+  ): Promise<{ repositories?: AttemptRepositoryRecord[]; checkpointKey?: string }> {
+    const checkout = this.checkoutOf(params.projectId, caller);
+    if (!checkout) return {};
+    const open = this.store.openAttemptFor(params.projectId, params.entityId, params.execution.kind, params.execution.targetId);
+    const checkpointKey = params.execution.sessionPath
+      ? checkpointSessionKey(params.execution.sessionPath)
+      : open
+        ? this.store.attemptCheckpointKey(params.projectId, open.linkId)
+        : undefined;
+    try {
+      const repositories = await attemptRepositoryFacts(this.store, {
+        projectId: params.projectId,
+        checkout,
+        startedAt: open?.startedAt ?? params.execution.startedAt ?? new Date().toISOString(),
+        ...(params.execution.endedAt ? { endedAt: params.execution.endedAt } : {}),
+        ...(checkpointKey ? { sessionKey: checkpointKey } : {}),
+        ...(open?.repositories ? { previous: open.repositories } : {}),
+        ...(params.execution.baseCommitObjectId ?? open?.baseCommitObjectId
+          ? { baseCommitObjectId: (params.execution.baseCommitObjectId ?? open?.baseCommitObjectId) as string }
+          : {}),
+      });
+      return {
+        ...(repositories.length > 0 ? { repositories } : {}),
+        ...(checkpointKey ? { checkpointKey } : {}),
+      };
+    } catch {
+      return checkpointKey ? { checkpointKey } : {};
+    }
+  }
+
+  /**
+   * The code state a revision was derived from (M21-T18).
+   *
+   * Recorded for a write made from a session with a checkout — the worker
+   * bridge — as one `based_on` link per repository, at the exact commit each
+   * one was on. A person editing a Spec in the workspace has no session
+   * checkout and gets none: inventing the project folder's current `HEAD` as
+   * "what this was derived from" would be a guess, and this record exists
+   * because guesses are what it replaces.
+   *
+   * Research is the one kind that is left out, and for a reason rather than
+   * for cost: a finding's provenance is the `SourceRef` it was read from, not
+   * the code that happened to be checked out while the agent read a web page.
+   *
+   * A failure here never undoes the revision: provenance is a record beside
+   * the work, not a condition of it.
+   */
+  private async recordBasedOn(
+    result: ProjectWorkWriteResult,
+    projectId: string,
+    idempotencyKey: string,
+    caller: ProjectWorkCaller,
+  ): Promise<ProjectWorkWriteResult> {
+    if (caller.cwd === undefined || result.replayed === true || result.entity.kind === "research") return result;
+    let states: Awaited<ReturnType<typeof currentStates>>;
+    try {
+      states = await currentStates(this.store, projectId, caller.cwd);
+    } catch {
+      return result;
+    }
+    const links: RepositoryLink[] = [];
+    for (const row of states) {
+      try {
+        const written = this.store.link({
+          projectId,
+          expectedRevisionId: result.revision.revisionId,
+          link: {
+            type: "repository",
+            relation: "based_on",
+            subjectEntityId: result.entity.entityId,
+            subjectRevisionId: result.revision.revisionId,
+            repositoryId: row.repositoryId,
+            target: { state: row.state },
+            ...(row.branch ? { display: { branch: row.branch } } : {}),
+          },
+          origin: this.originFor(undefined, caller),
+          idempotencyKey: `${idempotencyKey}-based-on-${row.repositoryId}`,
+        });
+        if (written.link.type === "repository") links.push(written.link.repository);
+      } catch {
+        // The revision is written and current; its provenance is best effort.
+      }
+    }
+    return links.length > 0 ? { ...result, basedOn: links } : result;
+  }
+
+  /**
+   * Accept one exact repository change as the delivery of this work.
+   *
+   * The whole of the leap's `implemented_by` rule lives in these steps, in
+   * this order:
+   *
+   * 1. **A person accepts delivery.** An agent reports evidence and proposes;
+   *    it never decides that what it wrote is what was wanted (D-332).
+   * 2. **The change is checked against git**, not taken on trust: the repository
+   *    must be one this project knows and has open here, both ends must exist,
+   *    and the diff digest must be the digest of the diff that is actually
+   *    there. A change that has moved is refused, with what to do.
+   * 3. **The canonical capture is stored before the acceptance is written.** A
+   *    full durable budget refuses the whole thing — there is no accepted
+   *    delivery whose evidence was never kept.
+   * 4. **The links are appended**, one per accepted subject revision, and a
+   *    correction supersedes without removing anything.
+   */
+  private async acceptDelivery(
+    params: ProjectWorkLinkParams,
+    caller: ProjectWorkCaller,
+    origin: ProjectWorkOrigin,
+  ): Promise<ProjectWorkLinkResult> {
+    if (params.link.type !== "delivery") throw new ProjectWorkRefusedError("That is not a delivery.");
+    const payload = params.link;
+    if (origin.actor.kind !== "person") {
+      throw new ProjectWorkRefusedError(
+        "Only a person accepts a change as the delivery of a task. Report the evidence for it and ask for review instead.",
+      );
+    }
+    const repositories = await this.repositoriesOf(params.projectId, caller);
+    const repository = repositoryFor(repositories, payload.repositoryId);
+    if (!repository) {
+      throw new ProjectWorkRefusedError(
+        "That repository is not one this project has open here, so the change it names cannot be read. Open the project at the checkout that holds it and accept the delivery there.",
+      );
+    }
+    const capture = await this.captureDelivery(params.projectId, payload, repository.repository);
+    return this.store.link({
+      projectId: params.projectId,
+      expectedRevisionId: params.expectedRevisionId,
+      link: payload,
+      capture,
+      origin,
+      idempotencyKey: params.idempotencyKey,
+    });
+  }
+
+  /** Read the change, prove it is the one that was previewed, and keep it. */
+  private async captureDelivery(
+    projectId: string,
+    payload: Extract<ProjectWorkLinkParams["link"], { type: "delivery" }>,
+    repository: HostRepository,
+  ): Promise<StoredCapture> {
+    const diff = await diffBetween(repository, payload.change.base.commitObjectId, payload.change.head.commitObjectId);
+    if (!diff) {
+      throw new ProjectWorkRefusedError(
+        "That change is not in the repository any more, so it cannot be accepted as the delivery. Pick a change that is still there — a commit, or a checkpoint that has not been pruned.",
+      );
+    }
+    if (diff.digest !== payload.change.diffDigest) {
+      throw new ProjectWorkRefusedError(
+        "That change is not what it was when you looked at it. Look at the difference again, then accept it.",
+      );
+    }
+    const built = await buildCapture({
+      repository,
+      repositoryId: payload.repositoryId,
+      change: payload.change,
+      now: new Date().toISOString(),
+    });
+    if (!built) {
+      throw new ProjectWorkRefusedError(
+        "That change could not be read out of the repository, so there would be nothing to review later. Try again, or pick a change that is still there.",
+      );
+    }
+    return storeCapture(this.store, { projectId, entityId: payload.entityId, capture: built, gate: "Accepting this delivery" });
+  }
+
+  /**
+   * Keep what a decision rests on readable, or refuse the decision.
+   *
+   * For every `implemented_by` / `verified_at` link on the entities a decision
+   * covers: if its capture is already stored, nothing happens; if git still
+   * has the change, the bounded capture is taken now and attached; if neither,
+   * the decision is refused naming what is missing. Nothing is ever approved
+   * or completed on evidence that cannot be looked at (D-345).
+   */
+  private async keepEvidenceReviewable(
+    projectId: string,
+    entityIds: readonly string[],
+    gate: string,
+    caller: ProjectWorkCaller,
+  ): Promise<void> {
+    const links: RepositoryLink[] = [];
+    for (const entityId of new Set(entityIds)) {
+      for (const link of this.store.repositoryLinksOf(projectId, entityId)) {
+        if (link.relation === "implemented_by" || link.relation === "verified_at") links.push(link);
+      }
+    }
+    if (links.length === 0) return;
+    const repositories = await this.repositoriesOf(projectId, caller);
+    for (const link of links) {
+      if (captureReadable(this.store, projectId, link)) continue;
+      const repository = repositoryFor(repositories, link.repositoryId)?.repository;
+      const availability = await linkAvailability(link, repository, false);
+      if (!repository || !availability.sourceAvailable) {
+        throw evidenceUnreviewable(link, availability.missing, gate);
+      }
+      if (!("change" in link.target)) {
+        // A state link names one commit and no difference; git still has it,
+        // which is the whole of what "reviewable" can mean for a state.
+        continue;
+      }
+      const built = await buildCapture({
+        repository,
+        repositoryId: link.repositoryId,
+        change: link.target.change,
+        now: new Date().toISOString(),
+      });
+      if (!built) throw evidenceUnreviewable(link, availability.missing, gate);
+      const stored = storeCapture(this.store, { projectId, entityId: link.subject.entityId, capture: built, gate });
+      this.store.attachCapture(projectId, link.linkId, stored.blobId);
     }
   }
 
@@ -611,12 +963,12 @@ export class ProjectWorkMethods {
    * one needs, findings never being edited, and the derived status. The body
    * in the params is ignored entirely.
    */
-  private researchWrite(
+  private async researchWrite(
     params: ProjectWorkBridgeParams,
     request: ProjectWorkRequest,
     projectId: string,
     caller: ProjectWorkCaller,
-  ): ProjectWorkBridgeResult {
+  ): Promise<ProjectWorkBridgeResult> {
     if (request.method !== "project/work/revise") {
       throw new ProtocolError(ErrorCodes.InvalidParams, "A research operation is applied by revising the research it belongs to.");
     }
@@ -635,7 +987,7 @@ export class ProjectWorkMethods {
       }
       throw error;
     }
-    const result = this.handle(
+    const result = await this.handle(
       { method: "project/work/revise", params: { ...request.params, body: { kind: "research", research: applied.body } } },
       caller,
     );
@@ -659,19 +1011,19 @@ export class ProjectWorkMethods {
    * is assembled here, so nothing a model wrote reaches it, and the checkout
    * stays in the store: no tool answer ever carries it.
    */
-  private recordAttemptShape(
+  private async recordAttemptShape(
     projectId: string,
     entityId: string,
     result: ProjectTaskLinkExecutionResult,
     params: ProjectWorkBridgeParams,
     caller: ProjectWorkCaller,
-  ): void {
+  ): Promise<void> {
     const attempt = params.attempt;
     if (!attempt) return;
     const link = result.link;
     const shape = attempt.workspace === "worktree" ? "a worktree of its own" : "the project's own checkout";
     try {
-      this.handle(
+      await this.handle(
         {
           method: "project/work/link",
           params: {

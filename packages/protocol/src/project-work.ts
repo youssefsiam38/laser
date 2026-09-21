@@ -24,6 +24,7 @@
  * Everything in this file is pure: no clock, no filesystem, no Pi.
  */
 import { z } from "zod";
+import { PRODUCT_NAME } from "./identity.js";
 
 // ---------------------------------------------------------------------------
 // Kinds and keys
@@ -222,6 +223,26 @@ export const PROJECT_WORK_TITLE_MAX = 200;
 export const PROJECT_WORK_LABEL_MAX = 200;
 export const PROJECT_WORK_TEXT_MAX = 4000;
 export const PROJECT_WORK_NOTE_MAX = 2000;
+
+/**
+ * What one attempt record may hold (M21-T18).
+ *
+ * An attempt is a record of what happened, not a copy of the repository: a
+ * session of a thousand turns in a forty-repository workspace must cost a
+ * bounded number of rows, and a record that hits one of these bounds says so
+ * rather than growing. The checkpoint list keeps its **ends** when it is cut,
+ * because the first and the last are what the change is computed from.
+ */
+export const ATTEMPT_REPOSITORIES_MAX = 64;
+export const ATTEMPT_CHECKPOINTS_MAX = 200;
+export const ATTEMPT_CHANGED_PATHS_MAX = 500;
+export const ATTEMPT_COMMITS_MAX = 100;
+
+/** What one canonical capture may hold before it says what it left out. */
+export const REPOSITORY_CAPTURE_FILES_MAX = 500;
+export const REPOSITORY_CAPTURE_SOURCES_MAX = 100;
+export const REPOSITORY_CAPTURE_SOURCE_BYTES_MAX = 128 * 1024;
+export const REPOSITORY_CAPTURE_BYTES_MAX = 4 * 1024 * 1024;
 
 const opaqueId = z.string().regex(OPAQUE_ID_PATTERN, "an id this app minted");
 const digest = z.string().regex(DIGEST_PATTERN, "a sha256 digest");
@@ -776,7 +797,47 @@ export interface RepositoryLink {
   sourceUnavailable?: boolean;
   /** Bounded canonical capture kept so a gate stays reviewable after pruning. */
   captureBlobId?: string;
+  /** The attempt this delivery came out of, when it came out of one. */
+  executionLinkId?: string;
+  /**
+   * Branch, remote and pull request: what a person reads the link *by*, and
+   * never what it *is* (M21-T18). Identity is the object ids in `target`;
+   * every field here may move, be renamed or be deleted without the link
+   * meaning anything different.
+   */
+  display?: RepositoryLinkContext;
 }
+
+/**
+ * Display context on a repository link (leap, "Repository provenance").
+ *
+ * A pull request is the most useful thing to show and the least reliable thing
+ * to trust: it can be closed, renumbered across a repository transfer or point
+ * at a force-pushed head. It lives here, beside the branch and the remote
+ * *name*, so that nothing reading identity can reach it by accident.
+ */
+export interface RepositoryLinkContext {
+  branch?: string;
+  /** The remote's name (`origin`), never its URL. */
+  remote?: string;
+  pullRequest?: { number: number; host: string; url?: string; title?: string };
+}
+
+export const repositoryLinkContextSchema = z
+  .object({
+    branch: z.string().min(1).max(255).optional(),
+    remote: z.string().min(1).max(255).optional(),
+    pullRequest: z
+      .object({
+        number: z.number().int().min(1).max(10_000_000),
+        host: z.string().min(1).max(60),
+        url: z.string().min(1).max(2048).optional(),
+        title: z.string().min(1).max(400).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
 
 export const repositoryLinkSchema = z
   .object({
@@ -795,6 +856,8 @@ export const repositoryLinkSchema = z
     supersedesLinkId: opaqueId.optional(),
     sourceUnavailable: z.boolean().optional(),
     captureBlobId: opaqueId.optional(),
+    executionLinkId: opaqueId.optional(),
+    display: repositoryLinkContextSchema.optional(),
   })
   .strict()
   .refine(
@@ -806,6 +869,152 @@ export const repositoryLinkSchema = z
     message: "published_as records the repository path the export was written to",
     path: ["publishedPath"],
   });
+
+// ---------------------------------------------------------------------------
+// Attempt facts and canonical captures (M21-T18)
+// ---------------------------------------------------------------------------
+
+/**
+ * One checkpoint an attempt made, resolved to its commit object id **at record
+ * time** (leap, "Execution and convergence").
+ *
+ * The ref is kept because it says which session and which turn produced the
+ * commit; the commit object id is what the record means. Retention may delete
+ * the ref later without changing anything this row says.
+ */
+export interface AttemptCheckpointRef {
+  /** The turn the checkpoint was taken after. 0 is the open-time baseline. */
+  turn: number;
+  /** `refs/<product>/checkpoints/<session>/<turn>` as it was when recorded. */
+  ref: string;
+  commitObjectId: string;
+  createdAt?: string;
+}
+
+export const attemptCheckpointRefSchema = z
+  .object({
+    turn: z.number().int().min(0).max(1_000_000),
+    ref: z.string().min(1).max(512),
+    commitObjectId: z.string().regex(/^[0-9a-f]{7,64}$/, "a git object id"),
+    createdAt: z.string().min(1).max(64).optional(),
+  })
+  .strict();
+
+/**
+ * What one repository of the workspace shape did during one attempt.
+ *
+ * Everything here is read from git: the base the attempt started at, the
+ * checkpoints it made, the change between its first and last checkpoint and
+ * the paths that change touched. **No tool call contributes a path** (leap,
+ * "Execution and convergence"): a model reporting that it edited a file
+ * changes nothing about this record, and a model that edited a file without
+ * saying so is in it anyway.
+ *
+ * A monorepo with two repositories produces two of these, with two distinct
+ * `repositoryId`s, and never one merged list.
+ */
+export interface AttemptRepositoryRecord {
+  repositoryId: string;
+  /** The repository's directory name. Display context only. */
+  name: string;
+  /** The commit the attempt started from. */
+  base: RepositoryStateRef;
+  /**
+   * The checkpoint turn this repository was already at when the attempt
+   * started, or `-1` when it had none.
+   *
+   * Turns are the session's own monotonic counter, so "the checkpoints this
+   * attempt made" is `turn > sinceTurn` and needs no clock: a ref's date has
+   * one-second resolution, and two attempts in the same second must not
+   * inherit each other's work.
+   */
+  sinceTurn: number;
+  checkpoints: AttemptCheckpointRef[];
+  /** checkpoint(first) → checkpoint(last), fenced by the digest of its diff. */
+  change?: RepositoryChangeRef;
+  /** Repository-relative paths the change touched, from git. */
+  changedPaths: string[];
+  /** Commits the attempt added on top of its base, newest first. */
+  commits: string[];
+  /** True when a recorded object could not be found when this was written. */
+  unavailable?: boolean;
+}
+
+export const attemptRepositoryRecordSchema = z
+  .object({
+    repositoryId: opaqueId,
+    name: z.string().min(1).max(200),
+    base: repositoryStateRefSchema,
+    sinceTurn: z.number().int().min(-1).max(1_000_000),
+    checkpoints: z.array(attemptCheckpointRefSchema).max(ATTEMPT_CHECKPOINTS_MAX),
+    change: repositoryChangeRefSchema.optional(),
+    changedPaths: z.array(z.string().min(1).max(1024)).max(ATTEMPT_CHANGED_PATHS_MAX),
+    commits: z.array(z.string().regex(/^[0-9a-f]{7,64}$/, "a git object id")).max(ATTEMPT_COMMITS_MAX),
+    unavailable: z.boolean().optional(),
+  })
+  .strict();
+
+/** Whether a link's git objects are still reachable, and what is kept if not. */
+export interface RepositoryLinkAvailability {
+  linkId: string;
+  /** False when git no longer has one of the objects this link names. */
+  sourceAvailable: boolean;
+  /** Which recorded object ids could not be found. Identity, not `HEAD`. */
+  missing: string[];
+  /** True when the bounded canonical capture is still readable. */
+  captureAvailable: boolean;
+  captureBlobId?: string;
+  /** One sentence for a person, when something is missing. */
+  detail?: string;
+}
+
+/**
+ * The bounded canonical capture that keeps an accepted delivery reviewable
+ * after the checkpoint ref it came from is pruned (leap, "Repository
+ * provenance"; D-345).
+ *
+ * It is a diff **manifest** plus the source of the files the change touched,
+ * both bounded: enough to review what was accepted, never a second copy of the
+ * repository. It is stored as canonical JSON in the content-addressed blob
+ * store and referenced by the link's `captureBlobId`.
+ */
+export const REPOSITORY_CAPTURE_MEDIA_TYPE = `application/vnd.${PRODUCT_NAME}.repository-capture+json`;
+
+export interface RepositoryCaptureFile {
+  path: string;
+  /** The three words the product speaks about a file (`FileChangeStatus`). */
+  status: "added" | "modified" | "deleted";
+  added: number | null;
+  removed: number | null;
+  /** The head-side blob object id, when the file exists at head. */
+  blobObjectId?: string;
+  /** sha256 of the captured bytes, when they were captured. */
+  contentDigest?: string;
+  /** Why this file's bytes are not in the capture. */
+  omitted?: "binary" | "too_large" | "budget" | "deleted";
+}
+
+export interface RepositoryCaptureSource {
+  path: string;
+  bytes: number;
+  /** True when only the first bytes of the file were kept. */
+  truncated?: boolean;
+  contentDigest: string;
+  text: string;
+}
+
+export interface RepositoryCapture {
+  version: 1;
+  createdAt: string;
+  repositoryId: string;
+  repositoryName?: string;
+  change: RepositoryChangeRef;
+  files: RepositoryCaptureFile[];
+  /** The head-side source of the files the change touched, bounded. */
+  sources: RepositoryCaptureSource[];
+  /** What was left out, in one sentence a person can act on. */
+  truncated?: string;
+}
 
 /**
  * A Project Task joined to a session, run, checkpoint, branch or command.
@@ -834,6 +1043,11 @@ export interface ExecutionLink {
   /** True when the session or run is no longer on this machine. */
   targetUnavailable?: boolean;
   createdBy: ProjectWorkActor;
+  /**
+   * What each repository of the workspace shape did during this attempt
+   * (M21-T18). One row per repository, so two repositories stay two records.
+   */
+  repositories?: AttemptRepositoryRecord[];
 }
 
 export const executionLinkSchema = z
@@ -853,6 +1067,7 @@ export const executionLinkSchema = z
     outcome: z.enum(["completed", "blocked", "cancelled", "failed"]).optional(),
     targetUnavailable: z.boolean().optional(),
     createdBy: projectWorkActorSchema,
+    repositories: z.array(attemptRepositoryRecordSchema).max(ATTEMPT_REPOSITORIES_MAX).optional(),
   })
   .strict();
 

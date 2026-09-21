@@ -183,3 +183,147 @@ claim to have obeyed.
 - **A Research run's own command and budget line in the fleet** are M21-T13's
   surface; the worker builds one `ProjectResearch` per session over the
   bridge's store, which is what the four tools need to exist at all.
+
+---
+
+# M21-T18 · Checkpoints, changes and delivery evidence
+
+Binding text: [`../project-lifecycle-leap.md`](../project-lifecycle-leap.md)
+("Repository provenance", "Execution and convergence"),
+[`../source-control-leap.md`](../source-control-leap.md) §E and §G, D-345.
+Base: the M21 spine (T1–T4, T15), T17's bridge, M20's checkpoints and git
+actions.
+
+## What this task is, in one paragraph
+
+An implementation attempt stops being a claim and becomes a **record read out
+of git**: every attempt carries, per repository of its workspace shape, the
+commit it started from, the M20 checkpoints it made — resolved to commit object
+ids at record time — the change between the first and the last of them, the
+paths that change touched and the commits it added. Those paths are the
+observed side of T15's scope conflicts. An exact change becomes *the delivery*
+only through an explicit acceptance, which stores a bounded canonical capture
+before it accepts, so the evidence is still reviewable after retention prunes
+the checkpoint ref. Nothing here ever resolves a missing object to `HEAD`.
+
+## Decisions
+
+- **D-357.a — the host reads git itself.** `packages/host/src/source-control/read.ts`
+  is a read-only plumbing layer (repositories of a checkout through the one
+  shared workspace resolver, object ids, checkpoint refs, `diff --raw`
+  fingerprints, one file's bytes at one commit). The authority over what an
+  attempt did has to be the same process that stores it: the worker is not
+  running when a person accepts a delivery, and a record assembled from a tool
+  call is exactly what the leap forbids. `project-work/delivery.ts` turns those
+  reads into attempt facts; `project-work/captures.ts` turns a change into the
+  durable capture.
+- **D-357.b — `ProjectWorkMethods.handle` is async.** Git is a subprocess, and
+  three methods now need it before they can answer. The router already awaited
+  the value it returned, so nothing above the authority changed; the internal
+  callers (`researchWrite`, the attempt-shape note) await it too.
+- **D-357.c — `implemented_by` has one door: accepting delivery.** A
+  `project/work/link` payload with `relation: "implemented_by"` is refused and
+  pointed at `{ type: "delivery", …, confirm: true }`, which is person-only
+  (D-332's shape: an agent reports and proposes, a person accepts), names the
+  exact `RepositoryChangeRef`, verifies the digest against the diff that is
+  actually in the repository, stores the capture, and only then writes one link
+  per accepted subject revision. The method inventory stays sixteen: the link
+  *payload* union grew, as evidence and decisions already do (spine decision 5).
+  A new `PROJECT_TASK_ACTIONS` member was rejected for the reason T15 gives —
+  every action there maps to a state, and accepting delivery changes none.
+- **D-357.d — `based_on` is written for a write that came from a session with a
+  checkout.** That is the bridge: the host resolves the worker's own checkout,
+  and records one `based_on` per repository at the exact commit it was on. A
+  person editing a Spec in the workspace gets none, because "the project folder's
+  current `HEAD`" is a guess, and this record exists to replace guesses. The
+  links come back on the write as `basedOn`, and a failure to write them never
+  undoes the revision.
+- **D-357.e — an attempt that ends is the attempt that started.** Closing an
+  attempt (`outcome`/`endedAt`) updates the open link for the same kind and
+  target instead of inserting a second row. The row that carries the base commit
+  and the checkpoints has to be the row that carries the terminal outcome, or
+  "an attempt records base, checkpoints and outcome" is not true of any row.
+- **D-357.f — "the checkpoints it made" is decided by turn, not by clock.**
+  Each repository record keeps `sinceTurn`, the turn that session's checkpoints
+  had already reached when the attempt started; the attempt's own checkpoints
+  are `turn > sinceTurn`. A ref's `creatordate` has one-second resolution, and
+  two attempts in the same second must not inherit each other's work. The time
+  window remains the fallback for an attempt with no recorded start.
+- **D-357.g — the diff digest is taken over `git diff --raw`.** Status, path
+  and the two blob object ids per file: exact (two contents can never share it),
+  bounded by the number of files rather than their size, and unaffected by
+  context, colour or whitespace settings, none of which change what was
+  delivered.
+- **D-357.h — a capture is a bounded manifest plus head-side source.** At most
+  500 files listed, 100 captured whole, 128 KB each, 4 MB in total; binary,
+  deleted and over-budget files are listed with why their bytes are not there.
+  A full durable budget refuses the gate with the recovery action and accepts
+  nothing (`ProjectWorkQuotaError`, code -32011).
+- **D-357.i — a state link has no capture.** `verified_at` names one commit and
+  no difference, and a bounded capture of a whole tree is not a thing this store
+  will hold. The rule for it at a gate is therefore: the commit must still exist,
+  or the decision is refused naming it.
+- **D-357.j — a git action emits a link-ready ref, and the UI decides.**
+  `commit`, `push` and `pr/create` answer with `linkRef` on `outcome: "done"`:
+  the full commit object id (identity) plus branch, remote name and pull request
+  (display context). The worker writes no link; the person accepts a delivery
+  with it. A preview, a refusal and an uncertain outcome carry none.
+
+## Known gap, and the one line that closes it
+
+The worker's `executionShape()` lives in `packages/worker/src/server.ts`, which
+this task may not edit, so it does not yet set `sessionPath` on the execution
+shape. The plumbing is complete on both sides — `ProjectWorkExecutionShape.sessionPath`
+→ `attemptEnvelope()` → the bridge envelope's `attempt.sessionPath` → the host's
+`checkpointSessionKey` — and the client path (`project/task/link-execution`
+params) already carries it. Until that one line is added, a bridge-opened
+attempt selects its checkpoints by `sinceTurn` and its own time window across
+every session in the checkout rather than by session key, which is exact for one
+session per checkout and imprecise for two concurrent ones (the case the
+shared-checkout conflict already warns about). Whoever next owns
+`packages/worker/src/server.ts` should add
+`...(live.path ? { sessionPath: live.path } : {})` to `executionShape`.
+
+## The shapes the Task detail (UI) consumes
+
+| Read or write | Shape |
+| --- | --- |
+| `project/task/link-execution` | `{ link, entity, seq, attemptEvidence?, conflicts?, attemptRepositories? }`; `link.repositories[]` is `{ repositoryId, name, base, sinceTurn, checkpoints[{turn,ref,commitObjectId,createdAt}], change?, changedPaths[], commits[], unavailable? }` |
+| `project/task/link-execution` params | `execution.sessionPath?` — the session whose checkpoints the attempt is reading. Stored as a derived key; never echoed back |
+| `project/work/get` | `repositoryLinks[].display?: { branch?, remote?, pullRequest? }` and `repositoryLinks[].executionLinkId?` — the attempt a delivery came out of |
+| `project/work/get { include: { repositoryStatus: true } }` | `repositoryStatus: [{ linkId, sourceAvailable, missing[], captureAvailable, captureBlobId?, detail? }]` — opt-in, one git read per repository |
+| `project/work/create` / `revise` | `basedOn?: RepositoryLink[]` when the write came from a session with a checkout |
+| `project/work/link` (accept delivery) | params `{ type: "delivery", entityId, revisionId, executionLinkId?, repositoryId, change, covers?, display?, supersedesLinkId?, confirm: true }` → `{ link: { type: "delivery", links: RepositoryLink[], capture?: { blobId, bytes, files, sources, truncated? } }, seq }` |
+| `project/work/link` (raw `implemented_by`) | refused: "A change becomes the delivery by being accepted as one, not by being linked." |
+| `project/work/blob/read { blobId: captureBlobId }` | the `RepositoryCapture` as canonical JSON: `{ version, createdAt, repositoryId, repositoryName?, change, files[], sources[], truncated? }` |
+| `pi/project/git/{commit,push}`, `pi/project/pr/create` | `linkRef?: { repo, objectFormat, commitObjectId, branch?, remote?, pullRequest? }` on `done` |
+
+The Task detail's attempt row therefore reads: attempt number, profile, branch,
+outcome, and per repository "N files changed across M checkpoints", with
+**Accept as delivery** offering `change` straight from the record. A link whose
+`repositoryStatus` says `sourceAvailable: false` shows its recorded ids and
+"read the capture" — never a fabricated current diff.
+
+## What landed
+
+| File | What it owns |
+| --- | --- |
+| `packages/protocol/src/project-work.ts` | `AttemptCheckpointRef`, `AttemptRepositoryRecord` (+ schema), `RepositoryLinkContext`, `RepositoryLinkAvailability`, `RepositoryCapture*`, the attempt/capture bounds, `ExecutionLink.repositories`, `RepositoryLink.display`/`executionLinkId` |
+| `packages/protocol/src/project-work-methods.ts` | the `delivery` link payload, `execution.sessionPath`, `include.repositoryStatus`, `repositoryStatus` and `basedOn` on results, `attemptRepositories` on a link-execution result |
+| `packages/protocol/src/project-work-bridge.ts` | `attempt.sessionPath` on the envelope |
+| `packages/protocol/src/git-actions.ts` | `GitActionLinkRef` and `linkRef` on commit/push/PR-create |
+| `packages/host/src/source-control/read.ts` | read-only git for the host |
+| `packages/host/src/project-work/delivery.ts` | repository identity for a checkout, current states, attempt facts, link availability |
+| `packages/host/src/project-work/captures.ts` | building, storing and reading back the bounded canonical capture; the gate refusals |
+| `packages/host/src/project-work/methods.ts` | async `handle`, `based_on` on a bridge write, attempt facts on link-execution, delivery acceptance, evidence kept reviewable before approve/`done`, `repositoryStatus` on a read |
+| `packages/host/src/project-work/store.ts` | schema v2 columns, attempt facts on the execution link, the `implemented_by` refusal, `acceptDelivery`, `attachCapture`, observed paths from attempts |
+| `packages/worker/src/git-actions/{git-ops,service}.ts` | `linkRefFor` and the `linkRef` on commit, push and PR create |
+| `packages/worker/src/project-work/{bridge,session,tools}.ts` | `sessionPath` on the execution shape, `attemptEnvelope()`, the attempt's repository rows on `report_project_task` |
+| `packages/host/test/project-work/delivery.test.ts` | 14 tests over real git repositories in temp dirs, through the router and the bridge |
+
+## Evidence
+
+`pnpm -F @lasercode/protocol test` (668) · `env -i … pnpm -F @lasercode/host test`
+(1172; `project-work/delivery.test.ts` 14) · `pnpm -F @lasercode/worker test`
+(1499) · `pnpm -r build` · `pnpm -r typecheck` · `pnpm identity:check` ·
+`pnpm verify`.

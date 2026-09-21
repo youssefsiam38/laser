@@ -41,9 +41,11 @@ import {
   taskActionTransition,
   taskTransition,
   TASK_ACTION_TARGET,
+  type AttemptRepositoryRecord,
   type PlanGraphReport,
   type ProjectTaskBody,
   type RepositoryChangeRef,
+  type RepositoryLinkContext,
   type RepositoryStateRef,
   type TaskConflict,
   type TaskReadiness,
@@ -227,6 +229,26 @@ export interface ProjectWorkDetail {
 
 /** How many related records one `get` inlines before it says it cut the list. */
 const RELATED_MAX = 100;
+
+/**
+ * What an attempt changed, in the words its evidence record uses (M21-T18).
+ *
+ * One phrase per repository that recorded something, so a monorepo reads as
+ * two facts rather than one merged number, and a repository the attempt did
+ * not touch is silent rather than reported as zero.
+ */
+function changeSummary(repositories: readonly AttemptRepositoryRecord[]): string[] {
+  const phrases: string[] = [];
+  for (const repository of repositories) {
+    if (repository.changedPaths.length === 0 && repository.checkpoints.length === 0) continue;
+    const files = repository.changedPaths.length;
+    const checkpoints = repository.checkpoints.length;
+    phrases.push(
+      `${String(files)} file${files === 1 ? "" : "s"} changed in ${repository.name} across ${String(checkpoints)} checkpoint${checkpoints === 1 ? "" : "s"}`,
+    );
+  }
+  return phrases;
+}
 /** Projections one search may rebuild before it answers. Keeps a read bounded. */
 const PROJECTION_REPAIR_MAX = 200;
 
@@ -1495,7 +1517,15 @@ export class ProjectWorkStore {
 
   // ---------------------------------------------------------------- links
 
-  link(input: { projectId: string; expectedRevisionId: string; link: ProjectWorkLinkInput } & ProjectWorkWriteOrigin): {
+  link(
+    input: {
+      projectId: string;
+      expectedRevisionId: string;
+      link: ProjectWorkLinkInput;
+      /** The capture the caller stored for a delivery, before it is accepted. */
+      capture?: { blobId: string; bytes: number; files: number; sources: number; truncated?: string } | undefined;
+    } & ProjectWorkWriteOrigin,
+  ): {
     link: ProjectWorkLinkRecord;
     seq: number;
     replayed?: boolean;
@@ -1504,6 +1534,7 @@ export class ProjectWorkStore {
       const now = this.now();
       const linkId = mintLinkId();
       const payload = input.link;
+      if (payload.type === "delivery") return this.acceptDelivery(input, payload, now);
       const anchorEntityId =
         payload.type === "edge" ? payload.subject.entityId : payload.type === "repository" ? payload.subjectEntityId : payload.entityId;
       const entity = this.entityRow(input.projectId, anchorEntityId);
@@ -1555,6 +1586,16 @@ export class ProjectWorkStore {
           payload.repositoryId,
         );
         if (!known) throw new ProjectWorkRefusedError("That repository is not one this project knows.");
+        // `implemented_by` is what "this is the change we delivered" means, and
+        // it is only ever the result of somebody accepting a change as the
+        // delivery — which is where the canonical capture is taken and where
+        // the person's decision is recorded (M21-T18, leap "Execution and
+        // convergence"). A bare link would be that claim with none of it.
+        if (payload.relation === "implemented_by") {
+          throw new ProjectWorkRefusedError(
+            "A change becomes the delivery by being accepted as one, not by being linked. Accept the attempt's change as delivery instead.",
+          );
+        }
         const subject = this.refOf(entity, revision);
         const repositoryLink: RepositoryLink = {
           projectId: input.projectId,
@@ -1568,24 +1609,9 @@ export class ProjectWorkStore {
           createdAt: now,
           ...(payload.supersedesLinkId ? { supersedesLinkId: payload.supersedesLinkId } : {}),
           ...(payload.captureBlobId ? { captureBlobId: payload.captureBlobId } : {}),
+          ...(payload.display ? { display: payload.display } : {}),
         };
-        this.statement(
-          "INSERT INTO repository_links (link_id, project_id, entity_id, revision_id, relation, repository_id, subject_json, target_json, published_path, created_by_json, created_at, supersedes_link_id, capture_blob_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        ).run(
-          linkId,
-          input.projectId,
-          entity.entity_id,
-          payload.subjectRevisionId,
-          payload.relation,
-          payload.repositoryId,
-          JSON.stringify(subject),
-          JSON.stringify(payload.target),
-          payload.publishedPath ?? null,
-          JSON.stringify(input.origin.actor),
-          now,
-          payload.supersedesLinkId ?? null,
-          payload.captureBlobId ?? null,
-        );
+        this.insertRepositoryLink(linkId, entity.entity_id, payload.subjectRevisionId, repositoryLink, now);
         record = { type: "repository", repository: repositoryLink };
       } else if (payload.type === "evidence") {
         const revision = this.revisionRow(input.projectId, payload.revisionId);
@@ -1598,6 +1624,31 @@ export class ProjectWorkStore {
           throw new ProjectWorkRefusedError(
             "Acceptance evidence is evidence that passed. Record this as supporting evidence instead — a failed attempt is evidence, not a failed task.",
           );
+        }
+        // A verification that names the state it ran against writes that link
+        // here, in the same transaction, and joins itself to it (M21-T18): the
+        // evidence and the `verified_at` link are one act, so neither can
+        // exist without the other.
+        let repositoryLinkId = payload.repositoryLinkId;
+        if (payload.verifiedAt) {
+          const known = this.statement("SELECT 1 AS present FROM repositories WHERE project_id = ? AND repository_id = ?").get(
+            input.projectId,
+            payload.verifiedAt.repositoryId,
+          );
+          if (!known) throw new ProjectWorkRefusedError("That repository is not one this project knows.");
+          const verifiedLinkId = mintLinkId();
+          const verified: RepositoryLink = {
+            projectId: input.projectId,
+            linkId: verifiedLinkId,
+            subject: this.refOf(entity, revision),
+            relation: "verified_at",
+            repositoryId: payload.verifiedAt.repositoryId,
+            target: { state: payload.verifiedAt.state },
+            createdBy: input.origin.actor,
+            createdAt: now,
+          };
+          this.insertRepositoryLink(verifiedLinkId, entity.entity_id, payload.revisionId, verified, now);
+          repositoryLinkId = verifiedLinkId;
         }
         const evidenceId = mintEvidenceId();
         const evidence: ProjectWorkEvidence = {
@@ -1613,7 +1664,7 @@ export class ProjectWorkStore {
           outcome: payload.outcome,
           at: now,
           origin: input.origin,
-          ...(payload.repositoryLinkId ? { repositoryLinkId: payload.repositoryLinkId } : {}),
+          ...(repositoryLinkId ? { repositoryLinkId } : {}),
         };
         this.statement(
           "INSERT INTO evidence (evidence_id, project_id, entity_id, revision_id, kind, role, summary, detail, blob_id, outcome, at, origin_json, repository_link_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -1630,7 +1681,7 @@ export class ProjectWorkStore {
           payload.outcome,
           now,
           JSON.stringify(input.origin),
-          payload.repositoryLinkId ?? null,
+          repositoryLinkId ?? null,
         );
         record = { type: "evidence", evidence };
       } else {
@@ -1677,6 +1728,127 @@ export class ProjectWorkStore {
         actorLabel: input.origin.actor.label,
       });
       return { link: record, seq };
+    });
+  }
+
+  /**
+   * Accept one exact repository change as the delivery of this work (M21-T18).
+   *
+   * The only door `implemented_by` has. It writes one link per accepted
+   * subject revision — the Task's own, and every approved input revision the
+   * caller named — all pointing at the **same** change, which is what makes
+   * the relation many-to-many without any of the copies drifting. The capture
+   * was already stored by the caller (`captures.ts`) before this ran, so the
+   * evidence is durable before the acceptance exists, not after.
+   *
+   * A correction appends: a link that supersedes another keeps the old one,
+   * with its own capture, exactly where it was.
+   */
+  private acceptDelivery(
+    input: {
+      projectId: string;
+      expectedRevisionId: string;
+      capture?: { blobId: string; bytes: number; files: number; sources: number; truncated?: string } | undefined;
+    } & ProjectWorkWriteOrigin,
+    payload: Extract<ProjectWorkLinkInput, { type: "delivery" }>,
+    now: string,
+  ): { link: ProjectWorkLinkRecord; seq: number } {
+    const entity = this.entityRow(input.projectId, payload.entityId);
+    this.requireCurrent(entity, input.expectedRevisionId);
+    const known = this.statement("SELECT 1 AS present FROM repositories WHERE project_id = ? AND repository_id = ?").get(
+      input.projectId,
+      payload.repositoryId,
+    );
+    if (!known) throw new ProjectWorkRefusedError("That repository is not one this project knows.");
+    if (payload.executionLinkId) {
+      const attempt = this.statement("SELECT 1 AS present FROM execution_links WHERE project_id = ? AND link_id = ?").get(
+        input.projectId,
+        payload.executionLinkId,
+      );
+      if (!attempt) throw new ProjectWorkNotFoundError("That attempt is not one this project has.");
+    }
+
+    const subjects: Array<{ entityId: string; revisionId: string }> = [{ entityId: payload.entityId, revisionId: payload.revisionId }];
+    for (const covered of payload.covers ?? []) {
+      if (subjects.some((subject) => subject.entityId === covered.entityId && subject.revisionId === covered.revisionId)) continue;
+      subjects.push(covered);
+    }
+
+    const links: RepositoryLink[] = [];
+    for (const subject of subjects) {
+      const row = this.entityRow(input.projectId, subject.entityId);
+      const revision = this.revisionRow(input.projectId, subject.revisionId);
+      if (revision.entity_id !== row.entity_id) throw new ProjectWorkRefusedError("That revision belongs to another item.");
+      const linkId = mintLinkId();
+      const link: RepositoryLink = {
+        projectId: input.projectId,
+        linkId,
+        subject: this.refOf(row, revision),
+        relation: "implemented_by",
+        repositoryId: payload.repositoryId,
+        target: { change: payload.change },
+        createdBy: input.origin.actor,
+        createdAt: now,
+        ...(payload.supersedesLinkId ? { supersedesLinkId: payload.supersedesLinkId } : {}),
+        ...(input.capture ? { captureBlobId: input.capture.blobId } : {}),
+        ...(payload.executionLinkId ? { executionLinkId: payload.executionLinkId } : {}),
+        ...(payload.display ? { display: payload.display } : {}),
+      };
+      this.insertRepositoryLink(linkId, row.entity_id, subject.revisionId, link, now);
+      this.statement("UPDATE entities SET updated_at = ? WHERE entity_id = ?").run(now, row.entity_id);
+      links.push(link);
+    }
+
+    const seq = this.raise(input.projectId, {
+      change: "link",
+      entityId: entity.entity_id,
+      entityKind: entity.kind as ProjectWorkKind,
+      key: entity.key,
+      title: entity.title,
+      state: entity.state as ProjectWorkState,
+      at: now,
+      actorLabel: input.origin.actor.label,
+    });
+    return { link: { type: "delivery", links, ...(input.capture ? { capture: input.capture } : {}) }, seq };
+  }
+
+  /** One repository link row. The same columns whichever door wrote it. */
+  private insertRepositoryLink(linkId: string, entityId: string, revisionId: string, link: RepositoryLink, now: string): void {
+    this.statement(
+      "INSERT INTO repository_links (link_id, project_id, entity_id, revision_id, relation, repository_id, subject_json, target_json, published_path, created_by_json, created_at, supersedes_link_id, capture_blob_id, display_json, execution_link_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      linkId,
+      link.projectId,
+      entityId,
+      revisionId,
+      link.relation,
+      link.repositoryId,
+      JSON.stringify(link.subject),
+      JSON.stringify(link.target),
+      link.publishedPath ?? null,
+      JSON.stringify(link.createdBy),
+      now,
+      link.supersedesLinkId ?? null,
+      link.captureBlobId ?? null,
+      link.display ? JSON.stringify(link.display) : null,
+      link.executionLinkId ?? null,
+    );
+  }
+
+  /**
+   * Attach a canonical capture to a link that had none (M21-T18).
+   *
+   * Used when a decision — an approval, a completion — reaches a link that was
+   * recorded before anyone knew it would be leant on. The link's identity is
+   * untouched: only the capture it can be read from is added.
+   */
+  attachCapture(projectId: string, linkId: string, blobId: string): void {
+    this.write(() => {
+      this.statement("UPDATE repository_links SET capture_blob_id = ? WHERE project_id = ? AND link_id = ? AND capture_blob_id IS NULL").run(
+        blobId,
+        projectId,
+        linkId,
+      );
     });
   }
 
@@ -1907,6 +2079,21 @@ export class ProjectWorkStore {
           const target = JSON.parse(row.target_json) as { state?: RepositoryStateRef; change?: RepositoryChangeRef };
           for (const ref of [target.state, target.change?.base, target.change?.head]) {
             if (ref?.path && !paths.includes(ref.path)) paths.push(ref.path);
+          }
+        }
+        // What the attempts actually wrote, from git (M21-T18). This is the
+        // *observed* side of a scope conflict: a Task that did not declare a
+        // package and wrote in it anyway is visible to the next attempt, and
+        // nothing a tool call said contributes a path here.
+        const attempts = this.statement(
+          "SELECT repositories_json FROM execution_links WHERE project_id = ? AND entity_id = ? AND repositories_json IS NOT NULL",
+        ).all(projectId, entityId) as Array<{ repositories_json: string }>;
+        for (const attempt of attempts) {
+          const repositories = JSON.parse(attempt.repositories_json) as AttemptRepositoryRecord[];
+          for (const repository of repositories) {
+            for (const path of repository.changedPaths) {
+              if (!paths.includes(path)) paths.push(path);
+            }
           }
         }
         return paths;
@@ -2181,6 +2368,10 @@ export class ProjectWorkStore {
       endedAt?: string | undefined;
       outcome?: ExecutionLink["outcome"] | undefined;
     };
+    /** What git said each repository did during it, resolved by the caller. */
+    repositories?: readonly AttemptRepositoryRecord[] | undefined;
+    /** The checkpoint namespace this attempt's refs were read from. */
+    checkpointKey?: string | undefined;
   } & ProjectWorkWriteOrigin): {
     link: ExecutionLink;
     entity: ProjectWorkEntity;
@@ -2194,10 +2385,31 @@ export class ProjectWorkStore {
       this.requireCurrent(entity, input.expectedRevisionId);
       if (entity.kind !== "task") throw new ProjectWorkRefusedError("Only a task links an execution attempt.");
       const now = this.now();
+      const ending = input.execution.outcome !== undefined || input.execution.endedAt !== undefined;
+      // An attempt that ends is the attempt that started, not a second one
+      // (M21-T18): the row that carries its base commit and its checkpoints is
+      // the row that has to carry its terminal outcome, or the record of what
+      // happened is split in two and neither half is an attempt.
+      const open = ending
+        ? (this.statement(
+            "SELECT link_id, attempt, started_at, base_commit, repositories_json FROM execution_links " +
+              "WHERE project_id = ? AND entity_id = ? AND kind = ? AND target_id = ? AND ended_at IS NULL " +
+              "ORDER BY attempt DESC LIMIT 1",
+          ).get(input.projectId, entity.entity_id, input.execution.kind, input.execution.targetId) as
+            | { link_id: string; attempt: number; started_at: string; base_commit: string | null; repositories_json: string | null }
+            | undefined)
+        : undefined;
       const attempt =
         input.execution.attempt ??
+        open?.attempt ??
         Number((this.statement("SELECT COALESCE(MAX(attempt), 0) AS n FROM execution_links WHERE entity_id = ?").get(entity.entity_id) as { n: number }).n) + 1;
-      const linkId = mintLinkId();
+      const linkId = open?.link_id ?? mintLinkId();
+      // Facts the caller could not read again keep what the open attempt
+      // recorded: a base commit and a checkpoint list are history, and a
+      // closing call that happened to be unable to read git must not erase it.
+      const repositories =
+        input.repositories ??
+        (open?.repositories_json ? (JSON.parse(open.repositories_json) as AttemptRepositoryRecord[]) : undefined);
       const link: ExecutionLink = {
         projectId: input.projectId,
         linkId,
@@ -2208,35 +2420,58 @@ export class ProjectWorkStore {
         ...(input.execution.profileId ? { profileId: input.execution.profileId } : {}),
         ...(input.execution.branch ? { branch: input.execution.branch } : {}),
         ...(input.execution.repositoryId ? { repositoryId: input.execution.repositoryId } : {}),
-        ...(input.execution.baseCommitObjectId ? { baseCommitObjectId: input.execution.baseCommitObjectId } : {}),
-        startedAt: input.execution.startedAt ?? now,
-        ...(input.execution.endedAt ? { endedAt: input.execution.endedAt } : {}),
+        ...(input.execution.baseCommitObjectId ?? open?.base_commit
+          ? { baseCommitObjectId: (input.execution.baseCommitObjectId ?? open?.base_commit) as string }
+          : {}),
+        startedAt: open?.started_at ?? input.execution.startedAt ?? now,
+        ...(ending ? { endedAt: input.execution.endedAt ?? now } : {}),
         ...(input.execution.outcome ? { outcome: input.execution.outcome } : {}),
         createdBy: input.origin.actor,
+        ...(repositories ? { repositories: [...repositories] } : {}),
       };
-      this.statement(
-        "INSERT INTO execution_links (link_id, project_id, entity_id, kind, target_id, attempt, profile_id, branch, repository_id, base_commit, started_at, ended_at, outcome, created_by_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      ).run(
-        linkId,
-        input.projectId,
-        entity.entity_id,
-        link.kind,
-        link.targetId,
-        attempt,
-        link.profileId ?? null,
-        link.branch ?? null,
-        link.repositoryId ?? null,
-        link.baseCommitObjectId ?? null,
-        link.startedAt,
-        link.endedAt ?? null,
-        link.outcome ?? null,
-        JSON.stringify(input.origin.actor),
-      );
+      if (open) {
+        this.statement(
+          "UPDATE execution_links SET profile_id = COALESCE(?, profile_id), branch = COALESCE(?, branch), " +
+            "repository_id = COALESCE(?, repository_id), base_commit = COALESCE(?, base_commit), ended_at = ?, outcome = ?, " +
+            "repositories_json = COALESCE(?, repositories_json), checkpoint_key = COALESCE(?, checkpoint_key) WHERE link_id = ?",
+        ).run(
+          link.profileId ?? null,
+          link.branch ?? null,
+          link.repositoryId ?? null,
+          link.baseCommitObjectId ?? null,
+          link.endedAt ?? null,
+          link.outcome ?? null,
+          input.repositories ? JSON.stringify(input.repositories) : null,
+          input.checkpointKey ?? null,
+          linkId,
+        );
+      } else {
+        this.statement(
+          "INSERT INTO execution_links (link_id, project_id, entity_id, kind, target_id, attempt, profile_id, branch, repository_id, base_commit, started_at, ended_at, outcome, created_by_json, repositories_json, checkpoint_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ).run(
+          linkId,
+          input.projectId,
+          entity.entity_id,
+          link.kind,
+          link.targetId,
+          attempt,
+          link.profileId ?? null,
+          link.branch ?? null,
+          link.repositoryId ?? null,
+          link.baseCommitObjectId ?? null,
+          link.startedAt,
+          link.endedAt ?? null,
+          link.outcome ?? null,
+          JSON.stringify(input.origin.actor),
+          repositories ? JSON.stringify(repositories) : null,
+          input.checkpointKey ?? null,
+        );
+      }
       // An attempt that ended is evidence and nothing else. The Task's state
       // is untouched here, on purpose: no run, however it finished, completes
       // a Task (leap, "Plan and Project Task contract").
       const attemptEvidence =
-        link.outcome !== undefined || link.endedAt !== undefined
+        ending
           ? this.insertEvidence({
               projectId: input.projectId,
               entityId: entity.entity_id,
@@ -2244,7 +2479,11 @@ export class ProjectWorkStore {
               kind: "command_output",
               role: "supporting",
               summary: `Attempt ${attempt} ended: ${link.outcome ?? "finished"}.`,
-              detail: `${link.kind} ${link.targetId}`,
+              // What the attempt changed, from git and from nowhere else
+              // (M21-T18): the checkpoints it made and the files between the
+              // first and the last of them. A model's account of its own work
+              // is not what this sentence is made of.
+              detail: [`${link.kind} ${link.targetId}`, ...changeSummary(link.repositories ?? [])].join(" · "),
               outcome: link.outcome === "completed" ? "passed" : link.outcome === "failed" ? "failed" : "inconclusive",
               at: now,
               origin: input.origin,
@@ -2725,7 +2964,14 @@ export class ProjectWorkStore {
       ...(row["supersedes_link_id"] ? { supersedesLinkId: row["supersedes_link_id"] as string } : {}),
       ...(row["source_unavailable"] === 1 ? { sourceUnavailable: true } : {}),
       ...(row["capture_blob_id"] ? { captureBlobId: row["capture_blob_id"] as string } : {}),
+      ...(row["execution_link_id"] ? { executionLinkId: row["execution_link_id"] as string } : {}),
+      ...(row["display_json"] ? { display: JSON.parse(row["display_json"] as string) as RepositoryLinkContext } : {}),
     }));
+  }
+
+  /** Every repository link on one entity, unbounded, for the host's own rules. */
+  repositoryLinksOf(projectId: string, entityId: string): RepositoryLink[] {
+    return this.readRepositoryLinks(projectId, entityId, []);
   }
 
   private readExecutionLinks(projectId: string, entityId: string, truncated: string[]): ExecutionLink[] {
@@ -2749,7 +2995,41 @@ export class ProjectWorkStore {
       ...(row["outcome"] ? { outcome: row["outcome"] as NonNullable<ExecutionLink["outcome"]> } : {}),
       ...(row["target_unavailable"] === 1 ? { targetUnavailable: true } : {}),
       createdBy: JSON.parse(row["created_by_json"] as string) as ExecutionLink["createdBy"],
+      ...(row["repositories_json"]
+        ? { repositories: JSON.parse(row["repositories_json"] as string) as AttemptRepositoryRecord[] }
+        : {}),
     }));
+  }
+
+  /**
+   * The attempt this session or run has open on this Task, if any (M21-T18).
+   *
+   * An attempt that has not ended is the one a closing call is closing, and
+   * the one whose `startedAt` bounds the window its checkpoints are read from.
+   */
+  openAttemptFor(projectId: string, entityId: string, kind: ExecutionLink["kind"], targetId: string): ExecutionLink | undefined {
+    const row = this.statement(
+      "SELECT link_id FROM execution_links WHERE project_id = ? AND entity_id = ? AND kind = ? AND target_id = ? AND ended_at IS NULL " +
+        "ORDER BY attempt DESC LIMIT 1",
+    ).get(projectId, entityId, kind, targetId) as { link_id: string } | undefined;
+    return row ? this.executionLink(projectId, row.link_id) : undefined;
+  }
+
+  /** The checkpoint namespace an attempt's refs were read from, when known. */
+  attemptCheckpointKey(projectId: string, linkId: string): string | undefined {
+    const row = this.statement("SELECT checkpoint_key FROM execution_links WHERE project_id = ? AND link_id = ?").get(projectId, linkId) as
+      | { checkpoint_key: string | null }
+      | undefined;
+    return row?.checkpoint_key ?? undefined;
+  }
+
+  /** One attempt by its link id, with what git said it did (M21-T18). */
+  executionLink(projectId: string, linkId: string): ExecutionLink | undefined {
+    const row = this.statement("SELECT entity_id FROM execution_links WHERE project_id = ? AND link_id = ?").get(projectId, linkId) as
+      | { entity_id: string }
+      | undefined;
+    if (!row) return undefined;
+    return this.readExecutionLinks(projectId, row.entity_id, []).find((link) => link.linkId === linkId);
   }
 
   private readComments(projectId: string, entityId: string, truncated: string[]): ProjectWorkComment[] {
