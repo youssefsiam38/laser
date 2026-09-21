@@ -17,6 +17,7 @@ import {
   projectWorkParamsSchemas,
   projectWorkUpdatedSchema,
   type ProjectWorkMethod,
+  type ProjectWorkQuotaRefusal,
 } from "../src/project-work-methods.js";
 import {
   DECISION_PROOF_KINDS,
@@ -174,6 +175,35 @@ describe("bounds", () => {
     expect(
       projectWorkParamsSchemas["project/work/blob/read"].safeParse({ projectId: SAMPLE_PROJECT_ID, blobId: "blb_1", limit: 10 * 1024 * 1024 }).success,
     ).toBe(false);
+  });
+});
+
+describe("a refused durable write", () => {
+  it("keeps byte numbers as bytes and carries a count ceiling as a count", () => {
+    // The shape a byte refusal has always had, unchanged: no `measure`, and
+    // the two byte numbers say what they say.
+    const bytes: ProjectWorkQuotaRefusal = {
+      refused: "quota",
+      scope: "project",
+      recovery: "Export or permanently delete some of this project's saved work and try again.",
+      usedBytes: 512 * 1024 * 1024,
+      limitBytes: 512 * 1024 * 1024,
+    };
+    expect(bytes.measure).toBeUndefined();
+    expect(bytes.usedCount).toBeUndefined();
+
+    // A count ceiling reports the count separately. `usedBytes` still holds
+    // real bytes, so nothing downstream can render rows as megabytes.
+    const records: ProjectWorkQuotaRefusal = {
+      ...bytes,
+      measure: "records",
+      usedCount: 200_001,
+      limitCount: 200_000,
+      usedBytes: 12_345,
+    };
+    expect(records.usedCount).toBeGreaterThan(records.limitCount!);
+    expect(records.usedBytes).not.toBe(records.usedCount);
+    expect(records.limitBytes).not.toBe(records.limitCount);
   });
 });
 
