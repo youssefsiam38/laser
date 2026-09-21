@@ -33,6 +33,7 @@ import {
 
 import { Board } from "./Board.js";
 import { CreateDialog } from "./CreateDialog.js";
+import { ImportExportMenu } from "./ImportExportMenu.js";
 import { Inspector } from "./Inspector.js";
 import { NeedsYou } from "./NeedsYou.js";
 import { Recent } from "./Recent.js";
@@ -133,6 +134,8 @@ export function ProjectWorkspace() {
           <Plus />
           <span className="hidden sm:inline">Create</span>
         </Button>
+        {/* Where this project's work comes from and where it goes (M21-T21). */}
+        <ImportExportMenu store={store} />
       </header>
 
       <BehindNotice offline={work.behind} error={work.error} onRetry={retry} />

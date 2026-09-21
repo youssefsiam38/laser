@@ -494,3 +494,123 @@ gate report reaches the wire without touching the file M21-T17 owns.
 | `project/work/get` (any) | `comments[].orphaned` is the anchor's current truth, recomputed on every revision |
 | `project/work/approve` | refusals: the wrong subject, an outcome the gate does not have, a build approval with no mode, a missing or moved covered revision, an unmet requirement, an open blocking comment (named), an agent |
 | `project/work/attention` | `gate` for a ready or invalidated gate, `blocking_comment` while one is open |
+
+---
+
+## M21-T21 · Import, export and repository publication
+
+Six methods beside the spine's sixteen, in their own protocol module and their
+own host modules, so nothing about the canonical store changed to make them
+possible.
+
+### What landed
+
+| File | What it owns |
+| --- | --- |
+| `packages/protocol/src/project-work-interop.ts` | the six methods' params/results and strict schemas, the adapter and mode vocabularies, the bounds, and `projectWorkManifestSchema` |
+| `packages/host/src/project-work/export/paths.ts` | project-relative containment, the bounded walk, the atomic write |
+| `packages/host/src/project-work/export/markdown.ts` | deterministic Markdown per kind, front matter, links section |
+| `packages/host/src/project-work/export/manifest.ts` | the manifest, its attachment enumeration and its canonical bytes |
+| `packages/host/src/project-work/export/index.ts` | `ProjectWorkExport`: compute, preview, apply, existing-export detection, stale removal, `-2` revision roots |
+| `packages/host/src/project-work/import/text.ts` | front matter, sections, bullets, checklists, tables, licence reading |
+| `packages/host/src/project-work/import/adapters.ts` | the five adapters and their proposals |
+| `packages/host/src/project-work/import/index.ts` | `ProjectWorkImport`: matching, conflicts, preview digest, apply, provenance records, relation recreation |
+| `packages/host/src/project-work/publish/git.ts` | read-only git: repository identity, object format, `ls-tree`, git blob ids |
+| `packages/host/src/project-work/publish/index.ts` | `ProjectWorkPublish`: the plan, the commit hand-off, `published_as` per item |
+| `packages/host/test/project-work/interop.test.ts` | 19 tests over the router harness, with real temporary git repositories |
+| `packages/protocol/test/project-work-interop.test.ts` | 13 tests: inventory, policy, closed schemas, the manifest |
+| `packages/ui/src/components/project-work/ImportExport*` | the header menu and the three previewed dialogs |
+
+Registration edits only, elsewhere: `messages.ts`, `schemas.ts`,
+`method-policy.ts`, `index.ts` (protocol); six delegating cases in
+`project-work/methods.ts` and six more `case` lines in `router.ts`;
+`ImportExportMenu` mounted in `Workspace.tsx`; the six store methods in
+`packages/ui/src/project-work/store.ts`.
+
+### Decisions where the contract is silent
+
+1. **A separate method family, not an extension of the spine's sixteen.** The
+   leap's inventory is closed and `project-work-methods.test.ts` pins it
+   exactly; interop is a different concern with a different scope story. So
+   `projectWorkInteropParamsSchemas` is its own table, its own limits and its
+   own test, and the spine's inventory test still passes untouched.
+2. **All six are `project_write`, previews included.** A preview here reads or
+   writes the *project's own files* — the tree an adapter parses, the export
+   root, the repository it would be published into — which is authority over
+   the project rather than the `read` of the product's own state the spine's
+   four reads are. Reach stays `any`; every write is gated by `confirm` plus
+   the digest of the preview it was decided from.
+3. **Publication never commits.** M20's git actions live in the worker, and a
+   project-work method may not start one (D-331). So `publish/preview` hands
+   back the exact `pi/project/git/commit` request to run — with its own
+   preview and typed confirmation — and `publish/apply` takes the commit that
+   resulted and *proves* it: one `ls-tree` at that commit, and every exported
+   document's git blob id computed locally from the bytes. Git is read
+   read-only from the host, which is what "the exact committed state is known"
+   requires; nothing here writes to a repository.
+4. **`published_as` is per item, not per export.** The relation joins one
+   revision to one state and one path, so each exported document gets its own
+   link carrying its own `publishedPath`, `blobObjectId` and `contentDigest`.
+   The commit is shared; the path is not. A new publication carries
+   `supersedesLinkId` of the previous one, which is kept.
+5. **An uncommitted publication needs a checkpoint.** Without one, an apply
+   whose commit does not carry the exported bytes is refused by name. With
+   one, the state records the checkpoint and the content digest and *no* blob
+   id — nothing is invented for bytes git does not hold.
+6. **The export writes the exact body beside the document.** Markdown is a
+   deliberately lossy view of a closed body, so `bodies/<KEY>.json` carries the
+   canonical bytes the digest covers and the `work_export` adapter reads those,
+   digest-checked. That is what makes export → import → export byte-identical
+   for every kind rather than for the three flat ones.
+7. **No timestamps anywhere in an export.** Not in a document, not in the
+   manifest. A clock would make every export differ, and a re-export would stop
+   being a diff a person can read. Identity that *is* time-like — created,
+   updated — stays in the store, which stays the authority.
+8. **Attachment bytes stay in the store.** The manifest references every blob
+   (id, media type, size, digest) and copies none: a sketch is megabytes, and
+   an export is a document set.
+9. **Re-export is `replace` or `new_revision`, with no default.** An apply over
+   an existing export with no mode is refused naming both. `replace` deletes
+   only files the *previous manifest* listed — never a file a person put in
+   that folder. `new_revision` writes to the first free `<root>-<n>`.
+10. **Provenance is an evidence record, not an edge.** `derived_from` joins two
+    artifacts; a source file is not one. Each imported revision carries the
+    note `Imported from <path> (<adapter>)` and a `source_location` evidence
+    record with the path, the sha256 of the bytes read, the adapter and the
+    licence the source declared — or "not declared by the source", which is a
+    fact rather than a guess.
+11. **An import writes item by item.** One proposal the store refuses is
+    recorded as skipped with the store's own sentence and the rest still land;
+    per-write idempotency keys are derived from the caller's one, so a retry
+    converges rather than duplicating.
+12. **Only `work_export` recreates relations.** They were real facts recorded
+    in a manifest. No other adapter invents a link: another tool's ids are not
+    keys this project minted, and `plan_md` keeps a row's declared dependencies
+    as a note on the Task instead.
+13. **There is no host-side project-config writer to borrow** (`.laser` is
+    written by the worker's settings and design modules, and this may not start
+    a worker), so `export/paths.ts` is the writer: contained to the project,
+    atomic temp-then-rename, `0o600`, and no symlink is followed by the walk.
+14. **`ExternalWorkLink` is M25's slot.** `WORK_IMPORT_ADAPTERS` deliberately
+    has no tracker member, and a test pins that: a Jira link is an explicit,
+    previewed, never-syncing record of an exported revision, not a file an
+    adapter parses.
+
+### Wire shapes the workspace consumes
+
+| Method | Shape (abridged) |
+| --- | --- |
+| `project/work/import/preview` | `{ adapter, root, previewDigest, proposals[], creates, conflicts, skipped[], truncated?, watches: false }` |
+| `project/work/import/apply` | `{ applied[], created, revised, skipped, relations, seq, watches: false }` |
+| `project/work/export/preview` | `{ root, previewDigest, files[], entities, attachments, totalBytes, mode, existing?, removes[], decide? }` |
+| `project/work/export/apply` | `{ root, mode, files[], removed[], manifestDigest, entities, attachments, totalBytes, seq }` |
+| `project/work/publish/preview` | `{ root, previewDigest, repository?, files[], uncommitted[], entities[], commit?, ready, refusal? }` |
+| `project/work/publish/apply` | `{ root, repositoryId, commitObjectId, objectFormat, state, published[], seq }` |
+
+A proposal carries `source { adapter, path, digest, licence?, licenceName?,
+externalId? }`, and a conflicting one carries `match` plus
+`conflict { reason, choices }`; the apply's `decisions[]` answers them.
+
+Audit rows: `project_work_imported`, `project_work_exported`,
+`project_work_published` — identity, paths, digests and counts only, never a
+title or a body.

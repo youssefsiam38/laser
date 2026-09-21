@@ -7,6 +7,9 @@ export { KeyTag, NeedsYouChip, StatusChip, TypeBadge, WorkIdentity } from "./Kin
 export { SessionTaskChip, WorkMentionChip } from "./MentionChip.js";
 export { WorkArtifactCard } from "./ArtifactCard.js";
 export { nextKeyFor } from "./CreateDialog.js";
+/** Import, export and publication (M21-T21). */
+export { ImportExportMenu } from "./ImportExportMenu.js";
+export { ExportDialog, ImportDialog, IMPORT_ADAPTERS, PublishDialog, type WorkDialogProps } from "./ImportExportDialogs.js";
 export {
   clearWorkCreationRequest,
   startProjectWork,

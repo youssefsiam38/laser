@@ -66,6 +66,7 @@ import {
   type ProjectWorkWrongProject,
   type ProjectTaskLinkExecutionResult,
   PROJECT_WORK_READ_METHODS,
+  type ProjectWorkInteropMethod,
 } from "@lasercode/protocol";
 import { projectRootOf } from "../paths.js";
 import { canonical } from "../trust.js";
@@ -87,14 +88,31 @@ import {
   ProjectWorkRefusedError,
   ProjectWorkUnavailableError,
 } from "./errors.js";
+import { ProjectWorkExport } from "./export/index.js";
+import { ProjectWorkImport } from "./import/index.js";
+import { ProjectWorkPublish } from "./publish/index.js";
 import type { ProjectWorkStore } from "./store.js";
 
-/** One request this authority answers, with the params its method declares. */
-export type ProjectWorkRequest = {
+/**
+ * One request this authority answers, with the params its method declares.
+ *
+ * Two families: the spine's sixteen (M21-T3) and the six import/export/publish
+ * methods (M21-T21). They share this door because they share everything that
+ * matters — the actor the host decided, the project resolution, the trust
+ * gate, the error vocabulary and the audit — and the six delegate their own
+ * work to `project-work/{import,export,publish}`.
+ */
+export type ProjectWorkSpineRequest = {
   [M in ProjectWorkMethod]: { method: M; params: ClientRequests[M]["params"] };
 }[ProjectWorkMethod];
 
-export type ProjectWorkResult = ClientRequests[ProjectWorkMethod]["result"];
+export type ProjectWorkInteropRequest = {
+  [M in ProjectWorkInteropMethod]: { method: M; params: ClientRequests[M]["params"] };
+}[ProjectWorkInteropMethod];
+
+export type ProjectWorkRequest = ProjectWorkSpineRequest | ProjectWorkInteropRequest;
+
+export type ProjectWorkResult = ClientRequests[ProjectWorkMethod | ProjectWorkInteropMethod]["result"];
 
 /**
  * Where the call came from.
@@ -145,6 +163,9 @@ export class ProjectWorkMethods {
   private readonly store: ProjectWorkStore;
   private readonly trustOf: ((projectRoot: string) => ProjectWorkTrust) | undefined;
   private readonly logs: { record(input: LogInput): unknown } | undefined;
+  private imports: ProjectWorkImport | undefined;
+  private exports: ProjectWorkExport | undefined;
+  private publishes: ProjectWorkPublish | undefined;
 
   constructor(options: ProjectWorkMethodsOptions) {
     this.store = options.store;
@@ -242,7 +263,7 @@ export class ProjectWorkMethods {
    * namespace from it and keeps only the derived key. The path never reaches a
    * model, a client or a log — it is used here and dropped.
    */
-  private attemptSession(request: ProjectWorkRequest, params: ProjectWorkBridgeParams): ProjectWorkRequest {
+  private attemptSession(request: ProjectWorkSpineRequest, params: ProjectWorkBridgeParams): ProjectWorkSpineRequest {
     const sessionPath = params.attempt?.sessionPath;
     if (request.method !== "project/task/link-execution" || !sessionPath) return request;
     if (request.params.execution.sessionPath !== undefined) return request;
@@ -543,6 +564,99 @@ export class ProjectWorkMethods {
         const repositories = result.link.repositories;
         return repositories && repositories.length > 0 ? { ...result, attemptRepositories: repositories } : result;
       }
+
+      // Import, export and publication (M21-T21). The rules live in
+      // `project-work/{import,export,publish}`; these cases decide the same
+      // three things every other case does — may this caller change this
+      // project, who is it, and is the decision worth an audit row — and
+      // delegate everything else.
+      case "project/work/import/preview": {
+        const params = request.params;
+        this.requireWritable(params.projectId);
+        return this.importer().preview(params);
+      }
+      case "project/work/import/apply": {
+        const params = request.params;
+        const origin = this.originFor(params.origin, caller);
+        this.requireWritable(params.projectId);
+        const result = this.importer().apply(params, origin);
+        this.audit("project_work_imported", {
+          origin,
+          caller,
+          projectId: params.projectId,
+          summary: `imported ${String(result.created + result.revised)} item(s) from ${result.root}`,
+          detail: {
+            adapter: result.adapter,
+            root: result.root,
+            created: result.created,
+            revised: result.revised,
+            skipped: result.skipped,
+            relations: result.relations,
+            // Identity and provenance only: a key, the revision it wrote and
+            // the digest of the source file. Never a title or a body.
+            items: result.applied
+              .filter((item) => item.key !== undefined)
+              .map((item) => `${item.key!}@${item.revisionId ?? ""}←${item.source.path}#${item.source.digest}`),
+          },
+        });
+        return { ...result, seq: this.store.seq(params.projectId) };
+      }
+      case "project/work/export/preview": {
+        const params = request.params;
+        this.requireWritable(params.projectId);
+        return this.exporter().preview(params);
+      }
+      case "project/work/export/apply": {
+        const params = request.params;
+        const origin = this.originFor(params.origin, caller);
+        this.requireWritable(params.projectId);
+        const result = this.exporter().apply(params);
+        // An export leaves the app's own storage, so it is an audited decision
+        // (leap, "Security, privacy and resource rules").
+        this.audit("project_work_exported", {
+          origin,
+          caller,
+          projectId: params.projectId,
+          summary: `exported ${String(result.entities)} item(s) to ${result.root}`,
+          detail: {
+            root: result.root,
+            mode: result.mode,
+            entities: result.entities,
+            attachments: result.attachments,
+            files: result.files.length,
+            removed: result.removed.length,
+            totalBytes: result.totalBytes,
+            manifestDigest: result.manifestDigest,
+          },
+        });
+        return { ...result, seq: this.store.seq(params.projectId) };
+      }
+      case "project/work/publish/preview": {
+        const params = request.params;
+        this.requireWritable(params.projectId);
+        return this.publisher().preview(params);
+      }
+      case "project/work/publish/apply": {
+        const params = request.params;
+        const origin = this.originFor(params.origin, caller);
+        this.requireWritable(params.projectId);
+        const result = this.publisher().apply(params, origin);
+        this.audit("project_work_published", {
+          origin,
+          caller,
+          projectId: params.projectId,
+          summary: `published ${String(result.published.length)} item(s) at ${result.commitObjectId.slice(0, 12)}`,
+          detail: {
+            root: result.root,
+            repositoryId: result.repositoryId,
+            commitObjectId: result.commitObjectId,
+            objectFormat: result.objectFormat,
+            ...(params.checkpointId !== undefined ? { checkpointId: params.checkpointId } : {}),
+            published: result.published.map((item) => `${item.key}@${item.publishedPath}`),
+          },
+        });
+        return { ...result, seq: this.store.seq(params.projectId) };
+      }
     }
   }
 
@@ -821,6 +935,30 @@ export class ProjectWorkMethods {
     }
   }
 
+  // --------------------------------------------- import, export, publish
+
+  /**
+   * The three interop modules, built on first use and kept.
+   *
+   * They hold no state beyond the store, so one instance each is enough; they
+   * are lazy so a host that never imports or exports never touches a project's
+   * files at all.
+   */
+  private importer(): ProjectWorkImport {
+    this.imports ??= new ProjectWorkImport(this.store);
+    return this.imports;
+  }
+
+  private exporter(): ProjectWorkExport {
+    this.exports ??= new ProjectWorkExport(this.store);
+    return this.exports;
+  }
+
+  private publisher(): ProjectWorkPublish {
+    this.publishes ??= new ProjectWorkPublish(this.store);
+    return this.publishes;
+  }
+
   // -------------------------------------------------------------------- reads
 
   private list(params: ProjectWorkListParams): ProjectWorkListResult {
@@ -924,7 +1062,7 @@ export class ProjectWorkMethods {
    * project the environment permits. A write may not: it is refused with the
    * owning project named, and the offer Laser makes instead.
    */
-  private fenceProject(request: ProjectWorkRequest, projectId: string): ProjectWorkRequest {
+  private fenceProject(request: ProjectWorkSpineRequest, projectId: string): ProjectWorkSpineRequest {
     if (request.method === "project/work/list") {
       // A worker never names a folder: the host already knows which one it is.
       const { cwd: _cwd, ...rest } = request.params;

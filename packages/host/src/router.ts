@@ -1193,6 +1193,15 @@ export class Router {
       case "project/work/unlink":
       case "project/task/action":
       case "project/task/link-execution":
+      // Import, export and publication (M21-T21) are the same authority over
+      // the same store, and equally worker-free: an adapter reads the
+      // project's own files, an export writes them, and publication reads git.
+      case "project/work/import/preview":
+      case "project/work/import/apply":
+      case "project/work/export/preview":
+      case "project/work/export/apply":
+      case "project/work/publish/preview":
+      case "project/work/publish/apply":
         // A client connection is always a person: only the worker bridge
         // (M21-T17) presents an agent, and it does not come through here.
         return this.projectWork().handle(req, { actor, source: "client" });
@@ -1458,7 +1467,7 @@ export class Router {
     const { projectWork: _claimed, ...params } = req.params;
     const pinned = promptMentionRefs(params.content);
     if (pinned.length === 0) return this.forwardToWorker({ ...req, params } as TypedClientRequest);
-    const read = this.readMentions(pinned, actor);
+    const read = await this.readMentions(pinned, actor);
     const forwarded = await this.forwardToWorker({
       ...req,
       params: { ...params, ...(read.projections.length > 0 ? { projectWork: read.projections } : {}) },
@@ -1468,10 +1477,10 @@ export class Router {
   }
 
   /** Validate every mention once, in the order the message named them. */
-  private readMentions(
+  private async readMentions(
     refs: readonly ProjectWorkRef[],
     actor: ActorIdentity,
-  ): { projections: ProjectWorkMentionProjection[]; outcomes: ProjectWorkMentionOutcome[] } {
+  ): Promise<{ projections: ProjectWorkMentionProjection[]; outcomes: ProjectWorkMentionOutcome[] }> {
     // Reading a mention is a project-work read, so it is admitted by the same
     // scope a `project/work/get` would need. A connection that may prompt but
     // may not read project work sends its words without the content.
@@ -1479,7 +1488,7 @@ export class Router {
     const projections: ProjectWorkMentionProjection[] = [];
     const outcomes: ProjectWorkMentionOutcome[] = [];
     for (const ref of refs) {
-      const found = mayRead ? this.readMention(ref, actor) : { problem: "unreadable" as const };
+      const found = mayRead ? await this.readMention(ref, actor) : { problem: "unreadable" as const };
       if ("problem" in found) {
         const detail = mentionProblemSentence(found.problem, ref.key);
         projections.push(
@@ -1524,10 +1533,10 @@ export class Router {
    * problem — and each of those is named separately, because "it did not work"
    * is not something a person can act on.
    */
-  private readMention(
+  private async readMention(
     ref: ProjectWorkRef,
     actor: ActorIdentity,
-  ): { reading: MentionReading } | { problem: "unknown_project" | "unknown_entity" | "unknown_revision" | "released" } {
+  ): Promise<{ reading: MentionReading } | { problem: "unknown_project" | "unknown_entity" | "unknown_revision" | "released" }> {
     const work = this.projectWork();
     const caller = { actor, source: "client" as const };
     const base = {
@@ -1538,14 +1547,14 @@ export class Router {
     };
     let detail;
     try {
-      detail = work.handle({ method: "project/work/get", params: { ...base, revisionId: ref.revisionId } }, caller) as ProjectWorkGetResult;
+      detail = (await work.handle({ method: "project/work/get", params: { ...base, revisionId: ref.revisionId } }, caller)) as ProjectWorkGetResult;
     } catch {
       try {
-        work.handle({ method: "project/work/get", params: base }, caller);
+        await work.handle({ method: "project/work/get", params: base }, caller);
         return { problem: "unknown_revision" };
       } catch {
         try {
-          work.handle({ method: "project/work/list", params: { projectId: ref.projectId, limit: 1 } }, caller);
+          await work.handle({ method: "project/work/list", params: { projectId: ref.projectId, limit: 1 } }, caller);
           return { problem: "unknown_entity" };
         } catch {
           return { problem: "unknown_project" };

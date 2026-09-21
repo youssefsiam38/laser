@@ -161,6 +161,16 @@ const EXPECTED_METHOD_CAPABILITIES = {
   "project/work/revise": [],
   "project/work/search": [],
   "project/work/unlink": [],
+  // Import, export and publication (M21-T21): the project's own files, under
+  // the same `project_write` scope as every other lifecycle write, and no
+  // capability family of their own — nothing here needs push, search or a
+  // runtime.
+  "project/work/import/preview": [],
+  "project/work/import/apply": [],
+  "project/work/export/preview": [],
+  "project/work/export/apply": [],
+  "project/work/publish/preview": [],
+  "project/work/publish/apply": [],
   "session/profile/set": [],
   "session/model/pin": [],
   "pi/host/environment": [],
