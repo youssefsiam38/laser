@@ -3,6 +3,9 @@ export { ProjectWorkBridge } from "./ProjectWorkBridge.js";
 export { ProjectWorkControl, controlTooltip } from "./ProjectWorkControl.js";
 export { ProjectWorkspace } from "./Workspace.js";
 export { KeyTag, NeedsYouChip, StatusChip, TypeBadge, WorkIdentity } from "./KindBadge.js";
+/** Mentioning project work outside the workspace (M21-T9). */
+export { SessionTaskChip, WorkMentionChip } from "./MentionChip.js";
+export { WorkArtifactCard } from "./ArtifactCard.js";
 export { nextKeyFor } from "./CreateDialog.js";
 export {
   clearWorkCreationRequest,

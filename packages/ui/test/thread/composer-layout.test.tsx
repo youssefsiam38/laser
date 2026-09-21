@@ -87,6 +87,8 @@ vi.mock("@/runtime", async (importActual) => ({
   useLaserStable: () => ({
     currentProject: mocks.currentProject,
     client: mocks.client,
+    projects: [],
+    projectInfo: {},
     actions: {
       toast: mocks.toast,
       compact: mocks.compact,

@@ -389,6 +389,17 @@ and a coarse pointer take. A person dragging a card is the acceptance run
 
 The host half is in [`m21-spine-plan.md`](m21-spine-plan.md) § M21-T8; this is
 what a person sees and touches.
+---
+
+## M21-T9 · Cross-session and cross-project mentions
+
+The slot the T6 plan left open ("Mentions (`@SPEC-12`) in the composer, the
+transcript's compact artifact card, and the sessions sidebar's `TASK-n` chip"),
+plus the global search the T7 notes deferred here, filled exactly. The
+contract is `docs/project-lifecycle-leap.md` "Cross-session mentions and
+context" and "Outside the workspace"; the behaviour is written up for people
+in [`docs/project-mentions.md`](../project-mentions.md) beside the machine-file
+mentions it extends.
 
 ### What landed
 
@@ -442,3 +453,84 @@ mounts `ApprovalRequestCard` in the footer beside `ThreadDialogCards`.
   and the canvas is M21-T13's; the panel lists what a canvas will draw pins for.
 - **Resolving from the Needs you queue.** The queue still only opens the item:
   a decision needs what it is deciding on screen (D-355).
+| `packages/protocol/src/project-work-mentions.ts` | the token grammar both sides read: the human form, the link-reference definition, the spans, `withProjectWorkMentions`, `projectWorkMentionProse`, and the projection/outcome shapes |
+| `packages/host/src/project-work/mention-projection.ts` | the bounded projection per kind, the `[from …]` provenance, and the sentence for each way a body can be missing |
+| `packages/host/src/router.ts` | `session/prompt` send-time validation: read scope, project, revision, digest; the projection the worker receives; the outcomes the sender is told |
+| `packages/ui/src/project-work/mentions.ts` | the query (`@KEY`, `@spec:` …), the ranking, the picker row identity, the pins, the send-time expansion, and the sessions sidebar's session → Task links |
+| `packages/ui/src/components/project-work/MentionChip.tsx` | the chip, in a transcript and in the sidebar |
+| `packages/ui/src/components/project-work/ArtifactCard.tsx` | the compact card for a message that *is* a reference |
+| `packages/ui/test/project-work/mentions*.test.*` | the query, the ranking, the pick, the stored shape vs the visible text, the chip, the card, the sidebar link and the sender's outcomes |
+| `packages/host/test/project-work/mentions.test.ts` | validation and projection over the wire, including the search index projection |
+
+Edited, each as small as it could be: `components/thread/project-path.ts` (the
+transcript formatter yields work mentions and drops the identity lines),
+`components/thread/finished-mentions.ts` (`noteChoice`, and a `work` kind so a
+restored draft's `@TASK-44` is the mention it was chosen as rather than a
+handle nobody started), `components/thread/composer-mention-tags.tsx` (the
+kind's colour token on the tag), `components/thread/Composer.tsx` (the rows,
+the insertion and the pin), `components/assistant-ui/elements/directive-text{,.aui}.tsx`
+(one `renderMention` seam), `components/assistant-ui/elements/thread-list.aui.tsx`
+(the sidebar chip, four lines), `components/shell/GlobalSearch.tsx` (project
+work above the conversations), `runtime/adapter.ts` (the send path expands the
+draft and reports the outcomes), `host/src/session-search.ts` and `host/src/catalog.ts` (a user
+message is indexed and previewed as its prose), `host/src/server.ts` (`projectPaths`, so provenance
+can name a project a person recognises).
+
+### Decisions where the contract is silent
+
+1. **The identity lives in the message, at its foot.** A conversation stores
+   text and images; there is no per-message side channel, and a mention has to
+   survive a reload, an edit, a fork and a second device. So the sent message
+   carries one Markdown link-reference definition per mention
+   (`[TASK-44]: laser://work/<project>/<kind>/<entity>/<revision> "sha256-…"`),
+   the prose keeps the human form, and the transcript drops the definitions
+   entirely. "Visible and copied text is the stable human form" therefore holds
+   literally: what is on screen, and what a person selects out of a bubble, is
+   `@TASK-44 "Rework the picker"`.
+2. **The host parses the message rather than trusting a parameter.** The
+   identities are already in the text it was asked to send, so nothing extra is
+   trusted, and an *edited* or *forked* message keeps its mentions working with
+   no extra plumbing. `session/prompt`'s `projectWork` is host-supplied only;
+   whatever a client sends there is dropped.
+3. **The projection is delivered on the request, not pasted into the
+   conversation.** The leap says a mention is captured *by reference, not
+   copied*, so the bounded projection rides on `session/prompt` as typed data
+   and never becomes message content nobody wrote. **Open item:** the worker
+   consumes `projectWork` in M21-T17, with the context packet it already owns;
+   until then the model reads the human form and the work link in the message
+   text, and the host's projection is validated, bounded and delivered but not
+   yet used by the engine. This is stated here rather than implied, because
+   nothing in the UI pretends otherwise.
+4. **Picking writes the draft itself.** The text an insertion produces depends
+   on the draft it lands in — the same key pinned twice at two revisions needs
+   two labels — which a directive formatter cannot know. So the picker's
+   navigation writes it, pins the identity, and records the choice as finished.
+5. **A pin is a memory, not an authority.** The window remembers the last 64
+   picks by label, so the send path can attach the revision that was on screen;
+   the host re-reads every mention anyway and re-pins it when the digest
+   disagrees.
+6. **Other projects are ordered and labelled, not nested behind a category.**
+   The picker's category mode is a second keystroke before any result is
+   visible; a block of rows under its project's name answers "where is this
+   from" without one. Exact keys still outrank everything.
+7. **The sidebar reads execution links once per project sequence.** A backlog
+   row says how many execution links a Task has, never which, so the Tasks that
+   have any are read (bounded to 30, `body: "none"`) and the map is shared by
+   every row. A project this window has not read has no chips, rather than a
+   chip that guesses from a title.
+
+### What is proven, and what is not
+
+Proven by `pnpm -F @lasercode/protocol test`, `env -i … pnpm -F @lasercode/host test`
+and `pnpm -F @lasercode/ui test`: the token grammar and its idempotence, the
+search projection storing the prose once, the ranking, the pick's draft and the
+identity it pins, a hand-typed key resolved from the project cache, the host's
+validation (digest mismatch → re-pinned, missing revision → unavailable with the
+reason, unknown project, a connection without read scope), the bounded
+projection and its provenance, a stale revision sent as the revision it names,
+the transcript chip and card and the exact revision they open, the composer's
+finished record, and the sidebar's session → Task link.
+
+Not proven by a test, and named rather than claimed: how any of it **looks** —
+the chip's weight beside prose, the tag's tint in both themes, the picker's
+blocks on a phone. That is the person's acceptance run (AGENTS.md, D-342).

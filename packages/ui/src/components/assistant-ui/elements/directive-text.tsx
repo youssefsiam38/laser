@@ -8,7 +8,7 @@
  * Divergences from the registry copy: the chip is our `Badge` in its default
  * variant, sized to the type scale (no 13px literal).
  */
-import type { FC } from "react";
+import type { FC, ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { ProjectFileLink } from "@/components/ui/project-file-link";
@@ -29,12 +29,20 @@ export type CreateDirectiveTextOptions = {
   iconMap?: Record<string, IconComponent>;
   /** Icon rendered when `iconMap` has no entry for the segment type. */
   fallbackIcon?: IconComponent;
+  /**
+   * A renderer for one directive type that needs more than a chip with a
+   * label — project work, whose identity opens a place in the app (M21-T9).
+   * `alone` is true when the whole string is that one mention, which is what a
+   * reference *as* a message looks like.
+   */
+  renderMention?: (segment: DirectiveTextSegment & { kind: "mention" }, alone: boolean) => ReactNode;
 };
 
 /** Creates a text component that parses directive syntax and renders inline chips. */
 export function createDirectiveText(formatter: DirectiveTextFormatter, options?: CreateDirectiveTextOptions): FC<{ text: string }> {
   const iconMap = options?.iconMap;
   const fallbackIcon = options?.fallbackIcon;
+  const renderMention = options?.renderMention;
 
   const Component: FC<{ text: string }> = ({ text }) => {
     const segments = formatter.parse(text);
@@ -48,6 +56,10 @@ export function createDirectiveText(formatter: DirectiveTextFormatter, options?:
                 {seg.text}
               </span>
             );
+          }
+          if (renderMention) {
+            const custom = renderMention(seg, segments.length === 1);
+            if (custom !== undefined && custom !== null) return <span key={i}>{custom}</span>;
           }
           if (seg.type === "file") return <ProjectFileLink key={i} path={seg.id} literal>{seg.label}</ProjectFileLink>;
           const Icon = iconMap?.[seg.type] ?? fallbackIcon;
