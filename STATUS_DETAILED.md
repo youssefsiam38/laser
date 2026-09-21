@@ -5994,7 +5994,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T14 | Greenfield design foundation | todo | — | — | `PLAN.md` M21 |
 | M21-T15 | Plan DAG and Project Task engine | done | claude-2026-09-21-leap | `2d2b5778` (merged `aa33ffbf`); host 1121 passed (`project-work/task-engine.test.ts` 17 over the wire), protocol 631 (`project-work-plan-graph.test.ts` 12) | see notes |
 | M21-T16 | Plans and Tasks workspace | in-progress | claude-2026-09-21-leap | — | see notes |
-| M21-T17 | Model tools and execution linking | todo | — | — | `PLAN.md` M21 |
+| M21-T17 | Model tools and execution linking | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T18 | Checkpoints, changes and delivery evidence | todo | — | — | `PLAN.md` M21 |
 | M21-T19 | Verification and convergence | todo | — | — | `PLAN.md` M21 |
 | M21-T20 | Cross-session continuity and recovery | todo | — | — | `PLAN.md` M21 |
@@ -6003,7 +6003,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T23 | Product-language and element reconciliation | todo | — | — | `PLAN.md` M21 |
 | M21-T24 | End-to-end project lifecycle acceptance | todo | — | — | `PLAN.md` M21 |
 | M21-T25 | Release the project lifecycle leap | todo | — | — | `PLAN.md` M21 |
-| M21-T26 | Research phase: adapters, tools and loop | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T26 | Research phase: adapters, tools and loop | done | claude-2026-09-21-leap | `331962d4` (merged `170b1457`); `pnpm -F @lasercode/worker test` (1452 passed; `test/research/*` 100) · protocol 619 | see notes |
 
 #### M21-T5–T6 notes
 - 2026-09-21 done: T5 `packages/ui/src/project-work/{store,registry,deep-link,workspace-state,hooks,model}.ts` (one store per stable projectId; sequence rules; reconcile with removed/reset; `#/work/<projectId>/<kind>/<entityId>[/<revisionId>]`); T6 `components/project-work/**` — Project work control with live counts, Work backlog with filters/sorts/saved views (`pi/prefs`), Needs you, Recent (`timeline`), + Create with the next key, kind-aware detail with real read-only bodies for all five kinds, inspector, Tasks Board (dnd-kit → `project/task/action`, illegal moves named), Archive/Delete with typed confirmation (Enter never confirms), `/spec` `/research` `/design` `/plan` with the project picker in a projectless Chat, palette entries by key, kind tokens `--kind-*` editable in Appearance; conversation stays mounted. Deferred slots for T7/T8/T9/T13/T16 in `docs/leap/m21-workspace-plan.md`. Visual acceptance is the person's (D-342).
@@ -6016,6 +6016,9 @@ live work holding its row when a snapshot thins — because both are real hazard
 #### M21-T7 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI worker over the T6 slots (Spec/Research create/edit/revise/archive, brief vs full spec, Research question tree + findings + source panel, provenance UI, cross-links, search, Markdown editing) — host stays as the spine provides; T8's UI pieces follow in the same session once T15's host changes are merged.
 
+#### M21-T17 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: worker `project-work` companion module + typed bridge to the host authority, the compact tool surface, engine registration of the Design Index and Research tools, host-side research enforcement, context packet, `/design implement` hand-off packet, execution linking; T9's composer adapter is consumed later — the packet takes refs directly.
+
 #### M21-T16 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI worker on the Plan document/graph, Task detail and Board over the T15 shapes; write set disjoint from T7's (plan/task/board components only).
 
@@ -6024,6 +6027,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap: host engine over the spine store (DAG validation, readiness, transitions, stale, assignments, conflicts, evidence rules); gate semantics from T8 are consumed through the store's approval records already present since T1/T2.
 
 #### M21-T26 notes
+- 2026-09-21 done (`331962d4`): `packages/protocol/src/research.ts` (adapter descriptors, settings + budgets, the body-typed `record_finding`/`resolve_question` operation with `applyResearchOperation` the host re-runs, confidence rule), five shipping adapters (`web` over the person's search provider, `project`, `repository` via git-actions, `package` registries, `document` with PDF as a recorded gap — no new dependency), readable-text with injection kept as data, digest cache, budget ledger with identical-query refusal, four tools under the contract, the 7-step playbook, Research Command; Settings → Research sources descriptors; 100 tests incl. every row of the contract's Tests table; fixtures replayed. Engine registration and host enforcement are M21-T17's (plan §obligations).
 - 2026-09-21 claimed by claude-2026-09-21-leap: worker-side Research adapters, tools and loop per `docs/research-phase.md`; tools linted and fixture-replayed like the Design Index; engine registration through M21-T17.
 
 #### M21-T1–T4 notes
