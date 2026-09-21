@@ -66,6 +66,13 @@ export interface ProviderRequestContext {
   provider?: string;
   model?: string;
   api?: string;
+  /**
+   * The Model Profile the session was running on when this request was built
+   * (`docs/model-profiles.md`): intent beside the model's evidence. Stamped by
+   * the worker, which holds the activation; absent for a pinned session and
+   * for captures made before profiles existed.
+   */
+  profileId?: string;
   /** Offsets refer to captured string leaves, never to files read by the UI. */
   instructionSources?: InstructionSourceMap[];
 }

@@ -217,6 +217,25 @@ it("lets the engine finish its own retries, then continues the turn on the next 
   expect(driver.state().isStreaming).toBe(false);
 });
 
+it("stamps the profile in force on every captured provider request, and none on a pinned session", async () => {
+  const { driver } = await open();
+  const captures: string[] = [];
+  driver.subscribe((event: DriverEvent) => {
+    if (event.type === "extension" && event.message.type === "lasercode/provider/request") {
+      captures.push(event.message.context?.profileId ?? "none");
+    }
+  });
+  await driver.prompt([{ type: "text", text: "hello" }]);
+  expect(captures.length).toBeGreaterThan(0);
+  expect(new Set(captures)).toEqual(new Set([driver.state().profile!.id]));
+
+  // A pinned session has no profile to attribute: the capture says nothing.
+  await driver.setModel(MODEL.b);
+  const before = captures.length;
+  await driver.prompt([{ type: "text", text: "again" }]);
+  expect(captures.slice(before)).toEqual(["none"]);
+});
+
 it("holds the engine's settle until the chain has finished, so a run is never ended early", async () => {
   script.a = () => down();
   const { driver, updates } = await open();

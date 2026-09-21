@@ -232,6 +232,55 @@ if (strays.length > 0) {
 }
 
 // ---------------------------------------------------------------------------
+// 3. Person surfaces speak the product's vocabulary.
+//
+// A model-routing list is a *profile* and a switch inside it is "moved to"
+// (docs/model-profiles.md, D-346). "Chain", "tier" and "fallback chain" were
+// the engine-era words; a sentence a person reads must not carry them. Like
+// check 2 this reads string literals only — identifiers such as the legacy
+// `chainKey` history field are symbols, not copy — and only in the packages
+// that draw or print for a person. Generic uses of the words that are not
+// about models (a relay chain, a node_modules chain) are listed as exempt
+// lines rather than weakening the pattern.
+
+const VOCABULARY_SURFACES = ["packages/ui/src/", "packages/cli/src/", "packages/host/src/", "packages/worker/src/", "packages/desktop/src/"];
+const VOCABULARY_EXEMPT_LINES = new Set([
+  "packages/cli/src/help.ts:the only check that proves the whole chain works",
+  "packages/cli/src/pi.ts:Searched the node_modules chain",
+]);
+const FORBIDDEN_VOCABULARY = [
+  { pattern: /\bfallback chains?\b/i, say: "profile" },
+  { pattern: /\b(model|models|fallback|default|active|current|session|selected)\s+chains?\b/i, say: "profile" },
+  { pattern: /\bchains?\s+(of|for)\s+models?\b/i, say: "profile" },
+  { pattern: /\bchains?\b/i, say: "profile" },
+  { pattern: /\btiers?\b/i, say: "profile" },
+];
+const vocabulary = [];
+for (const file of repositoryFiles()) {
+  if (!VOCABULARY_SURFACES.some((dir) => file.startsWith(dir))) continue;
+  if (!/\.(ts|tsx|mjs|js)$/.test(file) || file.includes("/test/") || file.endsWith(".test.ts") || file.endsWith(".test.tsx")) continue;
+  let text;
+  try {
+    text = readFileSync(join(repoRoot, file), "utf8");
+  } catch {
+    continue;
+  }
+  scannable(file, text).split("\n").forEach((line, index) => {
+    const hit = FORBIDDEN_VOCABULARY.find(({ pattern }) => pattern.test(line));
+    if (!hit) return;
+    if ([...VOCABULARY_EXEMPT_LINES].some((exempt) => exempt.startsWith(`${file}:`) && line.includes(exempt.slice(file.length + 1)))) return;
+    vocabulary.push({ file, line: index + 1, text: line.trim().slice(0, 140), say: hit.say });
+  });
+}
+if (vocabulary.length > 0) {
+  problems.push(
+    `${vocabulary.length} person-facing string${vocabulary.length === 1 ? "" : "s"} still use${vocabulary.length === 1 ? "s" : ""} ` +
+      `engine-era model vocabulary (docs/model-profiles.md):\n` +
+      vocabulary.map((stray) => `    ${stray.file}:${stray.line}  ${stray.text}  → say "${stray.say}"`).join("\n"),
+  );
+}
+
+// ---------------------------------------------------------------------------
 
 if (problems.length > 0) {
   process.stderr.write(

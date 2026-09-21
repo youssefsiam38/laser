@@ -310,6 +310,15 @@ export class StableSdkDriver implements SessionDriver {
           // clears it, so it can never describe an older attempt (M15-T3).
           if (message.type === "lasercode/provider/request" || message.type === "lasercode/provider/request/begin" || message.type === "lasercode/provider/request/omitted") {
             this.providerResponse = undefined;
+            // The extension sees the model; only the worker knows which profile
+            // chose it. Stamp the intent beside the evidence so a captured
+            // request is attributed to the profile in force when it ran.
+            const profileId = this.fallback?.activeProfileId() ?? null;
+            if (profileId !== null) {
+              const context = { ...(message.context ?? {}), profileId };
+              this.emit({ type: "extension", message: { ...message, context } });
+              return;
+            }
           }
           if (message.type === "lasercode/provider/response") this.providerResponse = { status: message.status, headers: message.headers };
           this.emit({ type: "extension", message });

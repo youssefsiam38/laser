@@ -333,3 +333,18 @@ it("counts payload occurrences once across Instructions, Full request and Full J
   await section("Conversation");expect(count()).toBe("1 / 1");expect(highlighted()).toHaveLength(1);
   await section("Instructions");expect(count()).toBe("1 / 1");expect(highlighted()).toHaveLength(1);
 });
+
+it("names the profile a captured request ran on, beside the model, and says when it was pinned or unrecorded",async()=>{
+  client.request.mockImplementation(async(method:string)=>{
+    if(method==="models/profiles/list")return{profiles:[{id:"mp_balanced01",name:"Balanced",models:[{provider:"openai",id:"test-model"}],origin:"seeded",updatedAt:"2026-09-06T10:00:00.000Z"}],assignments:{}};
+    return{entries:[{...entry,cwd:"/project",requestContext:{...entry.requestContext,profileId:"mp_balanced01"}}],hasMore:false};
+  });
+  await mount(<ApiRequestDialog target={{kind:"message",path:"/session",entryId:"user-1"}} onClose={()=>{}}/>);
+  await act(async()=>{await Promise.resolve();});
+  expect(document.body.textContent).toContain("Balanced");
+  expect(document.body.textContent).not.toMatch(/\bchain\b/i);
+  await act(async()=>root.unmount());root=createRoot(container);
+  client.request.mockImplementation(async(method:string)=>method==="models/profiles/list"?{profiles:[],assignments:{}}:{entries:[entry],hasMore:false});
+  await mount(<ApiRequestDialog target={{kind:"message",path:"/session",entryId:"user-1"}} onClose={()=>{}}/>);
+  expect(document.body.textContent).toContain("Pinned or not recorded");
+});

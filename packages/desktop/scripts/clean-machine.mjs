@@ -417,7 +417,12 @@ writeFileSync(join(scratchAgent, "models.json"), JSON.stringify({ providers: {
   ] },
 } }));
 writeFileSync(join(scratchAgent, "settings.json"), JSON.stringify({
-  defaultProvider: "packaged", defaultModel: "packaged", enabledModels: ["packaged/packaged"],
+  // A packaged app starts on a profile, never on a raw default model
+  // (docs/model-profiles.md): the settings a fresh install would hold after
+  // the profile review step.
+  modelProfiles: [{ id: "mp_packagedbalanced", name: "Balanced", models: [{ provider: "packaged", id: "packaged" }], origin: "seeded", updatedAt: "2026-01-01T00:00:00.000Z" }],
+  defaultProfileId: "mp_packagedbalanced", namingProfileId: "mp_packagedbalanced",
+  enabledModels: ["packaged/packaged"],
 }));
 const decoyPath = join(decoyAgentDir, "settings.json");
 writeFileSync(decoyPath, DECOY_SETTINGS);

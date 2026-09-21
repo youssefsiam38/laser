@@ -30,6 +30,7 @@ import { SyntaxHighlighter } from "@/components/assistant-ui/elements/shiki-high
 import { useRequestFind } from "./use-request-find.js";
 import { ConfidenceMarker } from "@/components/assistant-ui/elements/confidence-marker";
 import { FileLinkDirectory } from "@/components/ui/source-file-link";
+import { useProfileNames } from "@/components/assistant-ui/elements/model-profiles";
 import { requestSourceSpans } from "./request-sources.js";
 import { createRequestJsonText } from "./request-json-text.js";
 import { ReleasedBody } from "./ReleasedBody.js";
@@ -124,6 +125,7 @@ async function loadMessageRequests(
 
 function RequestBody({entry}:{entry:LogEntry}) {
   const {client}=useLaserStable();
+  const profileNames=useProfileNames(entry.cwd);
   const [payload,setPayload]=useState<unknown>(entry.detail);
   const [loading,setLoading]=useState(Boolean(entry.detailRef));
   const [error,setError]=useState<string>();
@@ -217,6 +219,7 @@ function RequestBody({entry}:{entry:LogEntry}) {
         </button>)}
       </nav>
       <SpecSheet bare className="mt-5 hidden md:flex" rows={[
+        {label:"profile",value:entry.requestContext?.profileId ? (profileNames.get(entry.requestContext.profileId) ?? "A profile since removed") : "Pinned or not recorded"},
         {label:"provider",value:entry.requestContext?.provider ?? "Not recorded"},
         {label:"model",value:entry.requestContext?.model ?? view.model ?? "Not recorded",typed:true},
         {label:"API",value:entry.requestContext?.api ?? "Not recorded",typed:true},
