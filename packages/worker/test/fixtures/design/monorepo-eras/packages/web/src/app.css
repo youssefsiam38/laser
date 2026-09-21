@@ -1,0 +1,11 @@
+:root {
+  --color-brand: #4338ca;
+  --space-4: 16px;
+  --radius-lg: 10px;
+}
+
+.shell {
+  background: #ffffff;
+  padding: 16px;
+  border-radius: 10px;
+}

@@ -667,8 +667,73 @@ export function designAggregateFidelity(body: Pick<DesignBody, "screens">): Desi
 // The Design Index (docs/design-phase.md "The Design Index")
 // ---------------------------------------------------------------------------
 
-export const DESIGN_INDEX_REVIEW_STATES = ["unreviewed", "accepted", "renamed", "merged", "rejected"] as const;
+export const DESIGN_INDEX_REVIEW_STATES = ["unreviewed", "accepted", "renamed", "merged", "split", "rejected"] as const;
 export type DesignIndexReviewState = (typeof DESIGN_INDEX_REVIEW_STATES)[number];
+
+/**
+ * A DTCG token document, as `docs/design-phase.md` requires the index to carry
+ * its tokens: groups of tokens with `$value`/`$type`, each token citing where
+ * it was parsed from through `$extensions`.
+ *
+ * The nesting is bounded by construction (six levels, built leaf-up rather
+ * than with `z.lazy`), because an index is a stored, transported body and a
+ * document that could nest without limit is a resource problem, not a design.
+ */
+export interface DesignTokenProvenance {
+  sources: Array<{ path: string; digest?: string | undefined; excerpt?: string | undefined }>;
+  confidence: FindingConfidence;
+  /** How many parsed declarations carried this value. */
+  usages?: number | undefined;
+  /** The index entry this token is reviewed as. */
+  entryId?: string | undefined;
+}
+
+export interface DesignToken {
+  $type?: string | undefined;
+  $value: string | number | Record<string, string | number>;
+  $description?: string | undefined;
+  $extensions?: Record<string, DesignTokenProvenance> | undefined;
+}
+
+export type DesignTokenGroup = { [name: string]: DesignToken | DesignTokenGroup };
+
+const designTokenProvenanceSchema = z
+  .object({
+    sources: z
+      .array(z.object({ path: z.string().min(1).max(1024), digest: digest.optional(), excerpt: z.string().max(2000).optional() }).strict())
+      .max(64),
+    confidence: z.enum(FINDING_CONFIDENCE),
+    usages: z.number().int().nonnegative().max(1_000_000).optional(),
+    entryId: opaqueId.optional(),
+  })
+  .strict();
+
+export const designTokenSchema = z
+  .object({
+    $type: z.string().min(1).max(60).optional(),
+    $value: z.union([
+      z.string().min(1).max(500),
+      z.number(),
+      z.record(z.string().min(1).max(60), z.union([z.string().max(500), z.number()])),
+    ]),
+    $description: z.string().max(500).optional(),
+    $extensions: z.record(z.string().min(1).max(120), designTokenProvenanceSchema).optional(),
+  })
+  .strict();
+
+const DESIGN_TOKEN_DOCUMENT_DEPTH = 6;
+const DESIGN_TOKEN_GROUP_KEYS = 500;
+
+function designTokenGroupSchema(depth: number): z.ZodType<DesignTokenGroup> {
+  const member: z.ZodType<DesignToken | DesignTokenGroup> =
+    depth <= 1 ? designTokenSchema : z.union([designTokenSchema, designTokenGroupSchema(depth - 1)]);
+  return z.record(z.string().min(1).max(120), member).refine((group) => Object.keys(group).length <= DESIGN_TOKEN_GROUP_KEYS, {
+    message: `a token group may hold at most ${String(DESIGN_TOKEN_GROUP_KEYS)} names`,
+  }) as z.ZodType<DesignTokenGroup>;
+}
+
+/** The index's DTCG document: groups of tokens, each citing its sources. */
+export const designTokenDocumentSchema: z.ZodType<DesignTokenGroup> = designTokenGroupSchema(DESIGN_TOKEN_DOCUMENT_DEPTH);
 
 export const DESIGN_INDEX_ENTRY_KINDS = ["token", "component", "convention", "asset", "era", "philosophy"] as const;
 export type DesignIndexEntryKind = (typeof DESIGN_INDEX_ENTRY_KINDS)[number];
@@ -688,7 +753,25 @@ export interface DesignIndexEntry {
   sources: Array<{ path: string; digest?: string; excerpt?: string }>;
   confidence: FindingConfidence;
   status?: "active" | "deprecated" | "internal";
-  review: { state: DesignIndexReviewState; reviewer?: string; reviewedAt?: string; note?: string };
+  review: {
+    state: DesignIndexReviewState;
+    reviewer?: string;
+    reviewedAt?: string;
+    note?: string;
+    /** The entry's `factsDigest` when the person reviewed it. */
+    reviewedFactsDigest?: string;
+    /** The name this entry was renamed from, so the parse's own name is not lost. */
+    renamedFrom?: string;
+    /** Where a merged entry went, and where a split child came from. */
+    mergedIntoId?: string;
+    splitFromId?: string;
+    /** A pinned convention is always offered when composing. */
+    pinned?: boolean;
+  };
+  /** Digest over the parsed facts behind this entry. Identity for "changed since review". */
+  factsDigest?: string;
+  /** L0 fact ids an inferred or proposed entry was derived from. */
+  citations?: string[];
   /** True when the underlying facts moved after the person reviewed it. */
   changedSinceReview?: boolean;
 }
@@ -702,6 +785,14 @@ export interface DesignIndex {
   builtFrom?: { repositoryId: string; commitObjectId: string; sourceDigests: number };
   gaps: Array<{ path: string; reason: string }>;
   builtAt: string;
+  /** The DTCG document: every token of the index, with its sources. */
+  tokensDocument?: DesignTokenGroup;
+  /** The app root a large monorepo was indexed from, relative to the project. */
+  appRoot?: string;
+  /** Which layers ran, and what synthesis ran on. Absent layers are honest gaps. */
+  builtWith?: { layers: Array<"l0" | "l1">; profileId?: string; model?: string };
+  /** True when the build hit its budget or the person stopped it. */
+  stoppedEarly?: boolean;
 }
 
 export const designIndexEntrySchema = z
@@ -723,8 +814,15 @@ export const designIndexEntrySchema = z
         reviewer: z.string().max(200).optional(),
         reviewedAt: isoInstant.optional(),
         note: z.string().max(1000).optional(),
+        reviewedFactsDigest: digest.optional(),
+        renamedFrom: z.string().min(1).max(200).optional(),
+        mergedIntoId: opaqueId.optional(),
+        splitFromId: opaqueId.optional(),
+        pinned: z.boolean().optional(),
       })
       .strict(),
+    factsDigest: digest.optional(),
+    citations: z.array(opaqueId).max(64).optional(),
     changedSinceReview: z.boolean().optional(),
   })
   .strict();
@@ -754,6 +852,17 @@ export const designIndexSchema = z
       .optional(),
     gaps: z.array(z.object({ path: z.string().min(1).max(1024), reason: z.string().max(500) }).strict()).max(500),
     builtAt: isoInstant,
+    tokensDocument: designTokenDocumentSchema.optional(),
+    appRoot: z.string().min(1).max(1024).optional(),
+    builtWith: z
+      .object({
+        layers: z.array(z.enum(["l0", "l1"])).max(2),
+        profileId: z.string().min(1).max(120).optional(),
+        model: z.string().min(1).max(200).optional(),
+      })
+      .strict()
+      .optional(),
+    stoppedEarly: z.boolean().optional(),
   })
   .strict();
 

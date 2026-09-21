@@ -1,0 +1,17 @@
+<section class="panel">
+  <h2>Products</h2>
+  <form class="form-inline" action="/products" method="get">
+    <input class="form-control" name="q" />
+    <button class="btn btn-primary" type="submit">Search</button>
+  </form>
+  <table class="table">
+    <tbody>
+      <% @products.each do |product| %>
+        <tr><td><%= product.name %></td></tr>
+      <% end %>
+    </tbody>
+  </table>
+  <% if @products.empty? %>
+    <p class="text-muted">No results yet.</p>
+  <% end %>
+</section>

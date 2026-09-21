@@ -1,0 +1,24 @@
+{
+  "color": {
+    "$type": "color",
+    "brand": {
+      "500": { "$value": "#7c3aed", "$description": "The product's one brand colour." },
+      "600": { "$value": "#6d28d9" }
+    },
+    "ink": { "$value": "#0f172a" },
+    "surface": { "$value": "#ffffff" }
+  },
+  "space": {
+    "$type": "dimension",
+    "1": { "$value": "4px" },
+    "2": { "$value": "8px" },
+    "4": { "$value": "16px" }
+  },
+  "radius": {
+    "$type": "dimension",
+    "md": { "$value": "8px" }
+  },
+  "semantic": {
+    "action": { "$type": "color", "$value": "{color.brand.500}", "$description": "Alias of the brand colour." }
+  }
+}
