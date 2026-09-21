@@ -6,7 +6,7 @@
  * imports from here; it reads the semantic tokens the compiler writes.
  */
 import { oklch } from "./color.js";
-import type { InstructionOrigin } from "@lasercode/protocol";
+import type { InstructionOrigin, ProjectWorkKind } from "@lasercode/protocol";
 
 /** Categorical hues, distinct from the status ramp; unrecorded stays neutral. */
 export const PROVENANCE_HUES = {
@@ -27,6 +27,27 @@ export const FLEET_AGENT_HUES = [245, 285, 145, 25, 195, 55, 345, 100] as const;
 export const FLEET_AGENT_SCALE = {
   dark: { lightness: 0.38, chroma: 0.08 },
   light: { lightness: 0.9, chroma: 0.06 },
+};
+
+/**
+ * One hue per kind of project work (D-355, "Keys and type identity").
+ *
+ * These are **identity**, never status: a Spec is not "running" and a Task is
+ * not "needs you", so the five hues are spread around the wheel away from each
+ * other and read as text — an icon and, where a surface needs one, a rule.
+ * The lightness is the provenance scale's, which is the one tuned for a small
+ * coloured glyph on every ground in both bases.
+ */
+export const KIND_HUES = {
+  spec: 255,
+  research: 195,
+  design: 315,
+  plan: 155,
+  task: 35,
+} satisfies Record<ProjectWorkKind, number>;
+export const KIND_SCALE = {
+  dark: { lightness: 0.78, chroma: 0.13 },
+  light: { lightness: 0.5, chroma: 0.14 },
 };
 
 /* ----------------------------------------------------------------------------

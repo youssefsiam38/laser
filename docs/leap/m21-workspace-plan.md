@@ -72,16 +72,32 @@ copy of the truth** (D-331, D-355).
 | File | What it owns |
 | --- | --- |
 | `packages/ui/src/components/project-work/ProjectWorkControl.tsx` | the top bar's one control, with live counts |
-| `packages/ui/src/components/project-work/Workspace.tsx` | the shell surface: header, tabs, "← Back to the conversation", the morph |
-| `packages/ui/src/components/project-work/WorkBacklog.tsx` | filters, sort, saved views, the wide table and the narrow rows |
-| `packages/ui/src/components/project-work/WorkDetail.tsx` | the kind-aware detail frame and the read-only bodies |
-| `packages/ui/src/components/project-work/Inspector.tsx` | the kind-aware inspector (links, comments, history, gates) |
+| `packages/ui/src/components/project-work/Workspace.tsx` | the shell surface: header, tabs, "← Back to the conversation", the morph, the inspector sheet |
+| `packages/ui/src/components/project-work/WorkBacklog.tsx` | filters, sort, saved views, the adopted `data-table` and the narrow rows |
+| `packages/ui/src/components/project-work/WorkDetail.tsx` | the kind-aware detail frame, the revision switcher and the historical/stale banners |
+| `packages/ui/src/components/project-work/bodies/*` | every kind's body, read-only and complete, from the protocol's own fields |
+| `packages/ui/src/components/project-work/Inspector.tsx` | the kind-aware inspector (gate, links, comments, evidence, history) |
 | `packages/ui/src/components/project-work/Board.tsx` | the Tasks board and its real drag transitions |
-| `packages/ui/src/components/project-work/NeedsYou.tsx` | the queue, on the adopted approval/artifact cards |
-| `packages/ui/src/components/project-work/Recent.tsx` | revisions newest first, on the adopted timeline |
+| `packages/ui/src/components/project-work/NeedsYou.tsx` | the queue, with each row's reason in words |
+| `packages/ui/src/components/project-work/Recent.tsx` | revisions newest first, on the adopted `timeline` |
 | `packages/ui/src/components/project-work/CreateDialog.tsx` | one dialog, the next key shown before creating |
-| `packages/ui/src/components/project-work/KindBadge.tsx` | the type badge, the key tag and the status chip |
-| `packages/ui/src/components/project-work/confirm.tsx` | Archive and Delete, typed confirmation, Enter confirms neither |
+| `packages/ui/src/components/project-work/KindBadge.tsx` | the type badge, the key tag, the status chip and the needs-you chip |
+| `packages/ui/src/components/project-work/ConfirmDialogs.tsx` | Archive and Delete, typed confirmation, Enter confirms neither |
+| `packages/ui/src/components/project-work/create-work.tsx` | the four commands' one action, and the projectless Chat's project picker |
+| `packages/ui/src/components/project-work/work-commands.ts` | the command list both the composer and the palette use |
+| `packages/ui/src/components/project-work/ProjectWorkBridge.tsx` | the registry's one meeting with the connection: notifications, reconnect, environment reset, saved views, deep links |
+| `packages/ui/src/project-work/{vocabulary,board,views}.ts` | what each kind and state is called; the board's rules; filters, sorts and saved views |
+| `packages/ui/src/components/assistant-ui/elements/todo-list.tsx` | the reinstated catalog element, de-demoed and retoned |
+
+Edits outside those files, all of them entry points: `components/shell/Shell.tsx`
+(mounts the workspace, the bridge and the picker, and hides the fleet/monitor
+columns while the workspace has their room), `components/shell/TopBar.tsx`
+(the control; the two column toggles step aside while the workspace is open),
+`components/shell/CommandPalette.tsx` (the destination, the queue, the four
+commands and every item by key), `components/thread/Composer.tsx` (the four
+slash commands), `theme/{primitives,types,compile}.ts` + `globals.css` +
+`components/settings/appearance/TokenEditor.tsx` (the five kind tokens), and
+`test/world/fake-host.tsx` (a `project/work/list` the shell tests can read).
 
 ### Decisions
 
@@ -104,6 +120,25 @@ copy of the truth** (D-331, D-355).
    function** and refuses an illegal one with the missing keys named, before
    any request is sent. The host's refusal is rendered with the same banner:
    the client's check is a courtesy, the authority is the host (M21-T15).
+   `hasAcceptanceEvidence` is passed as true in that pre-check *on purpose*: a
+   list row does not carry evidence, and refusing a completion this window
+   cannot see the evidence for would be inventing a fact. The engine refuses
+   it, with the sentence a person should read.
+5. **The status chip says what the row can prove.** A list row carries the
+   entity's review or task state, so the chip speaks that state in the kind's
+   own words (`Awaiting design approval`, `Running`). The vocabularies that
+   live in the *body* — Research `open/partial/answered`, Design
+   `Sketch/Mapped/Proposed`, a Plan's task counts, a Spec's brief-versus-full
+   — are shown in the detail, where the body has been read. Nothing guesses a
+   body-level status from a list row.
+6. **Keys rank first in the palette.** Typing `TASK-44` into `Cmd+K` finds
+   TASK-44: every item in the current project is a palette row above the
+   sessions. The global "Search all sessions" dialog is session-shaped and is
+   left to M21-T9, which owns cross-project search and mentions.
+7. **The backlog has two forms of one list.** With nothing open it has the
+   whole room and reads as the adopted table; with something open it is a
+   column of rows beside the detail. Same rows, fewer columns — never smaller
+   type.
 
 ### What T7, T8, T13 and T16 fill in
 
@@ -113,11 +148,11 @@ placeholder card.
 
 | Slot | File | Today | Filled by |
 | --- | --- | --- | --- |
-| `SpecBodyView` | `components/project-work/bodies/SpecBody.tsx` | the real body read-only: form, brief, problem, outcomes, non-goals, requirements with levels, acceptance with the machine-verifiable mark, constraints, and the Markdown document through the shared renderer | **M21-T7** adds editing, the brief→full revision flow and the Jira chip |
-| `ResearchBodyView` | `components/project-work/bodies/ResearchBody.tsx` | the real body read-only: question, scope, status, the question tree with each node's state and answer, findings with confidence/licence/trust/excerpt/provenance, options, unresolved facts, sources | **M21-T7** adds the two-column tree ↔ source panel, Quote, Open source and the retrieval budget bar (`docs/research-phase.md`) |
-| `DesignBodyView` | `components/project-work/bodies/DesignBody.tsx` | the real body read-only: brief, aggregate fidelity, foundation principles, screens with their fidelity and interaction states, flows, sketches (identity and bounds only — never the bytes), host page and strategy | **M21-T13** replaces the body with the canvas and the Design Index inspector; **M21-T14** the greenfield foundation |
-| `PlanBodyView` | `components/project-work/bodies/PlanBody.tsx` | the real body read-only: brief, phases with their task keys, dependencies as key pairs, boundaries, migrations, risks, verification, rollback, and the Markdown document | **M21-T16** adds the Document/Dependencies switch and the real graph |
-| `TaskBodyView` | `components/project-work/bodies/TaskBody.tsx` | the real body read-only: outcome, non-goals, dependencies as key cards, scope, acceptance with commands, verification commands, visual-evidence requirement, assignment, plan key, notes | **M21-T16** adds attempts, evidence, checkpoints and Start… |
+| `SpecBodyView` | `components/project-work/bodies/index.tsx` | the real body read-only: form, brief, problem, outcomes, non-goals, requirements with levels, acceptance with the machine-verifiable mark, constraints, and the Markdown document through the shared renderer | **M21-T7** adds editing, the brief→full revision flow and the Jira chip |
+| `ResearchBodyView` | `components/project-work/bodies/index.tsx` | the real body read-only: question, scope, status, the question tree with each node's state and answer, findings with confidence/licence/trust/excerpt/provenance, options, unresolved facts, sources | **M21-T7** adds the two-column tree ↔ source panel, Quote, Open source and the retrieval budget bar (`docs/research-phase.md`) |
+| `DesignBodyView` | `components/project-work/bodies/index.tsx` | the real body read-only: brief, aggregate fidelity, foundation principles, screens with their fidelity and interaction states, flows, sketches (identity and bounds only — never the bytes), host page and strategy | **M21-T13** replaces the body with the canvas and the Design Index inspector; **M21-T14** the greenfield foundation |
+| `PlanBodyView` | `components/project-work/bodies/index.tsx` | the real body read-only: brief, phases with their task keys, dependencies as key pairs, boundaries, migrations, risks, verification, rollback, and the Markdown document | **M21-T16** adds the Document/Dependencies switch and the real graph |
+| `TaskBodyView` | `components/project-work/bodies/index.tsx` | the real body read-only: outcome, non-goals, dependencies as key cards, scope, acceptance with commands, verification commands, visual-evidence requirement, assignment, plan key, notes | **M21-T16** adds attempts, evidence, checkpoints and Start… |
 | `InspectorGateCard` | `components/project-work/Inspector.tsx` | the gate's own facts: which gate, its approvals so far, and why it cannot be approved now (blocking comments, stale inputs) | **M21-T8** adds Approve / Request changes and the digest-bound approval |
 | `InspectorComments` | `components/project-work/Inspector.tsx` | every comment on the entity, its anchor, its state and who wrote it | **M21-T8** adds writing, anchoring, addressed/resolved and the blocking rules |
 
@@ -130,6 +165,21 @@ Deferred on purpose, and recorded here rather than implied:
   and T16 (Plan, Task); the Design canvas is T13.
 - **Comments, approvals and gates as *actions*.** M21-T8 owns every write;
   T6 shows their current state and says who may act.
-- **Mentions (`@SPEC-12`) in the composer.** M21-T9 owns the mention adapter;
-  T6 ships the chip component it will insert and the search ranking behind it.
+- **Mentions (`@SPEC-12`) in the composer**, the transcript's compact artifact
+  card, and the sessions sidebar's `TASK-n` chip. M21-T9 owns the mention
+  adapter and the transcript surfaces; T6 ships the pieces each of them draws
+  — `TypeBadge`, `KeyTag`, `StatusChip`, `WorkIdentity`
+  (`components/project-work/KindBadge.tsx`) — so none of them is rebuilt.
+- **"Link something…"**, the act. The inspector shows every link an entity
+  has, in both directions, and says plainly that links are optional; adding
+  and removing one is a write over `project/work/link` / `unlink` and belongs
+  with the surfaces that have something to link — M21-T7 (Spec ↔ Research ↔
+  Design) and M21-T16 (Plan ↔ Task). The slot is the inspector's `Links`
+  section.
+- **The global "Search all sessions" dialog.** Keys are searchable in the
+  palette and in the backlog today. M21-T9 owns `project/work/search` in the
+  cross-project surfaces.
+- **The Design canvas, the Design Index panel and Prototype mode.** M21-T13;
+  the Design body reads its real fields today and names the sketches it has
+  without ever rendering their bytes.
 - **Model tools and execution linking.** M21-T17.
