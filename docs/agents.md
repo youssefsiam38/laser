@@ -38,7 +38,7 @@ characters. There is no separate agent id, type or profile name.
 | Scope | `scope`, `projectCwd`, `path` | `global` lives under `<stateDir>/agents/`; `project` lives under a trusted project's `.laser/agents/`. A project that ships this directory requires the person's trust before its definitions are read; the first definition written through Laser records trust because the person authored it. `projectCwd` is canonical and present only for project agents; the host reports the absolute `path` |
 | Description | `description` | ≤ 300 chars. Answers "when should another agent start this one?" — it is the compact catalog text |
 | Instructions | `instructions`, `engineInstructions`, `excludeCoreInstructions` | The Markdown body, byte-preserved and interpreted as a Handlebars template, answers "how should this agent work?" Every custom agent first gets the shared `packages/worker/src/agents/core-instructions.md` unless `excludeCoreInstructions` is on; built-ins never do. The shipped `default` agent starts with `engineInstructions: true`: Laser's own neutral coding prompt, readable through `agents/engine-instructions`; a person may replace it with their own text |
-| Model | `model` | `{ provider, id }` or `null` to follow the configured default model |
+| Model profile | `profileId` | The id of one of the person's Model Profiles ([`model-profiles.md`](model-profiles.md)), or `null` to inherit `defaultProfileId`. A profile id nothing answers to is a warning on the `profile` field, never a refusal: the agent runs on `defaultProfileId`, and the run records the substitution so the fleet row shows it |
 | Thinking | `thinkingLevel` | `null` follows the default |
 | Supports subagents | `supportsSubagents` | When on, the agent gets `start_agent` and its siblings |
 | Agents it can run | `allowedAgents` | Multi-select of custom agents, including another instance of the same definition; never a built-in. Meaningful only with `supportsSubagents` |
@@ -46,7 +46,7 @@ characters. There is no separate agent id, type or profile name.
 | Default | snapshot `defaultAgent` | "Default" only means the agent a new session opens with (the `i` mark beside the toggle says so). The current default cannot be deleted; pick another default first |
 
 Each custom definition is `<name>.md`: YAML frontmatter uses the protocol field
-names (`description`, `model` as `provider/id` or null, `thinkingLevel`,
+names (`description`, `profile` as a profile id or null, `thinkingLevel`,
 `supportsSubagents`, `allowedAgents`, `scopedSkills`, `skills`,
 `engineInstructions`, `excludeCoreInstructions`, `createdAt`, `updatedAt`) and
 the text after the closing `---` line is `instructions` verbatim. Omitted
@@ -55,7 +55,10 @@ and every currently trusted project's files. A registered project with no
 trust-gated content remains a valid destination; its first definition written
 through Laser records trust before the file is created. An untrusted project is
 neither read nor written. An invalid hand edit produces a `file` warning and
-leaves the last valid definition running until it is fixed.
+leaves the last valid definition running until it is fixed. Nobody's file is
+rewritten for them: a definition written before M22 that still carries `model:`
+is told to remove an unknown field, which is how a person learns the format
+changed ([`model-profiles.md`](model-profiles.md)).
 
 The Agents page uses Settings' single explicit target. **Global** shows global
 custom definitions plus built-ins and owns the default and harness policy;
@@ -104,12 +107,15 @@ between ticks.
 Kinds: `custom` (a person's, including the seeded `default`) and `builtin`
 (Beam, Chat, Namer — visible at the bottom of the Agents page, never deletable,
 never the default and never another agent's child). A person may edit each
-built-in's system instructions and model; restoring instructions drops the
-override and follows the shipped prompt again. All three use the same
-connected-provider-only model picker (D-145). `AgentsSnapshot` carries
-`builtinInstructions` plus `beam`, `chat` and `namer` state; Chat's specialized
-state is the model choice alone, because it has neither a suggestion nor a
-benchmark behind it.
+built-in's system instructions and choose the Model Profile it runs on
+(`agents/builtin/set-profile`); restoring instructions drops the override and
+follows the shipped prompt again. All three use the same profile picker, and a
+profile offers only connected models while it is edited (D-145).
+`AgentsSnapshot` carries `builtinInstructions` plus `builtinProfiles` — one
+profile id, or `null`, for each of `beam`, `chat` and `namer`. `null` inherits
+the assignment that matches what the built-in is for: `defaultProfileId` for
+Beam and Chat, `namingProfileId` for Namer. No built-in holds a model of its
+own any more, so none of them needs a suggestion or a benchmark behind it.
 
 ## 2. The harness
 
@@ -456,9 +462,10 @@ way the reply carries the worktree's status as it was.
 
 Enforced in the harness, never by prompt alone: a child at `policy.maxDepth`
 gets no `start_agent`; `allowedAgents` is checked on every start; a definition
-that names a model the person has no credential for is refused with a
-person-facing message (and flagged as a warning on the Agents page); a run may
-only touch the worktree it created.
+naming a profile that is no longer there runs on `defaultProfileId` and records
+the substitution on its run, while a start that can reach no model in the
+resolved profile is refused with a person-facing message (and flagged as a
+warning on the Agents page); a run may only touch the worktree it created.
 
 Every refusal is a `HarnessError` written for a person and, through the tool
 result, for the parent model.
@@ -663,13 +670,13 @@ idle, so its worker is never retired underneath it.
 | --- | --- | --- | --- |
 | `beam` | one opaque, persistent directory per session under `<state>/workspaces/beam` | every tool and every user- or project-discovered skill, like any unscoped agent | two ways in (D-143, D-173): every press of the spark at the bottom left beside Settings starts a fresh bubble chat, while earlier Beam sessions remain in Beam's sidebar group; the `+` on that group starts a fresh chat in the window. Opening the bubble immediately creates or reuses an unstarted Beam session without moving the main view (D-183). The sidebar `+` uses the same launcher, reusing that empty session even in its private subdirectory; simultaneous requests allocate once. The bubble's maximize control moves its current chat into the window and selects Code. No other Beam entry point exists |
 | `chat` | one opaque, persistent directory per session under `<state>/workspaces/chat` | every tool, isolated from unrelated Chat sessions | the Chat tab, first in the sidebar before Code; projectless chats |
-| `namer` | the project's own worker | not a session agent | names a new session from its first prompt |
+| `namer` | the project's own worker | not a session agent | names a new session from its first prompt, on the profile assigned to session naming |
 
 The Agents page exposes the effective system instructions for all three.
 Saving writes a durable override; restoring stores `null` so a later release's
 improved shipped prompt takes effect. Beam and Chat apply the effective prompt
-when a session opens. Namer layers it into session-title and qualification
-requests while keeping the short-output contract.
+when a session opens. Namer layers it into the session-title request while
+keeping the short-output contract.
 
 Instructions are restricted Handlebars templates (D-175). The editor owns the
 syntax: **Insert field** shows searchable, human-labelled live values and puts
@@ -713,32 +720,33 @@ chosen for a scoped agent. Beam is unscoped. Its product-specific knowledge —
 where Laser stores sessions, agents, runs, preferences, projects and logs — is
 part of its editable built-in instructions, not a hidden skill.
 
-**Beam's model** is an average-but-fast one. When the first provider is
-connected and Beam has no model, the host sends `agents/beam/choose-model`
-with a suggestion (`suggestBeamModel`: the priciest fast-tier model in the
-mid-to-low price band among providers with a credential) and the UI opens the
-choice dialog, which explains what Beam does. The suggestion is never applied
-silently; `BeamState.needsChoice` stays true until the person picks or
-dismisses.
+**Beam runs on a profile**, like everything else that used to choose a model.
+When the first provider is connected, the host prepares the profiles
+(`models/profiles/migrate`) and notifies `models/profiles/seeded` with what
+Laser filled in from the connected models; the UI opens the review step, which
+explains what the profiles are for. A built-in that has made no choice of its
+own takes the matching assignment at that moment — Beam and Chat
+`defaultProfileId`, Namer `namingProfileId` — and a person changes any of them
+in the same picker on the Agents page. Nothing is chosen for a person twice:
+the review is offered once per host run and nothing stays pending afterwards.
 
 **Namer** (`packages/worker/src/agents/namer.ts`) is a service, never a
-session: one small completion per request with an 8 s ceiling, and it never
+session: one small completion per model with an 8 s ceiling each, and it never
 throws — a name that does not arrive is simply not shown. It accepts a plain
 answer as well as harmless quotes, prefixes, Markdown fences and small JSON
 wrappers, then safely shortens the result instead of rejecting useful wording
 for its packaging. It names a session from its first prompt (25–30 characters,
 `SESSION_NAME_MIN`/`SESSION_NAME_MAX`, quotes and trailing punctuation stripped,
-cut at a word boundary). Its model is qualified rather than picked:
-`agents/namer/qualify` deterministically ranks enabled models from connected
-providers — the current choice, small affordable models, other affordable
-models, then available fallbacks, at most six. It tests candidates in parallel
-on the real session-title job. A usable answer outranks speed and price; among
-equally correct models, combined latency and list price choose the winner.
-Rechecking never discards a model that was already working. A failed check
-remains retryable instead of turning a temporary formatting or provider failure
-into a permanent verdict, and a later worker retries it automatically. The
-result records `NamerState { status, model, candidates, qualifiedAt, reason }`;
-`status` is `unqualified`, `qualifying`, `ready` or `unavailable`.
+cut at a word boundary). Its models are the naming profile's, in the person's
+own order: naming is a **one-shot walk** of `namingProfileId`
+([`model-profiles.md`](model-profiles.md) "Runtime"), one model at a time,
+stopping at the first usable title and giving up quietly when the profile is
+exhausted. Only an explicit assignment turns naming on: with neither Namer's own profile nor
+`namingProfileId` set, nothing is named, because falling through to the profile
+new conversations use would spend a person's best model on titles. There is no
+benchmark, no candidate ranking and no qualification step: the ordered list the
+person wrote is the answer, and the qualification method, its stored verdicts
+and the state they lived in are gone with it.
 
 ## 8. Persistence
 
@@ -746,7 +754,7 @@ result records `NamerState { status, model, candidates, qualifiedAt, reason }`;
 | --- | --- |
 | `<stateDir>/agents/<name>.md` | one global custom definition: YAML frontmatter plus the byte-preserved instructions body. The seeded `default` is global |
 | `<project>/.laser/agents/<name>.md` | one project custom definition. The directory is trust-gated: shipped definitions are read and watched only after the registry lists that canonical project root as trusted; the first definition a person writes through Laser records that trust before creating the file. An untrusted project is neither read nor written. A project definition shadows a same-named global definition for that project |
-| `<stateDir>/agents.json` | version 2 metadata only: `defaultAgent` (always global), policy, revision, durable global rename aliases, and every built-in's instruction override and model choice. On first load, version 1 definitions migrate to Markdown files after an exact `agents.json.v1.bak` is made; existing Markdown names win |
+| `<stateDir>/agents.json` | version 2 metadata only: `defaultAgent` (always global), policy, revision, durable global rename aliases, and every built-in's instruction override and profile choice. On first load, version 1 definitions migrate to Markdown files after an exact `agents.json.v1.bak` is made; existing Markdown names win |
 | `<stateDir>/agent-runs.json` | every `AgentRun` the host has heard of, fed by `agents/run` notifications; terminal runs kept 30 days and at most 500 per project; non-terminal runs are failed on host load and on worker loss |
 | session custom entry `lasercode/agent` (`SESSION_AGENT_ENTRY_TYPE`) | the first custom entry of every agent-started or agent-defined session: `SessionAgentRecord { agentName, kind, subagentName, parentPath, parentSessionId, rootPath, runId, worktree? }` — `worktree` is absent for a child started with `worktree: false`, and that absence is what a reloaded session reads back — so a catalog that only reads files can attribute it |
 | session custom entry `lasercode/agent-run` (`SESSION_RUN_ENTRY_TYPE`) | run lifecycle moments in the child session (started, completed, blocked, failed, cancelled); a question is transient and is not written |
@@ -773,9 +781,8 @@ Requests (client → host unless noted):
 | `agents/engine-instructions` | `{ cwd }` → `{ text }` (routed by cwd) |
 | `agents/runs/list` | `{ path? }` → `{ runs }` (`path` narrows to that session's tree) |
 | `agents/runs/stop` | `{ runId, reason? }` → `{ run }` (recorded as user-initiated; the parent is told) |
-| `agents/builtin/set-model` | `{ name, model }` → `{ snapshot }` (`name` is `beam`, `chat` or `namer`; `null` follows the default model, and for Namer returns it to the next qualification) |
+| `agents/builtin/set-profile` | `{ name, profileId }` → `{ snapshot }` (`name` is `beam`, `chat` or `namer`; `null` inherits the matching assignment — `defaultProfileId` for Beam and Chat, `namingProfileId` for Namer) |
 | `agents/builtin/set-instructions` | `{ name, instructions }` → `{ snapshot }` (`instructions` is the replacement system prompt; `null` restores the shipped prompt) |
-| `agents/namer/qualify` | `{ cwd }` → `NamerState` (routed to the built-in workspace worker) |
 | `agents/sync` | host → worker only; refused from clients |
 | `session/new` | gains `agentName?` (omitted = the default agent) |
 | `pi/session/move` | `{ path, cwd }` → `{ path }` (a Chat session becomes `cwd`'s; the result is where it lives now, M13-T58) |
@@ -783,8 +790,15 @@ Requests (client → host unless noted):
 
 Notifications (host → client): `agents/updated` (`AgentsSnapshot`),
 `agents/run` (`{ run }`), `agents/event` (`AgentEvent`),
-`agents/beam/choose-model` (`{ suggested }`). `SessionSummary.agent` and
-`SessionState.agent` carry `SessionAgentInfo`.
+`models/profiles/seeded` (`{ profiles }`, the profiles Laser filled in for
+review). `SessionSummary.agent` and `SessionState.agent` carry
+`SessionAgentInfo`; `SessionSummary.profileId` and `SessionState.profile` carry
+the profile a conversation is running on.
+
+The profiles themselves are their own family — `models/profiles/list`, `save`,
+`delete`, `migrate`, plus `session/profile/set` and `session/model/pin` — and
+live in [`model-profiles.md`](model-profiles.md); the agents family only names
+the profile each definition and built-in runs on.
 
 Every method has a schema, a round-trip sample and a router owner
 (`packages/protocol/test/schemas.test.ts`, `docs/search-content.md`).

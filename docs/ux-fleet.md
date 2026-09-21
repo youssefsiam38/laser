@@ -108,13 +108,29 @@ Three lines in a 320px column (`docs/source-control-leap.md` §3 A.1). Collapsed
   turns · worktree/branch chip (branch keeps its suffix; `worktree: null` says
   shared checkout). Command: command · bytes · clock time. Token counts, an
   output sparkline, and a pid wait on protocol fields the host does not expose.
+  The short name here is the model that **actually answered**, never the
+  profile: the row is too narrow for both, and the profile is one expansion
+  away.
 - **elapsed** — live while the work is, frozen once it ends
 
 `needs_input` rows carry **Open** then **Answer**. Enter never answers (the
 approval rule); clicking Answer opens the child's chat. Answer is omitted when
 this is already the chat being read, and when the session is gone.
 
-Expanded, in place: the task excerpt, the model, the worktree branch — or, for a child its parent did not isolate, the checkout it shares — the
+**Profile is intent, model is evidence** ([`model-profiles.md`](model-profiles.md)).
+Wherever this column, the session list or a run detail attributes work to a
+model, the two are separate columns and neither stands in for the other: the
+profile is what the person chose, the model is what answered, and a row that
+has room for one shows the model and keeps the profile in its expansion. A run
+whose definition named a profile that is no longer there says so where the
+profile is shown — which profile it asked for, which one it ran on — rather
+than silently reading as the default. A profile deleted since the run still
+reads as a profile that is gone, never as no intent at all. A pinned
+conversation has no profile by construction; it reads as pinned, in the
+composer's own words — **Pinned · no fallback** — and never borrows the profile
+new conversations use.
+
+Expanded, in place: the task excerpt, the profile and the model, the worktree branch — or, for a child its parent did not isolate, the checkout it shares — the
 reason it ended, the result message, and, while a child is paused on a
 question (`needs_input`, D-158), **Asking** with the question itself — and for
 a background command, the tail of its output with ANSI interpreted, plus its

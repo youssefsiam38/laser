@@ -32,7 +32,7 @@ It is a Settings navigation choice, not a derivative of the open conversation, t
 
 ## How scope works today
 
-### Ambient source and fallback chain
+### Ambient source and its fallback order
 
 `components/workbench/Workbench.tsx:39-45` reads `currentProject` from `useLaserStable()`, reads the current session's `cwd`, and computes:
 
@@ -46,7 +46,7 @@ It passes the result to Settings, Agents, and Logs at lines 90-94. This makes on
 2. **Conversation location** — if no Code destination exists, the selected session supplies `cwd`.
 3. **Settings target or worker route** — Settings and Agents receive the same value despite having independent scope semantics.
 
-There is another implicit fallback before this chain: `LaserProvider.tsx:1880-1885` defaults Code memory to `projects[0]`. Consequently, merely having a first known project can become the Settings target.
+There is another implicit fallback before this order: `LaserProvider.tsx:1880-1885` defaults Code memory to `projects[0]`. Consequently, merely having a first known project can become the Settings target.
 
 `SettingsScreen.tsx:151` adds a fourth meaning. For several globally usable tabs, ambient project wins; otherwise it falls back to `pi/setup/state.cwd`:
 
@@ -55,6 +55,8 @@ project ?? (GLOBAL_THROUGH_SETUP.includes(shownTab) ? setupCwd : undefined)
 ```
 
 That setup directory is useful as a worker execution route, but it is not a Settings project selection.
+
+Model profiles make the route/target split concrete (`docs/model-profiles.md`). Profiles are global by definition — a project chooses which profile a surface uses, never which models are in one — so every read here is a route and every write goes to the global settings file. Whichever directory the reading request travelled through, it must never appear as the scope a profile or an assignment was saved at.
 
 ### Local scope controls are not shared
 
@@ -75,7 +77,7 @@ The result is exactly the product-owner complaint: a project chosen inside Gener
 | 3 | Features — `FeaturesScreen.tsx:26,31` | `feature/list(cwd)` returns effective feature state for ambient project; no cwd returns global/default. Worker recovery notice also follows ambient cwd. | Global sends no project; Project/Effective send selected project. Recovery is operational and must name its project rather than borrow scope silently. |
 | 4 | MCP catalog and inspector chain — `McpServersTab.tsx:55`, then its dialogs/inspector | `mcp/list` means “both scopes for this project”; inspect, ping, auth, run, and disconnect inherit the same ambient route. | Global lists global definitions only; Project lists selected-project definitions with explicit inherited context; Effective resolves selected project read-only. Separate route from target in the protocol. |
 | 5 | MCP import discovery — `McpServersTab.tsx:74` | Detects import sources through the ambient worker, even in a nominally global workflow. | Discovery route must be explicit and target-neutral; applying an import uses the shared scope and selected project only when Project is selected. |
-| 6 | Providers and models — `ModelsTab.tsx:130-133` | Provider credentials, model catalog, and dictation status are read through ambient cwd; model effective values come from that project's settings snapshot. | Label credentials/dictation global. Model settings obey shared Global/Project/Effective. Do not infer a write target from effective provenance. |
+| 6 | Providers and models — `ModelsTab.tsx:130-133` | Provider credentials, model catalog, and dictation status are read through ambient cwd; model effective values come from that project's settings snapshot. | Label credentials/dictation global. Remaining model settings obey shared Global/Project/Effective. Do not infer a write target from effective provenance. **Model profiles are Global only** (`docs/model-profiles.md`): the tab lists and edits them under Global and is read-only under Project and Effective, saying why; the profiles themselves and the four assignments (`defaultProfileId`, `namingProfileId`, `oracleProfileId`, `designIndexProfileId`) are written at global scope through `pi/settings/set`, whatever project the reading route used. |
 | 7 | Web Search — `WebSearchTab.tsx:40` | Reads connection status, providers, and effective feature state through ambient cwd. | Connections are global/account state; feature state obeys shared scope. Any connection test route must be explicit and must not select a project. |
 | 8 | Help and shortcuts — `KeyboardTab.tsx:229-253` | Keybindings are global, but a project worker is required solely as a transport route; without cwd the UI refuses to load them. | Scope-independent global surface. Remove cwd from the public contract or use a named neutral route internally. |
 | 9 | Projects — `ProjectsTab.tsx:23-28,99` | Ambient project is only sorted first and expanded by default. Every actual status read names each row's own cwd. | Remove ambient preference. This is an all-project collection; row identity is already explicit. |
@@ -83,7 +85,7 @@ The result is exactly the product-owner complaint: a project chosen inside Gener
 | 11 | Agent editor model and feature availability — `AgentEditor.tsx:244-246`, `use-page-data.ts:71-103` | `routeCwd = cwd ?? snapshot.workspaces.beam`; model/providers and Web Search feature state therefore use ambient project or Beam. | Existing definition/draft scope supplies project context; Global uses an explicit neutral route. Effective is read-only. |
 | 12 | Agent skills — `AgentEditor.tsx:520-523`, `use-page-data.ts:107-110` | Skills listing follows `routeCwd`, not the definition's fixed location or an explicit Settings project. | Global edit shows global skills; Project edit shows the selected project's effective skill catalog and writes the fixed selected project into the definition. |
 | 13 | Agent engine instructions — `AgentEditor.tsx:393`, `use-page-data.ts:112-116` | Default instructions are fetched through ambient/Beam route. | Route explicitly; never let a project switch change text under a dirty draft. |
-| 14 | Built-in agent model and Namer checks — `BuiltinPanel.tsx:228,256,313-319` | Uses ambient route, then Beam/Chat workspace fallback. Built-in configuration itself is global. | Keep configuration global and label it so; use a neutral execution route. Qualification can name an explicitly chosen project as an operation, not inherit one. |
+| 14 | Built-in agent profile choice — `BuiltinPanel.tsx` | Uses ambient route, then Beam/Chat workspace fallback. Built-in configuration itself is global: each built-in holds a Model Profile id, or `null` to inherit its assignment. | Keep configuration global and label it so; use a neutral execution route. The choice is a global write (`agents/builtin/set-profile`), and the profiles it offers are the global ones — no project can define or shadow them. The model checks this row used to cover are gone with the qualification step (`docs/model-profiles.md`). |
 | 15 | Logs project filter — `LogsScreen.tsx:85-92` | The optional “this project” filter follows Workbench ambient cwd. | **Keep project-aware, but decouple from Settings scope.** Logs is session/operation data; its filter should name the current conversation/project and remain a separate control. |
 
 Not counted as ambient reads:
@@ -240,7 +242,7 @@ Never mutate the draft's `projectCwd` because the shared selector changed. A new
 | Appearance | Device/installation preference. Scope-independent; never reads project. |
 | Features | Full Global / Project / Effective. Replace its private two-way selector. Effective is read-only. |
 | MCP servers | Full Global / Project / Effective with explicit provenance. Effective is read-only. Requires protocol separation of route and target. |
-| Providers and models | Provider auth/dictation are global; model configuration follows shared scope. Effective is read-only. Do not choose scope from current value provenance. |
+| Providers and models | Provider auth/dictation are global; model configuration follows shared scope. Effective is read-only. Do not choose scope from current value provenance. Model profiles and their assignments are Global only: editable under Global, read-only with a reason under Project and Effective. |
 | Usage | Account-wide, read-only, scope-independent. |
 | Help and shortcuts | Global file, scope-independent. Remove the visible/project requirement caused by worker routing. |
 | Projects | All-project collection. Each row is its own explicit target; shared scope does not reorder or auto-expand it. |
