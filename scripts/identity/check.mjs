@@ -247,13 +247,24 @@ const VOCABULARY_SURFACES = ["packages/ui/src/", "packages/cli/src/", "packages/
 const VOCABULARY_EXEMPT_LINES = new Set([
   "packages/cli/src/help.ts:the only check that proves the whole chain works",
   "packages/cli/src/pi.ts:Searched the node_modules chain",
+  // The two drawings of light that share the retired agent's word: the
+  // startup screen's beams and the travelling light under a running tool row.
+  "packages/ui/src/components/assistant-ui/elements/thinking-indicator.tsx:activity-beam",
+  // Stored identities that a person never reads: the retired workspace
+  // directory and record kind that old files still name, the legacy storage
+  // key the purge list must keep naming, and the legacy state key the
+  // naming carry reads once.
+  "packages/ui/src/runtime/device-storage.ts:beam-session",
+  "packages/host/src/paths.ts:beam",
+  "packages/host/src/agents/store.ts:namer",
+  "packages/worker/src/agents/session-config.ts:beam",
 ]);
 const FORBIDDEN_VOCABULARY = [
   // Beam and the Namer stopped being agents (docs/plain-chat.md, D-347): a
   // person-facing sentence must not name either. The startup drawing keeps
   // its "beams" (plural, the light) — the word alone, singular, is the agent.
-  { pattern: /\bBeam\b/, say: "nothing — Beam is gone; Chat is the plain conversation" },
-  { pattern: /\bNamer\b/, say: "naming (a one-shot request on the naming profile)" },
+  { pattern: /\bbeams?\b/i, say: "nothing — Beam is gone; Chat is the plain conversation" },
+  { pattern: /\bnamer\b/i, say: "naming (a one-shot request on the naming profile)" },
   { pattern: /\bfallback chains?\b/i, say: "profile" },
   { pattern: /\b(model|models|fallback|default|active|current|session|selected)\s+chains?\b/i, say: "profile" },
   { pattern: /\bchains?\s+(of|for)\s+models?\b/i, say: "profile" },
