@@ -224,20 +224,40 @@ patch, and the gate it must re-green is the parent's integrated run.
 | Path | Change |
 | --- | --- |
 | `patches/@legendapp__list@3.3.5.patch` | `moveChildBefore` (both `react.js` and `react.mjs`): the native `moveBefore` path returns untouched; the fallback holds the focused node, its caret, and the selection's endpoints for the moved subtree, and restores them after the insert. |
-| `pnpm-lock.yaml` | the three `@legendapp/list@3.3.5` hash references only (`patchedDependencies`, the `packages/ui` importer, the snapshot key). Every other entry, including the MCP SDK resolutions `pnpm patch-commit` wanted to rewrite, is byte-identical to `9bcdd23a`. |
+| `pnpm-lock.yaml` | the three `@legendapp/list@3.3.5` hash references only — `patchedDependencies`, the `packages/ui` importer, the snapshot key — from `52bcddbf…` to **`70a0c6525539145862d7b71c17258a08cc2598458811fd0a34748d1e4b19d8d0`**, the hash `pnpm install --frozen-lockfile` reproduces from the patch in this tree. Every other entry, including the MCP SDK resolutions `pnpm patch-commit` wanted to rewrite, is byte-identical to `9bcdd23a`. |
 | `packages/ui/test/thread/list-dom-order.ts` | the debounce constant and why a test drives the pass instead of racing it. |
-| `packages/ui/test/thread/list-dom-order.test.tsx` | seven cases over the mounted transcript (new file). |
+| `packages/ui/test/thread/list-dom-order.test.tsx` | ten cases over the mounted transcript (new file). |
 | `packages/ui/test/thread/trim-interaction.test.tsx` | the focus test now drives the list's pass at its boundary before its original assertions, and adds "the pass re-sorted", "the pass did not scroll" and "the row still holds the node". No original assertion changed, no timeout changed, nothing skipped. |
 | `docs/transcript-virtualization.md`, `docs/upstream.md` | correction 3 of the patch, and the upstream row with the proposal. |
 
-The repair, exactly: capture only when the focused node (or a selection
-endpoint) is inside the subtree about to move; restore focus only if the move
-left `activeElement` at `null`/`<body>` and the node is still connected, so a
-control focused meanwhile — a synchronous blur handler moving focus on — keeps
-it; `focus({ preventScroll: true })`; `setSelectionRange` only if the caret
-actually changed; `setBaseAndExtent` with the held endpoints, which keeps a
-backward selection backward. Nothing outside the moved subtree is read or
-written, and no geometry, scroll position or motion is touched.
+The repair, exactly:
+
+1. **Capture** only what the move can destroy: the focused node when it is
+   inside the subtree about to move (with its `selectionStart`/`End`/`Direction`
+   if it is a field), and the selection's two endpoints when either of them is
+   inside that subtree. Nothing else in the document is read.
+2. **One handover check for both.** If, after the move, something is focused
+   that was not focused before it and is not `<body>`, a synchronous blur
+   handler moved focus on — possibly into another editable control, with its own
+   caret and its own selection. Neither the focus nor the selection is restored
+   after that: `setBaseAndExtent` would overwrite the selection that handler
+   made, and can refocus an editing host.
+3. **Focus** is restored only if the move left `activeElement` at `null` or
+   `<body>` and the node is still connected, with `preventScroll: true`. The
+   caret is rewritten only if start, end **or direction** changed, so a backward
+   caret with the same offsets is put back the way the person made it.
+4. **Selection** is restored only if both endpoint nodes are still connected,
+   the current selection is not already the held one, and the current selection
+   is not a new one somebody made in nodes outside the moved subtree. The held
+   offsets are validated against each node's current length first — a handler
+   that rewrote the text while the row was out of the tree leaves them past the
+   end, where `setBaseAndExtent` throws — and the whole repair sits in a
+   `try`/`catch`, because a repair must never be the reason the list stops
+   sorting its rows half-way. `setBaseAndExtent` keeps a backward selection
+   backward.
+
+No geometry, scroll position or motion is touched, and the native `moveBefore`
+path returns before any of this.
 
 ### Evidence
 
@@ -247,19 +267,24 @@ Revision under test: this branch's tree with `9bcdd23a` as base.
 | --- | --- |
 | `pnpm -F @lasercode/ui exec vitest run test/thread/trim-interaction.test.tsx` | 9 passed |
 | same, with the fallback reverted in the installed package | **1 failed** — `expected <body>…</body> to be <button …>`, the gate's exact assertion |
-| `pnpm -F @lasercode/ui exec vitest run test/thread/list-dom-order.test.tsx` | 7 passed |
-| same, with the fallback reverted | **4 failed** (keyboard focus, forward selection, backward selection, caret), 3 passed — the three that must pass either way: no stealing, blur-time handover, native path |
-| `pnpm -F @lasercode/ui exec vitest run test/thread/transcript-viewport.test.ts` | see the handoff report |
-| `pnpm -F @lasercode/ui exec tsc -p tsconfig.test.json --noEmit`, `pnpm install --frozen-lockfile`, `pnpm identity:check`, full `pnpm -F @lasercode/ui test` | see the handoff report |
+| `pnpm -F @lasercode/ui exec vitest run test/thread/list-dom-order.test.tsx` | 10 passed |
+| same, with the fallback reverted | **4 failed** (keyboard focus, forward selection, backward selection, caret) — the repair's own cases |
+| same, with the repair's first shape (restore ungated, offsets untrusted, caret compared on offsets only) | **3 failed** — combined selection + blur handover, edited-text offsets, caret direction: the three guards this batch added |
+| `pnpm -F @lasercode/ui exec vitest run test/thread/transcript-viewport.test.ts` + both files above | 36 passed |
+| `pnpm -F @lasercode/ui run test:types`, `pnpm install --frozen-lockfile`, `pnpm identity:check`, full `pnpm -F @lasercode/ui test` | see the handoff report |
 
 ### Acceptance scope — unit versus a real iPhone
 
 Unit-proven, on the real integration boundary (mounted store, viewport, list,
 rows; only row geometry stubbed): the list's pass re-sorts containers; focus
 stays on the same node in the same row; the pass does not scroll; no focus is
-taken when nothing inside a moved row had it; focus stays where a blur-time
-handover put it; a selection outside the transcript is untouched; the caret in a
-focused field inside a moved row survives; the native `moveBefore` path runs
+taken when nothing inside a moved row had it; focus **and** selection stay where
+a blur-time handover put them, including its caret in its own field; a selection
+outside the transcript is untouched; a forward selection inside a moved row and
+a backward selection across two moved rows keep their endpoints and direction; a
+held selection whose text was rewritten mid-move is dropped rather than thrown
+over, and the pass still finishes sorting; the caret in a focused field inside a
+moved row survives, direction included; the native `moveBefore` path runs
 without the repair.
 
 Named proxies, because happy-dom cannot produce the browser behaviour:
@@ -268,7 +293,8 @@ Named proxies, because happy-dom cannot produce the browser behaviour:
 | --- | --- | --- |
 | Keyboard traversal | happy-dom does not move focus on `Tab`; the node is focused directly and the key is still sent to the viewport | keyboard case |
 | No `blur`/`focusout` on removal | happy-dom fires neither, so the handler's effect (focus moving on) is applied at the moment of the insert | blur-time case |
-| Range mutation on removal | happy-dom keeps a range whose endpoint was removed; the case collapses it at exactly the moment a browser would | both selection cases |
+| Range mutation on removal | happy-dom keeps a range whose endpoint was removed; the case collapses it at exactly the moment a browser would | the selection cases, including the combined handover one |
+| A caret whose direction is forgotten | happy-dom keeps a field's caret across a re-insertion, so the direction-only case resets it to forward at the moment of the move | caret-direction case |
 | `Element.moveBefore` | absent in happy-dom, so the native path is exercised through a stub that moves but cannot preserve state | native-path case |
 
 Person-acceptance, on a real engine, not inferable from any of the above
@@ -276,7 +302,8 @@ Person-acceptance, on a real engine, not inferable from any of the above
 long conversation, cause a scroll or a history change, wait half a second
 without touching the screen, then press Tab (or move the VoiceOver cursor) and
 check focus is still on that action; repeat with text selected across two
-messages, and with a caret inside a message edit field. On Chromium (the
+messages, with a caret inside a message edit field, and with focus moving
+between two fields at the moment the list re-sorts. On Chromium (the
 desktop app) the native `moveBefore` path is the one that runs and was never
 affected.
 
@@ -289,4 +316,6 @@ affected.
 | `pnpm-lock.yaml` contention with the SDK-patch owner | Three lines, named above, parent merges. |
 | Fake timers destabilising the fixture | Validated: only `setTimeout`/`clearTimeout` are faked, around the real mount; both files behave identically and `vi.useRealTimers()` runs in `afterEach`. |
 | A selection spanning rows the pass moves one at a time | Each move restores its own endpoints, so the whole pass preserves a multi-row selection; the backward case selects across two moved rows to hold that. |
+| A repair throwing inside the list's sort | The held offsets are validated against the nodes' current lengths and the whole repair is wrapped in `try`/`catch`; the edited-text case proves the pass completes and the stale selection is dropped. |
+| Restoring a selection over an editable control a handover moved into | One handover check gates focus and selection together, proven by the combined case, which fails against the ungated first shape. |
 | happy-dom hiding a real-engine difference | Every proxy is named above and in the test names; the iPhone check is the person's. |

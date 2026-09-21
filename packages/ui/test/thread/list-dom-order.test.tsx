@@ -408,6 +408,68 @@ describe("the list's own DOM-order pass", () => {
     }
   });
 
+  it("leaves both the focus and the selection a blur-time handover chose, and overwrites neither", async () => {
+    const { viewport, held, action } = await reading();
+    const text = textIn(rowOf(held)!);
+    const selection = document.getSelection()!;
+    const field = document.createElement("input");
+    field.value = "the handler's own field";
+    const prose = document.createElement("p");
+    prose.textContent = "and the handler's own selection";
+    document.body.append(field, prose);
+    // The person was reading a message with text selected in it, with the row's
+    // action focused. Both proxies at once: the range collapses the way removal
+    // makes it, and the handover happens at the same moment, because happy-dom
+    // raises no blur of its own.
+    await act(async () => { action.focus(); action.dispatchEvent(new FocusEvent("focusin", { bubbles: true })); });
+    selection.setBaseAndExtent(text, 4, text, 19);
+    const taking = duringMoves(moved => {
+      if (!moved.contains(text)) return;
+      selection.removeAllRanges();
+      field.focus();
+      field.setSelectionRange(2, 5, "forward");
+      selection.setBaseAndExtent(prose.firstChild!, 1, prose.firstChild!, 6);
+    });
+    try {
+      await sortPass(viewport);
+      // The handover keeps focus, its own caret, and its own selection: putting
+      // the row's selection back would overwrite an editable control the person
+      // was moved into.
+      expect(document.activeElement).toBe(field);
+      expect(field.selectionStart).toBe(2);
+      expect(field.selectionEnd).toBe(5);
+      expect(selection.anchorNode).toBe(prose.firstChild);
+      expect(selection.anchorOffset).toBe(1);
+      expect(selection.focusOffset).toBe(6);
+    } finally {
+      taking.release();
+      field.remove();
+      prose.remove();
+    }
+  });
+
+  it("drops a held selection whose own text changed while the row was out of the tree, and still finishes the sort", async () => {
+    const { viewport, held } = await reading();
+    const text = textIn(rowOf(held)!);
+    const selection = document.getSelection()!;
+    selection.setBaseAndExtent(text, 4, text, 40);
+    const taking = duringMoves(moved => {
+      if (!moved.contains(text)) return;
+      selection.removeAllRanges();
+      // A handler that rewrote the row's text leaves the held offsets past the
+      // end of it, where `setBaseAndExtent` throws. The pass must not stop
+      // half-sorted because a repair was impossible.
+      text.data = "rewritten";
+    });
+    try {
+      await sortPass(viewport);
+      expect(selection.rangeCount).toBe(0);
+      expect(readingOrder()).toEqual(domOrder());
+    } finally {
+      taking.release();
+    }
+  });
+
   it("keeps the caret in a focused field inside a moved row", async () => {
     const { viewport, held } = await reading();
     const field = document.createElement("input");
@@ -427,6 +489,29 @@ describe("the list's own DOM-order pass", () => {
     expect(field.selectionStart).toBe(3);
     expect(field.selectionEnd).toBe(9);
     expect(field.selectionDirection).toBe("backward");
+  });
+
+  it("restores a caret's direction, not only its offsets (proxy: the field's range is reset to forward during the move)", async () => {
+    const { viewport, held } = await reading();
+    const field = document.createElement("input");
+    field.value = "half an edit";
+    rowOf(held)!.append(field);
+    field.focus();
+    field.setSelectionRange(3, 9, "backward");
+    // A field whose caret comes back with the same offsets but selected the
+    // other way round is a person's shift-selection turned inside out. happy-dom
+    // keeps the direction across a re-insertion, so the case resets it at the
+    // moment of the move, which is what a browser that forgets it would do.
+    const taking = duringMoves(moved => { if (moved.contains(field)) field.setSelectionRange(3, 9, "forward"); });
+    try {
+      await sortPass(viewport);
+      expect(document.activeElement).toBe(field);
+      expect(field.selectionStart).toBe(3);
+      expect(field.selectionEnd).toBe(9);
+      expect(field.selectionDirection).toBe("backward");
+    } finally {
+      taking.release();
+    }
   });
 
   it("uses the native state-preserving move untouched where it exists (stub: happy-dom has no Element.moveBefore)", async () => {
