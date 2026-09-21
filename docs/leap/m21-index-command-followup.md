@@ -146,6 +146,114 @@ the same fact.
   "Back to the conversation" — the existing way to a session — and sends
   nothing. A conversation of another project is never silently used.
 
+## Review corrections (`docs/leap/m21-index-command-review.md`)
+
+The single review of this branch approved it with three low findings. All three
+are addressed here; nothing else about the ownership story changed, and the
+logical owner of a build is still decided once, at admission, from an argument.
+
+### F2 — a fork moved the conversation's file and the build did not follow
+
+The hole: `WorkerServer.rekeySessionState` is the one place that moves
+everything a worker holds under a session's old path when `pi/session/fork`
+replaces the file — the harness, the task index, MCP, git, a naming completion
+in flight. The design structures were not in that list, so
+`DesignWorkspace.Tracked.sessionPath` and `ProjectDesignIndex.HeldBuild.owner`
+kept naming a path no runtime serves. Two consequences, both real: the next
+progress report and the terminal row were published under the old path, and the
+row `TaskIndex.rekeySession` had just moved to the new path stayed `running`
+for ever — pinning the moved conversation against an unload that should have
+been allowed.
+
+The correction is a canonical transition on the structures that already exist,
+in that same central handler:
+
+```text
+pi/session/fork → rekeySessionState(old, new)
+    harness · tasks · mcp · git · naming            (unchanged)
+    projectDesignIndex?.rekeySession(old, new)      HeldBuild.owner  → new
+    projectDesignWorkspace?.rekeySession(old, new)  Tracked.sessionPath → new,
+                                                    running rows republished
+```
+
+- **The logical owner never changes.** The same conversation owns the same
+  builds; what moves is its *address*. Nothing reads a "current conversation"
+  at publish time and `startingFor` is not coming back — the admission argument
+  is still the only thing that decides who owns a build.
+- **The admission's argument object is never written to.** `rekeySession`
+  *replaces* the recorded owner (`{ ...owner, sessionPath }`); the object the
+  caller passed in stays as it was, which the test proves with a frozen one.
+- **Nothing is instantiated to move.** The handler uses the two fields, not
+  their getters, so a Chat that never asked anything about design does not
+  acquire an index and a workspace because its file moved.
+- **Active and finished builds both move**, so `design/index/get`, the index's
+  own `owner()` and the worker's `TaskIndex` keep agreeing.
+- **A running build republishes its row once**, after `tasks.rekeySession` has
+  moved the index, because a row is only ever learned from a publication: a
+  build that reports nothing for a while would otherwise be missing from the
+  conversation that now exists until it ended.
+
+Still open, deliberately, and **not** this milestone's: the host's own
+`TaskRegister` has no rekey either, so the host keeps the pre-fork row under the
+old path until the worker is lost. That is shared with every shell command a
+forked conversation owns — one host-side lifecycle fix, not a design one.
+
+### F1 — a settlement observer that threw said nothing
+
+`ProjectDesignIndex.settle` caught an exception from `onSettled` and dropped
+it, so a lost terminal row was invisible. It now writes one bounded line to the
+worker's own diagnostic channel (`console.error` with the product prefix, the
+convention every other worker diagnostic uses, injected as `log`): the build's
+id and the error's *kind*, never its message or stack — an index build walks a
+person's repository and that channel is not a place for its contents. Nothing
+is retried and nothing is queued; the sweep after it still runs, so an observer
+bug cannot hold every finished build in the worker for the life of the process.
+
+On the review's suggested mechanism, precisely: `publishTask` folds the row
+into the worker's own `TaskIndex` **before** the transport write, so an
+exception from the write cannot leave a stale `running` row or a stale pin —
+what it loses is the host's copy of the message. A stale pin needs a throw
+*before* that fold. Neither has been observed in production; the diagnostic is
+there so that if it ever happens it is not silent.
+
+### F3 — a failure sentence cut mid-word
+
+`failureSentence` sliced at 500 characters. It now backs up to the last space
+(when that keeps at least three quarters of the budget — a path or a digest
+longer than that is cut where it is) and ends with an ellipsis, so a row reads
+as a long sentence rather than as a rendering fault.
+
+### Evidence for the corrections
+
+Frozen install, clean recursive build, then (`env -i PATH="$PATH" HOME="$HOME"`,
+one suite at a time):
+
+| Command | Result |
+| --- | --- |
+| `pnpm -F @lasercode/worker exec vitest run test/design` | 234 passed (17 files) |
+| `pnpm -F @lasercode/worker exec vitest run test/agents/tasks.test.ts test/session-unload.test.ts test/session-retire.test.ts test/server.test.ts` | 88 passed |
+| `pnpm -F @lasercode/worker exec vitest run test/session-safety.test.ts test/agents/harness.test.ts test/agents/session-naming.test.ts` | 130 passed |
+| `pnpm -F @lasercode/worker typecheck`, `pnpm identity:check` | clean |
+
+The new proofs (`packages/worker/test/design/index-command-rekey.test.ts`, six
+tests) all fail on the code before this correction — the first two with rows
+still under the old path, the next two because the transition did not exist,
+the fifth with no diagnostic at all. F2 is taken through a real `WorkerServer`
+and its real `pi/session/fork` → `rekeySessionState` seam, with the real design
+workspace, index and build engine; the only stub is the session driver at the
+engine boundary, whose `fork` moves the session file as the real driver's does,
+and a Design profile whose model answers only when the test says so, which is
+what keeps the build genuinely running across the fork with no timing window.
+
+For one build running across a fork: the row is republished under the new path
+and the old path is never published to again; `pi/worker/safety` keeps the
+`task` pin on the new path and `pi/session/unload` still refuses;
+`design/index/get` and `ProjectDesignIndex.owner()` both answer the new path,
+for a finished build as well as a running one; `pi/task/stop` from the fleet
+row still reaches the build after the move; settlement publishes the terminal
+row at the new path and the pin is gone; and a second conversation's build,
+started at the same time, is untouched by the fork.
+
 ## Not touched
 
 Mention/turn-context/verification paths, prompt/steer/follow-up/pending/driver,
