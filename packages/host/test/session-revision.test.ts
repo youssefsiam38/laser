@@ -107,6 +107,27 @@ describe("the host's own answer", () => {
     }
   });
 
+  it("still proves the prefix behind a compaction barrier, so older pages stay readable", async () => {
+    const lines = [header(), message("e0", null, "one"), message("e1", "e0", "two")];
+    const { path, cleanup } = fixture(lines);
+    try {
+      const index = new SessionIndexCache();
+      const service = revisions({ index });
+      const cached = (await answer(service, path)).revision;
+      appendFileSync(path, `${JSON.stringify({ type: "compaction", id: "compact-1", parentId: "e1", timestamp: "2026-01-01T00:00:02.000Z", summary: "Earlier context summarized", tokensBefore: 1000 })}\n`);
+      const indexed = await index.read(path);
+      if (!indexed.ok) throw new Error("unreadable");
+      expect(service.resolveBase(indexed.index, cached)).toMatchObject({ base: "stale", barrier: true, state: { count: 2, leafId: "e1" } });
+      // The same base after the branch moved away carries nothing.
+      appendFileSync(path, `${JSON.stringify(message("f0", "e0", "elsewhere"))}\n`);
+      const moved = await index.read(path);
+      if (!moved.ok) throw new Error("unreadable");
+      expect(service.resolveBase(moved.index, cached)).toEqual({ base: "stale" });
+    } finally {
+      cleanup();
+    }
+  });
+
   it("treats Pi-shaped compaction and branch-summary appends as replacement barriers", async () => {
     for (const type of ["compaction", "branch_summary"] as const) {
       const { path, cleanup } = fixture();

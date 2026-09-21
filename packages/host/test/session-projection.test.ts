@@ -249,6 +249,26 @@ describe("worker-free session projection", () => {
     }
   });
 
+  it("serves older pages against a base behind a compaction barrier, and refuses a suffix merge on it", async () => {
+    const f = fixture(messages(12));
+    try {
+      const { projection } = services();
+      const tail = await project(projection, f.path, { tail: 4 });
+      appendFileSync(f.path, `${JSON.stringify({ type: "compaction", id: "compact", parentId: "e11", summary: "Earlier context" })}\n`);
+      // The rows before the cursor are byte-identical: the page is exact.
+      const older = await project(projection, f.path, { before: tail.window!.before!, limit: 4 }, tail.window!.revision);
+      expect(older.entries).toEqual(messages(12).slice(4, 8));
+      expect((await project(projection, f.path, { beforeEntry: "e8", limit: 4 }, tail.window!.revision)).entries).toEqual(older.entries);
+      // The same base cannot take the compaction as an ordinary suffix.
+      expect((await project(projection, f.path, { tail: 4 }, tail.window!.revision)).window?.mode).toBe("replace");
+      // Once the branch itself moves away, the base proves nothing.
+      appendFileSync(f.path, `${JSON.stringify(message("fork", "e1", 14))}\n`);
+      await expect(projection.read(f.path, { before: tail.window!.before!, limit: 4 }, tail.window!.revision)).resolves.toMatchObject({ kind: "refuse", error: { code: ErrorCodes.RevisionUnavailable } });
+    } finally {
+      f.cleanup();
+    }
+  });
+
   it("returns a proved append delta and replaces for branch, compaction, or an oversized suffix", async () => {
     const f = fixture(messages(4));
     try {

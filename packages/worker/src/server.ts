@@ -745,7 +745,10 @@ export class WorkerServer {
             // Older pages merge into rows the client already holds. Require the
             // existing revision service to prove those rows are still the
             // current state or a byte-identical prefix; cursor/entry identity
-            // alone cannot detect a same-id rewrite or compaction barrier.
+            // alone cannot detect a same-id rewrite. A base behind a compaction
+            // barrier still resolves to its proved state (`barrier`): the rows
+            // before the cursor are unchanged, so the page is exact even though
+            // the same base can no longer take a suffix merge.
             if (("before" in req.params.window || "beforeEntry" in req.params.window)
               && !resolved?.state) {
               throw new ProtocolError(
