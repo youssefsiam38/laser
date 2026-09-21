@@ -34,7 +34,7 @@ import { totalmem } from "node:os";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type AgentRun, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type ModelProfileMigrationRecord, type ModelProfileMigrationReport, MODEL_PROFILE_MIGRATION_RECORD, NAMING_PROFILE_SETTING, type ProjectWorkAttentionNotification, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, PROJECT_WORK_BRIDGE_METHOD, ProtocolError, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type AgentRun, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type ModelProfileMigrationRecord, type ModelProfileMigrationReport, MODEL_PROFILE_MIGRATION_RECORD, NAMING_PROFILE_SETTING, type ProjectWorkAttentionNotification, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
@@ -777,6 +777,27 @@ export class HostServer {
       onNotification: (cwd, n, source) => {
         this.observe(cwd, n, source);
         this.broadcast(n);
+      },
+      // The project-work bridge, and nothing else (M21-T17, D-356.b). The
+      // worker's model tools reach the host's own authority here; the
+      // project they may change is resolved from `cwd`, which is the
+      // directory this host spawned that worker for, never anything in the
+      // params. Any other method is refused: a worker has no client's method
+      // surface and must not acquire one by asking.
+      onWorkerRequest: async (cwd, method, params) => {
+        if (method !== PROJECT_WORK_BRIDGE_METHOD) {
+          throw new ProtocolError(ErrorCodes.Unsupported, "This app does not answer that request from a project runtime.");
+        }
+        const authority = this.projectWorkMethods;
+        if (!authority) {
+          throw new ProtocolError(
+            ErrorCodes.Unsupported,
+            this.projectWorkUnavailable
+              ? "This app cannot open its project work store, so project work cannot be read or changed right now."
+              : "Project work is not available in this app.",
+          );
+        }
+        return authority.handleBridge(params, { actor: { class: "local_app", id: `worker:${cwd}` }, cwd });
       },
       // A worker's own pressure report (RP-8) arrives on a road of its own and
       // stops here. It is the app talking to itself: it carries that spawn's

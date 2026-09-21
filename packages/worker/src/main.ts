@@ -319,6 +319,9 @@ async function main(): Promise<void> {
         applyEnvironment(notification.params);
         continue;
       }
+      // The host's answer to something this worker asked it (M21-T17): a
+      // response, never a request, and recognisable by our own string id.
+      if (notification?.method === undefined && typeof notification?.id === "string" && server.hostResponse(raw)) continue;
       void server.handle(raw);
     }
   });

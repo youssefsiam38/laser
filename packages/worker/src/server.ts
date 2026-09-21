@@ -342,6 +342,9 @@ export class WorkerServer {
   private readonly pressure: WorkerPressureController;
   /** Exact update fence; absent until this worker acknowledges park. */
   private activationGate: { updateId: string; generationId: string } | undefined;
+  /** Requests this worker has asked the host and not yet had answered (M21-T17). */
+  private readonly hostPending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  private hostRequestSeq = 0;
 
   constructor(private readonly options: WorkerServerOptions) {
     this.environmentId = options.environmentId ?? UNCONFIGURED_ENVIRONMENT;
@@ -463,6 +466,41 @@ export class WorkerServer {
 
   notify<M extends keyof HostNotifications>(method: M, params: HostNotifications[M]): void {
     this.options.send({ jsonrpc: "2.0", method, params });
+  }
+
+  /**
+   * Ask the host something (M21-T17, D-356.b).
+   *
+   * The fd-3 link used to go one way for requests: the host asked, the worker
+   * answered. A model tool that reads or writes project work needs the other
+   * direction, because the authority is the host's and nothing above the
+   * worker may be bypassed. Ids are strings (`w1`, `w2`, …) so a worker's own
+   * request can never be confused with a host request id, which is a number.
+   *
+   * A pending call is rejected if the host answers with an error, and simply
+   * never settles if the link dies — the process goes with it.
+   */
+  hostRequest<R = unknown>(method: string, params: unknown): Promise<R> {
+    const id = `w${String(++this.hostRequestSeq)}`;
+    return new Promise<R>((resolve_, reject) => {
+      this.hostPending.set(id, { resolve: resolve_ as (value: unknown) => void, reject });
+      this.options.send({ jsonrpc: "2.0", id, method, params } as unknown as JsonRpcMessage);
+    });
+  }
+
+  /**
+   * One inbound response to a {@link hostRequest}. Returns false when the id
+   * is not one of ours, so the transport can fall through to the request path.
+   */
+  hostResponse(raw: unknown): boolean {
+    const message = raw as { id?: unknown; result?: unknown; error?: { code?: number; message?: string } };
+    if (typeof message.id !== "string") return false;
+    const entry = this.hostPending.get(message.id);
+    if (!entry) return false;
+    this.hostPending.delete(message.id);
+    if (message.error) entry.reject(new ProtocolError(message.error.code ?? ErrorCodes.Internal, message.error.message ?? "the app refused that"));
+    else entry.resolve(message.result);
+    return true;
   }
 
   /** Handle one inbound raw JSON-RPC value. Never throws; errors become responses. */

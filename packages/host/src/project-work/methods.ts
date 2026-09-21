@@ -31,7 +31,9 @@
  *   archive name the actor, the project and the exact revisions — never a
  *   body (leap, "Security, privacy and resource rules").
  */
+import { basename } from "node:path";
 import {
+  applyResearchOperation,
   ErrorCodes,
   PROJECT_WORK_ATTENTION_ITEMS_MAX,
   PROJECT_WORK_CONFLICT_CODE,
@@ -48,6 +50,13 @@ import {
   type ProjectWorkMethod,
   type ProjectWorkOrigin,
   type ProjectWorkQuotaRefusal,
+  parseProjectWorkBridgeParams,
+  ResearchOperationRefused,
+  type ProjectWorkBridgeParams,
+  type ProjectWorkBridgeResult,
+  type ProjectWorkWrongProject,
+  type ProjectTaskLinkExecutionResult,
+  PROJECT_WORK_READ_METHODS,
 } from "@lasercode/protocol";
 import { projectRootOf } from "../paths.js";
 import { canonical } from "../trust.js";
@@ -126,6 +135,56 @@ export class ProjectWorkMethods {
   handle(request: ProjectWorkRequest, caller: ProjectWorkCaller): ProjectWorkResult {
     try {
       return this.route(request, caller);
+    } catch (error) {
+      throw toProtocolError(error);
+    }
+  }
+
+  /**
+   * Answer one call from a worker's model tools (M21-T17).
+   *
+   * This is the only door a model has to project work, and it is a narrower
+   * one than a client's:
+   *
+   * - **The project is the host's answer, not the caller's.** It is resolved
+   *   from the directory this host spawned that worker for (a worktree maps
+   *   to its parent), so a tool cannot write into a project by naming it.
+   *   A mutation aimed elsewhere is refused with the owning project named and
+   *   the offer to open a session there (leap, "Cross-session mentions and
+   *   context"); a **read** of another project is allowed, which is what makes
+   *   a cross-project mention useful and a projectless chat able to read.
+   * - **Trust and scope still apply**, through the same `requireWritable` a
+   *   client goes through: a declined folder refuses every mutation whoever
+   *   asked.
+   * - **A research write is applied by the rule, not by the caller.** The
+   *   operation is re-run here against this host's own current body, and the
+   *   body the applier returns is what is stored — so a tool that skipped the
+   *   worker's pre-check changes nothing (D-351.a, D-356.d).
+   * - **An attempt records its shape.** `project/task/link-execution` with an
+   *   `attempt` envelope also writes one supporting evidence record naming the
+   *   workspace shape and the checkout, which is how an attempt stays readable
+   *   after its session is gone (D-356.e).
+   */
+  handleBridge(rawParams: unknown, caller: { actor: { class: ActorClass; id: string }; cwd: string }): ProjectWorkBridgeResult {
+    let params: ProjectWorkBridgeParams;
+    try {
+      params = parseProjectWorkBridgeParams(rawParams);
+    } catch (error) {
+      throw new ProtocolError(
+        ErrorCodes.InvalidParams,
+        `That project work request is not one this app can answer: ${error instanceof Error ? error.message.slice(0, 500) : "it is malformed"}.`,
+      );
+    }
+    const projectId = this.projectOf(caller.cwd);
+    const bridgeCaller: ProjectWorkCaller = { actor: caller.actor, source: "worker", agent: params.agent };
+    const request = this.fenceProject(params.request, projectId);
+    try {
+      if (params.research) return this.researchWrite(params, request, projectId, bridgeCaller);
+      const result = this.handle(request, bridgeCaller);
+      if (request.method === "project/task/link-execution" && params.attempt) {
+        this.recordAttemptShape(request.params.projectId, request.params.entityId, result as ProjectTaskLinkExecutionResult, params, bridgeCaller);
+      }
+      return { method: request.method, result, projectId };
     } catch (error) {
       throw toProtocolError(error);
     }
@@ -489,6 +548,154 @@ export class ProjectWorkMethods {
     const projectId = this.store.projectIdFor(root);
     if (!projectId) throw new ProjectWorkNotFoundError("That folder is not a project this app keeps work for.");
     return projectId;
+  }
+
+  // --------------------------------------------------------- worker bridge
+
+  /**
+   * The project a worker belongs to: its own directory, canonicalised and
+   * mapped to its project root. Minted on first sight, exactly as a first
+   * `project/work/list { cwd }` mints it, and nothing else about the call is
+   * allowed to decide it.
+   */
+  private projectOf(cwd: string): string {
+    const root = projectRootOf(canonical(cwd));
+    const projectId = this.store.projectIdFor(root);
+    if (!projectId) throw new ProjectWorkNotFoundError("That folder is not a project this app keeps work for.");
+    return projectId;
+  }
+
+  /**
+   * Pin the call to the worker's own project.
+   *
+   * A read may name another project — the leap allows any session to read any
+   * project the environment permits. A write may not: it is refused with the
+   * owning project named, and the offer Laser makes instead.
+   */
+  private fenceProject(request: ProjectWorkRequest, projectId: string): ProjectWorkRequest {
+    if (request.method === "project/work/list") {
+      // A worker never names a folder: the host already knows which one it is.
+      const { cwd: _cwd, ...rest } = request.params;
+      void _cwd;
+      return { method: request.method, params: { ...rest, projectId: rest.projectId ?? projectId } };
+    }
+    const named = (request.params as { projectId?: string }).projectId;
+    if (named === undefined || named === projectId) return request;
+    if ((PROJECT_WORK_READ_METHODS as readonly string[]).includes(request.method)) return request;
+    throw this.wrongProject(named);
+  }
+
+  /** The refusal a mutation aimed at another project gets. */
+  private wrongProject(projectId: string): ProtocolError {
+    const paths = this.store.hasProject(projectId) ? this.store.projectPaths(projectId) : [];
+    const name = paths[0] ? basename(paths[0]) : "another project";
+    return new ProtocolError(
+      ErrorCodes.InvalidParams,
+      `That work belongs to ${name}, and this session is working in a different project, so it cannot be changed from here. Open a session in ${name} to work on it — reading it from here is fine.`,
+      {
+        refused: "wrong_project",
+        owningProjectId: projectId,
+        owningProjectName: name,
+        offer: "open_session",
+      } satisfies ProjectWorkWrongProject,
+    );
+  }
+
+  /**
+   * A research write, applied by the rule.
+   *
+   * The excerpt check is the worker's — the fetched text lives in its cache
+   * and never crosses this link (`docs/leap/m21-research-plan.md`) — and
+   * every other rule in the contract runs here: the confidence rule, the
+   * citation an `answered` question needs, the next step an `unanswerable`
+   * one needs, findings never being edited, and the derived status. The body
+   * in the params is ignored entirely.
+   */
+  private researchWrite(
+    params: ProjectWorkBridgeParams,
+    request: ProjectWorkRequest,
+    projectId: string,
+    caller: ProjectWorkCaller,
+  ): ProjectWorkBridgeResult {
+    if (request.method !== "project/work/revise") {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "A research operation is applied by revising the research it belongs to.");
+    }
+    this.requireWritable(projectId);
+    const current = this.store.get({ projectId, entityId: request.params.entityId, body: { mode: "full" } });
+    const body = current.body?.body;
+    if (!body || body.kind !== "research") {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "That is not a research artifact, so a research write cannot be applied to it.");
+    }
+    let applied;
+    try {
+      applied = applyResearchOperation(body.research, params.research!);
+    } catch (error) {
+      if (error instanceof ResearchOperationRefused) {
+        throw new ProtocolError(ErrorCodes.InvalidParams, error.message, { refused: error.code, next: error.next, committed: false });
+      }
+      throw error;
+    }
+    const result = this.handle(
+      { method: "project/work/revise", params: { ...request.params, body: { kind: "research", research: applied.body } } },
+      caller,
+    );
+    return {
+      method: "project/work/revise",
+      result,
+      projectId,
+      researchResult: {
+        ...(applied.attention ? { attention: applied.attention } : {}),
+        staleRefs: applied.staleRefs,
+      },
+    };
+  }
+
+  /**
+   * What an attempt ran in, as one supporting evidence record.
+   *
+   * The execution link carries identity, profile, branch and base commit; the
+   * shape of the workspace and the checkout it used have nowhere to live on
+   * it, and they are what makes an attempt readable a year later. The record
+   * is assembled here, so nothing a model wrote reaches it, and the checkout
+   * stays in the store: no tool answer ever carries it.
+   */
+  private recordAttemptShape(
+    projectId: string,
+    entityId: string,
+    result: ProjectTaskLinkExecutionResult,
+    params: ProjectWorkBridgeParams,
+    caller: ProjectWorkCaller,
+  ): void {
+    const attempt = params.attempt;
+    if (!attempt) return;
+    const link = result.link;
+    const shape = attempt.workspace === "worktree" ? "a worktree of its own" : "the project's own checkout";
+    try {
+      this.handle(
+        {
+          method: "project/work/link",
+          params: {
+            projectId,
+            expectedRevisionId: result.entity.currentRevisionId,
+            link: {
+              type: "evidence",
+              entityId,
+              revisionId: result.entity.currentRevisionId,
+              kind: "source_location",
+              role: "supporting",
+              summary: `Attempt ${String(link.attempt)} ran in ${shape}${link.branch ? ` on ${link.branch}` : ""}.`,
+              detail: attempt.checkout,
+              outcome: "inconclusive",
+            },
+            idempotencyKey: `attempt-shape-${link.linkId}`,
+          },
+        },
+        caller,
+      );
+    } catch {
+      // The attempt is linked; its shape is a note beside it. A failure to
+      // write the note must not undo the link the attempt depends on.
+    }
   }
 
   /** A project id this store has never minted names nothing a caller may read. */

@@ -215,8 +215,8 @@ export type JsonSchemaNode = Readonly<Record<string, unknown>>;
 export type ToolLabelMode = "injected" | "exempt";
 
 /**
- * Every tool Laser registers through `registerLaserTool` (D-350.d: ten
- * today). The live truth is `laserToolRegistry()` in the companion
+ * Every tool Laser registers through `registerLaserTool` (D-350.d: ten with
+ * M26, and the eleven project-work tools of M21-T17). The live truth is `laserToolRegistry()` in the companion
  * extension, which only a process that imports the engine may read; this is
  * the same list for the surfaces that may not — the transcript, which has to
  * know whether a row it is drawing is a Laser tool or the engine's `bash`.
@@ -235,6 +235,18 @@ export const LASER_TOOL_NAMES: readonly string[] = [
   "task_output",
   "task_stop",
   "web_search",
+  // M21-T17 · the project lifecycle, in one companion module.
+  "inspect_project_work",
+  "write_project_artifact",
+  "request_project_review",
+  "report_project_task",
+  "inspect_design_index",
+  "build_design_index",
+  "review_design_index",
+  "search_sources",
+  "read_source",
+  "record_finding",
+  "resolve_question",
 ];
 
 /** Whether this tool name is one of Laser's own, rather than the engine's or an MCP server's. */
