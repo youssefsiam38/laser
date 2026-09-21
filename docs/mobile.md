@@ -83,6 +83,21 @@ the first keyboard show; the app re-measures on `pageshow`, `visibilitychange`,
 focus changes and orientation changes, over the ~400 ms the keyboard animates.
 Inputs are 16 px on touch so Safari never zooms.
 
+### The model control
+
+The composer's model control is the same component on a phone as on a laptop,
+and it carries the same two lines ([`model-profiles.md`](model-profiles.md)):
+the **profile** the conversation is running on, and under it the **model that
+is actually answering**. Intent on top, evidence beneath; a phone narrows the
+control, never drops a line to fit. Choosing a profile re-anchors the
+conversation to that profile's first model. Choosing one model instead pins the
+conversation to it with nothing to move to, and the second line says **Pinned ·
+no fallback** — one wording for a pinned conversation everywhere, so the phone
+and the desktop never describe one conversation two ways. A session list row, a
+run row and a notification follow the fleet's rule
+([`ux-fleet.md`](ux-fleet.md)): the model is what fits in one line, the profile
+is what an expansion adds.
+
 ### Approvals with one hand
 
 A question that blocks the turn is a **card directly above the composer**, on

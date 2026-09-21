@@ -14,8 +14,8 @@ package installation.
 | Pi and Pi-native packages | agent loop, models, tools, session persistence and feature logic |
 | `packages/pi-goal` | exact upstream goal pin, loader entrypoint and stable state reader |
 | `packages/pi-extension` | in-process translation from supported engine capabilities to the Laser protocol; the model-facing agent harness tools (`start_agent` and siblings, `complete_agent_run`), the child's role block and parent event delivery, from the worker's bridge; long commands as background tasks |
-| Worker | the only Pi imports; feature-to-engine loading and `SessionDriver` mapping; agent execution — per-agent session configuration, child sessions, `.worktrees/` isolation when the parent asks for it, parent events, user-skill discovery, Namer qualification |
-| Protocol, host and UI | engine-neutral settings, feature policy, session state and presentation; agent definitions and policy (`agents.json`), the Agents page, the run registry (`agent-runs.json`), sub-sessions in the sidebar, the live map, and the built-in agents' product integrations (Beam's spark and bubble, the Chat tab, Namer's session titles) |
+| Worker | the only Pi imports; feature-to-engine loading and `SessionDriver` mapping; agent execution — per-agent session configuration, child sessions, `.worktrees/` isolation when the parent asks for it, parent events, user-skill discovery, Model Profile storage, validation and one-way migration, the profile walk a session or a naming request runs on |
+| Protocol, host and UI | engine-neutral settings, feature policy, session state and presentation; agent definitions and policy (`agents.json`), the Agents page, the run registry (`agent-runs.json`), sub-sessions in the sidebar, the live map, the profile a surface is assigned and the effective model it records, and the built-in agents' product integrations (Beam's spark and bubble, the Chat tab, Namer's session titles) |
 
 New backend behavior starts as a reusable Pi-native package, whether local or
 exact-pinned upstream. It must work without the Laser UI. Laser then adds a
@@ -31,19 +31,30 @@ above the worker.
 
 ## Settings taxonomy
 
-The classification is exhaustive for the pinned engine schema. Only General
-and Advanced entries are returned as settings fields.
+The classification is exhaustive for the pinned engine schema, and General also
+lists the product-owned profile keys. Only General and Advanced entries are
+returned as settings fields.
 
 | Disposition | Keys |
 | --- | --- |
-| General | `defaultProvider`, `defaultModel`, `defaultThinkingLevel`, `modelThinkingLevels`, `steeringMode`, `followUpMode`, `compaction`, `hideThinkingBlock`, `images`, `enabledModels` |
+| General | `modelProfiles`, `defaultProfileId`, `namingProfileId`, `oracleProfileId`, `designIndexProfileId`, `steeringMode`, `followUpMode`, `compaction`, `hideThinkingBlock`, `images`, `enabledModels` |
 | Advanced | `transport`, `retry`, `showCacheMissNotices`, `shellPath`, `shellCommandPrefix`, `thinkingBudgets`, `warnings`, `httpProxy`, `httpIdleTimeoutMs`, `websocketConnectTimeoutMs` |
-| Internally managed | `lastChangelogVersion`, `theme`, `defaultProjectTrust`, `npmCommand`, `enableInstallTelemetry`, `enableAnalytics`, `trackingId`, `packages`, `extensions`, `skills`, `prompts`, `themes`, `enableSkillCommands`, `defaultTools`, `sessionDir` |
+| Internally managed | `defaultProvider`, `defaultModel`, `defaultThinkingLevel`, `modelThinkingLevels` (history: engine-era model keys, read by the M22 migration only), `lastChangelogVersion`, `theme`, `defaultProjectTrust`, `npmCommand`, `enableInstallTelemetry`, `enableAnalytics`, `trackingId`, `packages`, `extensions`, `skills`, `prompts`, `themes`, `enableSkillCommands`, `defaultTools`, `sessionDir` |
 | Unsupported in Laser | `branchSummary`, `externalEditor`, `quietStartup`, `collapseChangelog`, `terminal`, `doubleEscapeAction`, `treeFilterMode`, `editorPaddingX`, `outputPad`, `autocompleteMaxVisible`, `showHardwareCursor`, `markdown`, `tuiMode`, `fullscreenExitOutput`, `fullscreenScrollbar`, `fullscreenCopyOnSelect` |
 
 Advanced is a permanent destination for specialist product controls. “Full
 configuration” only expands secondary fields inside General or Advanced; it
 does not reveal internally managed or unsupported engine settings.
+
+The five profile keys are Laser's own (`LASER_SETTINGS_KEYS` in
+`packages/worker/src/settings.ts`), written to the global settings file through
+`SettingsManager` and never handed to the engine as an override: a Model
+Profile is a product concept, and every surface that used to pick a model now
+holds a profile id ([`model-profiles.md`](model-profiles.md), D-346). The four
+engine model keys above stay classified so a pin bump still fails loudly, but
+nothing in the product writes or shows them. They are left on disk for one
+release after M22 and are read by the one-way migration alone, so rolling the
+app back reads them unchanged.
 
 `enabledModels` is a glob allow-list, and a list written before a model
 existed hides every newer one from every picker. Settings → Providers and

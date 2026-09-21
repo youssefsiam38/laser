@@ -22,7 +22,7 @@
 │  ui-bridge (ExtensionUIContext → pi/ui/*)                   │
 │  engine adapter + Laser-owned feature loader                 │
 │  agent harness: child sessions, .worktrees/, timeouts,     │
-│  parent events; Beam; Namer (docs/agents.md)               │
+│  parent events; Beam; Namer; the profile walk (agents.md)  │
 │  loads packages/pi-extension into the session:             │
 │    one extension, modules/{provider-log,subagents,         │
 │    background-work,transcribe,goal,...} activated          │
@@ -103,11 +103,16 @@ ACP-inspired JSON-RPC:
   package installation is not a Laser capability.
 - New product capabilities use engine-neutral methods: `feature/list`,
   `feature/set`, `session/goal/get`, `session/goal/action`, and the `agents/*`
-  family (definitions, policy, runs, Beam and Namer; `session/new` takes an
-  `agentName`) with the `agents/updated`, `agents/run`, `agents/event` and
-  `agents/beam/choose-model` notifications — see [`agents.md`](agents.md).
-  Remaining `pi/*` methods are internal wire compatibility and are not
-  product vocabulary.
+  family (definitions, policy, runs, Beam and Namer while they exist;
+  `session/new` takes an `agentName`) with the `agents/updated`, `agents/run`
+  and `agents/event` notifications — see [`agents.md`](agents.md). Model
+  routing belongs to the same family: `models/profiles/list`, `save`, `delete`
+  and `migrate` own the person's Model Profiles, `session/profile/set` moves
+  one conversation to another profile, `session/model/pin` pins it to a single
+  model with nothing to move to, and `models/profiles/seeded` offers the
+  profiles Laser filled in for review — see
+  [`model-profiles.md`](model-profiles.md). Remaining `pi/*` methods are
+  internal wire compatibility and are not product vocabulary.
 - Every client method carries a scope and a reach in one compiler-complete
   table at the host boundary, and `environment/describe` tells each connection
   what this environment is and what that connection may do in it
