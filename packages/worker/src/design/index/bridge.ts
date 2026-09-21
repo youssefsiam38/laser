@@ -8,7 +8,13 @@
  * through `storage.ts`, which is the project-config path.
  */
 import type { DesignIndex, DesignIndexEntry } from "@lasercode/protocol";
-import { startDesignIndexBuild, type DesignBuildCommand, type DesignBuildOptions, type DesignBuildProgress } from "./command.js";
+import {
+  startDesignIndexBuild,
+  type DesignBuildCommand,
+  type DesignBuildOptions,
+  type DesignBuildProgress,
+  type DesignBuildResult,
+} from "./command.js";
 import type { DesignBuildOwner } from "./tools.js";
 import { applyReview, applyReviewAction, reviewProgress, ReviewRefused, type ReviewActor, type DesignReviewAction } from "./review.js";
 import { clearParseCache, fileParseCache, readIndex, readReview, writeIndex, writeReview, type ParseCache } from "./storage.js";
@@ -34,18 +40,41 @@ export interface ProjectDesignIndexOptions {
    */
   onCommand?: (command: DesignBuildCommand, owner: DesignBuildOwner) => void;
   onProgress?: (commandId: string, progress: DesignBuildProgress) => void;
+  /**
+   * Told how a build ended, **while it is still held**.
+   *
+   * This is the ordering the retention below depends on: whoever publishes a
+   * build's last row is called from here, and nothing is released until that
+   * call has returned. A caller that attaches its own handler to
+   * `command.done` instead would race this one, because handler order is
+   * registration order and the index registers first.
+   */
+  onSettled?: (command: DesignBuildCommand, owner: DesignBuildOwner, outcome: DesignBuildOutcome) => void;
   now?: () => number;
 }
+
+/**
+ * How one build ended, as the index learned it from the engine.
+ *
+ * One value, decided once: a build either has a result — which says whether it
+ * ran to the end or was stopped — or it failed with an error. Nothing infers
+ * an outcome from a phase that happens to have been reported, so a terminal
+ * row can never say one thing and the failure another.
+ */
+export type DesignBuildOutcome = { kind: "done"; result: DesignBuildResult } | { kind: "failed"; error: unknown };
 
 /**
  * How many *finished* builds this project keeps a command object for.
  *
  * The same number the workspace keeps rows for, and for the same reason: a
  * project re-indexed all day would otherwise hold one command — and the
- * closure over its whole build — for the life of the worker. A build that is
- * still running is never counted and never released, and nothing is released
- * while it could still be asked about: the sweep runs when the *next* build
- * starts, long after the last row of the one being released was published.
+ * closure over its whole build — for the life of the worker.
+ *
+ * The bound holds **at settlement**, not at the next start: a burst of builds
+ * that all end and are never followed by another one would otherwise keep
+ * every closure for the life of the worker. A build that is still running is
+ * never counted and never released, and a build whose last row has not been
+ * published yet is still held — the sweep runs after `onSettled` returns.
  */
 export const FINISHED_COMMANDS_KEPT = 8;
 
@@ -53,6 +82,7 @@ export const FINISHED_COMMANDS_KEPT = 8;
 interface HeldBuild {
   command: DesignBuildCommand;
   owner: DesignBuildOwner;
+  /** True once the build has settled *and* its outcome has been announced. */
   finished: boolean;
 }
 
@@ -92,10 +122,6 @@ export class ProjectDesignIndex {
 
   async startBuild(input: { rebuild: boolean; appRoot?: string; maxFiles?: number; owner: DesignBuildOwner }): Promise<{ commandId: string; title: string; appRoot: string }> {
     const appRoot = input.appRoot ?? ".";
-    // Before this build joins them, not after it ends: a command released here
-    // has long since published its last row, and one still running is never a
-    // candidate however many have ended since.
-    this.release();
     if (input.rebuild) clearParseCache(this.options.stateDir, this.options.projectKey);
     const cache: ParseCache = fileParseCache(this.options.stateDir, this.options.projectKey);
     // The id is read from a holder rather than captured: the build reports its
@@ -122,14 +148,19 @@ export class ProjectDesignIndex {
     const held: HeldBuild = { command, owner: input.owner, finished: false };
     this.builds.set(commandId, held);
     this.options.onCommand?.(command, input.owner);
-    // A failed build must not become an unhandled rejection: the command's
-    // own `done` still carries the failure for whoever awaits it.
+    // Registered here, before anything else can attach to `done`, so the
+    // settlement below runs before any caller's own continuation: the row that
+    // says how this build ended is published before the build can be released,
+    // and before whoever awaited it carries on.
+    //
+    // A failed build must not become an unhandled rejection either; the
+    // command's own `done` still carries the failure for whoever awaits it.
     command.done.then(
-      () => {
-        held.finished = true;
+      (result) => {
+        this.settle(held, { kind: "done", result });
       },
-      () => {
-        held.finished = true;
+      (error: unknown) => {
+        this.settle(held, { kind: "failed", error });
       },
     );
     return { commandId, title: command.title, appRoot };
@@ -145,6 +176,27 @@ export class ProjectDesignIndex {
     if (!held) return false;
     held.command.stop();
     return true;
+  }
+
+  /**
+   * One build has ended: say how, then bound what is kept.
+   *
+   * The order is the whole point. `onSettled` is where the fleet row that says
+   * *failed*, *stopped* or *completed* is published, and it is called while
+   * this build is still in the map — so nothing can be forgotten between the
+   * build ending and the person being told how it ended.
+   */
+  private settle(held: HeldBuild, outcome: DesignBuildOutcome): void {
+    try {
+      this.options.onSettled?.(held.command, held.owner, outcome);
+    } catch {
+      // An observer that threw has lost its row, which is its own problem to
+      // report; it must not leave every finished build in this worker held for
+      // the life of the process, so the sweep below still runs.
+    } finally {
+      held.finished = true;
+      this.release();
+    }
   }
 
   /**

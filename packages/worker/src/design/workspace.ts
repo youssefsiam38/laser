@@ -37,7 +37,7 @@ import {
   type DesignIndexCommand,
   type DesignStrategyProposal,
 } from "@lasercode/protocol";
-import type { ProjectDesignIndex } from "./index/bridge.js";
+import type { DesignBuildOutcome, ProjectDesignIndex } from "./index/bridge.js";
 import { progressLine, type DesignBuildCommand, type DesignBuildProgress } from "./index/command.js";
 import type { DesignBuildOwner } from "./index/tools.js";
 import { reviewProgress, ReviewRefused } from "./index/review.js";
@@ -89,17 +89,50 @@ export const DESIGN_BUILD_NO_SESSION_SENTENCE =
 export const DESIGN_BUILD_UNKNOWN_SESSION_SENTENCE =
   "That conversation is not open in this project, so a build started for it would run where nobody could see or stop it. Nothing was started.";
 
+/**
+ * How a build ended, in the one vocabulary a fleet row and the window share.
+ *
+ * Set once, at settlement, from the engine's own answer — never inferred from
+ * a phase. While it is absent the build is running, whatever a progress report
+ * has said: a build is not over until the engine says how it ended, and a row
+ * that guessed *completed* from a phase could contradict the failure that
+ * arrives a microtask later.
+ */
+interface Settled {
+  status: "completed" | "failed" | "stopped";
+  /** Why it failed, as a sentence. Only ever set with `status: "failed"`. */
+  failure?: string;
+}
+
 interface Tracked {
   command: DesignBuildCommand;
   progress: DesignBuildProgress;
   /** The session that owns it. Fixed at admission; never re-read or replaced. */
   sessionPath: string;
   startedAt: string;
-  running: boolean;
-  failure?: string;
+  /** Absent while it runs; the one coherent outcome once it has ended. */
+  settled?: Settled;
   /** When the row was last published, so a per-file report is not a per-file frame. */
   publishedAtMs: number;
   publishedPhase?: DesignBuildProgress["phase"];
+}
+
+/**
+ * Why a build failed, for a person reading a fleet row.
+ *
+ * A refusal from below (storage, review) already carries a sentence and what
+ * to do next; anything else — a filesystem error, a bug — is given the
+ * sentence it lacks rather than being shown raw.
+ */
+function failureSentence(error: unknown): string {
+  const known = error as { message?: unknown; next?: unknown } | null;
+  const message = typeof known?.message === "string" ? known.message.trim() : "";
+  const next = typeof known?.next === "string" && known.next.trim() !== "" ? ` Next: ${known.next.trim()}.` : "";
+  if (message === "") return "The index build stopped on an error, so the index was not written. Try building it again.";
+  // A refusal that wrote its own sentence is shown as it is; a raw error
+  // message is given one, so a row never reads as a stack trace.
+  const sentence = next !== "" || /[.!?]$/.test(message) ? message : `The index build could not finish: ${message}`;
+  return `${sentence}${next}`.slice(0, 500);
 }
 
 /** How often a running build refreshes its fleet row. A file is not a frame. */
@@ -157,7 +190,6 @@ export class DesignWorkspace {
       progress: command.progress(),
       sessionPath: owner.sessionPath,
       startedAt: new Date(this.options.now?.() ?? Date.now()).toISOString(),
-      running: true,
       publishedAtMs: 0,
     };
     this.tracked.set(command.id, held);
@@ -171,6 +203,33 @@ export class DesignWorkspace {
     if (!held) return;
     held.progress = progress;
     this.publish(commandId, progress.phase !== held.publishedPhase);
+  }
+
+  /**
+   * A build has ended, and this is how. Called by the index the moment its
+   * `done` settles and **before** it releases anything, so the row that says
+   * *failed*, *stopped* or *completed* is published while the build is still
+   * held by everyone who could be asked about it.
+   *
+   * One outcome, from the engine's own answer: a progress report can say
+   * `failed` before the error is in hand, and a row built from that alone
+   * would have to guess — and would guess *completed*. Nothing guesses here.
+   */
+  observeSettled(command: DesignBuildCommand, owner: DesignBuildOwner, outcome: DesignBuildOutcome): void {
+    const held = this.tracked.get(command.id);
+    if (!held || held.settled !== undefined) return;
+    if (outcome.kind === "failed") {
+      held.progress = { ...held.progress, phase: "failed" };
+      held.settled = { status: "failed", failure: failureSentence(outcome.error) };
+    } else {
+      held.progress = outcome.result.progress;
+      const stopped = outcome.result.stopped === true || outcome.result.progress.phase === "stopped";
+      held.settled = { status: stopped ? "stopped" : "completed" };
+    }
+    // The final row first, then the bookkeeping: a person watching the fleet
+    // sees this build end before anything older is forgotten.
+    this.publish(command.id, true);
+    this.prune();
   }
 
   async get(_params: Params<"design/index/get">): Promise<Answer<"design/index/get">> {
@@ -225,23 +284,11 @@ export class DesignWorkspace {
     if (!command || !held) {
       throw new ProtocolError(ErrorCodes.Internal, "The index build could not be started. Try again; nothing was written.");
     }
-    const commandId = started.commandId;
-    void command.done
-      .then((result) => {
-        held.progress = result.progress;
-        held.running = false;
-      })
-      .catch((error: unknown) => {
-        held.running = false;
-        held.failure = error instanceof Error ? error.message.slice(0, 500) : "The index build failed.";
-        held.progress = { ...held.progress, phase: "failed" };
-      })
-      .finally(() => {
-        // The final row first, then the bookkeeping: a person watching the
-        // fleet sees this build end before anything older is forgotten.
-        this.publish(commandId, true);
-        this.prune();
-      });
+    // Nothing is attached to `command.done` here: how a build ended reaches
+    // this workspace through the index's `onSettled`, which runs before the
+    // index releases the build and before any caller's own continuation. A
+    // second handler registered at this point would run *after* both, and the
+    // last row would be a race.
     return { command: this.commandOf(held), appRoot: started.appRoot };
   }
 
@@ -363,10 +410,17 @@ export class DesignWorkspace {
 
   // ----------------------------------------------------------------- inside
 
-  /** True while this build can still do something. Phase, not just the flag. */
+  /**
+   * True while this build can still do something.
+   *
+   * The settled outcome, and nothing else: a build whose last progress report
+   * said `done` has still not been answered for — it can still fail while
+   * writing — and one that said `failed` has no failure to show yet. Waiting
+   * for the outcome is what makes the terminal row true, and it is also what
+   * keeps a build that has not published its last row from being pruned.
+   */
   private isRunning(held: Tracked): boolean {
-    const phase = held.progress.phase;
-    return held.running && phase !== "done" && phase !== "stopped" && phase !== "failed";
+    return held.settled === undefined;
   }
 
   /**
@@ -395,7 +449,7 @@ export class DesignWorkspace {
       ...(progress.currentPath !== undefined ? { currentPath: progress.currentPath } : {}),
       elapsedMs: Math.max(0, Math.round(progress.elapsedMs)),
       running: this.isRunning(held),
-      ...(held.failure !== undefined ? { failure: held.failure } : {}),
+      ...(held.settled?.failure !== undefined ? { failure: held.settled.failure } : {}),
       sessionPath: held.sessionPath,
     };
   }
@@ -408,21 +462,24 @@ export class DesignWorkspace {
     if (!force && at - held.publishedAtMs < ROW_INTERVAL_MS) return;
     held.publishedAtMs = at;
     held.publishedPhase = held.progress.phase;
-    const command = this.commandOf(held);
+    // One outcome decides the row: the status it carries, the reason it gives
+    // and whether it has an end at all all come from the same value, so a row
+    // can never say *completed* about a build that failed.
+    const settled = held.settled;
     const task: BackgroundTask = {
       id: designCommandTaskId(commandId),
       sessionPath: held.sessionPath,
       command: `Index the design system of ${this.options.projectCwd}`,
       title: held.command.title,
-      status: command.running ? "running" : command.failure !== undefined ? "failed" : command.phase === "stopped" ? "stopped" : "completed",
+      status: settled?.status ?? "running",
       origin: "background",
       startedAt: held.startedAt,
       outputBytes: 0,
       activity: progressLine(held.progress),
-      ...(command.running ? {} : { endedAt: new Date(this.options.now?.() ?? Date.now()).toISOString(), exitCode: null }),
-      ...(command.failure !== undefined ? { error: command.failure, terminalReason: command.failure } : {}),
-      ...(!command.running && command.phase === "stopped" ? { terminalReason: "you stopped it" } : {}),
-      ...(!command.running && command.phase === "done" ? { terminalReason: progressLine(held.progress) } : {}),
+      ...(settled === undefined ? {} : { endedAt: new Date(this.options.now?.() ?? Date.now()).toISOString(), exitCode: null }),
+      ...(settled?.failure !== undefined ? { error: settled.failure, terminalReason: settled.failure } : {}),
+      ...(settled?.status === "stopped" ? { terminalReason: "you stopped it" } : {}),
+      ...(settled?.status === "completed" ? { terminalReason: progressLine(held.progress) } : {}),
     };
     this.options.publishTask(held.sessionPath, task);
   }

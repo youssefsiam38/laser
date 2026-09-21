@@ -2380,6 +2380,10 @@ export class WorkerServer {
       },
       onCommand: (command, owner) => this.designWorkspace().observeCommand(command, owner),
       onProgress: (commandId, progress) => this.designWorkspace().observeProgress(commandId, progress),
+      // How a build ended, published as its last row before the index lets go
+      // of it: the fleet learns *failed*, *stopped* or *completed* from the one
+      // answer the engine gave, and never from a phase that arrived first.
+      onSettled: (command, owner, outcome) => this.designWorkspace().observeSettled(command, owner, outcome),
     });
     return this.projectDesignIndex;
   }
