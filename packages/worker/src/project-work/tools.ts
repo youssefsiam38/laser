@@ -985,11 +985,3 @@ async function entityIdFor(
   })) as ProjectWorkGetResult;
   return found.entity.entityId;
 }
-
-/** A refusal from below a tool, in the tool's own shape. */
-export function asProjectWorkFailure(failure: unknown, tool: string): Error {
-  const recovery = PROJECT_WORK_TOOL_RECOVERY[tool];
-  const known = projectWorkFailure(failure, tool);
-  if (!recovery) return known;
-  return known;
-}

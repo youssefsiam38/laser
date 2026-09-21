@@ -67,11 +67,18 @@ claim to have obeyed.
 - **D-356.d — a research write crosses as its operation, not its body.** The
   bridge's optional `research` field carries the `ResearchOperation`
   (D-351.a). The host reads the current body, runs `applyResearchOperation()`
-  — confidence rule, excerpt digest, citation on `answered`, `unanswerable`
-  needing a next step, findings never edited, derived status — and stores
-  **the applier's** body through `project/work/revise`, ignoring whatever body
-  the params carried. A tool that skipped the worker's pre-check therefore
-  changes nothing. `attention` and `staleRefs` come back on the bridge result.
+  — confidence rule, citation on `answered`, `unanswerable` needing a next
+  step, findings never edited, derived status — and stores **the applier's**
+  body through `project/work/revise`, ignoring whatever body the params
+  carried. A tool that skipped the worker's pre-check therefore changes
+  nothing. `attention` and `staleRefs` come back on the bridge result.
+  The **excerpt and digest** checks stay in the worker and are not re-run
+  host-side: the fetched text lives in the worker's per-project research
+  cache and never crosses the link (`m21-research-plan.md`, "Excerpt in
+  digest"), and a host that passed `{ digest, text: "" }` as the read record
+  would refuse every finding that carries a quote. Stale propagation along
+  the artifact graph is the store's own, on the revision the write makes;
+  the operation's `staleRefs` are returned for the tool and the UI.
 - **D-356.e — the attempt is one bridge call.** `report_project_task` with
   `action: "link_execution"` sends `project/task/link-execution` plus an
   `attempt` envelope (`workspace: worktree | shared`, `checkout`). The host
@@ -138,5 +145,41 @@ claim to have obeyed.
   packet, the `/design implement` hand-off packet, the session assembly.
 - **Extension.** One module, eleven registrations, the packet at
   `before_agent_start`.
-- **Tool-eval.** The Design Index and Research fixtures moved into the matrix,
-  four lifecycle fixtures added, the scripted project-work world.
+- **Tool-eval.** The Design Index and Research fixtures moved into the matrix
+  (`test/fixtures/tool-eval/`), four lifecycle fixtures added, the scripted
+  project-work world (`src/tool-eval/project-work-world.ts`), and the runner
+  now builds all three worlds and resolves the placeholders the replay tests
+  already resolved (`{{revision}}`, `{{stale}}`, `{{finding}}`,
+  `{{entry:…}}`, and `{{revision:KEY}}` for a lifecycle fixture).
+- **Done.** `pnpm tool-eval`: all 42 runs pass, 21 fixtures across 2 profiles.
+
+## What the fixtures had to change, and why
+
+- **Budgets.** The registered surface grew by eleven tools, so every prompt in
+  the matrix is bigger. The research and design fixtures' `inputTokens`
+  budgets moved to 70 000 against a measured 37–65 k. The budget measure is
+  the cost of the surface, so it follows the surface rather than the reverse.
+- **`inspect_design_index` and `read_source` truncation.** Both declared the
+  truncation measure with a byte ceiling their answers never reached in the
+  matrix (they were only ever replayed against the handlers before). Each now
+  really narrows: the design fixture lists twenty entries and then asks for
+  five, and the read fixture reads 300 bytes of a page and then the rest in a
+  256-byte window. A chain of ranged reads has to end on a page that is not
+  itself truncated, which is why the second read is a tail read.
+- **`body_limit` is a page size.** `PAGE_SIZE_NAMES` in
+  `packages/protocol/src/tool-contract.ts` grew by one name, with the tool
+  that introduced it, exactly as `docs/agent-tool-contract.md` says a new
+  page name is added.
+
+## Not done here, and where it belongs
+
+- **The UI half.** The Start… choice (existing eligible session / new
+  top-level session / agent run) and the `/design implement` command are
+  M21-T6/T7's; this task publishes the request shapes above and the
+  worker-side packet builder they drive.
+- **M20 checkpoints, diffs and repository links on an attempt** are M21-T18's
+  (`PLAN.md`). What lands here is the attempt's identity, workspace shape,
+  checkout and base commit.
+- **A Research run's own command and budget line in the fleet** are M21-T13's
+  surface; the worker builds one `ProjectResearch` per session over the
+  bridge's store, which is what the four tools need to exist at all.
