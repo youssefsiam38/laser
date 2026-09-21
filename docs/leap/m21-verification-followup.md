@@ -270,6 +270,10 @@ build. Laser will not grow a browser acceptance harness for this (D-342).
 
 ## Short plan · authoritative required sources for a capture (review F1)
 
+**Rejected in review. Kept for the record; superseded by "Short plan v2"
+below, which lists the objections that rejected it.** Nothing in this section
+was implemented.
+
 **Not yet implemented — this is the plan, for approval before any code.**
 
 **The gap.** `requiredPaths` is helper-only: `buildStateCapture` accepts it and
@@ -397,3 +401,252 @@ subject's key, record, and verify again — the visual criterion should read
 - `packages/worker/src/project-work/session.ts` — one option
   (`sessionPath`) and the verify tool's registration in `lifecycleTools()`.
   `turnContext` is untouched.
+
+## Short plan v2 · authoritative required sources for a decision capture (F1)
+
+**Not implemented. This is the plan, revised after the first one was rejected,
+for approval before any code.** It replaces every mechanism of the rejected
+section above: `attempt.changedPaths`, `subject.executionLinks` and
+"absent-at-head refuses" are all gone.
+
+### 0 · Why the first plan was wrong
+
+| Rejected mechanism | Why it cannot stand |
+| --- | --- |
+| required set = `AttemptRepositoryRecord.changedPaths` | that field is the **first → last checkpoint** aggregate (`project-work.ts` `attemptRepositoryRecordSchema`, `delivery.ts` `repositoryFacts`). It omits what the *first* checkpoint already changed against the attempt's base, and it includes paths a later checkpoint reverted. It describes an aggregate, never the one checkpoint being accepted |
+| find the attempt by walking the **subject's** execution links | attempts are on the **Task**; a Design-backed `visual` criterion is accepted on the **Design** (`evaluate.ts` `visualFinding`, `native-acceptance.ts` `acceptanceSubjects`). The subject would have no execution links at all, and picking "the Task's newest attempt" would be the guess the record exists to replace |
+| "a required path absent at head is missing source → refuse" | a **deleted** path is legitimately absent at the state; refusing it would make every delete unacceptable |
+| prioritise required paths inside the already-sliced tree | `treeManifest` stops at its own `limit`, so a required path beyond the cap was never in the list to prioritise |
+
+### 1 · The identity the host joins on — explicit, bounded, never latest
+
+One new optional field on the existing evidence-link door, no new route:
+
+```ts
+verifiedAt: {
+  repositoryId; state;
+  acceptance?: { kind: "checkpoint_preview" };
+  /** Required whenever `acceptance` is present. */
+  attempt?: { taskEntityId: string; executionLinkId: string };
+}
+```
+
+The UI already holds both: the Task detail it renders is the Task, and every
+row of `acceptanceCheckpoints()` is built **from one `ExecutionLink`**, so its
+`linkId` is carried down instead of being thrown away. The request is
+identity the caller *reports*; every part of it is then re-derived host-side
+and refused if it does not agree.
+
+`ProjectWorkGate.prepareVerifiedAt` validates, in this order, all before any
+git read of file bytes and all before `storeCapture`:
+
+1. `store.executionLink(projectId, executionLinkId)` exists, its `entityId` is
+   `taskEntityId`, and that entity is a **task** in this project. Otherwise:
+   refused, naming the attempt.
+2. **The subject is that Task, or an artifact revision the Task currently pins.**
+   The Task's own authority resolution is reused rather than re-invented —
+   `gatherAuthorities()` (`verification/authorities.ts`), the same function the
+   run used to build the report — and the subject must equal the Task's ref or
+   the Spec/Design ref it returns, at **exactly** `subjectRevisionId`. A Design
+   the Task no longer pins, or pinned at another revision, is refused with what
+   to do. This is the canonical Task ↔ Design ↔ attempt join, and it is the
+   same one the evaluator reads back.
+3. The existing rule stays on top of it: the subject must be the store's
+   **current** revision and digest.
+4. The attempt's record for **this exact `repositoryId`**
+   (`executionLink.repositories`) exists and is not `unavailable`, and one of
+   its `checkpoints` matches the request on **both** `ref === state.checkpointId`
+   and `commitObjectId === state.commitObjectId`. Not the newest, not the ref
+   alone: the exact recorded tuple. A workspace with two repositories has two
+   records and two commits, and one acceptance names one of them; the other
+   repository is a second acceptance, never an inferred merge.
+5. `listCheckpointRefs` still proves the ref → commit in git today (unchanged).
+
+A request without `attempt` and with `acceptance` is refused with the sentence
+that names the missing identity. A request without `acceptance` (a plain
+`verified_at`) is unchanged: validated, captured, honest, and **not** Native.
+
+### 2 · The required change set — attempt base → this exact state
+
+While git can still answer, and only then:
+
+- `base = record.base.commitObjectId`, the commit the host wrote when the
+  attempt was recorded. If git no longer has it, the acceptance is **refused**
+  with what to do (accept at a checkpoint whose attempt base is still there);
+  no `HEAD`, no fallback, no partial set.
+- `required = diffBetween(repository, base, state.commitObjectId)` — the exact
+  difference between what the attempt started from and the state being
+  accepted. An older checkpoint therefore carries the file *as it was at that
+  checkpoint*, and a path a later checkpoint reverted is simply not in this
+  set; a path the first checkpoint changed is.
+- Its `files` rows are the required set, with their own `status`
+  (`added`/`modified`/`deleted` — `--no-renames` means a rename is the delete
+  and the add, which is exactly the two bodies a review needs). No parallel
+  state machine is written beside `ChangedFileRow`.
+- Bound: `REQUIRED_PATHS_MAX = REPOSITORY_CAPTURE_SOURCES_MAX` (100). More
+  required files than that refuses the acceptance with what to do — never a
+  silent prefix.
+
+For a **parented** commit (a real commit, not an M20 checkpoint) the required
+set is its own `commit^ → commit` diff: the same helper, same rules.
+
+### 3 · What is captured for each required entry
+
+One shared selector used by `buildCapture` and `buildStateCapture`, so the
+parented branch cannot bypass completeness:
+
+| Required row | Body kept | Why |
+| --- | --- | --- |
+| `added` / `modified` | the **after** body, `fileAt(state.commitObjectId, path)` | the state being accepted is the after side |
+| `deleted` | the **before** body, `fileAt(base, path)`; the after side is recorded as absent, legitimately | a delete is reviewed by reading what was removed |
+
+`RepositoryCaptureSource` gains `side?: "before" | "after"` (absent = after) so
+a before-body can never be read back as the accepted state's content.
+
+Refusals, all before `storeCapture` and before the link transaction:
+
+1. a required body that is **binary** (host-side, from bytes — d534's strict
+   decoder is untouched);
+2. a required body that is **truncated** (a prefix is labelled `truncated` and
+   is honest, and honest is still not the whole source a decision rests on);
+3. a required body git cannot read at the side it is wanted on (a *modified*
+   path missing at the state, a *deleted* path missing at the base): the state
+   contradicts the diff, and that is refused rather than papered over;
+4. the required set alone exceeding `REPOSITORY_CAPTURE_BYTES_MAX` /
+   `…SOURCES_MAX` — the existing budget, never a larger one, never a second
+   store and never a repository backup.
+
+Required entries are looked up **directly by path**, so nothing about them
+depends on `treeManifest`'s cap. Non-required files fill what is left of the
+budget from the bounded listing, and the note says what the listing is:
+*"this listing covers the first N files of the tree"* — the capture never
+claims a full tree it did not read.
+
+### 4 · Zero change, and no authoritative attempt
+
+- **Zero-change checkpoint** (`required.files.length === 0`): the state is
+  byte-identical to what the attempt began from, so there is no change this
+  Task made for a person to have reviewed. The acceptance is **refused**, with
+  the next act named (work on the Task, then accept at a checkpoint that has a
+  change; or accept at the checkpoint that carries it). An empty required set
+  plus a digest-only marker is never written.
+- **Parentless state with no attempt identity**: acceptance refused with the
+  same actionable guidance. A plain `verified_at` write stays exactly as it is
+  today — bounded manifest, bounded sources, honest notes, no `required`
+  block, and therefore not Native.
+
+### 5 · The completeness proof, and what reads it back
+
+`RepositoryCapture` gains one host-written block:
+
+```ts
+required?: {
+  basis: "attempt_base_to_state" | "commit_parent_to_commit";
+  from: { baseCommitObjectId: string; executionLinkId?: string; taskEntityId?: string };
+  entries: Array<{ path; status; side: "before" | "after"; contentDigest; blobObjectId? }>;
+  complete: true;   // written only when every entry has a whole body in `sources`
+};
+```
+
+It is written by `captures.ts` from what git answered, canonicalised into the
+blob, and the blob is content-addressed — so it cannot be minted by a caller
+and cannot drift from the bytes it describes. Nothing in it comes from the
+request.
+
+`acceptedPreview()` (`verification/evaluate.ts`) gains a **sixth** stored fact
+beside the five it has, still reading only the store and never git: the
+capture parses as a capture of *this link's* state, and carries
+`required.complete === true` with every entry present in `sources` at the
+recorded digest and side. Consequences, stated rather than discovered:
+
+- an **older capture** (no `required` block) no longer satisfies a `visual`
+  criterion merely because its blob parses. The criterion reads `needs_person`
+  with the exact step — record the review again — which is the honest answer;
+- **nothing is erased or rewritten.** Links, acceptances, evidence and
+  completed Tasks stay exactly as they are (append-only); a re-recorded review
+  appends a new link beside the old one;
+- **no later git read** is introduced anywhere on this path, so a pruned and
+  gc'd checkpoint changes no answer.
+
+### 6 · Backfill and the other gates
+
+- `gate.keepEvidenceReviewable` derives the **same** required set for a link
+  that carries the attempt identity. `prepareVerifiedAt` therefore returns the
+  `executionLinkId` and the store writes it into the `verified_at`
+  `RepositoryLink.executionLinkId` — the field already on the schema and
+  already validated against `execution_links` — so a gate-time capture is
+  derived from recorded identity rather than re-guessed.
+- A historical acceptance link with no capture is backfilled exactly as today
+  (bounded capture, so the gate can still be reviewed) and **does not** gain a
+  `required` block: the gate passes, and the evaluator still does not call it
+  Native. A backfill never manufactures completeness it did not verify.
+- Delivery (`implemented_by`) uses the same selector and gains the same
+  before-bodies for deletes and the same required-first ordering, and records
+  `required` when the accepted change's whole diff fits. When it does not fit,
+  it keeps today's bounded capture with its honest note and no `required`
+  block — this plan does not add a new refusal to the delivery gate. **Flagged
+  explicitly**: if the parent wants delivery to refuse on a required-set
+  overflow too, that is a one-line rule change and a test, and I will do it
+  under this milestone on request.
+
+### 7 · What is touched
+
+| Package | Change |
+| --- | --- |
+| `protocol` | `verifiedAt.attempt` (+ schema, required with `acceptance`), `RepositoryCaptureSource.side`, `RepositoryCapture.required`, `REQUIRED_PATHS_MAX`; tests |
+| `host` | `project-work/captures.ts` (shared required selector, before-bodies, refusals, `required` block), `project-work/gate.ts` (identity join, base→state derivation, backfill), `project-work/store.ts` (write `executionLinkId` on the `verified_at` link), `verification/evaluate.ts` (sixth stored fact); `source-control/read.ts` only if a bounded read helper is genuinely missing |
+| `ui` | `native-acceptance.ts` (`executionLinkId` + `taskEntityId` on a row, unambiguous row identity per attempt, request shape), `NativeAcceptance.tsx` wiring only; no new copy beyond a refusal the host wrote |
+| `worker` | only if compilation requires it |
+
+Untouched on purpose: SDK/driver/prompt/steer/pending, design index/workspace,
+interop paths/publication/import, transcript/list/cache. No `PLAN.md` /
+`STATUS.md` edits from this owner.
+
+### 8 · Tests (real git repositories, owned fixtures, no external targets)
+
+Through the **host router/store path**, not helper-only, except where noted:
+
+1. the required set is the attempt **base → the chosen checkpoint**: an older
+   checkpoint is accepted while a *newer* checkpoint reverted one of its files,
+   and the capture holds that file as it was at the accepted checkpoint;
+2. a file changed by the **first** checkpoint (absent from `changedPaths`) is
+   in the required set and captured;
+3. a **Design-backed** `visual` criterion accepted on the Design, joined to the
+   **Task's** attempt; a Design the Task does not pin, and a stale pinned
+   revision, are refused;
+4. **multi-repository**: two records, two commits; the acceptance for one
+   repository captures that repository's change and nothing of the other;
+5. **delete and rename**: the before body is captured, the after side is
+   recorded absent, and neither is a refusal;
+6. a required path **beyond the manifest cap** is captured (tree larger than
+   `REPOSITORY_CAPTURE_FILES_MAX`);
+7. refusals — required path **binary**, **truncated**, absent on the side it is
+   wanted, required set **over budget**, required set over `REQUIRED_PATHS_MAX`,
+   attempt base gone, attempt/checkpoint tuple mismatched, `acceptance` with no
+   `attempt` — each asserted to leave the **blob count unchanged** and **no**
+   `verified_at` link, evidence record or acceptance written;
+8. **zero-change** checkpoint refuses the acceptance and its plain
+   `verified_at` counterpart still writes an honest bounded capture;
+9. **parented** commit parity: same selection, same refusals, `basis:
+   "commit_parent_to_commit"`;
+10. **durability end to end**: real repository → attempt recorded → verify →
+    record a review → Task `done` → delete the checkpoint refs → `git gc
+    --prune=now` → verify again finds the `visual` criterion satisfied from the
+    store alone;
+11. an acceptance whose capture predates this change (no `required` block) is
+    **not** Native, and the report says what to do;
+12. unit coverage of the UI model: a row carries its own attempt's
+    `executionLinkId`, and the request is refused rather than guessed when a
+    row cannot be tied to exactly one attempt.
+
+### 9 · Commands, after approval
+
+```
+env -i PATH="$PATH" HOME="$HOME" pnpm -F @lasercode/host exec vitest run test/project-work
+pnpm -F @lasercode/protocol test
+pnpm -F @lasercode/ui exec vitest run test/project-work/native-acceptance.test.tsx test/project-work/verification.test.tsx
+pnpm -r build && pnpm -r typecheck && pnpm identity:check
+```
+
+The full `pnpm verify` gate is the parent's; nothing here runs a concurrent
+monorepo gate, opens a browser or automates acceptance.
