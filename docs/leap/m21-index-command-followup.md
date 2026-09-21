@@ -325,3 +325,7 @@ source; `test/router.design.test.ts` passes.
 Visual acceptance is the person's (D-342): the Design tab with and without an
 eligible conversation, in both themes and both widths, and the index build's
 fleet row while it runs and after Stop. `pnpm -r build && pnpm sandbox`.
+
+## Interrupted continuation checkpoint (not complete)
+
+Run `run_f0dc9f86` ended without its completion tool after merging `d7213b26` as `c8baee11`. Parent inspected the stopped run and three modified files, then preserved them for transfer: host Router's canonical rekey hook; a TaskRegister migration implementation; build command abort/outcome changes. **No new tests, typecheck or validation were completed for these partial changes.** The workspace/result stopped-reason plumbing and strengthened fork test remain unfinished. Review the destination-versus-source terminal precedence against the approved newer-destination rule; do not treat the untested implementation as authoritative. Parent resumption attempt failed with the exact returned session id. Preserve this checkpoint and finish the approved end-to-end milestone before its narrow independent review.

@@ -1750,6 +1750,15 @@ export class Router {
             // nobody serves, and every later lifetime question about this worker
             // would disagree with it for ever.
             this.pool.rekeySession(path, moved, owner);
+            // The same move, for the host's memory of that session's commands.
+            // One authority decides a session moved — this validated state
+            // change, inside this lease — and every record keyed by the path
+            // follows it here. A register left behind would keep a *running*
+            // row under a path no runtime serves, and a client that re-listed
+            // the old session would be handed it back over the live one.
+            // Optional because a host may run without a register; a fork is
+            // not refused for it.
+            this.deps.tasks?.rekeySession(path, moved);
             if (state) this.noteUnwritten(state);
           }
           return { result: answer, cwd: owner, forked: moved };
