@@ -84,8 +84,12 @@ import {
   type ProjectWorkState,
   type GateReport,
   type PlanGraphReport,
+  repositoryLinkContextSchema,
+  type AttemptRepositoryRecord,
   type RepositoryChangeRef,
   type RepositoryLink,
+  type RepositoryLinkAvailability,
+  type RepositoryLinkContext,
   type RepositoryLinkRelation,
   type RepositoryStateRef,
   type TaskConflict,
@@ -282,7 +286,20 @@ export interface ProjectWorkGetParams {
   /** A historical revision. Omitted reads the entity's current pointer. */
   revisionId?: string;
   body?: { mode: ProjectWorkBodyMode; offset?: number; limit?: number };
-  include?: { comments?: boolean; approvals?: boolean; evidence?: boolean; links?: boolean; history?: boolean };
+  include?: {
+    comments?: boolean;
+    approvals?: boolean;
+    evidence?: boolean;
+    links?: boolean;
+    history?: boolean;
+    /**
+     * Ask git whether each repository link's objects are still there
+     * (M21-T18). Off by default because it spawns git per repository; on, the
+     * answer carries {@link RepositoryLinkAvailability} per link and the link
+     * itself still says exactly what it always said.
+     */
+    repositoryStatus?: boolean;
+  };
 }
 
 export interface ProjectWorkGetResult {
@@ -313,6 +330,13 @@ export interface ProjectWorkGetResult {
   conflicts?: TaskConflict[];
   /** Plans only: the state of the Plan's Task graph, including its orphans. */
   planGraph?: PlanGraphReport;
+  /**
+   * Whether each repository link's git objects are still reachable, when
+   * `include.repositoryStatus` asked (M21-T18). A missing object never
+   * resolves to `HEAD`: the link keeps its recorded identity and this row
+   * says what is gone and whether the canonical capture still answers.
+   */
+  repositoryStatus?: RepositoryLinkAvailability[];
   /**
    * The three hard gates of the Spec this entity belongs to, and where each
    * one stands (M21-T8).
@@ -382,6 +406,15 @@ export interface ProjectWorkWriteResult {
    * listing. A graph that could not be accepted is a refusal, not a result.
    */
   planGraph?: PlanGraphReport;
+  /**
+   * The code state this revision was derived from (M21-T18).
+   *
+   * Written when the revision was created or revised from a session that has a
+   * checkout: one `based_on` link per repository in that checkout, naming the
+   * exact commit it was at. It records provenance and approves nothing;
+   * ordinary `HEAD` movement afterwards makes nothing stale.
+   */
+  basedOn?: RepositoryLink[];
 }
 
 export interface ProjectWorkReviseParams {
@@ -537,6 +570,39 @@ export type ProjectWorkLinkInput =
       publishedPath?: string;
       supersedesLinkId?: string;
       captureBlobId?: string;
+      display?: RepositoryLinkContext;
+    }
+  | {
+      /**
+       * Accept an exact repository change as the delivery of this work
+       * (M21-T18, leap "Execution and convergence").
+       *
+       * This is the **only** way an `implemented_by` link is created. It is an
+       * explicit act by a person, it names the exact change (base + head +
+       * diff digest), and before it is accepted the host stores the bounded
+       * canonical capture so the evidence stays reviewable after the
+       * checkpoint it came from is pruned. A repository link sent with
+       * `relation: "implemented_by"` is refused and pointed here.
+       */
+      type: "delivery";
+      /** The Task (or artifact) the delivery is accepted on. */
+      entityId: string;
+      revisionId: string;
+      /** The attempt it came out of, when it came out of one. */
+      executionLinkId?: string;
+      repositoryId: string;
+      change: RepositoryChangeRef;
+      /**
+       * The approved input revisions this change also implements. Each one
+       * gains its own `implemented_by` link to the same change, which is what
+       * makes the relation many-to-many.
+       */
+      covers?: Array<{ entityId: string; revisionId: string }>;
+      /** Branch, remote and pull request. Display context, never identity. */
+      display?: RepositoryLinkContext;
+      supersedesLinkId?: string;
+      /** Accepting delivery is explicit. Without it nothing is written. */
+      confirm: true;
     }
   | {
       type: "evidence";
@@ -549,6 +615,16 @@ export type ProjectWorkLinkInput =
       blobId?: string;
       outcome: "passed" | "failed" | "inconclusive";
       repositoryLinkId?: string;
+      /**
+       * The exact repository state this verification ran against (M21-T18).
+       *
+       * Supplying it writes the `verified_at` link and joins this evidence
+       * record to it in the same write, which is the only way the two can be
+       * guaranteed to agree: a verification that names no state is evidence
+       * about nothing in particular, and a `verified_at` link with no evidence
+       * behind it is a claim.
+       */
+      verifiedAt?: { repositoryId: string; state: RepositoryStateRef };
     }
   | {
       type: "decision";
@@ -564,7 +640,14 @@ export type ProjectWorkLinkRecord =
   | { type: "edge"; edge: ProjectWorkEdge }
   | { type: "repository"; repository: RepositoryLink }
   | { type: "evidence"; evidence: ProjectWorkEvidence }
-  | { type: "decision"; decision: ProjectWorkDecision };
+  | { type: "decision"; decision: ProjectWorkDecision }
+  | {
+      type: "delivery";
+      /** One `implemented_by` link per accepted subject revision. */
+      links: RepositoryLink[];
+      /** The canonical capture stored before the acceptance was written. */
+      capture?: { blobId: string; bytes: number; files: number; sources: number; truncated?: string };
+    };
 
 export interface ProjectWorkLinkParams {
   projectId: string;
@@ -638,6 +721,16 @@ export interface ProjectTaskLinkExecutionParams {
     startedAt?: string;
     endedAt?: string;
     outcome?: "completed" | "blocked" | "cancelled" | "failed";
+    /**
+     * The session file this attempt runs in (M21-T18).
+     *
+     * The host derives the checkpoint ref namespace from it and stores the
+     * derived key; the path itself is never echoed back, to a model or to a
+     * client. Absent, the attempt still records its checkpoints — every
+     * checkpoint in its own repositories inside its own time window — and
+     * says which session each ref belongs to.
+     */
+    sessionPath?: string;
   };
   idempotencyKey: string;
   origin?: ProjectWorkOrigin;
@@ -656,6 +749,12 @@ export interface ProjectTaskLinkExecutionResult {
   attemptEvidence?: ProjectWorkEvidence;
   /** The active Tasks this attempt would be writing over, before it writes. */
   conflicts?: TaskConflict[];
+  /**
+   * What each repository did during this attempt, read from git at record
+   * time (M21-T18). Also on `link.repositories`; repeated here so a caller
+   * that only wants the facts does not have to reach into the link.
+   */
+  attemptRepositories?: AttemptRepositoryRecord[];
 }
 
 // ---------------------------------------------------------------------------
@@ -759,6 +858,24 @@ const linkInputSchema = z.discriminatedUnion("type", [
       publishedPath: z.string().min(1).max(1024).optional(),
       supersedesLinkId: projectWorkIdSchema.optional(),
       captureBlobId: projectWorkIdSchema.optional(),
+      display: repositoryLinkContextSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("delivery"),
+      entityId: projectWorkIdSchema,
+      revisionId: projectWorkRevisionIdSchema,
+      executionLinkId: projectWorkIdSchema.optional(),
+      repositoryId: projectWorkIdSchema,
+      change: repositoryChangeRefSchema,
+      covers: z
+        .array(z.object({ entityId: projectWorkIdSchema, revisionId: projectWorkRevisionIdSchema }).strict())
+        .max(64)
+        .optional(),
+      display: repositoryLinkContextSchema.optional(),
+      supersedesLinkId: projectWorkIdSchema.optional(),
+      confirm: z.literal(true),
     })
     .strict(),
   z
@@ -773,6 +890,7 @@ const linkInputSchema = z.discriminatedUnion("type", [
       blobId: projectWorkIdSchema.optional(),
       outcome: z.enum(["passed", "failed", "inconclusive"]),
       repositoryLinkId: projectWorkIdSchema.optional(),
+      verifiedAt: z.object({ repositoryId: projectWorkIdSchema, state: repositoryStateRefSchema }).strict().optional(),
     })
     .strict(),
   z
@@ -834,6 +952,7 @@ export const projectWorkParamsSchemas = {
           evidence: z.boolean().optional(),
           links: z.boolean().optional(),
           history: z.boolean().optional(),
+          repositoryStatus: z.boolean().optional(),
         })
         .strict()
         .optional(),
@@ -1013,6 +1132,7 @@ export const projectWorkParamsSchemas = {
           startedAt: z.string().min(1).max(64).optional(),
           endedAt: z.string().min(1).max(64).optional(),
           outcome: z.enum(["completed", "blocked", "cancelled", "failed"]).optional(),
+          sessionPath: z.string().min(1).max(4096).optional(),
         })
         .strict(),
       idempotencyKey,
@@ -1213,6 +1333,18 @@ export const taskConflictSchema = z
       .strict(),
     observed: z.boolean(),
     accepted: z.boolean(),
+  })
+  .strict();
+
+/** What git still has for one repository link, asked for on a read (M21-T18). */
+export const repositoryLinkAvailabilitySchema = z
+  .object({
+    linkId: projectWorkIdSchema,
+    sourceAvailable: z.boolean(),
+    missing: z.array(z.string().regex(/^[0-9a-f]{7,64}$/, "a git object id")).max(8),
+    captureAvailable: z.boolean(),
+    captureBlobId: projectWorkIdSchema.optional(),
+    detail: z.string().min(1).max(PROJECT_WORK_TEXT_MAX).optional(),
   })
   .strict();
 

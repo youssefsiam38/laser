@@ -605,7 +605,7 @@ describe("policy, reach and authorization", () => {
       },
     ];
     // The worker bridge, acting for an agent: refused, whatever it claims.
-    expect(() =>
+    await expect(
       h.methods.handle(
         {
           method: "project/work/approve",
@@ -623,7 +623,7 @@ describe("policy, reach and authorization", () => {
         },
         { actor: { class: "local_app", id: "l1.app" }, source: "worker", agent: { label: "Builder", sessionId: "ses_1" } },
       ),
-    ).toThrow(/Only a person approves/);
+    ).rejects.toThrow(/Only a person approves/);
     // And the same request from a client connection is allowed.
     const approved = ok<{ entity: ProjectWorkEntity; approval: { origin: { actor: { kind: string } } } }>(
       await h.call("project/work/approve", {
@@ -642,13 +642,13 @@ describe("policy, reach and authorization", () => {
 
   it("records an agent's revision as an agent's, with its session as provenance", async () => {
     h = projectWorkHarness();
-    const written = h.methods.handle(
+    const written = (await h.methods.handle(
       {
         method: "project/work/create",
         params: { projectId: h.projectId, kind: "task", title: "From a tool", body: taskBody(), idempotencyKey: "w1" },
       },
       { actor: { class: "local_app", id: "l1.app" }, source: "worker", agent: { label: "Builder", sessionId: "ses_9" } },
-    ) as ProjectWorkWriteResult;
+    )) as ProjectWorkWriteResult;
     expect(written.revision.origin).toEqual({ actor: { kind: "agent", label: "Builder" }, sessionId: "ses_9" });
   });
 });

@@ -26,7 +26,7 @@ import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { ProjectWorkUnavailableError } from "./errors.js";
 
 /** The shape of the tables this file owns. Bump with a migration step. */
-export const PROJECT_WORK_SCHEMA_VERSION = 1;
+export const PROJECT_WORK_SCHEMA_VERSION = 2;
 
 export interface ProjectWorkDatabase {
   exec(sql: string): void;
@@ -128,6 +128,21 @@ export function migrate(db: ProjectWorkDatabase, file: string, log: (message: st
 }
 
 function step(db: ProjectWorkDatabase, from: number): void {
+  if (from === 1) {
+    // M21-T18. What an attempt did in each repository, read from git at record
+    // time, and the session whose checkpoint refs it was read from; plus the
+    // display context (branch, remote, pull request) a repository link is read
+    // *by* and never identified by. Columns rather than tables: every one of
+    // them belongs to exactly one row of the link it hangs off, and a JSON
+    // column keeps the bounded record together with the link it describes.
+    db.exec(`
+      ALTER TABLE execution_links ADD COLUMN repositories_json TEXT;
+      ALTER TABLE execution_links ADD COLUMN checkpoint_key TEXT;
+      ALTER TABLE repository_links ADD COLUMN display_json TEXT;
+      ALTER TABLE repository_links ADD COLUMN execution_link_id TEXT;
+    `);
+    return;
+  }
   if (from === 0) {
     db.exec(`
       -- Identity. A project is an id; the paths it has lived at are rows that

@@ -234,7 +234,7 @@ async function approve(write: WriteResult): Promise<void> {
 }
 
 /** The same authority, entered as the worker bridge does: an agent. */
-function asAgent(request: ProjectWorkRequest): unknown {
+async function asAgent(request: ProjectWorkRequest): Promise<unknown> {
   return h.methods.handle(request, {
     actor: { class: "local_app", id: "l1.app" },
     source: "worker",
@@ -557,10 +557,10 @@ describe("what done requires, and what a run ending is", () => {
         },
       }) as ProjectWorkRequest;
 
-    expect(() => asAgent(action("submit_for_review"))).toThrow(/Report the evidence for this task before sending it for review/);
+    await expect(asAgent(action("submit_for_review"))).rejects.toThrow(/Report the evidence for this task before sending it for review/);
     await acceptanceEvidence(started.entity);
-    expect(asAgent(action("submit_for_review"))).toMatchObject({ transition: { from: "in_progress", to: "needs_review" } });
-    expect(() => asAgent(action("complete"))).toThrow(/An agent reports evidence; a person completes the task/);
+    await expect(asAgent(action("submit_for_review"))).resolves.toMatchObject({ transition: { from: "in_progress", to: "needs_review" } });
+    await expect(asAgent(action("complete"))).rejects.toThrow(/An agent reports evidence; a person completes the task/);
     expect((await detail(task.entity.entityId)).entity.state).toBe("needs_review");
   });
 });
@@ -637,7 +637,7 @@ describe("two tasks writing in the same place", () => {
     await act(first.entity, "mark_ready");
     await act(second.entity, "mark_ready");
 
-    const agentTried = (): unknown =>
+    const agentTried = ((): Promise<unknown> =>
       asAgent({
         method: "project/work/revise",
         params: {
@@ -647,8 +647,8 @@ describe("two tasks writing in the same place", () => {
           body: taskBodyWith({ paths: ["packages/ui"], sharedWith: [first.entity.key] }),
           idempotencyKey: idem(),
         },
-      } as ProjectWorkRequest);
-    expect(agentTried).toThrow(/Only you can accept the risk of two tasks writing the same files/);
+      } as ProjectWorkRequest))();
+    await expect(agentTried).rejects.toThrow(/Only you can accept the risk of two tasks writing the same files/);
 
     const accepted = await revise(second.entity, taskBodyWith({ paths: ["packages/ui"], sharedWith: [first.entity.key] }));
     expect(accepted.entity.state).toBe("ready");

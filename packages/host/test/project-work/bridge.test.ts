@@ -36,13 +36,13 @@ afterEach(() => {
 const ACTOR = { class: "local_app" as const, id: "worker:alpha" };
 const AGENT = { label: "Builder", sessionId: "ses_1", runId: "run_1" };
 
-function bridge(harness: ProjectWorkHarness, request: ProjectWorkBridgeParams["request"], extras: Partial<ProjectWorkBridgeParams> = {}, cwd?: string): ProjectWorkBridgeResult {
+async function bridge(harness: ProjectWorkHarness, request: ProjectWorkBridgeParams["request"], extras: Partial<ProjectWorkBridgeParams> = {}, cwd?: string): Promise<ProjectWorkBridgeResult> {
   return harness.methods.handleBridge({ agent: AGENT, request, ...extras }, { actor: ACTOR, cwd: cwd ?? harness.projectRoot });
 }
 
-function refusal(run: () => unknown): ProtocolError {
+async function refusal(run: () => unknown): Promise<ProtocolError> {
   try {
-    run();
+    await run();
   } catch (error) {
     expect(error, "a refusal is a protocol error").toBeInstanceOf(ProtocolError);
     return error as ProtocolError;
@@ -63,10 +63,10 @@ function researchBody(): ResearchBody {
 }
 
 describe("the worker bridge", () => {
-  it("resolves the project from the worker's own directory and records an agent, not a person", () => {
+  it("resolves the project from the worker's own directory and records an agent, not a person", async () => {
     h = projectWorkHarness();
     mkdirSync(h.projectRoot, { recursive: true });
-    const answer = bridge(h, {
+    const answer = await bridge(h, {
       method: "project/work/create",
       params: { projectId: h.projectId, kind: "spec", title: "Phone review", body: specBody(), idempotencyKey: "c1" },
     });
@@ -77,27 +77,27 @@ describe("the worker bridge", () => {
     expect(created.revision.origin.sessionId).toBe("ses_1");
   });
 
-  it("answers a list that names no project at all, because the host knows which one it is", () => {
+  it("answers a list that names no project at all, because the host knows which one it is", async () => {
     h = projectWorkHarness();
     mkdirSync(h.projectRoot, { recursive: true });
-    const answer = bridge(h, { method: "project/work/list", params: { cwd: h.projectRoot, limit: 1 } });
+    const answer = await bridge(h, { method: "project/work/list", params: { cwd: h.projectRoot, limit: 1 } });
     expect((answer.result as { projectId: string }).projectId).toBe(h.projectId);
   });
 
-  it("resolves a worktree to the project it belongs to", () => {
+  it("resolves a worktree to the project it belongs to", async () => {
     h = projectWorkHarness();
     const worktree = join(h.projectRoot, ".worktrees", "feature");
     mkdirSync(worktree, { recursive: true });
-    const answer = bridge(h, { method: "project/work/list", params: { cwd: worktree, limit: 1 } }, {}, worktree);
+    const answer = await bridge(h, { method: "project/work/list", params: { cwd: worktree, limit: 1 } }, {}, worktree);
     expect(answer.projectId, "a worktree sees its parent project's work").toBe(h.projectId);
   });
 
-  it("refuses a write aimed at another project by naming the owner and offering a session there", () => {
+  it("refuses a write aimed at another project by naming the owner and offering a session there", async () => {
     h = projectWorkHarness();
     mkdirSync(h.projectRoot, { recursive: true });
     const otherRoot = join(h.dir, "beta");
     const otherId = h.store.projectIdFor(otherRoot)!;
-    const error = refusal(() =>
+    const error = await refusal(() =>
       bridge(h, {
         method: "project/work/create",
         params: { projectId: otherId, kind: "spec", title: "Elsewhere", body: specBody(), idempotencyKey: "x1" },
@@ -110,7 +110,7 @@ describe("the worker bridge", () => {
     expect(data).toMatchObject({ refused: "wrong_project", owningProjectId: otherId, owningProjectName: "beta", offer: "open_session" });
   });
 
-  it("lets a read of another project through, which is what a cross-project mention is", () => {
+  it("lets a read of another project through, which is what a cross-project mention is", async () => {
     h = projectWorkHarness();
     const otherRoot = join(h.dir, "beta");
     const otherId = h.store.projectIdFor(otherRoot)!;
@@ -122,16 +122,16 @@ describe("the worker bridge", () => {
       origin: { actor: { kind: "person", label: "You" } },
       idempotencyKey: "b1",
     });
-    const answer = bridge(h, {
+    const answer = await bridge(h, {
       method: "project/work/get",
       params: { projectId: otherId, entityId: created.entity.entityId, body: { mode: "none" } },
     });
     expect((answer.result as ProjectWorkGetResult).entity.title).toBe("Theirs");
   });
 
-  it("refuses every mutation in a folder a person declined", () => {
+  it("refuses every mutation in a folder a person declined", async () => {
     h = projectWorkHarness({ trustOf: () => "declined" });
-    const error = refusal(() =>
+    const error = await refusal(() =>
       bridge(h, {
         method: "project/work/create",
         params: { projectId: h.projectId, kind: "spec", title: "Phone review", body: specBody(), idempotencyKey: "c1" },
@@ -140,13 +140,13 @@ describe("the worker bridge", () => {
     expect(error.code).toBe(ErrorCodes.ProjectUntrusted);
   });
 
-  it("refuses a stale write with the conflict a tool turns into its next call", () => {
+  it("refuses a stale write with the conflict a tool turns into its next call", async () => {
     h = projectWorkHarness();
-    const created = bridge(h, {
+    const created = (await bridge(h, {
       method: "project/work/create",
       params: { projectId: h.projectId, kind: "spec", title: "Phone review", body: specBody(), idempotencyKey: "c1" },
-    }).result as ProjectWorkWriteResult;
-    const error = refusal(() =>
+    })).result as ProjectWorkWriteResult;
+    const error = await refusal(() =>
       bridge(h, {
         method: "project/work/revise",
         params: {
@@ -161,9 +161,9 @@ describe("the worker bridge", () => {
     expect(error.code).toBe(PROJECT_WORK_CONFLICT_CODE);
   });
 
-  it("refuses an unknown method on the bridge rather than half-understanding it", () => {
+  it("refuses an unknown method on the bridge rather than half-understanding it", async () => {
     h = projectWorkHarness();
-    const error = refusal(() => h.methods.handleBridge({ agent: AGENT, request: { method: "project/work/nope", params: {} } }, { actor: ACTOR, cwd: h.projectRoot }));
+    const error = await refusal(() => h.methods.handleBridge({ agent: AGENT, request: { method: "project/work/nope", params: {} } }, { actor: ACTOR, cwd: h.projectRoot }));
     expect(error.code).toBe(ErrorCodes.InvalidParams);
   });
 });
@@ -180,7 +180,7 @@ describe("a research write, applied by the rule", () => {
     });
   }
 
-  it("stores what the applier returned, not the body the caller sent", () => {
+  it("stores what the applier returned, not the body the caller sent", async () => {
     h = projectWorkHarness();
     const research = seedResearch(h);
     const operation: ResearchOperation = {
@@ -191,7 +191,7 @@ describe("a research write, applied by the rule", () => {
       source: { kind: "web", id: "https://example.org/a", title: "A", fetchedVia: "web", trust: "unknown" },
       licence: "permissive",
     };
-    const answer = bridge(
+    const answer = await bridge(
       h,
       {
         method: "project/work/revise",
@@ -216,10 +216,10 @@ describe("a research write, applied by the rule", () => {
     expect(stored.research.findings[0]?.claim).toBe("pdf-text is MIT licensed.");
   });
 
-  it("refuses a confidence the rule cannot justify, and writes nothing", () => {
+  it("refuses a confidence the rule cannot justify, and writes nothing", async () => {
     h = projectWorkHarness();
     const research = seedResearch(h);
-    const error = refusal(() =>
+    const error = await refusal(() =>
       bridge(
         h,
         {
@@ -252,10 +252,10 @@ describe("a research write, applied by the rule", () => {
     expect(read.entity.currentRevisionId, "a refused write leaves the revision where it was").toBe(research.revision.revisionId);
   });
 
-  it("raises the attention item a question handed to a person needs", () => {
+  it("raises the attention item a question handed to a person needs", async () => {
     h = projectWorkHarness();
     const research = seedResearch(h);
-    const answer = bridge(
+    const answer = await bridge(
       h,
       {
         method: "project/work/revise",
@@ -279,10 +279,10 @@ describe("a research write, applied by the rule", () => {
     expect(answer.researchResult?.attention).toMatchObject({ kind: "handed_to_person", questionId: "q1" });
   });
 
-  it("refuses a research operation sent with anything but a revise", () => {
+  it("refuses a research operation sent with anything but a revise", async () => {
     h = projectWorkHarness();
     const research = seedResearch(h);
-    const error = refusal(() =>
+    const error = await refusal(() =>
       bridge(
         h,
         { method: "project/work/get", params: { projectId: h.projectId, entityId: research.entity.entityId } },
@@ -312,11 +312,11 @@ describe("an implementation attempt", () => {
     });
   }
 
-  it("records the session, the workspace shape, the checkout and the base commit", () => {
+  it("records the session, the workspace shape, the checkout and the base commit", async () => {
     h = projectWorkHarness();
     const task = seedTask(h);
     const checkout = join(h.projectRoot, ".worktrees", "feature");
-    const answer = bridge(
+    const answer = await bridge(
       h,
       {
         method: "project/task/link-execution",
@@ -340,13 +340,13 @@ describe("an implementation attempt", () => {
     expect(shape?.detail, "the checkout is stored, and never returned to a model").toBe(checkout);
   });
 
-  it("keeps the attempt, with its identity, after the session it ran in is gone", () => {
+  it("keeps the attempt, with its identity, after the session it ran in is gone", async () => {
     h = projectWorkHarness();
     const task = seedTask(h);
     const sessionFile = join(h.dir, "sessions", "ses_gone.jsonl");
     mkdirSync(join(h.dir, "sessions"), { recursive: true });
     writeFileSync(sessionFile, "{}\n");
-    bridge(
+    await bridge(
       h,
       {
         method: "project/task/link-execution",
@@ -367,10 +367,10 @@ describe("an implementation attempt", () => {
     expect(read.executionLinks[0]).toMatchObject({ kind: "session", targetId: "ses_gone", attempt: 1 });
   });
 
-  it("records evidence when an attempt ends, and never moves the task", () => {
+  it("records evidence when an attempt ends, and never moves the task", async () => {
     h = projectWorkHarness();
     const task = seedTask(h);
-    bridge(h, {
+    await bridge(h, {
       method: "project/task/link-execution",
       params: {
         projectId: h.projectId,
@@ -380,7 +380,7 @@ describe("an implementation attempt", () => {
         idempotencyKey: "x3",
       },
     });
-    const ended = bridge(h, {
+    const ended = (await bridge(h, {
       method: "project/task/link-execution",
       params: {
         projectId: h.projectId,
@@ -389,7 +389,7 @@ describe("an implementation attempt", () => {
         execution: { kind: "agent_run", targetId: "run_2", attempt: 1, endedAt: new Date().toISOString(), outcome: "completed" },
         idempotencyKey: "x4",
       },
-    }).result as ProjectTaskLinkExecutionResult;
+    })).result as ProjectTaskLinkExecutionResult;
     expect(ended.entity.state, "a run ending is evidence, never a state change").toBe(task.entity.state);
   });
 });

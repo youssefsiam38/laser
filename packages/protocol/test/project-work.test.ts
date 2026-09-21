@@ -6,9 +6,11 @@
  */
 import { describe, expect, it } from "vitest";
 import { PROJECT_DIR_NAME } from "../src/identity.js";
+import { CHECKPOINT_REF_NAMESPACE } from "../src/source-control.js";
 import {
   PROJECT_WORK_KINDS,
   PROJECT_WORK_KEY_PREFIXES,
+  attemptRepositoryRecordSchema,
   executionLinkSchema,
   parseProjectWorkKey,
   planDependencyCycle,
@@ -206,6 +208,21 @@ describe("repository provenance (D-345)", () => {
     expect(parsed.sourceUnavailable).toBe(true);
     expect("state" in parsed.target && parsed.target.state.commitObjectId).toBe("1".repeat(40));
   });
+
+  it("keeps the pull request as display context, never as identity (M21-T18)", () => {
+    const parsed = repositoryLinkSchema.parse({
+      ...base,
+      relation: "implemented_by",
+      target: { change },
+      display: { branch: "main", remote: "origin", pullRequest: { number: 7, host: "github", url: "https://example.invalid/pull/7" } },
+    });
+    expect("change" in parsed.target && parsed.target.change.head.commitObjectId).toBe("2".repeat(40));
+    expect(parsed.display?.pullRequest?.number).toBe(7);
+    // A remote is named, never addressed: no URL travels as identity.
+    expect(repositoryLinkSchema.safeParse({ ...base, relation: "based_on", target: { state }, display: { remoteUrl: "git@x:y.git" } }).success).toBe(
+      false,
+    );
+  });
 });
 
 describe("execution links never transfer ownership", () => {
@@ -224,6 +241,43 @@ describe("execution links never transfer ownership", () => {
     expect(executionLinkSchema.safeParse({ ...link, targetUnavailable: true }).success).toBe(true);
     // No path, ever: a link that named a checkout would leak storage layout.
     expect(executionLinkSchema.safeParse({ ...link, sessionPath: "/tmp/a.jsonl" }).success).toBe(false);
+  });
+
+  it("carries one record per repository, with checkpoints resolved to object ids (M21-T18)", () => {
+    const record = {
+      repositoryId: "repo_1",
+      name: "app",
+      base: { vcs: "git" as const, objectFormat: "sha1" as const, commitObjectId: "1".repeat(40) },
+      sinceTurn: 2,
+      checkpoints: [
+        { turn: 3, ref: `${CHECKPOINT_REF_NAMESPACE}/abc/3`, commitObjectId: "3".repeat(40) },
+        { turn: 4, ref: `${CHECKPOINT_REF_NAMESPACE}/abc/4`, commitObjectId: "4".repeat(40) },
+      ],
+      change: {
+        base: { vcs: "git" as const, objectFormat: "sha1" as const, commitObjectId: "3".repeat(40) },
+        head: { vcs: "git" as const, objectFormat: "sha1" as const, commitObjectId: "4".repeat(40) },
+        diffDigest: "d".repeat(64),
+      },
+      changedPaths: ["src/a.ts"],
+      commits: ["5".repeat(40)],
+    };
+    expect(attemptRepositoryRecordSchema.safeParse(record).success).toBe(true);
+    // A changed path is repository-relative, like every other path here.
+    expect(attemptRepositoryRecordSchema.safeParse({ ...record, checkout: "/home/someone/app" }).success).toBe(false);
+
+    const link = {
+      projectId: SAMPLE_PROJECT_ID,
+      linkId: "lnk_3",
+      entityId: SAMPLE_ENTITY_ID,
+      kind: "agent_run" as const,
+      targetId: "run_1",
+      attempt: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      createdBy: { kind: "person" as const, label: "You" },
+      repositories: [record, { ...record, repositoryId: "repo_2", name: "lib", changedPaths: [], commits: [] }],
+    };
+    const parsed = executionLinkSchema.parse(link);
+    expect(parsed.repositories?.map((row) => row.repositoryId)).toEqual(["repo_1", "repo_2"]);
   });
 });
 

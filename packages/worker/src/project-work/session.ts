@@ -54,7 +54,7 @@ import {
 } from "../research/tools.js";
 import { buildContextPacket } from "./context-packet.js";
 import { buildDesignHandoff, designImplementRef } from "./design-handoff.js";
-import type { ProjectWorkBridge } from "./bridge.js";
+import { attemptEnvelope, type ProjectWorkBridge } from "./bridge.js";
 import {
   INSPECT_PROJECT_WORK_SPEC,
   PROJECT_WORK_TOOL_RECOVERY,
@@ -279,7 +279,7 @@ export class ProjectWorkSession implements ExtensionProjectWorkBridge {
           },
           idempotencyKey: `attempt-${targetId}-${current.revision.revisionId}`,
         },
-        { attempt: { workspace: shape.workspace, checkout: shape.checkout } },
+        { attempt: attemptEnvelope(shape) },
       );
     } catch {
       // Reported by nothing: the model is told what the Task is either way,

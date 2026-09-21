@@ -200,6 +200,36 @@ describe("notifications", () => {
     ).toBe(false);
   });
 
+  it("takes a delivery only as an explicit acceptance of an exact change (M21-T18)", () => {
+    const schema = projectWorkParamsSchemas["project/work/link"];
+    const state = { vcs: "git" as const, objectFormat: "sha1" as const, commitObjectId: "1".repeat(40) };
+    const delivery = {
+      type: "delivery" as const,
+      entityId: SAMPLE_ENTITY_ID,
+      revisionId: SAMPLE_REVISION_ID,
+      repositoryId: "repo_1",
+      change: { base: state, head: { ...state, commitObjectId: "2".repeat(40) }, diffDigest: "d".repeat(64) },
+      covers: [{ entityId: "wk_other", revisionId: "rev_other" }],
+      display: { branch: "main", pullRequest: { number: 7, host: "github" } },
+      confirm: true as const,
+    };
+    const base = { projectId: SAMPLE_PROJECT_ID, expectedRevisionId: SAMPLE_REVISION_ID, idempotencyKey: "accept-1" };
+    expect(schema.safeParse({ ...base, link: delivery }).success).toBe(true);
+    // Accepting delivery is explicit: no confirmation, no acceptance.
+    const { confirm: _dropped, ...unconfirmed } = delivery;
+    expect(schema.safeParse({ ...base, link: unconfirmed }).success).toBe(false);
+    // And it names a change, never a bare state.
+    const { change: _change, ...stateOnly } = delivery;
+    expect(schema.safeParse({ ...base, link: { ...stateOnly, target: { state } } }).success).toBe(false);
+  });
+
+  it("lets a read ask git what it still has, and defaults to not asking", () => {
+    const schema = projectWorkParamsSchemas["project/work/get"];
+    const base = { projectId: SAMPLE_PROJECT_ID, entityId: SAMPLE_ENTITY_ID };
+    expect(schema.parse({ ...base, include: { links: true, repositoryStatus: true } }).include?.repositoryStatus).toBe(true);
+    expect(schema.parse(base).include?.repositoryStatus).toBeUndefined();
+  });
+
   it("keeps the attention count exact even when the item list is cut", () => {
     const attention = projectWorkAttentionSchema.parse({
       projectId: SAMPLE_PROJECT_ID,

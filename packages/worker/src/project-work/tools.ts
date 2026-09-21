@@ -39,6 +39,7 @@ import {
   PROJECT_WORK_TEXT_MAX,
   isRecord,
   projectWorkBodySchema,
+  type AttemptRepositoryRecord,
   type LaserToolSpec,
   type ProjectTaskAction,
   type ProjectWorkBody,
@@ -49,7 +50,7 @@ import {
   type ProjectWorkListResult,
   type ProjectWorkSearchResults,
 } from "@lasercode/protocol";
-import { projectWorkFailure, refuseProjectWork, type ProjectWorkBridge } from "./bridge.js";
+import { attemptEnvelope, projectWorkFailure, refuseProjectWork, type ProjectWorkBridge } from "./bridge.js";
 
 /** The most of a body one call may read. Bigger pages come by asking again. */
 export const PROJECT_WORK_TOOL_BODY_PAGE = 8_192;
@@ -256,6 +257,7 @@ export const REPORT_PROJECT_TASK_SPEC: LaserToolSpec = {
     "action start, submit_for_review, block, request_changes, reopen, mark_ready, cancel and return_to_draft move the task; the host refuses a move the task's dependencies or upstream do not allow and says why. " +
     "action record_evidence stores one piece of evidence — a test run, a diff, a command's output — with its outcome. " +
     "action link_execution records this session as an attempt on the task and is what a run does before it starts working; passing outcome ends the attempt and records evidence only. " +
+    "The files an attempt changed are read from this session's own checkpoints and from git, never from what you report, so report what you proved rather than which files you touched. " +
     "A task is never marked done by a report alone: action complete needs acceptance evidence that passed, in this call or already recorded. Every call needs the expected_revision_id you read and an idempotency_key you choose.",
   input: {
     type: "object",
@@ -289,6 +291,11 @@ export const REPORT_PROJECT_TASK_SPEC: LaserToolSpec = {
       evidence_id: { type: "string", description: "The evidence record this call wrote." },
       attempt: { type: "integer", description: "Which attempt this session is on the task." },
       execution_link_id: { type: "string", description: "The attempt's link id." },
+      repositories: {
+        type: "array",
+        description: "What each repository recorded for this attempt, from its checkpoints: how many files changed and how many checkpoints it has.",
+        items: { type: "object", description: "One repository's record of this attempt." },
+      },
       conflicts: { type: "array", description: "Active tasks writing where this one does.", items: { type: "object", description: "One conflict." } },
       note: { type: "string", description: "What happens next, in one sentence." },
     },
@@ -948,19 +955,43 @@ async function linkExecution(
       },
       idempotencyKey: input.idempotency_key,
     },
-    { attempt: { workspace: shape.workspace, checkout: shape.checkout } },
+    { attempt: attemptEnvelope(shape) },
   );
+  const repositories = result.attemptRepositories ?? result.link.repositories ?? [];
   return {
     key: result.entity.key,
     entity_id: result.entity.entityId,
     state: result.entity.state,
     attempt: result.link.attempt,
     execution_link_id: result.link.linkId,
+    ...(repositories.length > 0 ? { repositories: repositories.map(attemptRepositoryRow) } : {}),
     ...(result.conflicts && result.conflicts.length > 0 ? { conflicts: result.conflicts } : {}),
     ...(result.attemptEvidence ? { evidence_id: result.attemptEvidence.evidenceId } : {}),
     note: input.outcome
       ? "The attempt is closed and its evidence recorded. Ending a run never marks the task done."
       : `Attempt ${String(result.link.attempt)} is linked to ${result.entity.key}. Start the work.`,
+  };
+}
+
+/**
+ * One repository's record of an attempt, as a model reads it.
+ *
+ * Counts and object ids, and the repository's own name — never a checkout
+ * path, and never the full list of changed files, which is a page of the
+ * workspace rather than something a tool answer carries. It is here so a model
+ * can *see* what was observed about its own work: the files come from the
+ * checkpoints, so a report that contradicts them is visibly wrong.
+ */
+function attemptRepositoryRow(record: AttemptRepositoryRecord): Record<string, unknown> {
+  return {
+    repository: record.name,
+    repository_id: record.repositoryId,
+    base_commit: record.base.commitObjectId,
+    checkpoints: record.checkpoints.length,
+    changed_files: record.changedPaths.length,
+    ...(record.change ? { head_commit: record.change.head.commitObjectId, diff_digest: record.change.diffDigest } : {}),
+    ...(record.commits.length > 0 ? { commits: record.commits.length } : {}),
+    ...(record.unavailable ? { unavailable: true } : {}),
   };
 }
 

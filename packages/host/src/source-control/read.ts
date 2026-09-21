@@ -1,0 +1,347 @@
+/**
+ * Read-only git for the host (M21-T18).
+ *
+ * The worker owns writing checkpoints and running git actions; the host owns
+ * the project-work record, and a record of what happened in a repository has
+ * to be read from the repository. This module is the whole of what the host
+ * reads: repositories, object ids, checkpoint refs, the files between two
+ * commits and one file's bytes at one commit.
+ *
+ * Three rules it never bends:
+ *
+ * - **Nothing here writes.** No `update-ref`, no index, no checkout, no fetch.
+ *   Every command is a plumbing read with a timeout and a bounded buffer, and
+ *   a failure answers `undefined` rather than throwing a git error at a
+ *   person.
+ * - **An object id is identity, a ref is a name.** A ref is resolved once, at
+ *   record time, and what is kept is the object id it pointed at. Asking again
+ *   later may find nothing; it never finds something else and calls it the
+ *   same thing.
+ * - **Every argument is an argv element.** No shell, no interpolation, and a
+ *   revision that does not look like one is refused before git sees it
+ *   (`docs/source-control-leap.md` §G.4).
+ */
+import { createHash } from "node:crypto";
+import { basename } from "node:path";
+import {
+  CHECKPOINT_REF_NAMESPACE,
+  listCheckpointRepositories,
+  parseCheckpointRef,
+  type FileChangeStatus,
+} from "@lasercode/protocol";
+import { checkpointSessionKey } from "@lasercode/protocol/checkpoint-key";
+import { runGit } from "@lasercode/protocol/git-run";
+import { createWorkspaceResolver } from "../workspace.js";
+
+const resolver = createWorkspaceResolver();
+
+/** How long any one read may take. A hung git is an absent answer, not a stall. */
+const READ_TIMEOUT_MS = 10_000;
+/** The most one read may return before it is treated as too large to use. */
+const READ_MAX_BYTES = 8 * 1024 * 1024;
+
+/** One repository of a checkout's workspace shape, as this module reads it. */
+export interface HostRepository {
+  /** Work-tree root (`rev-parse --show-toplevel`). */
+  path: string;
+  /** Absolute git common dir; a linked worktree resolves to its owner's. */
+  gitDir: string;
+  /** The directory's own name. Display context only. */
+  name: string;
+}
+
+/** One checkpoint ref as it stands right now. */
+export interface CheckpointRefRow {
+  sessionKey: string;
+  turn: number;
+  ref: string;
+  commitObjectId: string;
+  createdAt: string;
+  failed: boolean;
+}
+
+/** One file between two commits, from `git diff`. */
+export interface ChangedFileRow {
+  path: string;
+  status: FileChangeStatus;
+  added: number | null;
+  removed: number | null;
+  /** The head-side blob object id, absent when the file was deleted. */
+  blobObjectId?: string;
+}
+
+/** The exact change between two commits: its files, and the digest over them. */
+export interface DiffFingerprint {
+  digest: string;
+  files: ChangedFileRow[];
+}
+
+export { checkpointSessionKey };
+
+/**
+ * The repositories a checkout belongs to, through the one workspace resolver
+ * the harness and the checkpoint engine already share.
+ *
+ * A bare repository is excluded, exactly as checkpoint capture excludes it:
+ * there is no work tree, so there is nothing an attempt could have changed.
+ */
+export async function workspaceRepositories(cwd: string, options: { rescan?: boolean } = {}): Promise<HostRepository[]> {
+  // Recording an attempt rescans, as the session-delete cleanup does: a
+  // repository may have been added since the shape was last resolved, and
+  // leaving one out of the record would understate what the attempt changed.
+  // Everything else takes the shared cached shape.
+  const shape = await resolver.resolve(cwd, options.rescan === true ? { rescan: true } : {}).catch(() => undefined);
+  if (!shape) return [];
+  return listCheckpointRepositories(shape).map((tree) => ({
+    path: tree.path,
+    gitDir: tree.gitDir,
+    name: basename(tree.path) || tree.path,
+  }));
+}
+
+async function read(repo: HostRepository, args: readonly string[]): Promise<string | undefined> {
+  const result = await runGit({ cwd: repo.path, args, timeoutMs: READ_TIMEOUT_MS, maxBuffer: READ_MAX_BYTES }).catch(() => undefined);
+  if (!result || result.timedOut || result.overflow || result.exitCode !== 0) return undefined;
+  return result.stdout;
+}
+
+/** `sha1` or `sha256`, as this repository declares it. */
+export async function objectFormatOf(repo: HostRepository): Promise<"sha1" | "sha256"> {
+  const value = (await read(repo, ["rev-parse", "--show-object-format"]))?.trim();
+  return value === "sha256" ? "sha256" : "sha1";
+}
+
+/** The commit `HEAD` points at, or `undefined` in a repository with none. */
+export async function headCommitOf(repo: HostRepository): Promise<string | undefined> {
+  const value = (await read(repo, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]))?.trim();
+  return value && isObjectId(value) ? value : undefined;
+}
+
+/**
+ * The repository's first commit: the identity that survives cloning, moving
+ * the checkout and opening it through a worktree (M21-T2's identity key).
+ */
+export async function rootCommitOf(repo: HostRepository): Promise<string | undefined> {
+  const value = await read(repo, ["rev-list", "--max-parents=0", "--reverse", "HEAD"]);
+  const first = value?.split("\n").map((line) => line.trim()).filter(Boolean)[0];
+  return first && isObjectId(first) ? first : undefined;
+}
+
+/** The branch `HEAD` is on, or `undefined` when it is detached. Display only. */
+export async function branchOf(repo: HostRepository): Promise<string | undefined> {
+  const value = (await read(repo, ["symbolic-ref", "--quiet", "--short", "HEAD"]))?.trim();
+  return value || undefined;
+}
+
+/**
+ * Is this exact commit still in this repository?
+ *
+ * The one question a link asks git, and the only honest answer to "where did
+ * this go": a pruned checkpoint or a force-pushed head answers `false`, and
+ * the link keeps saying what it always said instead of resolving to `HEAD`.
+ */
+export async function commitExists(repo: HostRepository, objectId: string): Promise<boolean> {
+  if (!isObjectId(objectId)) return false;
+  const result = await runGit({
+    cwd: repo.path,
+    args: ["cat-file", "-e", `${objectId}^{commit}`],
+    timeoutMs: READ_TIMEOUT_MS,
+  }).catch(() => undefined);
+  return result !== undefined && !result.timedOut && result.exitCode === 0;
+}
+
+const LIST_FORMAT = "%(refname)%00%(objectname)%00%(creatordate:iso-strict)%00%(trailers:key=Failed,valueonly)";
+
+/**
+ * Every checkpoint ref in this repository, or only one session's when the
+ * caller knows which session it is asking about.
+ *
+ * The ref namespace is the worker's (`docs/source-control-leap.md` §E.1) and
+ * the session key derivation is the shared one, so the host reads exactly what
+ * the worker wrote and nothing else.
+ */
+export async function listCheckpointRefs(repo: HostRepository, sessionKey?: string): Promise<CheckpointRefRow[]> {
+  const prefix = sessionKey ? `${CHECKPOINT_REF_NAMESPACE}/${sessionKey}` : CHECKPOINT_REF_NAMESPACE;
+  const listed = await read(repo, ["for-each-ref", `--format=${LIST_FORMAT}`, prefix]);
+  if (!listed) return [];
+  const rows: CheckpointRefRow[] = [];
+  for (const chunk of listed.split("\n")) {
+    if (!chunk) continue;
+    const [ref, commit, createdAt, failed] = chunk.split("\0");
+    if (!ref || !commit || !isObjectId(commit)) continue;
+    const parsed = parseCheckpointRef(ref);
+    if (!parsed) continue;
+    rows.push({
+      sessionKey: parsed.sessionKey,
+      turn: parsed.turn,
+      ref,
+      commitObjectId: commit,
+      createdAt: createdAt ?? "",
+      failed: (failed ?? "").trim() === "1",
+    });
+  }
+  rows.sort((a, b) => (a.turn === b.turn ? a.ref.localeCompare(b.ref) : a.turn - b.turn));
+  return rows;
+}
+
+/**
+ * The files between two commits, and the digest that fences them.
+ *
+ * The digest is taken over git's own `--raw` listing — status, path and the
+ * two blob object ids per file — rather than over the patch text. It is
+ * therefore exact (two different contents can never share it), bounded by the
+ * number of files rather than by their size, and stable across `diff.context`,
+ * colour and whitespace settings, none of which change what was delivered.
+ */
+export async function diffBetween(repo: HostRepository, base: string, head: string): Promise<DiffFingerprint | undefined> {
+  if (!isObjectId(base) || !isObjectId(head)) return undefined;
+  const [raw, numstat] = await Promise.all([
+    read(repo, ["diff", "--raw", "--no-renames", "--no-ext-diff", "-z", base, head, "--"]),
+    read(repo, ["diff", "--numstat", "--no-renames", "--no-ext-diff", "-z", base, head, "--"]),
+  ]);
+  if (raw === undefined || numstat === undefined) return undefined;
+  const counts = parseNumstat(numstat);
+  const files: ChangedFileRow[] = [];
+  const lines: string[] = [];
+  for (const entry of parseRaw(raw)) {
+    const count = counts.get(entry.path);
+    files.push({
+      path: entry.path,
+      status: entry.status,
+      added: count?.added ?? null,
+      removed: count?.removed ?? null,
+      ...(entry.dstBlob && !/^0+$/.test(entry.dstBlob) ? { blobObjectId: entry.dstBlob } : {}),
+    });
+    lines.push(`${entry.status}\t${entry.path}\t${entry.srcBlob}\t${entry.dstBlob}`);
+  }
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  lines.sort();
+  return { digest: createHash("sha256").update(lines.join("\n")).digest("hex"), files };
+}
+
+/** The commits `head` has that `base` does not, newest first, bounded. */
+export async function commitsBetween(repo: HostRepository, base: string, head: string, max: number): Promise<string[]> {
+  if (!isObjectId(base) || !isObjectId(head) || max <= 0) return [];
+  const listed = await read(repo, ["rev-list", `--max-count=${String(max)}`, `${base}..${head}`]);
+  if (!listed) return [];
+  return listed.split("\n").map((line) => line.trim()).filter((line) => isObjectId(line));
+}
+
+/** One file's bytes at one commit, bounded, with the blob id they came from. */
+export async function fileAt(
+  repo: HostRepository,
+  commit: string,
+  path: string,
+  limitBytes: number,
+): Promise<{ text: string; bytes: number; truncated: boolean; blobObjectId?: string } | undefined> {
+  if (!isObjectId(commit) || !isRepoPath(path)) return undefined;
+  const spec = `${commit}:${path}`;
+  const size = Number((await read(repo, ["cat-file", "-s", spec]))?.trim() ?? Number.NaN);
+  if (!Number.isFinite(size)) return undefined;
+  const blobObjectId = (await read(repo, ["rev-parse", "--verify", "--quiet", spec]))?.trim();
+  const result = await runGit({
+    cwd: repo.path,
+    args: ["cat-file", "blob", spec],
+    timeoutMs: READ_TIMEOUT_MS,
+    maxBuffer: Math.max(limitBytes * 2, 64 * 1024),
+  }).catch(() => undefined);
+  if (!result || result.timedOut || result.overflow || result.exitCode !== 0) return undefined;
+  const whole = Buffer.from(result.stdout, "utf8");
+  const truncated = whole.byteLength > limitBytes;
+  const kept = truncated ? sliceOnCharacterBoundary(whole, limitBytes) : whole;
+  return {
+    text: kept.toString("utf8"),
+    bytes: whole.byteLength,
+    truncated,
+    ...(blobObjectId && isObjectId(blobObjectId) ? { blobObjectId } : {}),
+  };
+}
+
+/** Bytes that look like text a person can review. Anything else is not captured. */
+export function looksBinary(text: string): boolean {
+  return text.includes("\u0000");
+}
+
+export function isObjectId(value: string): boolean {
+  return /^[0-9a-f]{7,64}$/.test(value);
+}
+
+/** A repository-relative path git may be handed as one argv element. */
+function isRepoPath(value: string): boolean {
+  return value.length > 0 && value.length <= 1024 && !value.startsWith("-") && !value.includes("\u0000");
+}
+
+function sliceOnCharacterBoundary(buffer: Buffer, limit: number): Buffer {
+  let end = Math.min(limit, buffer.byteLength);
+  while (end > 0 && (buffer[end]! & 0b1100_0000) === 0b1000_0000) end -= 1;
+  return buffer.subarray(0, end);
+}
+
+interface RawEntry {
+  path: string;
+  status: FileChangeStatus;
+  srcBlob: string;
+  dstBlob: string;
+}
+
+/**
+ * `git diff --raw -z`: records of `:<srcmode> <dstmode> <srcblob> <dstblob> <status>`
+ * followed by the path as its own NUL-terminated field.
+ */
+function parseRaw(text: string): RawEntry[] {
+  const fields = text.split("\0");
+  const entries: RawEntry[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const meta = fields[i];
+    if (!meta || !meta.startsWith(":")) continue;
+    const parts = meta.slice(1).split(" ");
+    const code = parts[4] ?? "";
+    const path = fields[i + 1];
+    if (!path) continue;
+    i += 1;
+    entries.push({
+      path,
+      status: statusOf(code),
+      srcBlob: parts[2] ?? "",
+      dstBlob: parts[3] ?? "",
+    });
+  }
+  return entries;
+}
+
+/**
+ * A rename and a type change are a modification of the path git reports; the
+ * three statuses the product speaks are the whole vocabulary a person reads
+ * (`FileChangeStatus`), and a fourth here would have to be invented in the UI
+ * as well.
+ */
+function statusOf(code: string): FileChangeStatus {
+  switch (code[0]) {
+    case "A":
+      return "added";
+    case "D":
+      return "deleted";
+    default:
+      return "modified";
+  }
+}
+
+/** `git diff --numstat -z`: `added\tremoved\tpath\0`. Binaries use `-`. */
+function parseNumstat(text: string): Map<string, { added: number | null; removed: number | null }> {
+  const counts = new Map<string, { added: number | null; removed: number | null }>();
+  for (const record of text.split("\0")) {
+    if (!record) continue;
+    const first = record.indexOf("\t");
+    const second = record.indexOf("\t", first + 1);
+    if (first < 0 || second < 0) continue;
+    const added = record.slice(0, first);
+    const removed = record.slice(first + 1, second);
+    const path = record.slice(second + 1);
+    if (!path) continue;
+    counts.set(path, {
+      added: added === "-" ? null : Number.parseInt(added, 10) || 0,
+      removed: removed === "-" ? null : Number.parseInt(removed, 10) || 0,
+    });
+  }
+  return counts;
+}

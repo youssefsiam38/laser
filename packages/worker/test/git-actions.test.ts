@@ -168,6 +168,13 @@ describe("commit, push, branch", () => {
     const done = await service.commit({ cwd: dir, paths: ["a.ts"], message: "Bump a", confirm: true });
     expect(done.outcome).toBe("done");
     expect(done.commit?.subject).toBe("Bump a");
+    // What a repository link can name afterwards (M21-T18): the full object
+    // id is identity, the branch beside it is display context, and the short
+    // hash a person reads is not either of them.
+    const objectId = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir }).toString().trim();
+    expect(done.linkRef).toMatchObject({ repo: dir, objectFormat: "sha1", commitObjectId: objectId, branch: "main" });
+    expect(done.linkRef?.commitObjectId).not.toBe(done.commit?.hash);
+    expect(preview.linkRef, "a preview has nothing exact to link to yet").toBeUndefined();
   });
 
   it("pushes to a local remote, never force, and previews first", async () => {
@@ -186,6 +193,9 @@ describe("commit, push, branch", () => {
     const done = await service.push({ cwd: dir, remote: "origin", branch: "main", confirm: true });
     expect(done.outcome).toBe("done");
     expect(done.pushed).toEqual({ remote: "origin", branch: "main" });
+    const objectId = execFileSync("git", ["rev-parse", "refs/heads/main"], { cwd: dir }).toString().trim();
+    expect(done.linkRef).toMatchObject({ repo: dir, commitObjectId: objectId, branch: "main", remote: "origin" });
+    expect(preview.linkRef).toBeUndefined();
   });
 
   it("creates a branch from an explicit base", async () => {
@@ -298,6 +308,30 @@ describe("pull requests", () => {
     expect(merged.outcome).toBe("done");
     expect(calls.some((call) => call.command === "gh" && call.args.includes("--squash"))).toBe(true);
     expect(calls.filter((call) => call.command === "git" || (call.command === "gh" && call.args[0] === "pr")).every((call) => !call.args.includes("--force"))).toBe(true);
+  });
+
+  it("emits the head commit a delivery link names when a pull request is opened", async () => {
+    const objectId = "a".repeat(40);
+    const { run } = recording(
+      githubScript((command, args) => {
+        if (command === "git" && args[0] === "rev-parse" && args.includes("--show-object-format")) return "sha1\n";
+        if (command === "git" && args[0] === "rev-parse" && args.some((arg) => String(arg).endsWith("^{commit}"))) return `${objectId}\n`;
+        if (command === "gh" && args[0] === "pr" && args[1] === "create") return "https://github.com/acme/app/pull/12\n";
+        return undefined;
+      }),
+    );
+    const dir = temp("gh-pr-link");
+    const service = new GitActionsService({ projectCwd: dir, run, env: {} });
+    const created = await service.createPr({ cwd: dir, title: "Fix", body: "x", base: "main", head: "feature/x", confirm: true });
+    expect(created.outcome).toBe("done");
+    // The commit is identity; the request is how a person finds it (M21-T18).
+    expect(created.linkRef).toMatchObject({
+      commitObjectId: objectId,
+      objectFormat: "sha1",
+      branch: "feature/x",
+      remote: "origin",
+      pullRequest: { number: 12, host: "github", url: "https://github.com/acme/app/pull/12" },
+    });
   });
 
   it("creates and reads a Bitbucket pull request without putting the token in a result", async () => {
