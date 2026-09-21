@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T22:33:22+03:00 · leap integration · HEAD: df42de20
+**Last updated:** 2026-09-21T22:47:29+03:00 · leap integration · HEAD: 3a45e494
 **Current focus:** M21 integration and acceptance gaps. T14 integrated/done; T10/T13 Fleet ownership correction and T19 evidence correction remain. T21 reviewed corrections integrated/done. M26 v0.14.0 is published and verified; M21 remains the next release gate.
 
 | Milestone | State |
@@ -35,9 +35,12 @@
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
-**Active owners:** T9/T17 integrated/done (`a0cfcaf0` via d5018060, review2fdefb60); merged frozen install/build/worker71/host25/extension14/typecheck/identity pass; three source/review trees removed. T10/T13 ownership review accepted (`e92e6392`); worker rekey checkpointd7213b26 returned; host Fleet ghost and Stop-as-completed correction interrupted; unverified WIP preserved641288f9 and transferred for completion; Legend continuity source/review/final corrections merged (`abfe5f7c`), parent focused41/types/identity and full verify/identity pass; three merged trees removed. T18/T19 capture checkpoint34c1790c returned; parent found scope/proof/supersession/timeout gaps, capture checkpointa44248c2 returned; remaining basis/approval-Done binding/legacy/paging gaps have approved plan9fa1ce26 and an implementation owner. T14/T21 and image fixture repairs remain integrated. Exact paths/sessions in `STATUS_DETAILED.md`.
-**Gate:** merged mention + transcript repair **`pnpm verify && pnpm identity:check` pass** (`t-4d8fdf93`, 152.7s, sourceabfe5f7c/planningb30dc243; clean environment with display preserved). The previous trim-focus failure is fixed. This is the current integration branch, **not final main**, and does not cover the unmerged Command/capture work. Person-owned browser acceptance remains unclaimed (D-342).
-**Published:** v0.14.0 Latest (M26), v0.13.0 (M23), v0.12.0 (M22). Candidate `ac098597`; exact-source CI `35616431166` and release `35616858358` attempt4 pass. Twelve assets, manifest digests and source-bound provenance verified by release controller; evidence `docs/leap/m26-release-evidence.json`. Parent merged release metadata (`64c701cc`), identity check passes. Final integrated main-branch gates remain required.
-**Next dependency-ready work:** finish capture corrections and Command/transcript reviews, then T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
-**Recent implementation checkpoints:** T18 `85ee5ea4` (reopened: durable verification capture missing); T9 `222d86c0`; T17 `133d55cd`; T12 `92cc43c9` + `f15eb7d1`; T8 `98a01428`.
+**Active owners:**
+- T10/T13: host rekey + truthful Stop checkpoint `0cd96a9a`; parent frozen install/build/worker335/host115/types/identity pass. Narrow independent review active (`run_9c98f688`), not merged.
+- T18/T19: checkpoint `a44248c2` preserved; final basis/decision-binding/legacy/paging corrections implementing under approved plan `9fa1ce26` (`run_9a5f943a`). First full T19 review remains pending.
+- Integrated: T9/T17 mentions, T14 Foundation, T21 interop, image fixture and transcript continuity repairs. Exact ancestry/owners in `STATUS_DETAILED.md`.
+
+**Gate:** integrated mention/transcript **`pnpm verify && pnpm identity:check` pass** (`t-4d8fdf93`, 152.7s, source `abfe5f7c`; clean graphical environment). Current integration branch, **not final main**; excludes pending Command/capture work. Person-owned browser acceptance remains unclaimed (D-342).
+**Published:** v0.14.0 Latest (M26), v0.13.0 (M23), v0.12.0 (M22). Candidate `ac098597`; source CI `35616431166` and release `35616858358` attempt4 pass. Twelve assets/digests/source provenance verified; `docs/leap/m26-release-evidence.json`.
+**Next:** finish Command/capture corrections and reviews → T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
 **Other retained blocker:** M19-T7 waits for M19-T6 shared storage ownership. Person-owned M20/visual acceptance must not be inferred from unit tests.
