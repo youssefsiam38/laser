@@ -13,7 +13,7 @@
 - https://github.com/gastownhall/beads
 - ![old api requests got removed](image-1.png): user should have the choice! he navigate in the settings and the resources page give him the info about the size f the logs, and he have full dynamic
 - "Couldn’t refresh this conversation.", "An update was installed. Restart the app and its host to use it" and "An update is waiting for current work to finish. Keep working by cancelling update preparation first. Your message is back in the composer — send it again when you are ready." are very annoying! how hard it is to remove it
-
+- "Reading changes…" in the file section in the telemetry is taking too long
 
 =======================================
 
