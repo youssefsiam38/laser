@@ -101,15 +101,31 @@ only ends them when the worker is lost, and the UI's fleet model renders a root
 the catalog no longer lists as deleted-session work rather than dropping its
 rows (`packages/ui/src/fleet/model.ts`, `deleted`).
 
-### Retention, owned by the index
+### Settlement: how a build ends, in one place and in one order
 
-`ProjectDesignIndex` now bounds its own map (`FINISHED_COMMANDS_KEPT = 8`), so
-the bound holds for every caller — the workspace, the tools and a scripted
-world alike — rather than depending on one caller's callback. The sweep runs
-when the *next* build starts, so a command is only released long after its last
-row was published; a running build is never counted and never released. The
-workspace keeps its own row retention unchanged (terminal row published before
-the prune, running builds never evicted).
+Ending a build touches three things — the last row, the retention and the
+outcome the window reads — and all three now happen in one ordered step.
+
+`ProjectDesignIndex` learns that a build has ended (its `command.done`
+settles), announces **how** it ended through `onSettled(command, owner,
+outcome)`, and only then sweeps its map. The workspace is that observer: it
+writes the outcome onto the tracked build, publishes the terminal row, and
+prunes its own rows. Nothing else attaches to `command.done`, because handler
+order is registration order and the index registers first — a second handler in
+the workspace would have been a race between the row and the release.
+
+Three corrections come out of that one ordering:
+
+| Was | Is |
+| --- | --- |
+| The index swept only when the *next* build started, so a burst of builds that all ended and were never followed by another kept every command — and the closure over its whole build — for the life of the worker. | The bound (`FINISHED_COMMANDS_KEPT = 8`) holds **at settlement**: twelve builds that end with nothing after them leave eight. A running build is never counted and never released, and a build whose last row has not been published yet is still held, because the sweep runs after `onSettled` returns. |
+| The row's status was derived from whatever state happened to be set: `running ? running : failure ? failed : phase === "stopped" ? stopped : completed`. A progress report carrying a terminal-looking phase arrives before the error is in hand, so the row could say **completed** about a build that was about to be reported as failed. | A build is running until its outcome arrives, whatever a phase says, and the outcome — `completed`, `failed` or `stopped`, taken from the engine's own result — writes the status, the reason and the `endedAt` together. A terminal row is published once, and it is true. |
+| A failure's row carried the raw error message. | A refusal that wrote its own sentence is shown as it is, with its next step; anything else is given the sentence it lacked, so a row never reads as a stack trace. |
+
+The workspace's own row retention is unchanged in shape — terminal row
+published before the prune, running builds never evicted — but it now rests on
+the outcome rather than on a phase, so "still running" and "not prunable" are
+the same fact.
 
 ### The window
 
@@ -117,6 +133,14 @@ the prune, running builds never evicted).
   and only when its directory resolves to the project being indexed — the
   registry resolves a worktree and its owner to the same `projectId`, so a
   worktree conversation qualifies.
+- **The answer belongs to the directory it was made for.** Resolving a
+  conversation's folder to a project is one bounded read, so there is always a
+  moment when the window has moved to a conversation it knows nothing about
+  yet. The resolved state is keyed by that conversation's `cwd` *and* by the
+  project being asked about, and an unresolved directory is refused rather than
+  inheriting the previous conversation's eligibility — which would have offered
+  this project's build to a conversation that turns out to belong to another
+  one. Cancellation on unmount and on a change of conversation is unchanged.
 - `useDesignAccess` offers **Re-index** only with an owner, and always sends its
   path. Without one the panel shows the sentence where the button was, plus
   "Back to the conversation" — the existing way to a session — and sends
@@ -133,10 +157,10 @@ per-invocation design profile read, and the parse-only guarantee (D-353).
 
 | Command | Result |
 | --- | --- |
-| `pnpm -F @lasercode/worker exec vitest run test/design` | 225 passed |
-| `pnpm -F @lasercode/worker exec vitest run` | 1654 passed, 4 skipped |
-| `pnpm -F @lasercode/ui exec vitest run test/design` | 120 passed |
-| `pnpm -F @lasercode/ui exec vitest run test/fleet test/design test/runtime` | 1144 passed |
+| `pnpm -F @lasercode/worker exec vitest run test/design` | 228 passed |
+| `pnpm -F @lasercode/worker exec vitest run` | 1657 passed, 4 skipped |
+| `pnpm -F @lasercode/ui exec vitest run test/design` | 122 passed |
+| `pnpm -F @lasercode/ui exec vitest run test/fleet test/design test/runtime` | 1146 passed |
 | `pnpm -F @lasercode/host exec vitest run test/router.design.test.ts` | 6 passed |
 | `pnpm -F @lasercode/protocol exec vitest run` | 729 passed |
 | `pnpm -r build && pnpm -r typecheck && pnpm identity:check` | clean |
@@ -157,6 +181,28 @@ New proofs, all through a real `WorkerServer` with the real
   neither writes an index;
 - another project's conversation can never own one, because it can never be
   opened here.
+
+The settlement corrections (`packages/worker/test/design/workspace.test.ts`,
+"when builds end"; `packages/ui/test/design/workspace.test.tsx`, "Re-index, as
+a Command"), each of which fails on the code before it:
+
+- twelve builds start together, all end, and **nothing follows them**: eight
+  commands are left, the build that is still working (waiting on a model that
+  never answers) is neither counted nor released, and every build that ended
+  published its terminal row while it was still held;
+- a build that reports a terminal-looking phase before its outcome arrives
+  keeps a *running* row — the row that says `completed`, `failed` or `stopped`
+  is published once, from the outcome, and a failed build's row never says
+  completed;
+- a real failing build — the index file's own path is a directory, so the
+  store's rename cannot land — publishes `failed` with its sentence as the last
+  word, before anything is cleaned up, and `design/index/get` reports the same
+  one outcome. (This one is coverage rather than a regression: the old code
+  reached the same end state by a different route.)
+- the Design tab moved to an unresolved conversation offers no build and sends
+  no request; when that conversation resolves to another project it still
+  offers none; when it resolves to a worktree of this project it offers
+  **Re-index** again and the build is owned by that worktree conversation.
 
 ### Not proven by tests
 
