@@ -1,5 +1,10 @@
 # M21-T2 — canonical metadata accounting and quotas (plan, not implementation)
 
+Parent inspection returned checkpoint40c89aa1 for the bounded migration,
+global recovery-copy, no-clamp and historical-reference corrections in
+[`m21-canonical-quota-corrections.md`](m21-canonical-quota-corrections.md).
+The first independent storage review remains pending.
+
 Reopened T2 gap: the durable budget counts revision bodies and blobs only, so
 every other canonical row — comments, approvals, decisions, evidence, edges,
 repository links, capture associations, decision bindings, execution links —
