@@ -10,6 +10,12 @@
  * Two forms of the same list: the adopted `data-table` when the backlog has
  * the room, Laser's own rows when it is a column beside the detail. Nothing
  * shrinks below the 12px floor; the narrow form drops columns instead.
+ *
+ * The filter text does two things at once (M21-T7): it filters the rows this
+ * window holds by key and title, and it asks the host to search the bodies it
+ * has projected (`project/work/search`) — so a phrase that only exists inside
+ * a spec's document or a research finding still finds it. A key matches
+ * exactly and ranks first, always.
  */
 import { Bookmark, Check, Filter, Link2, Plus, Search, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -33,15 +39,14 @@ import { relativeTime } from "@/format";
 import { cn } from "@/lib/utils";
 import { openWorkCreate, selectWork, useWorkspaceUi, type ProjectWorkSnapshot, type ProjectWorkStore } from "@/project-work";
 import { attentionReasonOf } from "@/project-work/model";
+import { matchNote, mergeSearchResults, useWorkSearch } from "@/project-work/search";
 import { KIND_ICON, KIND_LABEL, KIND_TEXT } from "@/project-work/vocabulary";
 import {
-  applyFilter,
   deleteView,
   EMPTY_FILTER,
   isEmptyFilter,
   sameFilter,
   saveView,
-  sortWork,
   useSavedViews,
   type WorkFilter,
   type WorkSort,
@@ -74,7 +79,12 @@ export function WorkBacklog({
   const [name, setName] = useState("");
   const views = useSavedViews(work.projectId);
 
-  const rows = useMemo(() => sortWork(applyFilter(work.items, filter), sort, filter.text), [filter, sort, work.items]);
+  const search = useWorkSearch(store, filter.text);
+  const { rows, fromBody } = useMemo(
+    () => mergeSearchResults(work.items, filter, sort, search.results),
+    [filter, search.results, sort, work.items],
+  );
+  const resultsById = useMemo(() => new Map(search.results.map((result) => [result.ref.entityId, result])), [search.results]);
   const activeView = views.find((view) => sameFilter(view.filter, filter) && view.sort === sort);
 
   const toggleKind = (kind: ProjectWorkKind): void =>
@@ -95,7 +105,8 @@ export function WorkBacklog({
             <Input
               value={filter.text}
               onChange={(event) => setFilter((current) => ({ ...current, text: event.target.value }))}
-              placeholder="Filter by key or title"
+              placeholder="Filter by key, title or text"
+              aria-busy={search.busy || undefined}
               className="h-8 ps-7 text-sm"
             />
             {filter.text ? (
@@ -256,7 +267,11 @@ export function WorkBacklog({
         ) : (
           <WorkPlaceholder
             title="Nothing matches this filter"
-            detail="Every item is still here; the filter is hiding them."
+            detail={
+              search.busy
+                ? "Still looking inside the documents…"
+                : (search.error ?? "Every item is still here; the filter is hiding them. Keys, titles and the text of documents were all searched.")
+            }
             action={
               <Button size="sm" variant="outline" onClick={() => setFilter(EMPTY_FILTER)}>
                 Clear the filter
@@ -272,14 +287,21 @@ export function WorkBacklog({
         <ul role="list" className="min-h-0 flex-1 overflow-y-auto p-1">
           {rows.map((row) => (
             <li key={row.ref.entityId}>
-              <BacklogRow row={row} selected={ui.selection?.entityId === row.ref.entityId} onOpen={() => open(row)} />
+              <BacklogRow
+                row={row}
+                selected={ui.selection?.entityId === row.ref.entityId}
+                onOpen={() => open(row)}
+                note={filter.text.trim() === "" ? undefined : matchNote(resultsById.get(row.ref.entityId))}
+              />
             </li>
           ))}
         </ul>
       )}
 
-      <p className="border-t border-line px-3 py-1.5 text-xs leading-xs text-ink-3">
+      <p className="border-t border-line px-3 py-1.5 text-xs leading-xs text-ink-3" aria-live="polite">
         {rows.length === work.items.length ? `${rows.length} item${rows.length === 1 ? "" : "s"}` : `${rows.length} of ${work.items.length}`}
+        {fromBody > 0 ? ` · ${fromBody} found inside documents` : ""}
+        {search.error ? " · only the rows this window holds were searched" : ""}
         {work.more ? " · more than this window read; filter to narrow it" : ""}
       </p>
     </div>
@@ -318,7 +340,17 @@ function FilterToggle({
   );
 }
 
-function BacklogRow({ row, selected, onOpen }: { row: ProjectWorkListItem; selected: boolean; onOpen: () => void }) {
+function BacklogRow({
+  row,
+  selected,
+  onOpen,
+  note,
+}: {
+  row: ProjectWorkListItem;
+  selected: boolean;
+  onOpen: () => void;
+  note?: string | undefined;
+}) {
   return (
     <button
       type="button"
@@ -345,6 +377,7 @@ function BacklogRow({ row, selected, onOpen }: { row: ProjectWorkListItem; selec
         <StatusChip kind={row.kind} state={row.state} staleBecauseKey={row.staleBecauseKey} />
         {row.archived ? <Badge variant="outline">Archived</Badge> : null}
         <span className="min-w-0 truncate text-xs leading-xs text-ink-3">{relativeTime(row.updatedAt)}</span>
+        {note ? <span className="min-w-0 truncate text-xs leading-xs text-ink-3">{note}</span> : null}
       </span>
     </button>
   );

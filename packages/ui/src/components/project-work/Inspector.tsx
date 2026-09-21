@@ -8,14 +8,18 @@
  * state, read from the host.
  *
  * The acts belong to later tasks and are named where they will live:
- * approving and commenting are M21-T8, adding a link is M21-T7/T16, and the
- * Design Index panel replaces this column for a Design in M21-T13.
+ * approving and commenting are M21-T8, and the Design Index panel replaces
+ * this column for a Design in M21-T13. **Linking is here** (M21-T7): adding
+ * and removing a link is this section's own act, and both are optional in
+ * every direction — nothing is pending because a link is missing (D-352).
  */
-import { MessageSquare, Link2, ShieldCheck, FlaskConical } from "lucide-react";
+import { MessageSquare, Link2, Plus, ShieldCheck, FlaskConical, Unlink } from "lucide-react";
 import type { ClientRequests } from "@lasercode/protocol";
 import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useCapability, useLaserStable } from "@/runtime";
 import { SpecSheet } from "@/components/assistant-ui/elements/spec-sheet";
 import { Timeline, type TimelineEvent } from "@/components/assistant-ui/elements/timeline";
 import { clockTime, dateTime, relativeTime } from "@/format";
@@ -23,6 +27,7 @@ import { cn } from "@/lib/utils";
 import { selectWork, useWorkspaceUi, type ProjectWorkSnapshot, type ProjectWorkStore } from "@/project-work";
 
 import { KeyTag } from "./KindBadge.js";
+import { LinkDialog, RELATION_SENTENCE } from "./LinkDialog.js";
 import { Section } from "./bodies/fields.js";
 
 type Detail = ClientRequests["project/work/get"]["result"];
@@ -37,7 +42,10 @@ export function Inspector({
   className?: string;
 }) {
   const ui = useWorkspaceUi();
+  const { actions } = useLaserStable();
   const [detail, setDetail] = useState<Detail | undefined>(undefined);
+  const [linking, setLinking] = useState(false);
+  const canLink = useCapability("project/work/link", { presentation: "explained" });
   const entityId = ui.selection?.entityId;
   const revisionId = ui.selection?.revisionId;
 
@@ -132,12 +140,12 @@ export function Inspector({
               const other = edge.subject.entityId === entity.entityId ? edge.object : edge.subject;
               const known = work.items.some((item) => item.ref.entityId === other.entityId);
               return (
-                <li key={edge.linkId}>
+                <li key={edge.linkId} className="flex min-w-0 items-center gap-1">
                   <button
                     type="button"
                     onClick={() => selectWork({ entityId: other.entityId, kind: other.kind })}
                     className={cn(
-                      "flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-start outline-none",
+                      "flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-start outline-none",
                       "hover:bg-surface-2 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live",
                       "disabled:cursor-default disabled:hover:bg-transparent pointer-coarse:min-h-11",
                     )}
@@ -149,6 +157,27 @@ export function Inspector({
                       {work.items.find((item) => item.ref.entityId === other.entityId)?.title ?? (known ? "" : "archived or filtered out")}
                     </span>
                   </button>
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    disabled={canLink.state !== "available"}
+                    aria-label={`Unlink ${other.key} (${RELATION_SENTENCE[edge.relation]} it)`}
+                    onClick={() => {
+                      if (!store) return;
+                      void store
+                        .unlink({ entityId: entity.entityId, expectedRevisionId: entity.currentRevisionId }, edge.linkId)
+                        .then((outcome) => {
+                          if (outcome.ok) {
+                            actions.toast("info", `${entity.key} and ${other.key} are no longer linked`);
+                            void read();
+                          } else {
+                            actions.toast("error", outcome.failure.message);
+                          }
+                        });
+                    }}
+                  >
+                    <Unlink />
+                  </Button>
                 </li>
               );
             })}
@@ -169,6 +198,18 @@ export function Inspector({
             ))}
           </ul>
         )}
+        <div>
+          <Button
+            size="xs"
+            variant="outline"
+            data-slot="link-something"
+            disabled={canLink.state !== "available"}
+            onClick={() => setLinking(true)}
+          >
+            <Plus />
+            Link something…
+          </Button>
+        </div>
       </Section>
 
       <Section title="Comments">
@@ -218,6 +259,8 @@ export function Inspector({
           <Timeline events={history} />
         </Section>
       ) : null}
+
+      <LinkDialog store={store} detail={detail} items={work.items} open={linking} onOpenChange={setLinking} onLinked={() => void read()} />
     </aside>
   );
 }

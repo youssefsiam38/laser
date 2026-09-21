@@ -25,7 +25,7 @@ import { useRunsForRoot } from "@/agents";
 import { DictateButton } from "@/components/mobile";
 import { CapabilityNotice } from "@/components/capability-gate";
 // The project lifecycle leap (M21-T6): `/spec`, `/research`, `/design`, `/plan`.
-import { useProjectWorkCommands } from "@/components/project-work";
+import { onWorkQuote, useProjectWorkCommands } from "@/components/project-work";
 import { KIND_ICON } from "@/project-work/vocabulary";
 import { errorText, useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
@@ -67,6 +67,7 @@ export function Composer() {
 
 function ComposerBody() {
   useHandedBackText();
+  useWorkQuotes();
   const mobile = useIsMobile();
   const dictating = useAuiState((s) => s.composer.dictation != null);
   const slash = useSlashCommands();
@@ -264,6 +265,26 @@ export function useHandedBackText(): void {
     }
     actions.takeEditorText(handedBackPath);
   }, [handedBack, handedBackPath, composerPath, aui, actions]);
+}
+
+/**
+ * Quote, from the project workspace (M21-T7).
+ *
+ * A finding's excerpt arrives as Markdown that already carries its `[from …]`
+ * provenance. It is *appended* to whatever the person is writing rather than
+ * replacing it — a quote is an addition to a thought, never a reset of one —
+ * and the composer is the one consumer of the event.
+ */
+function useWorkQuotes(): void {
+  const aui = useAui();
+  useEffect(
+    () =>
+      onWorkQuote(({ text }) => {
+        const current = aui.composer.getState().text;
+        aui.composer.setText(current.trim() === "" ? `${text}\n\n` : `${current.trimEnd()}\n\n${text}\n\n`);
+      }),
+    [aui],
+  );
 }
 
 function setComposerStreamingBehavior(aui: ReturnType<typeof useAui>, streamingBehavior: "prompt" | "pending" | "steer" | "followUp"): void {

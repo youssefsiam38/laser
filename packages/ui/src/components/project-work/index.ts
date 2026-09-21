@@ -12,3 +12,5 @@ export {
   WorkProjectPicker,
 } from "./create-work.js";
 export { useProjectWorkCommands, WORK_COMMAND_KINDS } from "./work-commands.js";
+/** Quote a finding into the conversation's composer (M21-T7). */
+export { onWorkQuote, quoteIntoComposer, WORK_QUOTE_EVENT, type WorkQuoteDetail } from "./quote.js";
