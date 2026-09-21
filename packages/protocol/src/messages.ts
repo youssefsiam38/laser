@@ -364,6 +364,17 @@ export interface SessionSummary {
   seenAt?: string;
   /** Which agent runs this session and, for a child, whose child it is. */
   agent?: SessionAgentInfo;
+  /**
+   * The Model Profile this conversation is running on — its intent
+   * (`docs/model-profiles.md`). Absent for a pinned session and for a
+   * conversation written before profiles existed.
+   */
+  profileId?: string;
+  /**
+   * The model that last answered in this conversation — the evidence beside
+   * `profileId`. Absent when the transcript never recorded one.
+   */
+  model?: ModelRef;
 }
 
 export interface SessionState {

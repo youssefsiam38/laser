@@ -13,7 +13,7 @@
  *   the engine finishes its own retries and gives up
  *     → classify; a failure that is not about reaching the model stops here
  *     → open a failover event, remember what this model did
- *     → earlier models in the chain, one request each, in chain order
+ *     → earlier models in the profile, one request each, in the profile's order
  *     → then the next fallback, with its normal retry policy
  *     → the first normal response wins and the session stays on that model
  *     → nothing left: preserve the task, say what stood in the way, schedule
@@ -170,7 +170,7 @@ export class FallbackController {
   }
 
   /**
-   * Resolve a chain for the model this session is on, when no traversal was
+   * Resolve the profile this session runs on, when no traversal was
    * restored. Nothing is written: an activation with no history is exactly
    * what the next open would resolve again, and a record per open would be
    * noise in every session that never fails.
@@ -305,7 +305,7 @@ export class FallbackController {
 
   /**
    * The failover itself, run after the engine's own turn has settled. Resolves
-   * when the session is on a model that answered, or when the chain is spent.
+   * when the session is on a model that answered, or when the profile is spent.
    */
   async settle(): Promise<boolean> {
     const activation = this.state.activation;
@@ -320,7 +320,7 @@ export class FallbackController {
     this.abort = abort;
     this.switching = true;
     const failed = activation.models[activation.position] ?? this.engine.selectedModel();
-    // The model the chain is standing on, as the traversal moves: the sentence
+    // The model the profile is standing on, as the traversal moves: the sentence
     // a person reads at the end is about what failed last, not what failed
     // first.
     let standing = failed;
@@ -490,7 +490,7 @@ export class FallbackController {
     });
     this.write("attempt_failed", { to: options.candidate, failure: { class: next.class, at: this.iso() } });
     if (!opensFailover(next.class)) {
-      // The new model failed for a reason a chain cannot answer (the
+      // The new model failed for a reason a profile cannot answer (the
       // conversation is too long, the provider refused the content, the
       // person stopped it). Leave the session here and say so once.
       this.exhausted(options.candidate, next, []);

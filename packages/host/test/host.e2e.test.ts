@@ -551,7 +551,7 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
         instructions: "Inspect this project.",
         engineInstructions: false,
         excludeCoreInstructions: false,
-        model: null,
+        profileId: null,
         thinkingLevel: null,
         supportsSubagents: false,
         allowedAgents: [],
@@ -565,7 +565,7 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
         .toContainEqual(expect.objectContaining({ cwd: shippedProject, trust: "unknown" }));
       expect((await client.request<{ agents: Array<{ name: string }> }>("agents/list", {})).agents.some((agent) => agent.name === "shipped")).toBe(false);
       await expect(client.request("agents/save", {
-        agent: { name: "blocked", scope: "project", projectCwd: shippedProject, description: "Blocked", instructions: "Blocked.", engineInstructions: false, excludeCoreInstructions: false, model: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] },
+        agent: { name: "blocked", scope: "project", projectCwd: shippedProject, description: "Blocked", instructions: "Blocked.", engineInstructions: false, excludeCoreInstructions: false, profileId: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] },
         originalName: null,
       })).rejects.toThrow("Choose Trust in Settings");
       await client.request("pi/project/trust", { cwd: shippedProject, trusted: true });
@@ -581,7 +581,7 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
 
       // A save is broadcast to every client and persisted for the next host.
       const saved = await client.request<{ agent: { name: string }; snapshot: { revision: number } }>("agents/save", {
-        agent: { name: "reviewer", scope: "global", description: "Reviews", instructions: "Review.", engineInstructions: false, excludeCoreInstructions: false, model: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] },
+        agent: { name: "reviewer", scope: "global", description: "Reviews", instructions: "Review.", engineInstructions: false, excludeCoreInstructions: false, profileId: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] },
         originalName: null,
       });
       expect(saved.agent.name).toBe("reviewer");
@@ -596,7 +596,7 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
       const { state } = await client.request<{ state: SessionState }>("session/new", { cwd: project });
       expect(state.cwd).toBe(project);
       const projectSaved = await client.request<{ snapshot: { agents: Array<{ name: string; scope: string; projectCwd?: string }> } }>("agents/save", {
-        agent: { name: "reviewer", scope: "project", projectCwd: project, description: "Project reviews", instructions: "Review this project.", engineInstructions: false, excludeCoreInstructions: false, model: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] },
+        agent: { name: "reviewer", scope: "project", projectCwd: project, description: "Project reviews", instructions: "Review this project.", engineInstructions: false, excludeCoreInstructions: false, profileId: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] },
         originalName: null,
       });
       expect(projectSaved.snapshot.agents.filter((agent) => agent.name === "reviewer")).toHaveLength(2);

@@ -27,14 +27,14 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { totalmem } from "node:os";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type AgentRun, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type NamerState, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type AgentRun, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type BuiltinAgentName, type ModelProfileMigrationRecord, type ModelProfileMigrationReport, MODEL_PROFILE_MIGRATION_RECORD, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
@@ -347,6 +347,8 @@ export class HostServer {
   private readonly transcripts = new Map<WebSocket, TranscriptDelivery>();
   /** The private directory every command log this host will read must be inside. */
   private readonly taskLogRoot: string;
+  /** This host's own state directory; the migration preview record lives here. */
+  private readonly stateDir: string;
   /** Crash cleanup of that directory, started before any worker exists. */
   private taskLogCleanup: Promise<number> = Promise.resolve(0);
   private readonly searches = new Map<WebSocket, SearchCancellation>();
@@ -363,14 +365,14 @@ export class HostServer {
   private readonly relayClients: RelayClient[] = [];
   /** Listeners for host notifications, so a relayed device sees the same stream. */
   private readonly notificationListeners = new Set<(n: JsonRpcNotification) => void>();
-  /** The Beam choose-model dialog is offered once per host run. */
-  private beamPrompted = false;
+  /** The seeded profiles are offered for review once per host run. */
+  private profilesPrompted = false;
+  /** Every profile id the person has, so a definition naming a dead one is flagged. */
+  private knownProfileIds: ReadonlySet<string> = new Set();
+  /** The one-way settings migration runs once per host run, behind the first worker. */
+  private profilesMigrated = false;
   /** Set by `close()`: background work started behind a request must not outlive the host. */
   private closing = false;
-  /** One Namer benchmark at a time for the whole host; it tests two small naming jobs per candidate. */
-  private namerQualifying = false;
-  /** Provider sets already benchmarked this run, so a failure is not retried on every worker. */
-  private readonly namerQualified = new Set<string>();
   /** Bounded harness-failure handoff through exact successor workers. */
   private readonly agentFailureRecovery: AgentFailureRecoveryQueue;
   private readonly launchId: string;
@@ -380,6 +382,7 @@ export class HostServer {
     this.uiDir = options.uiDir ?? defaultUiDir();
     const agentDir = options.agentDir ?? defaultAgentDir();
     const stateDir = options.stateDir ?? defaultStateDir();
+    this.stateDir = stateDir;
     // Command output is a person's own bytes: it lives in a private directory
     // of this host's state, not in a shared, guessable temporary path, and it
     // is the only place anything here will read a command log from (RP-6).
@@ -589,6 +592,7 @@ export class HostServer {
     for (const [cwd, runs] of loadedFailures) this.agentFailureRecovery.note(cwd, runs);
     this.skillsCheck = new SkillsCheck({
       agents: () => this.agents.snapshot().agents,
+      profileIds: () => this.knownProfileIds,
       report: (warnings) => this.agents.setWarnings(warnings),
     });
 
@@ -707,13 +711,13 @@ export class HostServer {
         // retire, and a failure here is reported and never fatal (RP-4): an
         // older worker that refuses the method is still a working worker.
         await client.request("agents/sync", { snapshot: this.agents.snapshot() });
-        // Naming must not wait for a sign-in this run may never see. The first
-        // worker to come up benchmarks Namer, after priming so nothing that
-        // opened this worker waits on it.
-        if (!speculative) setImmediate(() => void this.qualifyNamer(cwd, client));
+        // The one-way migration onto Model Profiles runs behind the first real
+        // worker, after priming, so nothing that opened this worker waits on
+        // it (docs/model-profiles.md, "Migration").
+        if (!speculative) setImmediate(() => void this.migrateModelProfiles(cwd, client));
       },
       onPreparedUse: (client, cwd) => {
-        setImmediate(() => void this.qualifyNamer(cwd, client));
+        setImmediate(() => void this.migrateModelProfiles(cwd, client));
       },
       onNotification: (cwd, n, source) => {
         this.observe(cwd, n, source);
@@ -1166,104 +1170,102 @@ export class HostServer {
   // ---------------------------------------------------------------- agents
 
   /**
-   * A provider was just connected. If Beam has no model yet, propose one and
-   * open the choice (once per host run); if Namer still has no model, the new
-   * provider set is a reason to benchmark again. Neither blocks anything: the
-   * login has already been answered, and a failure only logs.
+   * A provider was just connected.
+   *
+   * If the person has no Model Profiles yet, this is the moment to make some:
+   * the migration seeds Smart, Balanced and Fast from what the new provider
+   * offers, and the client is told to show them for review. Nothing is
+   * applied silently and nothing blocks — the sign-in has already been
+   * answered, and a failure only logs (`docs/model-profiles.md`).
    */
   private async onProviderConnected(cwd: string): Promise<void> {
-    const snapshot = this.agents.snapshot();
-    const wantsBeam = snapshot.beam.model === null && snapshot.beam.needsChoice && !this.beamPrompted;
-    const wantsNamer = this.namerNeedsQualifying();
-    if (!wantsBeam && !wantsNamer) return;
+    // A provider set that grew may fill what the first pass could not.
+    await this.migrateModelProfiles(cwd);
+  }
+
+  /**
+   * Run the settings half of the one-way migration through a worker, which is
+   * the only writer of the global settings file, and remember what it wrote.
+   *
+   * Idempotent and cheap after the first run: the worker answers `ran: false`
+   * and writes nothing. The preview record is this host's to write, because
+   * the state directory is this host's.
+   */
+  private async migrateModelProfiles(cwd: string, existing?: WorkerClient): Promise<ModelProfileMigrationReport | undefined> {
+    if (this.closing) return undefined;
     let worker: WorkerClient;
     try {
-      worker = await this.pool.get(cwd);
+      worker = existing ?? (await this.pool.get(cwd));
     } catch (error) {
-      this.log(`agents: no worker for ${cwd} after sign-in: ${error instanceof Error ? error.message : String(error)}`);
-      return;
+      this.log(`agents: no worker for ${cwd} to prepare model profiles: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
     }
-    if (wantsNamer) void this.qualifyNamer(cwd, worker);
-    if (wantsBeam) {
-      this.beamPrompted = true;
-      try {
-        const [providers, catalog] = await Promise.all([
-          worker.request<ClientRequests["pi/providers/list"]["result"]>("pi/providers/list", { cwd }),
-          worker.request<ClientRequests["pi/models/catalog"]["result"]>("pi/models/catalog", { cwd, settingsView: "effective" }),
-        ]);
-        const configured = new Set(providers.providers.filter((provider) => provider.configured).map((provider) => provider.id));
-        const suggested = suggestBeamModel(catalog.models, { configuredProviders: configured });
-        this.agents.setBeamSuggestion(suggested);
-        this.notify("agents/beam/choose-model", { suggested });
-      } catch (error) {
-        // Nothing was shown, so the next sign-in may try again — including
-        // when the worker was stopping and never received the request (RP-4).
-        this.beamPrompted = false;
-        this.log(`agents: could not propose a Beam model: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-  }
-
-  /**
-   * Benchmark Namer against this worker's connected providers.
-   *
-   * Naming used to wait for a sign-in performed through the UI during this
-   * host run, so an installation whose providers were already connected — the
-   * normal case — never qualified and never named anything. Any worker that
-   * comes up is enough: the pool primes it, then this runs behind the
-   * request that started it.
-   *
-   * One benchmark at a time for the whole host, one per provider set per run
-   * (connecting another provider is a new set and so a new attempt), and a
-   * failure only logs and leaves the state retryable.
-   */
-  private async qualifyNamer(cwd: string, existing?: WorkerClient): Promise<void> {
-    if (this.closing || this.namerQualifying || !this.namerNeedsQualifying()) return;
-    this.namerQualifying = true;
+    if (this.closing || !worker.alive) return undefined;
     try {
-      const worker = existing ?? (await this.pool.get(cwd));
-      // Nothing here is worth a request into a worker that is going away: the
-      // benchmark is background work behind somebody else's request.
-      if (this.closing || !worker.alive) return;
-      const listed = await worker.request<ClientRequests["pi/providers/list"]["result"]>("pi/providers/list", { cwd });
-      const configured = listed.providers.filter((provider) => provider.configured).map((provider) => provider.id).sort();
-      // Nothing to name with yet. The sign-in that connects the first provider
-      // brings us straight back here.
-      if (configured.length === 0) return;
-      const providerSet = configured.join(",");
-      if (this.namerQualified.has(providerSet)) return;
-      // Another attempt may have finished while the provider list was read.
-      const snapshot = this.agents.snapshot();
-      if (!this.namerNeedsQualifying()) return;
-      if (this.closing || !worker.alive) return;
-      this.agents.setNamerState({ ...snapshot.namer, status: "qualifying" });
-      try {
-        const state = await worker.request<NamerState>("agents/namer/qualify", { cwd });
-        this.agents.setNamerState(state);
-        // Only a usable result spends this provider set. A transient model or
-        // formatting failure stays retryable when another worker starts.
-        if (state.status === "ready" && state.model) this.namerQualified.add(providerSet);
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        this.agents.setNamerState({ ...snapshot.namer, status: "unqualified", reason });
-        this.log(`agents: Namer could not be qualified: ${reason}`);
+      const { report } = await worker.request<ClientRequests["models/profiles/migrate"]["result"]>("models/profiles/migrate", { cwd });
+      this.knownProfileIds = new Set(report.profiles.map((profile) => profile.id));
+      this.adoptSeededBuiltinProfiles(report);
+      if (report.ran || !this.profilesMigrated) this.writeMigrationRecord(report);
+      this.profilesMigrated = true;
+      this.skillsCheck.run();
+      // Laser filled these in for the person; they review them and edit or
+      // leave them. Offered once per host run, and never applied silently.
+      const seeded = report.profiles.filter((profile) => profile.origin === "seeded");
+      if (report.ran && seeded.length > 0 && !this.profilesPrompted) {
+        this.profilesPrompted = true;
+        this.notify("models/profiles/seeded", { profiles: report.profiles });
       }
+      return report;
     } catch (error) {
-      this.log(`agents: Namer could not be qualified from ${cwd}: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      this.namerQualifying = false;
+      this.log(`agents: model profiles could not be prepared: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
     }
   }
 
   /**
-   * Namer has no model of its own yet. `unavailable` counts only when no
-   * connected candidate exists, and connecting one makes that verdict stale;
-   * a failed candidate check stays retryable too. A model a person picked, or
-   * one a benchmark chose, is `ready` and is never benchmarked over.
+   * The built-ins' half of the migration: a built-in with no profile of its
+   * own takes the assignment that matches what it is for. Written once, and
+   * only over a built-in that has made no choice.
    */
-  private namerNeedsQualifying(): boolean {
-    const { status, model } = this.agents.snapshot().namer;
-    return model === null && (status === "unqualified" || status === "unavailable");
+  private adoptSeededBuiltinProfiles(report: ModelProfileMigrationReport): void {
+    const current = this.agents.builtinProfileIds;
+    const wanted: Array<[BuiltinAgentName, string | null]> = [
+      ["beam", report.assignments.defaultProfileId],
+      ["chat", report.assignments.defaultProfileId],
+      ["namer", report.assignments.namingProfileId],
+    ];
+    for (const [name, id] of wanted) {
+      if (current[name as "beam" | "chat" | "namer"] !== null || !id) continue;
+      try {
+        this.agents.setBuiltinProfile(name, id);
+      } catch (error) {
+        this.log(`agents: ${name} could not take a model profile: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  /**
+   * The preview a person reads: what the migration did to their settings, and
+   * what it did to the definitions this host owns. One file, one writer.
+   */
+  private writeMigrationRecord(report: ModelProfileMigrationReport): void {
+    const stateDir = this.stateDir;
+    if (!stateDir) return;
+    const record: ModelProfileMigrationRecord = {
+      version: 1,
+      at: new Date().toISOString(),
+      settings: report,
+      builtins: (Object.entries(this.agents.builtinProfileIds) as Array<[string, string | null]>)
+        .map(([name, to]) => ({ name, from: null, to })),
+      agentFiles: this.agents.snapshot().agents
+        .filter((agent) => agent.kind === "custom" && agent.path)
+        .map((agent) => ({ path: agent.path!, from: null, to: agent.profileId })),
+    };
+    try {
+      writeFileSync(join(stateDir, MODEL_PROFILE_MIGRATION_RECORD), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+    } catch (error) {
+      this.log(`agents: the model-profile migration record could not be written: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   // -------------------------------------------------------------- log store

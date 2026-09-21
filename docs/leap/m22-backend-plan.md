@@ -190,3 +190,32 @@ session runs inside Laser, so `LASERCODE_FEATURE_GENERATION_ID` and
 faults every spawn with "could not verify the project runtime". It is not a
 product defect and not caused by M22 — the host tests must be run with those
 variables unset (`env -i PATH=… HOME=… pnpm -F @lasercode/host test`).
+
+### M22-T5 checkpoint — done
+
+- `models/profiles/{list,save,delete}` are answered by the host, which picks a
+  worker (the only writer of the global settings file) and owns the two
+  decisions a worker cannot make: which definitions point at a profile, and
+  what happens to them when one is deleted.
+- **Delete-with-replacement is enforced server-side.** A profile an agent
+  definition or a built-in still uses is refused without a `replacementId`, and
+  nothing is asked of the worker in that case, so nothing is written. With a
+  replacement, the worker moves the assignments first and the host then moves
+  the built-ins and the definitions; no path leaves a dangling id.
+- The one-way migration runs once per host run behind the first real worker
+  (`models/profiles/migrate`, host → worker, `native` reach), writes the
+  preview record to `<stateDir>/model-profiles-migration.json`, and gives each
+  built-in that has made no choice the matching assignment.
+- The first-provider prompt is now `models/profiles/seeded`, carrying the
+  seeded profiles for review; `agents/beam/choose-model` is gone.
+- Catalog rows expose the intent and the evidence without opening a session:
+  `SessionSummary.profileId` from the last activation record and
+  `SessionSummary.model` from the last `model_change`, both read by the scan
+  the catalog already runs.
+
+### Decisions needed / left open
+
+- **D-g** "Session projection exposes profile + effective model" is satisfied
+  by the catalog scan above and by `SessionState.profile` / `AgentRun.profileId`.
+  `session-projection.ts` plans history pages and carries no model attribution
+  at all, so there was nothing there to extend.

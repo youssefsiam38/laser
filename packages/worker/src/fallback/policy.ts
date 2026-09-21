@@ -232,7 +232,7 @@ export function nextCandidate(context: CandidateContext): Traversal {
 }
 
 /**
- * `return` is an earlier model than the one the chain is standing on; `advance`
+ * `return` is an earlier model than the one the profile is standing on; `advance`
  * is a later fallback. Same mapping {@link nextCandidate} uses, so a size
  * recovery can join the shared attempt path without asking the traversal for
  * a model it has just moved onto.
