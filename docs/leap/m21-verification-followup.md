@@ -766,3 +766,127 @@ readable in it.
   behaves on a real project. Steps unchanged from batch 3, plus: pick a
   checkpoint two attempts both recorded and check the action stays unavailable
   with the sentence that says why.
+
+## Correction plan · the four findings, before any code (M21-T18/T19)
+
+Ownership moved (forced transfer). The previous owner's branch is preserved
+whole: `agents/implement-approved-capture-completeness-93fd4a03` at `34c1790c`
+merged into `f1286987` as `b203a44a`, **no conflicts**, nothing cherry-picked,
+rewritten or deleted. Nothing below is a replan of the feature; it is four
+concrete corrections to what is already in the code.
+
+### F1 · the scope is selected before the enumeration is bounded
+
+Today `selectRequired`'s zero-change branch lists the **whole** tree bounded at
+`REQUIRED_PATHS_MAX + 1` and *then* filters to the scope. Two wrong answers
+follow: 100 unrelated earlier-sorting files plus one scoped file passes as a
+"complete" scope that is a prefix, and a scope that sorts entirely past row 101
+is refused with "not in the repository at that state", which is false.
+`treeManifest` also drops every non-blob row silently, so a gitlink inside the
+scope disappears from a set that claims to be complete.
+
+- `source-control/read.ts`: one bounded helper that takes the scope **into
+  git** — `ls-tree -r -z --long <commit> -- <scope>` — and answers honestly:
+  `{ rows, truncated, unreadable: Array<{ path; kind: "gitlink" | "other" }> }`
+  or `undefined` when git could not list at all. `treeManifest` keeps its
+  signature and is implemented on the same parser; one helper, no framework.
+- `captures.ts`: the zero-change branch calls it with the scope. Empty → the
+  scope really is absent; `truncated` → refused as over the cap (worded "more
+  than N", never an invented exact count); any `unreadable` row → refused
+  naming that path and why. The cap stays 100, the budgets stay, no backup
+  facility, no second store.
+- `gate.ts attemptOrigin` currently drops `state.path`; it will pass
+  `scopePath` through, so the path a request actually names reaches the
+  selector (and is recorded in `required.from.scopePath`).
+
+Tests, through the router: a scope over the cap refused; a scope of a few files
+preceded by >100 unrelated files captured **complete and correct** (fails
+today); a small scope sorting after >100 unrelated files **succeeds** (falsely
+refused today); a gitlink inside the scope refused by a deterministic fixture
+(`update-index --cacheinfo 160000`, no corrupted repository); and `state.path`
+proven to reach the selector.
+
+### F2 · completeness is checked against the record, not against itself
+
+`requiredComplete(capture, state?)` compares only `state.commitObjectId` and
+the entry/body digests: a capture that is internally consistent but belongs to
+another repository, another ref, another path, another base or another attempt
+passes. The contract wants the durable *state and basis* proven too.
+
+- New small module `project-work/required-facts.ts`:
+  `expectedRequiredFacts(store, projectId, link)` derives what the capture must
+  say from the **persisted** link and, when the link names one, the persisted
+  attempt record — never from git, so a collected checkpoint changes no answer.
+  It yields: `repositoryId`; the link's exact target (state `commitObjectId` +
+  `checkpointId` + `path`, or change base/head + `diffDigest`); the bases that
+  link shape allows; the `from.baseCommitObjectId` that basis must equal (the
+  attempt record's `base` for `attempt_base_to_state`, the change's base for
+  `accepted_change`); `from.scopePath` = the link's `state.path` for
+  `complete_bounded_state`; and `from.executionLinkId` / `taskEntityId`
+  matching the link's `executionLinkId` and that link's own `entityId`.
+- `requiredComplete(capture, expected)` checks all of it, then today's body
+  proof unchanged (entries ↔ sources ↔ re-taken digests). Called from the
+  Native evaluator hook in `methods.ts`, from `keepEvidenceReviewable`'s
+  decision branch and from the delivery path, so one rule holds at all three.
+  No caller self-certification: nothing in the expectation comes from a
+  request.
+- Tests through the real store/evaluator/gates: wrong repository, wrong ref,
+  wrong path, wrong `from` base, a foreign `executionLinkId`, a basis the link
+  shape does not allow — each not native and refused at the gate, including two
+  attempts sharing one commit id where only `from` tells them apart. Ordinary
+  unchanged cases stay satisfied; the existing 21 stay green.
+
+### F3 · supersession provenance — approval needed before code
+
+`attachCapture(..., replacing)` does an `UPDATE` of
+`repository_links.capture_blob_id`. The old blob survives in the store by
+content address, but nothing records **which proof an earlier decision rested
+on**: the association is overwritten. Retaining orphan bytes is not provenance.
+
+Proposed, minimal and append-only:
+
+- a new table `repository_link_captures(project_id, link_id, blob_id,
+  attached_at, supersedes_blob_id, reason, actor_json)`, written in the same
+  transaction as the link's first capture and as every later correction. Never
+  updated, never deleted;
+- `repository_links.capture_blob_id` stays the current pointer, so every
+  reader is unchanged; the table is the history that says what was current
+  when;
+- the CAS stays, and is honest: the history row is appended **only** when the
+  compare-and-set actually moved the pointer (`changes === 1`); a lost race
+  appends nothing and is reported to the caller as a conflict rather than
+  assumed to have won;
+- a decision's own recorded time plus the chain answers "which capture did
+  this rest on" without rewriting anything.
+
+**Question for the parent, before any code here.** Root
+`docs/project-lifecycle-leap.md` says a correction *appends a superseding link*
+and retains the old provenance. Is that satisfied by (i) the above — link
+identity and target unchanged, only the stored proof of it superseded, with an
+append-only capture history — or do you want (ii) a full superseding
+`RepositoryLink` row per capture correction (`supersedesLinkId`)? I recommend
+(i): the link's target did not change, and (ii) would append a link per
+gate-time backfill and change what every existing reader sees. Also confirm the
+history row should carry the gate name and actor that caused the correction (I
+propose yes, host-written, no caller text).
+
+### F4 · the blanket test timeout comes out, with the measurement
+
+Measured at `b203a44a`, file alone, `vitest run
+test/project-work/capture-completeness.test.ts --reporter=verbose`: 21 passed,
+**5.90 s total, 4.53 s in tests**; slowest test 985 ms (520 pad files, which is
+the minimum that makes a required file sort past `REPOSITORY_CAPTURE_FILES_MAX`
+= 500), then 454 ms (40 × 120 KB, the over-budget fixture), everything else
+≤ 270 ms. Nothing is within 5× of the 5 s default; the two original failures
+were whole-suite parallel contention, not intrinsic cost. So:
+`vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })` is removed, the
+two heavy fixtures are measured again under the full `test/project-work` load,
+and only if a specific test is genuinely intrinsic-bound does it get a narrow
+per-test budget with the measured number in its note. No retries, no skips, no
+weakened assertions.
+
+### What is not touched
+
+SDK/driver/worker session/server factories, design index/workspace, interop,
+transcript/Legend, `PLAN.md`/`STATUS.md`. Native acceptance model/dialog only
+if the identity contract forces it. Evidence lands in this file.
