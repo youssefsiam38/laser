@@ -28,9 +28,10 @@ import type { FixtureEvaluation } from "../../src/tool-eval/measures.js";
 const FIXTURES = join(import.meta.dirname, "..", "fixtures", "tool-eval");
 
 /**
- * Every tool under the contract today: the ten M26 brought under it (D-350.d)
- * and the eleven project-work tools M21-T17 registered — the four lifecycle
- * tools, the three Design Index tools and the four Research tools.
+ * Every tool under the contract today: the ten M26 brought under it (D-350.d),
+ * the eleven project-work tools M21-T17 registered — the four lifecycle tools,
+ * the three Design Index tools and the four Research tools — and the verifier
+ * M21-T19 added beside them.
  */
 const TOOLS = [
   "start_agent",
@@ -47,6 +48,7 @@ const TOOLS = [
   "write_project_artifact",
   "request_project_review",
   "report_project_task",
+  "verify_project_task",
   "inspect_design_index",
   "build_design_index",
   "review_design_index",
