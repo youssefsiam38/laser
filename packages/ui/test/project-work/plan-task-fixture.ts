@@ -7,6 +7,7 @@
  * fields the host may not have sent.
  */
 import type {
+  AttemptRepositoryRecord,
   ClientRequests,
   ExecutionLink,
   PlanBody,
@@ -131,6 +132,7 @@ export function evidence(over: Partial<ProjectWorkEvidence> & { evidenceId: stri
     at: over.at ?? "2026-02-02T09:00:00.000Z",
     origin: over.origin ?? ORIGIN,
     ...(over.detail ? { detail: over.detail } : {}),
+    ...(over.blobId ? { blobId: over.blobId } : {}),
     ...(over.repositoryLinkId ? { repositoryLinkId: over.repositoryLinkId } : {}),
     evidenceId: over.evidenceId,
   };
@@ -149,8 +151,30 @@ export function executionLink(over: Partial<ExecutionLink> & { linkId: string; t
     ...(over.branch ? { branch: over.branch } : {}),
     ...(over.baseCommitObjectId ? { baseCommitObjectId: over.baseCommitObjectId } : {}),
     ...(over.targetUnavailable ? { targetUnavailable: over.targetUnavailable } : {}),
+    ...(over.repositories ? { repositories: over.repositories } : {}),
     linkId: over.linkId,
     targetId: over.targetId,
+  };
+}
+
+/**
+ * One repository's record of an attempt, as the host writes it from git: the
+ * opaque repository id, the base it started at and the checkpoints it made,
+ * each with its own ref and its own commit.
+ */
+export function attemptRepository(
+  over: Partial<AttemptRepositoryRecord> & { repositoryId: string; name: string },
+): AttemptRepositoryRecord {
+  return {
+    base: over.base ?? { vcs: "git", objectFormat: "sha1", commitObjectId: "b".repeat(40) },
+    sinceTurn: over.sinceTurn ?? -1,
+    checkpoints: over.checkpoints ?? [],
+    changedPaths: over.changedPaths ?? [],
+    commits: over.commits ?? [],
+    ...(over.change ? { change: over.change } : {}),
+    ...(over.unavailable ? { unavailable: over.unavailable } : {}),
+    repositoryId: over.repositoryId,
+    name: over.name,
   };
 }
 

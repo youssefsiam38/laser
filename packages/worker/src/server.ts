@@ -22,7 +22,7 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, isLiveEdgeWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, WIRE_NAMESPACE, AGENT_ISOLATION_DEFAULT, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type ModelIdentity, type ModelProfile, type ModelProfileInput, type ProfileAssignments, type SettingChange, validateModelProfiles, MODEL_PROFILES_SETTING, DEFAULT_PROFILE_SETTING, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TelemetryContext, type TelemetrySection, type TypedClientRequest, type WorkerActivationState, type AgentIsolationDefault } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, isVerificationFleetTaskId, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, isLiveEdgeWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, WIRE_NAMESPACE, AGENT_ISOLATION_DEFAULT, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type ModelIdentity, type ModelProfile, type ModelProfileInput, type ProfileAssignments, type SettingChange, validateModelProfiles, MODEL_PROFILES_SETTING, DEFAULT_PROFILE_SETTING, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TelemetryContext, type TelemetrySection, type TypedClientRequest, type WorkerActivationState, type AgentIsolationDefault } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
 import {
   PRESSURE_MAX_REPLAY_DROPS,
@@ -89,7 +89,13 @@ import { ProjectResearch } from "./research/bridge.js";
 import { enabledResearchAdapters, type ResearchAdapterId } from "@lasercode/protocol";
 import type { ResearchBridge } from "./research/tools.js";
 import { createProcessRunner } from "./git-actions/index.js";
-import { HostProjectWorkBridge, ProjectWorkSession, type ProjectWorkBridge, type ProjectWorkExecutionShape } from "./project-work/index.js";
+import {
+  HostProjectWorkBridge,
+  ProjectWorkSession,
+  VerificationService,
+  type ProjectWorkBridge,
+  type ProjectWorkExecutionShape,
+} from "./project-work/index.js";
 import { bridgeResearchStore } from "./project-work/research-store.js";
 import { projectInstructions } from "./project-work/instructions.js";
 import { migrateModelProfiles } from "./profiles/migrate.js";
@@ -371,6 +377,8 @@ export class WorkerServer {
   /** Requests this worker has asked the host and not yet had answered (M21-T17). */
   private readonly hostPending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private hostRequestSeq = 0;
+  /** The verification runs this worker holds, once one has been started. */
+  private verificationRuns: VerificationService | undefined;
   /** This project's design index (M21-T10), built once and read on demand. */
   private projectHostGrounding: ProjectHostGrounding | undefined;
   private projectDesignIndex: ProjectDesignIndex | undefined;
@@ -1061,6 +1069,13 @@ export class WorkerServer {
         return (await this.pressure.directive(req.params)) satisfies Result<"pi/worker/pressure">;
 
       case "pi/task/stop": {
+        // A verification run is a Command with no companion process behind it
+        // (M21-T19): it is this worker's own loop, so Stop from the fleet row
+        // is answered here rather than delivered to the extension. The id is
+        // namespaced, so it can never be mistaken for a shell command's.
+        if (isVerificationFleetTaskId(req.params.id)) {
+          return { delivered: this.verification().stopByTaskId(req.params.id) } satisfies Result<"pi/task/stop">;
+        }
         // An index build is a Command with no process (D-353): it is this
         // worker's own loop, so Stop from the fleet row is answered here
         // rather than delivered to the companion extension.
@@ -1156,6 +1171,31 @@ export class WorkerServer {
       case "pi/project/pr/viewed":
         return await this.dispatchGitAction(req);
 
+      // ------------------------------------- M21-T19 verification runs ---
+      // Run control only: a verification run executes the Task's own declared
+      // commands, which needs the checkout this worker owns. Which criteria
+      // exist and what each one came out as is the host's, over the bridge.
+      case "pi/project/verify/start": {
+        this.assertCwd(req.params.cwd);
+        try {
+          return { run: this.verification().start(req.params) } satisfies Result<"pi/project/verify/start">;
+        } catch (error) {
+          // A refusal is a sentence a person can act on — which conversation
+          // to run it in, and how to get one — never a bare failure.
+          throw new ProtocolError(
+            ErrorCodes.InvalidParams,
+            error instanceof Error ? error.message : "That task could not be verified from here.",
+          );
+        }
+      }
+      case "pi/project/verify/state": {
+        this.assertCwd(req.params.cwd);
+        return { runs: this.verification().state(req.params) } satisfies Result<"pi/project/verify/state">;
+      }
+      case "pi/project/verify/stop": {
+        this.assertCwd(req.params.cwd);
+        return this.verification().stop(req.params) satisfies Result<"pi/project/verify/stop">;
+      }
       // --------------------------------- M21-T13 the design workspace ---
       // The index, its review, its builds and the grounding of a page are
       // files inside this project directory, and this process is the one that
@@ -2144,6 +2184,38 @@ export class WorkerServer {
    * whether it has a design index, which research adapters the person left
    * on, and whether it was opened to work on a Task.
    */
+  /**
+   * This worker's verification runs (M21-T19).
+   *
+   * One registry for the whole worker, so a run a person started from the
+   * Task detail and a run a model started with `verify_project_task` are the
+   * same run: watchable and stoppable from either side. Each run reaches the
+   * host authority over a bridge for its own checkout, with no session behind
+   * it — a person verifying a Task is not a conversation.
+   */
+  private verification(): VerificationService {
+    this.verificationRuns ??= new VerificationService({
+      bridgeFor: (cwd) =>
+        new HostProjectWorkBridge({
+          link: (method, params) => this.hostRequest(method, params),
+          identity: () => ({ label: "Verification" }),
+          execution: () => this.executionShape(cwd),
+        }),
+      // A run belongs to a conversation this worker is actually holding: a
+      // path nobody here has open could not be watched or stopped, and a row
+      // under it would be a row nobody can find.
+      holdsSession: (path) => this.runtimes.get(path) !== undefined,
+      // The row travels the road every Command row already travels: an
+      // extension message the host's task register folds into its own. A
+      // person stops it from the fleet exactly as they stop a shell command.
+      publishTask: (path, task) => {
+        const { logPath: _logPath, ...rest } = task as typeof task & { logPath?: string };
+        this.notify("pi/extension/message", { path, message: { type: "lasercode/task/update", task: rest } });
+      },
+    });
+    return this.verificationRuns;
+  }
+
   private projectWorkSession(live: Live, openOptions: Parameters<SessionDriver["open"]>[0]): ProjectWorkSession | undefined {
     if (this.options.projectWork !== true) return undefined;
     const agent = openOptions.agent;
@@ -2173,7 +2245,13 @@ export class WorkerServer {
       foundationModels: () => this.designModels(),
       ...(this.researchRun(bridge, openOptions.cwd) ? { research: this.researchRun(bridge, openOptions.cwd) } : {}),
       projectInstructions: () => projectInstructions(this.options.cwd),
+      // A run a model starts belongs to the conversation it ran in, and shows
+      // in the fleet under it (M21-T19).
+      sessionPath: () => live.path,
       reviewActor: { kind: "agent", label },
+      // The same registry the person's own verify surface uses, so one run is
+      // one run whoever started it (M21-T19).
+      verification: this.verification(),
     });
   }
 
