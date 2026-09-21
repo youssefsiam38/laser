@@ -103,8 +103,14 @@ export interface DesignIndexCommand {
   running: boolean;
   /** Why it ended, when it ended badly. A sentence, never a stack. */
   failure?: string;
-  /** The session the fleet row hangs under, when one started it. */
-  sessionPath?: string;
+  /**
+   * The session that owns it, and whose fleet group its row hangs under.
+   *
+   * Required: an index build is a Command the person watches and stops
+   * (`docs/design-phase.md`, "Re-index"), so a build with no owning session is
+   * refused before it starts rather than run where nobody can see it.
+   */
+  sessionPath: string;
 }
 
 export const designIndexCommandSchema = z
@@ -119,7 +125,7 @@ export const designIndexCommandSchema = z
     elapsedMs: z.number().int().nonnegative(),
     running: z.boolean(),
     failure: z.string().max(1000).optional(),
-    sessionPath: z.string().min(1).max(4096).optional(),
+    sessionPath: z.string().min(1).max(4096),
   })
   .strict();
 
@@ -154,11 +160,15 @@ export interface DesignIndexBuildParams {
   /** The file budget. The build stops itself at it and says so. */
   maxFiles?: number;
   /**
-   * The session the person started it from, so the Command takes a row in that
-   * session's fleet group (D-328: one command, one session). Absent = the
-   * progress is read in the Design tab and nowhere else.
+   * The session that owns this build, so the Command takes a row in that
+   * session's fleet group (D-328: one command, one session).
+   *
+   * Required, and checked by the worker against the sessions it actually
+   * holds: a build is bounded work a person must be able to watch and stop,
+   * and one started for no session — or for a session this project's worker
+   * does not hold — is refused before a file is opened.
    */
-  sessionPath?: string;
+  sessionPath: string;
 }
 
 export interface DesignIndexBuildResult {
@@ -345,7 +355,7 @@ export const designWorkspaceParamsSchemas = {
       rebuild: z.boolean().optional(),
       appRoot: z.string().min(1).max(1024).optional(),
       maxFiles: z.number().int().positive().max(200_000).optional(),
-      sessionPath: z.string().min(1).max(4096).optional(),
+      sessionPath: z.string().min(1).max(4096),
     })
     .strict(),
   "design/index/stop": z.object({ ...projectTarget, commandId: z.string().min(1).max(200) }).strict(),

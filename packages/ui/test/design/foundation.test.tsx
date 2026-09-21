@@ -34,6 +34,15 @@ import { DesignDetail } from "../../src/components/project-work/bodies/DesignDet
 import type { WorkBodyContext } from "../../src/components/project-work/bodies/context.js";
 import { FOUNDATION_UNSAVED_SENTENCE } from "../../src/components/design/FoundationWizard.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
+import { createStateStore, LaserStoreProvider } from "../../src/runtime/LaserProvider.js";
+import { initialState } from "../../src/store.js";
+
+/**
+ * The window's state, with no conversation selected: these tests are about the
+ * detail itself, and a design surface mounted with nothing selected simply has
+ * no conversation that could own an index build.
+ */
+const designStore = createStateStore(initialState);
 import { ProjectWorkStore, type ProjectWorkMethod } from "../../src/project-work/store.js";
 import { foundationProfileDigest, foundationSampleScreens, setFoundationToken, foundationTokenRows } from "../../src/design/foundation.js";
 
@@ -247,9 +256,9 @@ const type = async (element: Element | null | undefined, value: string): Promise
 async function render(body: DesignBody, context: WorkBodyContext, index?: ReturnType<typeof indexFixture>): Promise<void> {
   await act(async () =>
     root.render(
-      <TooltipProvider>
+      <LaserStoreProvider store={designStore}><TooltipProvider>
         <DesignDetail body={body} context={context} {...(index ? { index } : {})} />
-      </TooltipProvider>,
+      </TooltipProvider></LaserStoreProvider>,
     ),
   );
   await settle();

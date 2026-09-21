@@ -83,6 +83,7 @@ import { ModelsAdapter, PackagesAdapter } from "./packages.js";
 import { SettingsAdapter, readEffectiveProductSettings, readProfileSettings, researchSourcesFrom, resolveProfile } from "./settings.js";
 import { ProjectHostGrounding } from "./design/host/ground.js";
 import { ProjectDesignIndex } from "./design/index/bridge.js";
+import type { DesignIndexBridge } from "./design/index/tools.js";
 import { designModelAccess, type DesignModelAccess } from "./design/profile.js";
 import { DesignWorkspace, isDesignCommandTaskId } from "./design/workspace.js";
 import { ProjectResearch } from "./research/bridge.js";
@@ -2190,7 +2191,10 @@ export class WorkerServer {
     return new ProjectWorkSession({
       bridge,
       cwd: openOptions.cwd,
-      design: this.designIndex(),
+      // Bound to *this* session: the model never names an owner for a build,
+      // and the one it gets is the conversation it is speaking in, read when
+      // the tool is called rather than when the session was opened.
+      design: this.designSurface(live),
       hostGrounding: this.hostGrounding(),
       // Foundation mode proposes on the Design profile (`docs/design-phase.md`,
       // "Model profiles"), read per call so a profile assigned while this
@@ -2278,8 +2282,24 @@ export class WorkerServer {
       // exactly as they stop a shell command.
       publishTask: (path, task) => {
         const { logPath: _logPath, ...rest } = task as typeof task & { logPath?: string };
-        this.notify("pi/extension/message", { path, message: { type: "lasercode/task/update", task: rest } });
+        const message = { type: "lasercode/task/update", task: rest } as const;
+        // This worker's own fleet index first, then the host's. An index build
+        // is a Command of that session like any other: an agent reading
+        // `inspect_fleet` sees it, and — because a session with a running
+        // command is pinned (`session-safety.ts`) — the conversation that owns
+        // it cannot be released, and therefore cannot be deleted, while it
+        // runs. That is how "no invisible running work" is kept: through the
+        // rules that already exist, not a second set for design.
+        this.tasks.observe(path, message);
+        this.notify("pi/extension/message", { path, message });
       },
+      // A build may only be owned by a conversation this worker holds open.
+      // The worker opens sessions of its own project and nothing else
+      // (`session/new` and `session/load` refuse another directory; a child is
+      // opened by the harness in a worktree of this project), so this is also
+      // the check that a session of another project can never own a build
+      // here.
+      holdsSession: (path) => this.runtimes.has(path),
     });
     return this.projectDesignWorkspace;
   }
@@ -2325,6 +2345,45 @@ export class WorkerServer {
     });
   }
 
+  /**
+   * This session's design surface: the project's one index, with builds bound
+   * to this conversation (M21-T10/T13 follow-up).
+   *
+   * Reading and reviewing are the project's, so they go straight to the index.
+   * Starting a build is not: it is admitted by the design workspace, which
+   * decides whether this session may own one and publishes the Command row
+   * before the first file is opened. The person's `design/index/build` and the
+   * model's `build_design_index` therefore reach the same admission, and
+   * neither can start work nobody can see.
+   */
+  private designSurface(live: Live): DesignIndexBridge {
+    return {
+      index: () => this.designIndex().index(),
+      review: (input) => this.designIndex().review(input),
+      startBuild: async (input) => {
+        // At invocation, not at construction: a session learns its path while
+        // it opens, and this is the conversation the tool call is happening in.
+        const started = await this.designWorkspace().startBuild({
+          sessionPath: this.sessionPathOf(live),
+          rebuild: input.rebuild,
+          ...(input.appRoot !== undefined ? { appRoot: input.appRoot } : {}),
+          ...(input.maxFiles !== undefined ? { maxFiles: input.maxFiles } : {}),
+        });
+        return { commandId: started.command.commandId, title: started.command.title, appRoot: started.appRoot };
+      },
+    };
+  }
+
+  /** This session's file path, from the driver when the record has not landed yet. */
+  private sessionPathOf(live: Live): string {
+    if (live.path) return live.path;
+    try {
+      return live.driver.state().path;
+    } catch {
+      return "";
+    }
+  }
+
   /** This project's design index, built once per worker and read on demand. */
   private designIndex(): ProjectDesignIndex {
     this.projectDesignIndex ??= new ProjectDesignIndex({
@@ -2344,8 +2403,12 @@ export class WorkerServer {
           ...(access.profile ? { profileId: access.profile.id } : {}),
         };
       },
-      onCommand: (command) => this.designWorkspace().observeCommand(command),
+      onCommand: (command, owner) => this.designWorkspace().observeCommand(command, owner),
       onProgress: (commandId, progress) => this.designWorkspace().observeProgress(commandId, progress),
+      // How a build ended, published as its last row before the index lets go
+      // of it: the fleet learns *failed*, *stopped* or *completed* from the one
+      // answer the engine gave, and never from a phase that arrived first.
+      onSettled: (command, owner, outcome) => this.designWorkspace().observeSettled(command, owner, outcome),
     });
     return this.projectDesignIndex;
   }
