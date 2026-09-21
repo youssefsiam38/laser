@@ -6249,12 +6249,15 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | M23-T1 | Protocol removal and `sessionKind` | in-progress | claude-2026-09-21-leap | — | see notes |
 | M23-T2 | Worker: chat prompt and one-shot naming | in-progress | claude-2026-09-21-leap | — | see notes |
 | M23-T3 | Host: no built-ins, Beam re-home | in-progress | claude-2026-09-21-leap | — | see notes |
-| M23-T4 | UI: remove Beam, plain Chat entry points | todo | — | — | `PLAN.md` M23 |
+| M23-T4 | UI: remove Beam, plain Chat entry points | in-progress | claude-2026-09-21-leap | — | see notes |
 | M23-T5 | Docs, identity guard, gates | todo | — | — | `PLAN.md` M23 |
 | M23-T6 | Release | todo | — | — | `PLAN.md` M23 |
 
 #### M23-T1–T3 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap while 0.12.0 builds: one backend worker (protocol → worker → host) on a branch based on `13c1ce3b`, one commit per task, plan in `docs/leap/m23-backend-plan.md`. M22 real-migration observation carried in: `builtinProfiles.namer` must become `namingProfileId` when the Namer built-in goes.
+
+#### M23-T4 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: UI/CLI worker based on `92e5480e` (M23-T1/T2 merged; host T3 still in flight), write set packages/ui + packages/cli + scripts/browser-check Beam fixtures; plan in `docs/leap/m23-ui-plan.md`.
 
 #### M23-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/plain-chat.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M23 tasks added; D-347 recorded. Implementation not started.
