@@ -5992,7 +5992,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T12 | Native validation runner and source selection | todo | — | — | `PLAN.md` M21 |
 | M21-T13 | Design workspace and anchored review | todo | — | — | `PLAN.md` M21 |
 | M21-T14 | Greenfield design foundation | todo | — | — | `PLAN.md` M21 |
-| M21-T15 | Plan DAG and Project Task engine | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T15 | Plan DAG and Project Task engine | done | claude-2026-09-21-leap | `2d2b5778` (merged `aa33ffbf`); host 1121 passed (`project-work/task-engine.test.ts` 17 over the wire), protocol 631 (`project-work-plan-graph.test.ts` 12) | see notes |
 | M21-T16 | Plans and Tasks workspace | todo | — | — | `PLAN.md` M21 |
 | M21-T17 | Model tools and execution linking | todo | — | — | `PLAN.md` M21 |
 | M21-T18 | Checkpoints, changes and delivery evidence | todo | — | — | `PLAN.md` M21 |
@@ -6017,6 +6017,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI worker over the T6 slots (Spec/Research create/edit/revise/archive, brief vs full spec, Research question tree + findings + source panel, provenance UI, cross-links, search, Markdown editing) — host stays as the spine provides; T8's UI pieces follow in the same session once T15's host changes are merged.
 
 #### M21-T15 notes
+- 2026-09-21 done (`2d2b5778`): `packages/host/src/project-work/task-engine.ts` — plan graph validation (cycles named by key, unknown/non-task/self dependencies refused, orphans recorded not refused), readiness derived on read with `blocked → ready` cascades as `system` transitions, stale-upstream start refusal with typed data, `done` only with passing acceptance evidence, cancel with a stored reason, no run→done (execution end writes supporting evidence only), assignments without session/run ids, declared+observed scope conflicts with person-only `sharedWith`, attention reasons. `validatePlanGraph` lives beside the schema so refusals name keys (decision 1 in the plan). Board/Task wire shapes appended to `docs/leap/m21-spine-plan.md`.
 - 2026-09-21 claimed by claude-2026-09-21-leap: host engine over the spine store (DAG validation, readiness, transitions, stale, assignments, conflicts, evidence rules); gate semantics from T8 are consumed through the store's approval records already present since T1/T2.
 
 #### M21-T26 notes
