@@ -280,7 +280,7 @@ function FleetEmpty() {
 }
 
 /**
- * No session is open: a fresh window, or only Beam’s bubble. The fleet has
+ * No session is open: a fresh window, or a landing. The fleet has
  * nothing to be the tree of, and saying "nothing is running" would be a claim
  * about the whole project that this column no longer makes.
  */

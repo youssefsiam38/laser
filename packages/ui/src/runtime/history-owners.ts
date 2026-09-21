@@ -3,7 +3,7 @@
  *
  * One canonical store owns a session: its metadata, branch and epoch, its
  * questions, its queue and drafts, and the order of the host's updates. What a
- * rendered surface has *loaded* is not canonical — the main window and Beam can
+ * rendered surface has *loaded* is not canonical — two surfaces can
  * show the same session and have paged it to different depths, and re-entering
  * a session normally starts at its recent tail without disturbing the other.
  *

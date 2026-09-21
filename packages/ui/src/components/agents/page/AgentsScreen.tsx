@@ -308,6 +308,7 @@ export function AgentsScreen({ target }: AgentsScreenProps) {
                 warnings={warnings}
                 selection={selection}
                 onSelect={(next) => void select(next)}
+                {...(canCreate ? { onNew: startNew } : {})}
                 lead={mobile && canCreate && isFirstRun(snapshot, scopeView, projectCwd) ? (
                   <AgentsOverview
                     compact

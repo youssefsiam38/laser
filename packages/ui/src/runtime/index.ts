@@ -119,7 +119,6 @@ export {
   mainPath,
   mainTab,
   pendingSessionPath,
-  projectReturnOf,
   provisionalSessionPath,
   rememberedCodeOf,
   rootCwdForSession,

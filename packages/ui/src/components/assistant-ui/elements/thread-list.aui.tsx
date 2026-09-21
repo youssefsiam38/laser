@@ -24,12 +24,11 @@
  *     accessible name.
  *
  * Since the agents leap (docs/agents.md, Lane U2):
- *   - Two tabs. **Code** is the project list; **Chat** is the projectless
- *     conversations of the built-in Chat workspace, one flat list, newest
- *     first. The Beam workspace is a group of its own after the projects, with
- *     a spark instead of a folder, and its rows carry a small spark too.
- *     Neither built-in group offers a `+`: Beam is started from its bubble and
- *     Chat from the tab's own button.
+ *   - Two tabs, Chat first. **Chat** is the projectless conversations of the
+ *     Chat workspace, one flat list, newest first; **Code** is the project
+ *     list. The Chat group offers no `+` of its own: a chat is started from
+ *     the tab's own button, the palette or Cmd+Shift+N
+ *     (`docs/plain-chat.md`).
  *   - A child session an agent started nests under its parent, one step per
  *     depth, on a continuous lineage rail (the grammar of
  *     `elements/subagent-list.tsx`). Its row leads with the instance name and
@@ -67,7 +66,7 @@ import {
   useAuiState,
   type AssistantState,
 } from "@assistant-ui/react";
-import { humanizeLabel, type AgentRun, type AgentRunStatus, type SessionSummary } from "@lasercode/protocol";
+import { humanizeLabel, sessionKindOf, type AgentRun, type AgentRunStatus, type SessionSummary } from "@lasercode/protocol";
 import {
   Archive,
   ArchiveRestore,
@@ -84,7 +83,6 @@ import {
   Pin,
   PinOff,
   Plus,
-  Sparkles,
   Trash2,
 } from "lucide-react";
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type FC } from "react";
@@ -200,7 +198,7 @@ interface ItemMeta {
   label: string;
   parentPath: string | undefined;
   child: boolean;
-  workspaceKind: "beam" | "chat" | undefined;
+  workspaceKind: "chat" | undefined;
   modifiedAt: number;
   empty: boolean;
   /** When the row was born: the run's start, else the catalog's `createdAt`. */
@@ -288,7 +286,7 @@ export function useThreadListGroups(
         label: humanizeLabel(str(custom["subagentName"]) ?? (title !== "" ? title : (path.split("/").pop() ?? path))),
         parentPath,
         child: custom["agentKind"] === "child" || parentPath !== undefined,
-        workspaceKind: custom["agentKind"] === "beam" || custom["agentKind"] === "chat" ? custom["agentKind"] : undefined,
+        workspaceKind: typeof custom["agentKind"] === "string" && sessionKindOf(custom["agentKind"]) === "chat" ? "chat" : undefined,
         modifiedAt: modified(item),
         empty: custom["empty"] === true,
         startedAt: time(run?.startedAt) || time(custom["createdAt"]),
@@ -372,8 +370,6 @@ export function useThreadListGroups(
       // is the child's directory, not a project, so it gets no group of its own.
       order = filter ? [filter] : projects.filter((cwd) => workspaceKindOf(cwd, workspaces) === undefined && !isWorktreeCwd(cwd));
       for (const cwd of byCwd.keys()) if (!order.includes(cwd) && workspaceKindOf(cwd, workspaces) === undefined) order.push(cwd);
-      // Beam after the projects: a built-in feature, not a directory someone added.
-      if (!filter && workspaces.beam !== undefined && byCwd.has(workspaces.beam)) order.push(workspaces.beam);
     }
 
     return order
@@ -686,7 +682,7 @@ const ThreadListRows: FC<ThreadListProps> = ({ projects, query = "", onOpen, onN
 const EMPTY_WORKSPACES: Workspaces = {};
 const EMPTY_PROJECTS: readonly string[] = [];
 const sameWorkspaces = (a: Workspaces | undefined, b: Workspaces | undefined): boolean =>
-  a === b || (a !== undefined && b !== undefined && a.beam === b.beam && a.chat === b.chat);
+  a === b || (a !== undefined && b !== undefined && a.chat === b.chat);
 
 // ---------------------------------------------------------------------------
 // Groups
@@ -743,11 +739,9 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
     : catalogPage?.remaining === undefined ? undefined : Math.min(7, catalogPage.remaining);
   const id = groupDomId(group.cwd);
   const listId = `${id}-list`;
-  const beam = group.kind === "beam";
   const count = group.roots.length;
   const total = catalogPage?.total ?? group.total;
-  // Beam's group starts a Beam chat, which opens in the window rather than in
-  // the bubble; the panel decides which agent a directory means (D-143).
+  // The panel decides what a directory means (D-143).
   const newSession = onNewSession;
   return (
     <section aria-labelledby={`${id}-name`} data-cwd={group.cwd} data-kind={group.kind} data-current={isCurrent || undefined} className="group/project">
@@ -757,16 +751,14 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
           onClick={() => sessionsList.toggleCollapsed(group.cwd)}
           aria-expanded={!collapsed}
           aria-controls={listId}
-          title={beam ? "Beam: your assistant for the app. Its conversations live here." : `${group.cwd}${isCurrent ? "\nCurrent project: new sessions start here" : ""}`}
+          title={`${group.cwd}${isCurrent ? "\nCurrent project: new sessions start here" : ""}`}
           className={cn(
             "flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-md px-1 text-start text-ink-3 outline-none hover:bg-surface-2 hover:text-ink-2",
             "focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-live",
           )}
         >
           <ChevronRight aria-hidden="true" className={cn("rtl:-scale-x-100", "size-3 shrink-0 transition-transform duration-(--motion-fast) motion-reduce:transition-none", !collapsed && "rotate-90 rtl:-rotate-90")} />
-          {beam ? (
-            <Sparkles aria-hidden="true" data-slot="beam-mark" className="size-3.5 shrink-0 text-live" />
-          ) : collapsed ? (
+          {collapsed ? (
             <Folder aria-hidden="true" className="size-3.5 shrink-0" />
           ) : (
             <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
@@ -778,7 +770,7 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
         </button>
         {newSession && (
           <TooltipIconButton
-            tooltip={beam ? `New ${group.name} chat` : `New session in ${group.name}`}
+            tooltip={`New session in ${group.name}`}
             size="icon-xs"
             className="text-ink-3 opacity-0 group-hover/project:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 [@media(pointer:coarse)]:opacity-100"
             disabled={!canCreate}
@@ -799,7 +791,7 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
               onSelect={() => { void (async () => {
                 // Archive uses the complete summary tree, not just fetched pages.
                 const complete = actions.allSessionSummaries ? await actions.allSessionSummaries() : sessions;
-                const seeds = complete.filter((session) => session.cwd === group.cwd || (beam && workspaceKindOf(session.cwd, workspaces) === "beam")).map((session) => session.path);
+                const seeds = complete.filter((session) => session.cwd === group.cwd).map((session) => session.path);
                 const include = (node: ThreadListNode) => { seeds.push(node.path); node.children.forEach(include); };
                 [...group.roots, ...group.pinned].forEach(include);
                 const paths = sessionSubtreePaths(seeds, complete);
@@ -810,7 +802,7 @@ const ProjectGroup = memo(function ProjectGroup({ group, collapsed, isCurrent, s
             >
               <Archive /> Archive chats
             </DropdownMenuItem>
-            {!beam && removeProject.state === "available" && (
+            {removeProject.state === "available" && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => void actions.removeProject(group.cwd)}>
@@ -1146,7 +1138,7 @@ interface RowModel {
   messageCount: number;
   /** An agent started this session under another one. */
   child: boolean;
-  workspaceKind: "beam" | "chat" | undefined;
+  workspaceKind: "chat" | undefined;
   /** The instance name its parent gave it. */
   subagentName: string | undefined;
   /** The newest run in this session, when the registry knows one. */
@@ -1237,7 +1229,7 @@ function useRowModel(path: string | undefined): RowModel {
           modifiedAt: summary.modifiedAt,
           messageCount: summary.messageCount,
           child: info?.kind === "child" || summary.parentPath !== undefined,
-          workspaceKind: info?.kind === "beam" || info?.kind === "chat" ? info.kind : undefined,
+          workspaceKind: info && sessionKindOf(info.kind) === "chat" ? "chat" : undefined,
           subagentName: info?.subagentName === undefined ? undefined : humanizeLabel(info.subagentName),
           runId: run?.runId ?? info?.runId,
           runStatus: run?.status ?? info?.runStatus,
@@ -1279,7 +1271,6 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   const isEditing = editing === id;
   const triggerRef = useRef<HTMLButtonElement>(null);
   const workspaceKind = row.workspaceKind ?? workspaceKindOf(row.cwd, workspaces);
-  const beam = workspaceKind === "beam";
   const workspaceLabel = workspaceKind ? groupNameOf(row.cwd, workspaceKind) : shortCwd(row.cwd);
   // A Chat conversation of its own (not one an agent started under it) can
   // move into a project (M13-T58); the same rule that put it in the Chat tab.
@@ -1330,7 +1321,6 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
       data-pinned={isPinned || undefined}
       data-child={row.child || undefined}
       data-run-status={row.runStatus}
-      data-beam={beam || undefined}
       data-dimmed={dimmed || undefined}
       className={cn("group relative rounded-lg", active && "bg-surface-2")}
     >

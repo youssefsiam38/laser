@@ -106,10 +106,15 @@ export function modKey(): string {
   return /Mac|iPhone|iPad|iPod/.test(navigator.platform ?? "") || /Mac OS X/.test(navigator.userAgent ?? "") ? "⌘" : "Ctrl";
 }
 
-/** `⌘N` / `Ctrl+N` — the platform's modifier joined to a key for Kbd labels. */
-export function shortcutLabel(key: string): string {
+/**
+ * `⌘N` / `Ctrl+N` — the platform's modifier joined to a key for Kbd labels.
+ * With `shift`, the platform's own order: `⇧⌘N` on Apple, `Ctrl+Shift+N`
+ * elsewhere.
+ */
+export function shortcutLabel(key: string, options: { shift?: boolean } = {}): string {
   const mod = modKey();
-  return mod === "⌘" ? `${mod}${key}` : `${mod}+${key}`;
+  if (mod === "⌘") return `${options.shift ? "⇧" : ""}${mod}${key}`;
+  return `${mod}+${options.shift ? "Shift+" : ""}${key}`;
 }
 
 /**

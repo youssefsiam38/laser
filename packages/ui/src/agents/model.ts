@@ -10,8 +10,8 @@
 import {
   DEFAULT_AGENT_NAME,
   effectiveAgents,
-  isBuiltinAgentName,
   isTerminalRunStatus,
+  sessionKindOf,
   type AgentDefinition,
   type AgentDefinitionInput,
   type AgentIssue,
@@ -20,6 +20,7 @@ import {
   type AgentWarning,
   type AgentsSnapshot,
   type SessionAgentKind,
+  type SessionKind,
   type SessionSummary,
 } from "@lasercode/protocol";
 
@@ -27,12 +28,10 @@ import {
 // Sessions and kinds
 // ---------------------------------------------------------------------------
 
-/** Which built-in workspace `cwd` is, or `null` for an ordinary project. */
-export function isWorkspaceCwd(cwd: string | undefined, snapshot: AgentsSnapshot | null | undefined): "beam" | "chat" | null {
+/** `"chat"` when `cwd` is the Chat workspace, else `null` for a project. */
+export function isWorkspaceCwd(cwd: string | undefined, snapshot: AgentsSnapshot | null | undefined): "chat" | null {
   if (!cwd || !snapshot) return null;
-  if (cwd === snapshot.workspaces.beam) return "beam";
-  if (cwd === snapshot.workspaces.chat) return "chat";
-  return null;
+  return cwd === snapshot.workspaces.chat ? "chat" : null;
 }
 
 /**
@@ -50,33 +49,36 @@ export function agentKindOf(
   return isWorkspaceCwd(summary.cwd, snapshot) ?? "root";
 }
 
-/** The definition a session runs: its attribution, else the snapshot's default. */
-export function sessionAgentName(
-  summary: Pick<SessionSummary, "agent"> | undefined,
+/**
+ * Plain conversation or project session (`docs/plain-chat.md`). The stored
+ * record wins — including a legacy `beam` one, which {@link sessionKindOf}
+ * reads as a Chat — and a session without one is placed by its directory.
+ */
+export function sessionKindFor(
+  summary: Pick<SessionSummary, "cwd" | "agent"> | undefined,
   snapshot: AgentsSnapshot | null | undefined,
-): string {
+): SessionKind {
+  const agent = summary?.agent;
+  if (agent) return agent.sessionKind ?? sessionKindOf(agent.kind);
+  return isWorkspaceCwd(summary?.cwd, snapshot) === "chat" ? "chat" : "project";
+}
+
+/**
+ * The definition a session runs: its attribution, else the snapshot's default.
+ * A Chat session runs none, so this answers `undefined` for one rather than
+ * naming an assistant that is not there (`docs/plain-chat.md`).
+ */
+export function sessionAgentName(
+  summary: Pick<SessionSummary, "cwd" | "agent"> | undefined,
+  snapshot: AgentsSnapshot | null | undefined,
+): string | undefined {
+  if (sessionKindFor(summary, snapshot) === "chat") return undefined;
   return summary?.agent?.agentName ?? snapshot?.defaultAgent ?? DEFAULT_AGENT_NAME;
 }
 
-/** Product-facing names for the shipped agents; a custom name is the name the person typed. */
+/** The name a person sees for a definition; the shipped `default` has a word of its own. */
 export function agentDisplayName(name: string): string {
-  switch (name) {
-    case "beam":
-      return "Beam";
-    case "chat":
-      return "Chat";
-    case "namer":
-      return "Namer";
-    case DEFAULT_AGENT_NAME:
-      return "Default agent";
-    default:
-      return name;
-  }
-}
-
-/** Built-ins keep their identity but expose instructions and model; the shipped `default` is a normal editable definition. */
-export function isBuiltinAgent(agent: Pick<AgentDefinition, "name" | "kind">): boolean {
-  return agent.kind === "builtin" || isBuiltinAgentName(agent.name);
+  return name === DEFAULT_AGENT_NAME ? "Default agent" : name;
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +211,7 @@ export function agentByName(snapshot: AgentsSnapshot | null | undefined, name: s
  * belonging to every other project stay out of the catalog entirely.
  */
 export function customAgentsForProject(snapshot: AgentsSnapshot | null | undefined, projectCwd: string | undefined): AgentDefinition[] {
-  return effectiveAgents(snapshot?.agents ?? [], projectCwd).filter((agent) => !isBuiltinAgent(agent));
+  return effectiveAgents(snapshot?.agents ?? [], projectCwd);
 }
 
 const EMPTY_WARNINGS: readonly AgentWarning[] = Object.freeze([]);

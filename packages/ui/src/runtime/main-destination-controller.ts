@@ -15,7 +15,6 @@ import {
   mainPath,
   mainTab,
   pendingSessionPath,
-  projectReturnOf,
   rememberedCodeOf,
   type CodeDestination,
   type MainCreationTarget,
@@ -64,16 +63,10 @@ const projectCode = (value: unknown): ProjectCodeDestination | undefined => {
   return undefined;
 };
 
-const codeDestination = (value: unknown): CodeDestination | undefined => {
-  const project = projectCode(value);
-  if (project) return project;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const item = value as Record<string, unknown>;
-  const returnTo = projectCode(item["returnTo"]);
-  return item["kind"] === "beam-session" && typeof item["path"] === "string" && returnTo
-    ? { kind: "beam-session", path: item["path"], returnTo }
-    : undefined;
-};
+// A memory written before M23 could name a Beam session; it is not a Code
+// destination any more, and `projectCode` simply does not recognise it, so
+// the window opens on the remembered project instead (`docs/plain-chat.md`).
+const codeDestination = (value: unknown): CodeDestination | undefined => projectCode(value);
 
 /**
  * What this environment remembers, or nothing.
@@ -127,7 +120,7 @@ function writeMemory(destination: MainDestination): void {
   // person who prefers Chat gets Chat in every environment.
   rememberSessionsTab(tab);
   deviceStore.write(DEVICE_KEYS.project, mainCodeProject(destination));
-  const projectTarget = projectReturnOf(code);
+  const projectTarget = code;
   if (projectTarget.kind === "project-session") {
     const sessions = rememberedSessions();
     if (sessions[projectTarget.project] !== projectTarget.path) {
@@ -370,7 +363,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
 
   const leave = useCallback(() => {
     const current = depsRef.current.readState().destination;
-    const code = projectReturnOf(rememberedCodeOf(current));
+    const code = rememberedCodeOf(current);
     const intent = begin({ kind: "code-tab", code });
     readyCode(intent, code.kind === "project-session" ? { kind: "project-landing", project: code.project } : code);
   }, [begin, readyCode]);
@@ -403,7 +396,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
       transition({ phase: "ready-chat", chat: { kind: "landing" }, intent, rememberedCode: rememberedCodeOf(current) });
       return;
     }
-    const code = projectReturnOf(rememberedCodeOf(current));
+    const code = rememberedCodeOf(current);
     const intent = begin({ kind: "code-tab", code });
     readyCode(intent, code.kind === "project-session" ? { kind: "project-landing", project: code.project } : code);
   }, [begin, readyCode, transition]);
@@ -451,7 +444,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     const snapshot = depsRef.current.readState();
     const current = snapshot.destination;
     if (token.intent !== intentRef.current || current.intent !== token.intent) return;
-    if (token.target.agentName === "chat") {
+    if (token.target.sessionKind === "chat") {
       if (current.phase !== "ready-chat" || current.chat.kind !== "landing") return;
       chatPathRef.current = path;
       setChatPath(path);
@@ -476,7 +469,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
 
   const newSession = useCallback(async (cwd: string, options: NewSessionOptions = {}): Promise<string> => {
     if (options.select === false) return depsRef.current.launchSession(cwd, { ...options, select: false });
-    const visibleTab: MainTab = options.agentName === "chat" ? "chat" : "code";
+    const visibleTab: MainTab = options.sessionKind === "chat" ? "chat" : "code";
     const snapshot = depsRef.current.readState();
     const current = snapshot.destination;
     const currentPath = mainPath(current);
@@ -538,7 +531,12 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
       finishInitialization({
         id: 0,
         intent,
-        target: { cwd, intent, ...(options.agentName !== undefined ? { agentName: options.agentName } : {}) },
+        target: {
+          cwd,
+          intent,
+          ...(options.agentName !== undefined ? { agentName: options.agentName } : {}),
+          ...(options.sessionKind !== undefined ? { sessionKind: options.sessionKind } : {}),
+        },
       }, path);
       depsRef.current.onLandingAdopted?.(landingKey, path);
       return path;
@@ -571,7 +569,7 @@ export function useMainDestinationController(deps: MainDestinationControllerDeps
     if (parsed.kind === "invalid") {
       consume();
       depsRef.current.onError(parsed.error);
-      const remembered = projectReturnOf(readDestinationMemory().code);
+      const remembered = readDestinationMemory().code;
       const code = remembered.kind === "project-session"
         ? { kind: "project-landing" as const, project: remembered.project }
         : remembered;

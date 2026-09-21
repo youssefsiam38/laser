@@ -17,8 +17,6 @@ import { closeFleetSheet, setFleetSheetOpen, useFleetReconcile, useFleetSheetOpe
 // menus, run tabs and the live map through `requestEndAgent`.
 import { EndAgentDialog } from "@/components/agents/EndAgentDialog";
 import { RemoveWorktreeDialog } from "@/components/agents/RemoveWorktreeDialog";
-// Beam: the bubble and its model choice, mounted once (docs/agents.md "Beam").
-import { BeamBubble, BeamProfileDialog } from "@/components/beam";
 import { mergeSessions, sessionTitle, useCapability, useLaserStable, useLaserState } from "@/runtime";
 import { currentView, samePresentationView } from "@/runtime/presentation-state";
 
@@ -236,6 +234,9 @@ function ShellFrame() {
 
   const createSession = useCapability("session/new");
   const canCreate = createSession.state === "available" && connection === "open" && (currentProject !== undefined || view !== undefined);
+  // Where projectless conversations live; absent until the host has said.
+  const chatWorkspace = useLaserState((s) => s.agents.snapshot?.workspaces.chat);
+  const canChat = createSession.state === "available" && connection === "open" && chatWorkspace !== undefined;
 
   const newSession = useCallback(async () => {
     if (createSession.state !== "available") return;
@@ -259,9 +260,32 @@ function ShellFrame() {
     });
   }, [actions, connection, createSession.state, currentProject, showChat, view?.state.cwd]);
 
-  // Keyboard: [ ] toggle rails, Cmd/Ctrl+N new session, Cmd/Ctrl+K the
-  // palette. Esc is handled by the overlays themselves (Radix) and by the
-  // inline rename fields.
+  // One implementation of "start an empty Chat" for all three entry points:
+  // the Chat tab's `+`, the palette's New chat and Cmd+Shift+N
+  // (`docs/plain-chat.md`, "Chat"). A Chat belongs to no project, so it needs
+  // no current project — only the workspace the host says it lives in.
+  const newChat = useCallback(async () => {
+    if (createSession.state !== "available") return;
+    if (connection !== "open") {
+      actions.toast("warning", "Not connected to the host yet.");
+      return;
+    }
+    if (chatWorkspace === undefined) {
+      actions.toast("warning", "Chat is not ready yet. Try again in a moment.");
+      return;
+    }
+    // Close covering chrome now, as the project path does: the Chat landing is
+    // already the destination and a late settle must not steal focus.
+    showChat();
+    void actions.newSession(chatWorkspace, { sessionKind: "chat" }).catch((error: unknown) => {
+      const next = destinationRef.current;
+      if (next.phase === "ready-chat" && next.chat.kind === "landing") actions.toast("error", errorText(error));
+    });
+  }, [actions, chatWorkspace, connection, createSession.state, showChat]);
+
+  // Keyboard: [ ] toggle rails, Cmd/Ctrl+N new session, Cmd/Ctrl+Shift+N a new
+  // Chat, Cmd/Ctrl+K the palette. Esc is handled by the overlays themselves
+  // (Radix) and by the inline rename fields.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -270,9 +294,9 @@ function ShellFrame() {
         setPaletteOpen((open) => !open);
         return;
       }
-      if (createSession.state === "available" && mod && !e.shiftKey && !e.altKey && (e.key === "n" || e.key === "N")) {
+      if (createSession.state === "available" && mod && !e.altKey && (e.key === "n" || e.key === "N")) {
         e.preventDefault();
-        void newSession();
+        void (e.shiftKey ? newChat() : newSession());
         return;
       }
       if (mod || e.altKey || isEditableTarget(e.target)) return;
@@ -289,7 +313,7 @@ function ShellFrame() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [createSession.state, newSession, toggleFleet, toggleSessions, toggleTelemetry]);
+  }, [createSession.state, newChat, newSession, toggleFleet, toggleSessions, toggleTelemetry]);
 
   // Tab title carries the same vocabulary as the dots: "(2) name · laser".
   // Derived in the selector: a streamed token that changes no session's
@@ -350,16 +374,20 @@ function ShellFrame() {
       addProjectOpen,
       setAddProjectOpen,
       newSession,
+      newChat,
       canCreate,
+      canChat,
       showChat,
       returnToChat,
     }),
     [
       addProjectOpen,
+      canChat,
       canCreate,
       fleetOpen,
       historyOpen,
       layout,
+      newChat,
       newSession,
       openHistory,
       returnToChat,
@@ -454,8 +482,6 @@ function ShellFrame() {
         {!fleetIsColumn && <FleetSheet />}
         <EndAgentDialog />
         <RemoveWorktreeDialog />
-        <BeamBubble />
-        <BeamProfileDialog />
         <Toasts />
         {/* The reconnect guard and service-worker plumbing on every width; the
             phone's notices and install sheet only under 768px. */}

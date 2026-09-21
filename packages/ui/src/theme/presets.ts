@@ -6,7 +6,7 @@
  *
  * The default is the Laser brand pair (T5). Most people never open Appearance,
  * so it gets the scrutiny of a single-theme product: the approved mark's
- * black, warm-white and beam green, amber for "needs you", and the two default
+ * black, warm-white and the mark's green, amber for "needs you", and the two default
  * faces. Graphite and Paper remain available as quieter alternatives.
  */
 import { PRODUCT, PRODUCT_DISPLAY_NAME, PRODUCT_NAME } from "@lasercode/protocol";
@@ -72,7 +72,7 @@ export const PRESETS: readonly ThemePreset[] = [
   {
     id: PRODUCT_NAME,
     name: PRODUCT_DISPLAY_NAME,
-    tagline: "Brand black, warm-white ink and beam green. The default.",
+    tagline: "Brand black, warm-white ink and the mark's green. The default.",
     base: "dark",
     tokens: {
       ...paletteTokens({ family: "graphite", base: "dark", accentHue: ACCENT_HUES.green, attentionHue: ACCENT_HUES.amber, steps: DARK_STEPS }),
@@ -133,7 +133,7 @@ export const PRESETS: readonly ThemePreset[] = [
   {
     id: `${PRODUCT_NAME}-light`,
     name: `${PRODUCT_DISPLAY_NAME} light`,
-    tagline: "Brand warm white, black ink and an accessible beam-green tone.",
+    tagline: "Brand warm white, black ink and an accessible green tone.",
     base: "light",
     tokens: {
       ...paletteTokens({ family: "stone", base: "light", accentHue: ACCENT_HUES.green, attentionHue: 65, steps: LIGHT_STEPS }),
@@ -146,7 +146,7 @@ export const PRESETS: readonly ThemePreset[] = [
   {
     id: "paper",
     name: "Paper",
-    tagline: "Warm white, beam-green accent. Light, easy on the eyes.",
+    tagline: "Warm white, green accent. Light, easy on the eyes.",
     base: "light",
     tokens: paletteTokens({ family: "stone", base: "light", accentHue: ACCENT_HUES.green, attentionHue: 65, steps: LIGHT_STEPS }),
     fonts: { ...DEFAULT_FONTS },

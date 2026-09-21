@@ -1,6 +1,5 @@
 "use client";
 
-import type { InstructionTemplateTarget } from "@lasercode/protocol";
 import { useMemo, type CSSProperties, type ReactNode } from "react";
 import { useShikiHighlighter } from "react-shiki";
 
@@ -27,7 +26,6 @@ interface SyntaxRange extends Omit<SyntaxToken, "content"> {
 }
 
 export interface InstructionTemplateSourceProps {
-  target: InstructionTemplateTarget;
   value: string;
   context: InstructionTemplateValueContext;
   ariaLabel?: string | undefined;
@@ -135,11 +133,10 @@ function SourceVariable({ variable, context }: { variable: InstructionTemplateVa
 
 function highlightedSource(
   source: string,
-  target: InstructionTemplateTarget,
   context: InstructionTemplateValueContext,
   syntax: readonly SyntaxRange[],
 ): ReactNode[] {
-  const variables = instructionTemplateVariables(source, target);
+  const variables = instructionTemplateVariables(source);
   const boundaries = new Set<number>([0, source.length]);
   for (const range of syntax) {
     boundaries.add(range.start);
@@ -177,14 +174,14 @@ function highlightedSource(
 }
 
 /** Markdown syntax colours over exact source, with variables layered as controls. */
-export function InstructionTemplateSource({ target, value, context, ariaLabel, invalid, className }: InstructionTemplateSourceProps) {
+export function InstructionTemplateSource({ value, context, ariaLabel, invalid, className }: InstructionTemplateSourceProps) {
   const highlighted = useShikiHighlighter(value, "md", LASER_SHIKI_THEME, {
     engine: SHIKI_ENGINE,
     outputFormat: "tokens",
     delay: 150,
   });
   const syntax = useMemo(() => instructionSyntaxRanges(value, highlighted?.tokens), [highlighted?.tokens, value]);
-  const content = useMemo(() => highlightedSource(value, target, context, syntax), [context, syntax, target, value]);
+  const content = useMemo(() => highlightedSource(value, context, syntax), [context, syntax, value]);
   return (
     <pre dir="ltr"
       data-slot="instruction-template-source"

@@ -186,7 +186,7 @@ export function ModelProfilesTab({ cwd, onApply, scopeView, decision, onDraftCha
 
   const usageOf = useCallback(
     (profile: ModelProfile) =>
-      profileUsage(profile.id, assignments, agentsSnapshot?.agents ?? [], agentsSnapshot?.builtinProfiles),
+      profileUsage(profile.id, assignments, agentsSnapshot?.agents ?? []),
     [agentsSnapshot, assignments],
   );
 

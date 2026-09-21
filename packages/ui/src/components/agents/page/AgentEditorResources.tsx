@@ -50,7 +50,6 @@ export function EngineInstructions({
         <GenerationLoader label={`Loading ${PRODUCT_DISPLAY_NAME}'s default instructions`} layout="inline" />
       ) : (
         <InstructionTemplateSourceView
-          target="agent"
           value={engine.data}
           ariaLabel={`${PRODUCT_DISPLAY_NAME}'s default instructions highlighted source`}
           context={{

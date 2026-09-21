@@ -6,7 +6,7 @@
  * piece and is module-level so `Rail` and `SessionsPanel` share it without a
  * context the shell would have to own.
  */
-import { WORKTREES_DIR_NAME } from "@lasercode/protocol";
+import { sessionKindOf, WORKTREES_DIR_NAME } from "@lasercode/protocol";
 import { useSyncExternalStore } from "react";
 import type { AgentRun, SessionSummary } from "@lasercode/protocol";
 
@@ -22,29 +22,28 @@ import { isUntitled, sessionStatus, sessionSubtitle, type SessionSubtitle, type 
 // ---------------------------------------------------------------------------
 // Tabs and workspaces (agents leap, Lane U2)
 //
-// The panel has two tabs. **Code** is every project as a group, plus the
-// built-in Beam workspace as a group of its own after them. **Chat** is the
-// projectless conversations: sessions in the built-in Chat workspace, one flat
-// list. A child session an agent started belongs to its parent's group, never
-// to the worktree directory it happens to run in.
+// The panel has two tabs, Chat first. **Chat** is the projectless
+// conversations: sessions in the Chat workspace, one flat list (`docs/
+// plain-chat.md`). **Code** is every project as a group. A child session an
+// agent started belongs to its parent's group, never to the worktree
+// directory it happens to run in.
 // ---------------------------------------------------------------------------
 
 export type SessionsTab = MainTab;
 export const SESSIONS_TABS: readonly SessionsTab[] = ["chat", "code"];
 export { SESSIONS_TAB_STORAGE_KEY };
 
-/** The built-in workspace directories, from the agents snapshot; absent until it lands. */
+/** The Chat workspace directory, from the agents snapshot; absent until it lands. */
 export interface Workspaces {
-  readonly beam?: string | undefined;
   readonly chat?: string | undefined;
 }
 
-export type SessionGroupKind = "project" | "beam" | "chat";
+export type SessionGroupKind = "project" | "chat";
 
 export const workspacesOf = (state: Pick<AppState, "agents">): Workspaces => state.agents.snapshot?.workspaces ?? {};
 
-/** Which built-in workspace contains a directory, or `undefined` for a project. */
-export function workspaceKindOf(cwd: string | undefined, workspaces: Workspaces): "beam" | "chat" | undefined {
+/** `"chat"` when the Chat workspace contains a directory, else `undefined`. */
+export function workspaceKindOf(cwd: string | undefined, workspaces: Workspaces): "chat" | undefined {
   if (!cwd) return undefined;
   const path = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
   const within = (root: string | undefined): boolean => {
@@ -52,9 +51,7 @@ export function workspaceKindOf(cwd: string | undefined, workspaces: Workspaces)
     const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
     return path === normalizedRoot || path.startsWith(`${normalizedRoot}/`);
   };
-  if (within(workspaces.beam)) return "beam";
-  if (within(workspaces.chat)) return "chat";
-  return undefined;
+  return within(workspaces.chat) ? "chat" : undefined;
 }
 
 export const isChildSession = (summary: Pick<SessionSummary, "agent" | "parentPath">): boolean =>
@@ -83,9 +80,7 @@ export function groupCwdOf(
 
 /** The name a group header shows. */
 export function groupNameOf(cwd: string, kind: SessionGroupKind): string {
-  if (kind === "beam") return "Beam";
-  if (kind === "chat") return "Chat";
-  return shortCwd(cwd);
+  return kind === "chat" ? "Chat" : shortCwd(cwd);
 }
 
 /**
@@ -104,7 +99,7 @@ export interface SessionRowModel {
 
 export interface SessionGroupModel {
   cwd: string;
-  /** Last path segment, or the built-in workspace's product name. */
+  /** Last path segment, or the Chat workspace's product name. */
   name: string;
   kind: SessionGroupKind;
   /** Most attention-worthy session (a crashed worker counts as an error). */
@@ -132,7 +127,7 @@ const rowOf = (summary: SessionSummary, views: Views): SessionRowModel => {
  * nothing on disk is ever unreachable from the list.
  */
 export interface SessionGroupOptions {
-  /** `code` (default) lists projects and Beam; `chat` lists the Chat workspace alone. */
+  /** `code` (default) lists the projects; `chat` lists the Chat workspace alone. */
   tab?: SessionsTab | undefined;
   workspaces?: Workspaces | undefined;
   /** The run registry, for placing a child whose parent is no longer listed. */
@@ -152,10 +147,11 @@ export function sessionGroups(
   const byPath = new Map(merged.map((s) => [s.path, s]));
   const byCwd = new Map<string, SessionSummary[]>();
   for (const s of merged) {
-    // A Beam or Chat session belongs to its workspace by its own record even
-    // when its header names an older workspace directory (the workspaces
-    // moved under the state directory); the directory never becomes a group.
-    const recorded = s.agent?.kind === "beam" || s.agent?.kind === "chat" ? s.agent.kind : undefined;
+    // A Chat conversation belongs to its workspace by its own record even when
+    // its header names an older workspace directory (the workspaces moved
+    // under the state directory, and a session recorded before M23 still says
+    // `beam`); the directory never becomes a group.
+    const recorded = s.agent && sessionKindOf(s.agent.kind) === "chat" ? ("chat" as const) : undefined;
     const rawCwd = groupCwdOf(s, byPath, options.runs ?? {});
     const kind = recorded ?? workspaceKindOf(rawCwd, workspaces);
     const cwd = kind && workspaces[kind] !== undefined ? workspaces[kind]! : rawCwd;
@@ -171,11 +167,9 @@ export function sessionGroups(
     if (cwd === undefined || rows.length === 0) return [];
     return [{ cwd, name: groupNameOf(cwd, "chat"), kind: "chat", status: aggregateStatus(rows.map((r) => r.status)), needYou: rows.filter((r) => r.status === "waiting_for_input").length, rows }];
   }
-  // Projects in rail order, then any directory the rail does not know, then
-  // Beam last: it is a built-in feature, not a project.
+  // Projects in rail order, then any directory the rail does not know.
   const order = projects.filter((cwd) => workspaceKindOf(cwd, workspaces) === undefined && !isWorktreeCwd(cwd));
   for (const cwd of byCwd.keys()) if (!order.includes(cwd) && workspaceKindOf(cwd, workspaces) === undefined) order.push(cwd);
-  if (workspaces.beam !== undefined && byCwd.has(workspaces.beam)) order.push(workspaces.beam);
   return order.map((cwd) => {
     const kind: SessionGroupKind = workspaceKindOf(cwd, workspaces) ?? "project";
     const rows = sortSessions(byCwd.get(cwd) ?? [], views).map((s) => rowOf(s, views));

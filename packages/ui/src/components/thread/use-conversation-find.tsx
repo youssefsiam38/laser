@@ -106,13 +106,10 @@ export function useConversationFind({ partial = false, loadAll, refusal, toolLab
         if (!root.current?.getClientRects().length || document.querySelector('[aria-label="Workbench screens"]') || document.querySelector('[data-slot="changes-overlay"]')) return;
         const focusedThread = document.activeElement?.closest('[data-slot="thread"]');
         if (focusedThread && focusedThread !== root.current) return;
-        if (!focusedThread && document.activeElement?.closest('[data-slot="beam-bubble"]') !== root.current?.closest('[data-slot="beam-bubble"]')) return;
         e.preventDefault(); show();
       }
     };
     const event = (e: Event) => {
-      // Saved-session results and the main top bar target the main conversation.
-      if (root.current?.closest('[data-slot="beam-bubble"]')) return;
       const { query, source } = (e as CustomEvent<{ query?: string; source?: SearchSource }>).detail;
       show(query, source);
     };

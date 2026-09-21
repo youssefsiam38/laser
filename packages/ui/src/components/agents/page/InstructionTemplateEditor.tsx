@@ -4,7 +4,6 @@ import {
   instructionTemplateFields,
   instructionTemplateToken,
   type InstructionTemplateField,
-  type InstructionTemplateTarget,
 } from "@lasercode/protocol";
 import { Braces, Code2, PenLine, Search } from "lucide-react";
 import { lazy, Suspense, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -45,7 +44,6 @@ export function InstructionTemplateSourceView(props: InstructionTemplateSourcePr
 }
 
 export interface InstructionTemplateEditorProps {
-  target: InstructionTemplateTarget;
   context: InstructionTemplateValueContext;
   value: string;
   ariaLabel?: string;
@@ -63,7 +61,7 @@ function insertion(value: string, start: number, end: number, field: Instruction
   return { value: `${value.slice(0, start)}${inserted}${value.slice(end)}`, caret: start + inserted.length };
 }
 
-export function InstructionTemplateEditor({ target, context, value, ariaLabel, placeholder, maxLength, invalid, onChange }: InstructionTemplateEditorProps) {
+export function InstructionTemplateEditor({ context, value, ariaLabel, placeholder, maxLength, invalid, onChange }: InstructionTemplateEditorProps) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const selection = useRef({ start: value.length, end: value.length });
   const pendingSelection = useRef<{ start: number; end: number } | undefined>(undefined);
@@ -71,7 +69,7 @@ export function InstructionTemplateEditor({ target, context, value, ariaLabel, p
   const [mode, setMode] = useState<"edit" | "source">("edit");
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const fields = instructionTemplateFields(target);
+  const fields = instructionTemplateFields();
   const shown = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return needle ? fields.filter((field) => `${field.label} ${field.description}`.toLowerCase().includes(needle)) : fields;
@@ -168,7 +166,7 @@ export function InstructionTemplateEditor({ target, context, value, ariaLabel, p
           onChange={(event) => onChange(event.target.value)}
         />
       ) : (
-        <InstructionTemplateSourceView target={target} value={value} context={context} ariaLabel={`${ariaLabel ?? "Instructions"} highlighted source`} invalid={invalid} />
+        <InstructionTemplateSourceView value={value} context={context} ariaLabel={`${ariaLabel ?? "Instructions"} highlighted source`} invalid={invalid} />
       )}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Hint>Fields fill from the live session whenever the agent runs.</Hint>

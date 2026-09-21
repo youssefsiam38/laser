@@ -463,7 +463,7 @@ const STALE_BASE_MESSAGE = "This conversation changed since that page was read. 
  * What one earlier-history request came to: whether it added rows to the
  * view, and how many serialized bytes the page carried. The bytes travel with
  * the answer so a caller pacing itself can count them — there is one loader
- * per surface (main, Beam's bubble), and a shared cell would let one surface's
+ * per surface, and a shared cell would let one surface's
  * page be charged to another's budget.
  */
 export interface EarlierPage { accepted: boolean; bytes: number }

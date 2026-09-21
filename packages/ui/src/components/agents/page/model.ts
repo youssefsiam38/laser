@@ -7,13 +7,10 @@
 import {
   AGENT_MAX_DEPTH_LIMIT,
   AGENT_NAME_MAX,
-  BUILTIN_AGENT_NAMES,
   DEFAULT_AGENT_NAME,
   FOREGROUND_COMMAND_SECONDS_MAX,
   FOREGROUND_COMMAND_SECONDS_MIN,
-  PRODUCT_DISPLAY_NAME,
   canReferenceAgent,
-  isBuiltinAgentName,
   type AgentDefinition,
   type AgentDefinitionInput,
   type AgentLocation,
@@ -22,13 +19,12 @@ import {
   type AgentSkillsListing,
   type AgentWarning,
   type AgentsSnapshot,
-  type BuiltinAgentName,
   type ModelCatalogEntry,
   type ModelProfile,
   type ThinkingLevel,
 } from "@lasercode/protocol";
 
-import { agentIssueRoot, customAgentsForProject, isBuiltinAgent } from "@/agents";
+import { agentIssueRoot, customAgentsForProject } from "@/agents";
 
 // ---------------------------------------------------------------------------
 // Selection and routing
@@ -124,11 +120,10 @@ export function sectionOfField(field: string): EditorSection {
 // Ordering and marks
 // ---------------------------------------------------------------------------
 
-export type AgentMark = "default" | "custom" | BuiltinAgentName;
+export type AgentMark = "default" | "custom";
 export type AgentsScopeView = "global" | "project" | "effective";
 
 export function agentMark(agent: Pick<AgentDefinition, "name" | "kind">): AgentMark {
-  if (isBuiltinAgentName(agent.name)) return agent.name;
   return agent.name === DEFAULT_AGENT_NAME ? "default" : "custom";
 }
 
@@ -144,29 +139,25 @@ export function compareAgents(
   return left.name.localeCompare(right.name);
 }
 
-/** The one scope projection used by the list, overview, counts and warnings. */
+/**
+ * The one scope projection used by the list, overview, counts and warnings.
+ * Every agent is one a person wrote (D-347), so there is one list.
+ */
 export function agentsInScope(
   snapshot: AgentsSnapshot | null | undefined,
   view: AgentsScopeView,
   projectCwd?: string,
-): { custom: AgentDefinition[]; builtin: AgentDefinition[] } {
+): { custom: AgentDefinition[] } {
   const all = snapshot?.agents ?? [];
   const sort = (agents: AgentDefinition[]) => agents.sort((left, right) => compareAgents(snapshot, left, right));
-  const globals = sort(all.filter((agent) => agent.kind === "custom" && agent.scope === "global"));
-  const projects = sort(all.filter(
-    (agent) => agent.kind === "custom" && agent.scope === "project" && agent.projectCwd === projectCwd,
-  ));
+  const globals = sort(all.filter((agent) => agent.scope === "global"));
+  const projects = sort(all.filter((agent) => agent.scope === "project" && agent.projectCwd === projectCwd));
   const custom = view === "global"
     ? globals
     : view === "project"
       ? [...projects, ...globals]
       : sort(customAgentsForProject(snapshot, projectCwd));
-  const builtin = view === "global"
-    ? BUILTIN_AGENT_NAMES
-        .map((name) => all.find((agent) => agent.name === name))
-        .filter((agent): agent is AgentDefinition => agent !== undefined)
-    : [];
-  return { custom, builtin };
+  return { custom };
 }
 
 /** True when the person has not made an agent of their own yet in this scope. */
@@ -214,7 +205,7 @@ export function fileWarningIsVisible(
   if (!warning.path) return true;
 
   const visible = agentsInScope(snapshot, view, projectCwd);
-  if ([...visible.custom, ...visible.builtin].some((agent) => agent.path === warning.path)) return true;
+  if (visible.custom.some((agent) => agent.path === warning.path)) return true;
   // A known definition outside this exact scope projection must not attach to
   // a same-name source that happens to be visible here.
   if (snapshot?.agents.some((agent) => agent.path === warning.path)) return false;
@@ -229,8 +220,7 @@ export function fileWarningIsVisible(
   if (owningProject) return view !== "global" && owningProject === projectCwd;
   if (view !== "effective") return true;
   return !snapshot?.agents.some(
-    (agent) => agent.kind === "custom"
-      && agent.scope === "project"
+    (agent) => agent.scope === "project"
       && agent.projectCwd === projectCwd
       && agent.name === warning.agentName,
   );
@@ -258,8 +248,7 @@ export function agentForWarning(
   projectCwd?: string,
 ): AgentDefinition | undefined {
   if (!snapshot) return undefined;
-  const visible = agentsInScope(snapshot, view, projectCwd);
-  const agents = [...visible.custom, ...visible.builtin];
+  const agents = agentsInScope(snapshot, view, projectCwd).custom;
   if (warning.path) return agents.find((agent) => agent.path === warning.path);
   const named = agents.filter((agent) => agent.name === warning.agentName);
   return named.length === 1 ? named[0] : undefined;
@@ -268,18 +257,6 @@ export function agentForWarning(
 // ---------------------------------------------------------------------------
 // Wording
 // ---------------------------------------------------------------------------
-
-/** What each shipped agent does, in a person's words. */
-export function builtinBlurb(name: BuiltinAgentName): string {
-  switch (name) {
-    case "beam":
-      return `${PRODUCT_DISPLAY_NAME}'s fast helper. Beam answers questions about your sessions, agents, settings and logs, and runs on a quick model so it never keeps you waiting. It opens from the spark beside Settings.`;
-    case "chat":
-      return "Plain conversations that belong to no project. Each Chat session gets its own private working directory and stays under the Chat tab until you move it into a project.";
-    case "namer":
-      return "Names things while they happen: a session from its first prompt, a running tool call, a stretch of activity. It runs often on a small task, so a quick profile suits it.";
-  }
-}
 
 export const TOOL_LABEL: Readonly<Record<string, string>> = {
   read: "Read files",
@@ -365,7 +342,6 @@ export interface Deletability {
 }
 
 export function deletability(agent: Pick<AgentDefinition, "name" | "kind" | "scope">, snapshot: Pick<AgentsSnapshot, "defaultAgent"> | null | undefined): Deletability {
-  if (isBuiltinAgent(agent)) return { ok: false, reason: `${agent.name} is built in and cannot be deleted.` };
   if (snapshot && agent.scope === "global" && agent.name === snapshot.defaultAgent) {
     return { ok: false, reason: "This is the default agent for new sessions. Make another agent the default first, then delete this one." };
   }

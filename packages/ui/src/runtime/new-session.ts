@@ -1,7 +1,7 @@
-import type { SessionSummary } from "@lasercode/protocol";
+import type { SessionKind, SessionSummary } from "@lasercode/protocol";
 import type { AppState, SessionView } from "../store.js";
 import { mergeSessions } from "./threadList.js";
-import { isWorkspaceCwd } from "../agents/model.js";
+import { isWorkspaceCwd, sessionKindFor } from "../agents/model.js";
 
 /** Draft text and model choices are deliberately not work: reuse keeps them. */
 export function isUnstartedSession(view: SessionView): boolean {
@@ -22,9 +22,15 @@ export interface NewSessionOptions {
   /** The definition the session runs; omitted means the default agent. */
   agentName?: string;
   /**
+   * `"chat"` starts a plain conversation: no definition, no project, the
+   * Chat workspace (`docs/plain-chat.md`). The protocol refuses it beside an
+   * `agentName`, because a Chat session runs no agent at all.
+   */
+  sessionKind?: SessionKind;
+  /**
    * `false` leaves the main view where it is: the session is opened and
-   * returned but never selected. A scoped surface (the Beam bubble) starts
-   * its sessions this way (runtime/LaserProvider.tsx `LaserThreadScope`).
+   * returned but never selected. A scoped surface starts its sessions this
+   * way (runtime/LaserProvider.tsx `LaserThreadScope`).
    */
   select?: boolean;
 }
@@ -48,8 +54,8 @@ interface SessionLauncherDeps {
   /**
    * The definition a name stands for, with `undefined` resolved to the default
    * agent. Applied to the request and to every catalog row alike, so an empty
-   * session is reused only by a request for the same agent: a blank Beam chat
-   * must never become someone's project session, or the reverse.
+   * session is reused only by a request for the same agent: a blank project
+   * session must never answer a request for another agent, or the reverse.
    */
   resolveAgent?(name: string | undefined): string | undefined;
 }
@@ -67,9 +73,12 @@ export function createSessionLauncher(deps: SessionLauncherDeps): SessionLaunche
   const pending = new Map<string, { work: Promise<string>; selected?: Promise<string>; landing: { value: boolean } }>();
   const resolve = deps.resolveAgent ?? ((name) => name);
   return (cwd, options = {}) => {
-    const wanted = resolve(options.agentName);
+    // A Chat session runs no definition, so the agent a request resolves to
+    // says nothing about it: its kind is the whole of its identity.
+    const chat = options.sessionKind === "chat";
+    const wanted = chat ? undefined : resolve(options.agentName);
     const quiet = options.select === false;
-    const key = `${cwd} ${wanted ?? ""}`;
+    const key = `${cwd} ${chat ? "chat" : wanted ?? ""}`;
     const resultFor = (entry: { work: Promise<string>; selected?: Promise<string>; landing: { value: boolean } }) => {
       if (options.landing) entry.landing.value = true;
       if (quiet) return entry.work;
@@ -85,10 +94,12 @@ export function createSessionLauncher(deps: SessionLauncherDeps): SessionLaunche
       const state = deps.state();
       const workspace = isWorkspaceCwd(cwd, state.agents.snapshot);
       const candidates = mergeSessions(state.sessions, state.open)
-        .filter((session) => (session.cwd === cwd || (workspace !== null && session.agent?.kind === workspace))
+        .filter((session) => (session.cwd === cwd || (workspace !== null && sessionKindFor(session, state.agents.snapshot) === workspace))
           && !session.parentPath && session.agent?.kind !== "child"
           && !deps.archived(session.path)
-          && resolve(agentNameOf(session)) === wanted
+          && (chat
+            ? sessionKindFor(session, state.agents.snapshot) === "chat"
+            : sessionKindFor(session, state.agents.snapshot) === "project" && resolve(agentNameOf(session)) === wanted)
           && session.messageCount === 0 && !session.firstMessage
           // An attention mark is not a reason to skip a session that has never
           // been prompted: an unwritten row can carry a stale "unread" stamp
@@ -121,6 +132,7 @@ export function createSessionLauncher(deps: SessionLauncherDeps): SessionLaunche
       }
       return deps.create(cwd, {
         ...(options.agentName !== undefined ? { agentName: options.agentName } : {}),
+        ...(options.sessionKind !== undefined ? { sessionKind: options.sessionKind } : {}),
         select: false,
         ...(landing.value ? { landing: true } : {}),
       });

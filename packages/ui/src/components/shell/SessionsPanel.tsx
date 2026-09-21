@@ -7,12 +7,8 @@ import { FileClock, FolderPlus, MessageSquarePlus, Moon, Plus, Search, Settings,
 // Agents page (M13-T5): the phone's way in, from the sessions sheet footer.
 import { AgentsButton } from "@/components/agents/page/AgentsButton";
 import { ThreadList, ThreadListSearch } from "@/components/assistant-ui/elements/thread-list.aui";
-// Beam: its one entry point, in the sheet footer on a phone (docs/agents.md "Beam").
-import { BeamSpark } from "@/components/beam/BeamSpark";
 import { matchesThread, rankSearchThreads, ThreadSearch, threadSearchKeys, type SearchableThread } from "@/components/assistant-ui/elements/thread-search";
 import { STATUS_LABEL, StatusDot, StatusRing } from "@/components/status";
-import { useAgentsSnapshot } from "@/agents";
-import { startBeamSession } from "@/components/beam";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -24,7 +20,7 @@ import { mainTab, rememberedCodeOf, sessionAttention, useCapability, useLaserSta
 import { onVisible } from "@/runtime/visible-poll";
 import type { AppState } from "@/store";
 
-import { SESSIONS_TABS, groupsFor, sameGroups, sessionsList, useSessionsList, workspacesOf, type SessionsTab } from "./session-groups.js";
+import { SESSIONS_TABS, groupsFor, sameGroups, sessionsList, useSessionsList, type SessionsTab } from "./session-groups.js";
 import { errorText, useShell } from "./shell-context.js";
 import { useSessionSearch } from "./use-session-search.js";
 import { SessionSearchProgress } from "./SessionSearchProgress.js";
@@ -113,7 +109,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
   const tab = useLaserState((s) => mainTab(s.destination));
   const codePath = useLaserState((s) => {
     const code = rememberedCodeOf(s.destination);
-    return code.kind === "project-session" || code.kind === "beam-session" ? code.path : undefined;
+    return code.kind === "project-session" ? code.path : undefined;
   });
   const hiddenChatActivity = useTabActivity(chatPath, tab === "chat");
   const hiddenCodeActivity = useTabActivity(codePath, tab === "code");
@@ -127,9 +123,6 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
   const destination = useLaserState((s) => s.destination);
   const destinationRef = useRef(destination);
   destinationRef.current = destination;
-  const chatCwd = useLaserState((s) => workspacesOf(s).chat);
-  const beamCwd = useLaserState((s) => workspacesOf(s).beam);
-  const snapshot = useAgentsSnapshot();
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | undefined>(undefined);
   const search = useSessionSearch(query, tab === "code" ? list.filter : undefined);
@@ -157,43 +150,28 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
 
   const newSessionIn = useCallback(
     async (cwd: string) => {
-      // Beam's group is a built-in feature, not a project: it starts its own
-      // agent, and it must not become the rail's current project.
-      const isBeam = beamCwd !== undefined && cwd === beamCwd;
       if (connection !== "open") {
         actions.toast("warning", "Not connected to the host yet.");
         return;
       }
       onOpen();
-      void (isBeam ? startBeamSession(actions, snapshot) : actions.newSession(cwd)).catch((error: unknown) => {
+      void actions.newSession(cwd).catch((error: unknown) => {
         const next = destinationRef.current;
-        const still = isBeam
-          ? next.phase === "ready-code" && (next.code.kind === "project-landing" || next.code.kind === "beam-session")
-          : next.phase === "ready-code" && next.code.kind === "project-landing" && next.code.project === cwd;
-        if (still) actions.toast("error", errorText(error));
+        if (next.phase === "ready-code" && next.code.kind === "project-landing" && next.code.project === cwd) {
+          actions.toast("error", errorText(error));
+        }
       });
     },
-    [actions, beamCwd, connection, onOpen, snapshot],
+    [actions, connection, onOpen],
   );
 
-  // A chat is a conversation that is not about a project: it runs the
-  // built-in Chat agent in its own workspace, never in the current project.
-  const canChat = connection === "open" && chatCwd !== undefined;
+  // A chat is a conversation that is not about a project: it runs no
+  // definition, in its own workspace, never in the current project
+  // (`docs/plain-chat.md`). One verb for all three entry points, on the shell.
   const newChat = useCallback(async () => {
-    if (connection !== "open") {
-      actions.toast("warning", "Not connected to the host yet.");
-      return;
-    }
-    if (chatCwd === undefined) {
-      actions.toast("warning", "Chat is not ready yet. Try again in a moment.");
-      return;
-    }
     onOpen();
-    void actions.newSession(chatCwd, { agentName: "chat" }).catch((error: unknown) => {
-      const next = destinationRef.current;
-      if (next.phase === "ready-chat" && next.chat.kind === "landing") actions.toast("error", errorText(error));
-    });
-  }, [actions, chatCwd, connection, onOpen]);
+    await shell.newChat();
+  }, [onOpen, shell]);
 
   // Search rows: every session of the tab (the rail's filter still applies),
   // with the project as the group and the list row's subtitle as the preview.
@@ -240,7 +218,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
 
   const newLabel = chat ? "New chat" : `New session${currentProject ? ` in ${shortCwd(currentProject)}` : ""}`;
   const onNew = chat ? () => void newChat() : () => void shell.newSession();
-  const canNew = chat ? canChat : shell.canCreate;
+  const canNew = chat ? shell.canChat : shell.canCreate;
 
   const changeTab = useCallback((next: SessionsTab) => {
     if (next === tab) return;
@@ -265,7 +243,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
         {variant === "panel" && createSession.state === "available" && (
           <TooltipIconButton
             tooltip={newLabel}
-            {...(chat ? {} : { shortcut: shortcutLabel("N") })}
+            shortcut={chat ? shortcutLabel("N", { shift: true }) : shortcutLabel("N")}
             onClick={onNew}
             disabled={!canNew}
             data-slot={chat ? "new-chat" : "new-session"}
@@ -282,7 +260,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
           <Button size="sm" variant="outline" className="w-full justify-start" onClick={onNew} disabled={!canNew} data-slot={chat ? "new-chat" : "new-session"}>
             {chat ? <MessageSquarePlus /> : <Plus />}
             <span className="truncate">{newLabel}</span>
-            {!chat && <Kbd className="ms-auto">{shortcutLabel("N")}</Kbd>}
+            <Kbd className="ms-auto">{chat ? shortcutLabel("N", { shift: true }) : shortcutLabel("N")}</Kbd>
           </Button>
         </div>
       )}
@@ -327,7 +305,7 @@ function SessionsPanelBody({ variant }: SessionsPanelProps) {
               title="No chats yet"
               body="Chats are conversations that are not about a project. Ask anything; nothing here touches your code."
               action={createSession.state === "available" ? (
-                <Button size="sm" variant="outline" onClick={() => void newChat()} disabled={!canChat} data-slot="new-chat">
+                <Button size="sm" variant="outline" onClick={() => void newChat()} disabled={!shell.canChat} data-slot="new-chat">
                   <MessageSquarePlus />
                   New chat
                 </Button>
@@ -440,7 +418,6 @@ function SessionsTabs({ tab, onChange, activity }: { tab: SessionsTab; onChange(
 function SheetFooter() {
   const { theme, toggle } = useTheme();
   const addProject = useCapability("pi/project/add");
-  const createSession = useCapability("session/new");
   const logs = useCapability("pi/logs/query");
   const shell = useShell();
   const workbench = useWorkbench();
@@ -464,8 +441,6 @@ function SheetFooter() {
       <TooltipIconButton tooltip="Settings" side="top" onClick={() => openWorkbench("settings")}>
         <Settings />
       </TooltipIconButton>
-      {/* Beam's spark, beside Settings: the rail's affordance, rendered where a phone has room for it. */}
-      {createSession.state === "available" ? <BeamSpark side="top" onOpen={() => shell.setSessionsOpen(false)} /> : null}
       <span className="ms-auto pe-1 typed text-ink-3">{PRODUCT_NAME}</span>
     </footer>
   );

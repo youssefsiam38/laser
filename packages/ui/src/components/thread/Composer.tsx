@@ -536,7 +536,7 @@ function useSlashCommands() {
 // ---------------------------------------------------------------------------
 
 function useHandleMentions() {
-  // One record per composer: Beam's bubble and the session's own composer each
+  // One record per composer: a scoped surface and the session's own composer each
   // hold their own draft, so neither can finish the other's mention.
   const mentionsRef = useRef<FinishedMentions>(undefined);
   mentionsRef.current ??= createFinishedMentions();

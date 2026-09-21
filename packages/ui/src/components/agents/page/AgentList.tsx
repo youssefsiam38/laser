@@ -1,15 +1,17 @@
 "use client";
 /**
- * The list column: your agents, the built-ins in a quieter section at the
- * bottom, and the harness policy row last. A listbox: arrows and Home/End
- * move between rows, Enter or Space (or a click) selects one.
+ * The list column: the agents this person wrote, and the harness policy row
+ * last. A listbox: arrows and Home/End move between rows, Enter or Space (or
+ * a click) selects one. Every agent is one a person wrote (D-347); when the
+ * only one is the shipped default, the group says how to write the first.
  */
 import type { AgentDefinition, AgentWarning, AgentsSnapshot } from "@lasercode/protocol";
-import { Bot, FileWarning, MessageSquare, SlidersHorizontal, Sparkles, Tag } from "lucide-react";
+import { Bot, FileWarning, Plus, SlidersHorizontal } from "lucide-react";
 import { useMemo, type KeyboardEvent, type ReactNode } from "react";
 
 import { agentDisplayName } from "@/agents";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import {
@@ -25,9 +27,6 @@ import {
 const MARK_ICON: Record<AgentMark, typeof Bot> = {
   default: Bot,
   custom: Bot,
-  beam: Sparkles,
-  chat: MessageSquare,
-  namer: Tag,
 };
 
 export function AgentMarkIcon({ mark, className }: { mark: AgentMark; className?: string | undefined }) {
@@ -42,15 +41,17 @@ export interface AgentListProps {
   warnings: readonly AgentWarning[];
   selection: AgentsSelection;
   onSelect(selection: AgentsSelection): void;
+  /** Offered by the empty state; absent when this scope cannot be written to. */
+  onNew?: (() => void) | undefined;
   /** Drawn above the rows on a phone: the overview or first-run card. */
   lead?: ReactNode;
   className?: string | undefined;
 }
 
-export function AgentList({ snapshot, view, projectCwd, warnings, selection, onSelect, lead, className }: AgentListProps) {
-  const { custom, builtin, warningCounts, fileWarnings } = useMemo(() => {
-    const { custom, builtin } = agentsInScope(snapshot, view, projectCwd);
-    const agents = [...custom, ...builtin];
+export function AgentList({ snapshot, view, projectCwd, warnings, selection, onSelect, onNew, lead, className }: AgentListProps) {
+  const { custom, warningCounts, fileWarnings } = useMemo(() => {
+    const { custom } = agentsInScope(snapshot, view, projectCwd);
+    const agents = custom;
     const byPath = new Map(agents.flatMap((agent) => agent.path ? [[agent.path, agent] as const] : []));
     const counts = new Map<AgentDefinition, number>();
     const unlinked: AgentWarning[] = [];
@@ -61,9 +62,12 @@ export function AgentList({ snapshot, view, projectCwd, warnings, selection, onS
       if (linked) counts.set(linked, (counts.get(linked) ?? 0) + 1);
       else if (warning.field === "file") unlinked.push(warning);
     }
-    return { custom, builtin, warningCounts: counts, fileWarnings: unlinked };
+    return { custom, warningCounts: counts, fileWarnings: unlinked };
   }, [projectCwd, snapshot, view, warnings]);
   const warningCount = (agent: AgentDefinition) => warningCounts.get(agent) ?? 0;
+  // The shipped default is an ordinary editable definition, not an agent this
+  // person wrote: until there is one beside it, the list says how to make one.
+  const ownAgents = custom.filter((agent) => agent.name !== snapshot.defaultAgent).length;
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]')];
@@ -120,25 +124,10 @@ export function AgentList({ snapshot, view, projectCwd, warnings, selection, onS
             onSelect={() => selection?.kind === "new" && onSelect(selection)}
           />
         ) : null}
+        {ownAgents === 0 && selection?.kind !== "new" ? <NoAgentsYet onNew={onNew} /> : null}
       </Group>
       {view === "global" ? (
         <>
-          <Group label="Built in" quiet>
-            {builtin.map((agent) => (
-              <AgentRow
-                key={agent.name}
-                agent={agent}
-                isDefault={false}
-                warnings={warningCount(agent)}
-                shadowsGlobal={false}
-                showGlobalBadge={false}
-                selected={sameSelection(selection, selectionOfAgent(agent))}
-                tabIndex={focusable(selectionOfAgent(agent), false)}
-                quiet
-                onSelect={() => onSelect(selectionOfAgent(agent))}
-              />
-            ))}
-          </Group>
           <Group label="Harness" quiet>
             <Row
               icon={<SlidersHorizontal aria-hidden="true" />}
@@ -152,6 +141,29 @@ export function AgentList({ snapshot, view, projectCwd, warnings, selection, onS
             />
           </Group>
         </>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * No agent of this person's own yet. Not a bare “Nothing here”: it says what
+ * an agent is and offers the one verb that makes one, in the column where
+ * they will appear.
+ */
+function NoAgentsYet({ onNew }: { onNew?: (() => void) | undefined }) {
+  return (
+    <div data-slot="agent-list-empty" className="mx-1 mt-1 flex flex-col items-start gap-2 rounded-lg bg-surface-2/60 px-3 py-3">
+      <p className="text-sm font-medium text-ink">No agents of your own yet</p>
+      <p className="text-xs leading-5 text-ink-2">
+        An agent is a way of working you can reuse: a name, the instructions that shape how it works, and the model and
+        skills it uses. Write one and it appears here, ready to start.
+      </p>
+      {onNew ? (
+        <Button type="button" size="xs" variant="secondary" onClick={onNew} data-slot="agent-list-empty-new">
+          <Plus />
+          New agent
+        </Button>
       ) : null}
     </div>
   );

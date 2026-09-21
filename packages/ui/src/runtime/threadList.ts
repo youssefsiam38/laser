@@ -13,10 +13,10 @@
  *
  * The builders below are pure and tested in test/runtime/threadList.test.ts.
  */
-import { humanizeLabel, WORKTREES_DIR_NAME } from "@lasercode/protocol";
+import { humanizeLabel, sessionKindOf, WORKTREES_DIR_NAME } from "@lasercode/protocol";
 import { DEVICE_KEYS, deviceStore } from "./device-storage.js";
 import type { RemoteThreadListAdapter } from "@assistant-ui/react";
-import type { ProjectInfo, SessionAttention, SessionSummary } from "@lasercode/protocol";
+import type { ProjectInfo, SessionAttention, SessionKind, SessionSummary } from "@lasercode/protocol";
 import { viewFirstUserText, viewHasUserMessage } from "../view-summary.js";
 import type { SessionView } from "../store.js";
 
@@ -26,6 +26,15 @@ import type { SessionView } from "../store.js";
  * `@assistant-ui/core` (not a direct dependency).
  */
 export type RemoteThreadMetadata = Awaited<ReturnType<RemoteThreadListAdapter["fetch"]>>;
+
+/** Where a brand-new conversation starts, as the destination decides it. */
+export interface CreationTarget {
+  cwd: string;
+  agentName?: string | undefined;
+  /** `"chat"` starts a plain conversation with no definition (`docs/plain-chat.md`). */
+  sessionKind?: SessionKind | undefined;
+  intent?: number | undefined;
+}
 
 /** Attention order for the sidebar (DESIGN.md "Layout" → Sessions). */
 export const ATTENTION_ORDER: readonly SessionAttention[] = [
@@ -128,8 +137,9 @@ export function mergeSessions(
     if (listed) {
       // The catalog row wins, except for what only the open session can know
       // yet: an unwritten session has no file to read an agent record from,
-      // and a row with no attribution makes the launcher treat a Beam chat as
-      // the default agent's (M13-T47). The view's state carries the truth.
+      // and a row with no attribution makes the launcher treat a Chat
+      // conversation as the default agent's (M13-T47). The view's state
+      // carries the truth.
       if (listed.agent === undefined && view.state.agent !== undefined) merged.set(view.path, { ...listed, agent: view.state.agent });
       continue;
     }
@@ -293,7 +303,7 @@ export function visibleProjectCwds(
   open: Readonly<Record<string, SessionView | undefined>>,
   archive: ArchiveStore,
   options: {
-    /** Directories that are never projects: the Beam and Chat workspaces. */
+    /** Directories that are never projects: the Chat workspace. */
     exclude?: readonly string[];
     visibleCounts?: Readonly<Record<string, number>>;
     /** Whether an open, unarchived view still pins its project. Every view does when omitted. */
@@ -325,7 +335,9 @@ export function visibleProjectCwds(
   for (const project of projects) {
     if (project.pinned || (options.visibleCounts?.[project.cwd] ?? project.sessionCount - (archivedByCwd.get(project.cwd) ?? 0)) > 0) append(project.cwd);
   }
-  const workspaceKind = (kind: string | undefined) => kind === "beam" || kind === "chat";
+  // A stored `beam` record is a Chat conversation now (`docs/plain-chat.md`);
+  // either way its directory is a workspace, never a project.
+  const workspaceKind = (kind: string | undefined) => kind !== undefined && sessionKindOf(kind) === "chat";
   for (const session of sessions) if (!archived(session.path) && !workspaceKind(session.agent?.kind)) append(session.cwd);
   for (const [path, view] of Object.entries(open)) {
     if (!view || workspaceKind(view.state.agent?.kind) || archived(path)) continue;
@@ -366,12 +378,12 @@ export interface ThreadListDeps {
   views(): Readonly<Record<string, SessionView | undefined>>;
   archive: ArchiveStore;
   /** Explicit destination-owned target for a brand-new session. Never guessed from an open view. */
-  creationTarget(): Promise<{ cwd: string; agentName?: string | undefined; intent?: number | undefined } | undefined>;
+  creationTarget(): Promise<CreationTarget | undefined>;
   /**
    * Reuse an unstarted session for this exact target, or create one; returns
    * its path. Must not make it current: the runtime adopts it first.
    */
-  createSession(target: { cwd: string; agentName?: string | undefined; intent?: number | undefined }): Promise<string>;
+  createSession(target: CreationTarget): Promise<string>;
   /** `pi/session/rename`. */
   renameSession(path: string, name: string): Promise<void>;
   /** Permanently delete a closed persisted transcript. */

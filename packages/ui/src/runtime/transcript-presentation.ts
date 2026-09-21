@@ -48,7 +48,7 @@ export class MessageEditPresentation {
   update(patch: Partial<typeof this.state>) { this.state = { ...this.state, ...patch }; for (const listener of this.listeners) listener(); }
 }
 
-/** Owned by the canonical app store, never by a mounted tool row or a Beam scope. */
+/** Owned by the canonical app store, never by a mounted tool row or a thread scope. */
 export class TranscriptPresentation {
   private questions = new Map<string, Map<string, QuestionPresentation>>();
   private edits = new Map<string, Map<string, MessageEditPresentation>>();

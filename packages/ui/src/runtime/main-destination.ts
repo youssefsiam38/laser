@@ -1,6 +1,6 @@
-import type { AgentRun, SessionSummary } from "@lasercode/protocol";
+import type { AgentRun, SessionKind, SessionSummary } from "@lasercode/protocol";
 
-import { latestRunForSession } from "../agents/model.js";
+import { latestRunForSession, sessionKindFor } from "../agents/model.js";
 import type { AppState, SessionView } from "../store.js";
 import { sessionKindTab, type SessionKindTab } from "./session-tab-memory.js";
 import { mergeSessions, parentPathOf, projectRootOfCwd } from "./threadList.js";
@@ -12,12 +12,7 @@ export type ProjectCodeDestination =
   | { readonly kind: "project-landing"; readonly project: string }
   | { readonly kind: "project-session"; readonly project: string; readonly path: string };
 
-export type CodeDestination = ProjectCodeDestination | {
-  readonly kind: "beam-session";
-  readonly path: string;
-  /** Project destination preserved while Beam is explicitly in the main window. */
-  readonly returnTo: ProjectCodeDestination;
-};
+export type CodeDestination = ProjectCodeDestination;
 
 export type MainTarget =
   | { readonly kind: "chat-tab" }
@@ -47,10 +42,6 @@ export function rememberedCodeOf(destination: MainDestination): CodeDestination 
   return destination.phase === "ready-code" ? destination.code : destination.rememberedCode;
 }
 
-export function projectReturnOf(code: CodeDestination): ProjectCodeDestination {
-  return code.kind === "beam-session" ? code.returnTo : code;
-}
-
 export function mainTab(destination: MainDestination): MainTab {
   if (destination.phase === "ready-code") return "code";
   if (destination.phase === "ready-chat") return "chat";
@@ -62,18 +53,18 @@ export function mainTab(destination: MainDestination): MainTab {
 export function mainPath(destination: MainDestination): string | undefined {
   if (destination.phase === "ready-chat") return destination.chat.kind === "session" ? destination.chat.path : undefined;
   if (destination.phase !== "ready-code") return undefined;
-  return destination.code.kind === "project-session" || destination.code.kind === "beam-session" ? destination.code.path : undefined;
+  return destination.code.kind === "project-session" ? destination.code.path : undefined;
 }
 
 export function mainCodeProject(destination: MainDestination): string | undefined {
-  const project = projectReturnOf(rememberedCodeOf(destination));
+  const project = rememberedCodeOf(destination);
   return project.kind === "project-session" || project.kind === "project-landing" ? project.project : undefined;
 }
 
 /**
  * What the landing can say about where it is, from the destination alone
- * (D-341). A project by its directory; the Chat or Beam workspace by kind,
- * whose display names are constants and need no directory; or nothing, when no
+ * (D-341). A project by its directory; the Chat workspace by kind, whose
+ * display name is a constant and needs no directory; or nothing, when no
  * project is open. Never read from a session or from the agents snapshot: the
  * landing paints from this on its first frame and the backend's later answer
  * must not change a word of it.
@@ -81,14 +72,12 @@ export function mainCodeProject(destination: MainDestination): string | undefine
 export type LandingWorkspace =
   | { readonly kind: "project"; readonly cwd: string }
   | { readonly kind: "chat" }
-  | { readonly kind: "beam" }
   | { readonly kind: "none" };
 
 export function landingWorkspaceOf(destination: MainDestination): LandingWorkspace {
   const fromCode = (code: CodeDestination): LandingWorkspace =>
-    code.kind === "beam-session" ? { kind: "beam" }
-      : code.kind === "no-project-landing" ? { kind: "none" }
-        : { kind: "project", cwd: code.project };
+    code.kind === "no-project-landing" ? { kind: "none" }
+      : { kind: "project", cwd: code.project };
   if (destination.phase === "ready-chat") return { kind: "chat" };
   if (destination.phase === "ready-code") return fromCode(destination.code);
   // Resolving or unavailable: the target names the place before the host has
@@ -245,18 +234,18 @@ export function isSessionInCodeProject(
   runs: Readonly<Record<string, AgentRun>>,
   cwd: string,
 ): boolean {
-  if (session.agent?.kind === "chat" || session.agent?.kind === "beam") return false;
+  if (sessionKindFor(session, undefined) === "chat") return false;
   return projectRootOfCwd(rootCwdForSession(session, sessions, runs)) === cwd;
 }
 
-/** The Code project a row belongs to. Chat and Beam retain Code memory. */
+/** The Code project a row belongs to. A Chat conversation retains Code memory. */
 export function codeProjectForSession(
   session: SessionSummary,
   sessions: readonly SessionSummary[],
   runs: Readonly<Record<string, AgentRun>>,
   previous: string | undefined,
 ): string | undefined {
-  if (session.agent?.kind === "chat" || session.agent?.kind === "beam") return previous;
+  if (sessionKindFor(session, undefined) === "chat") return previous;
   return projectRootOfCwd(rootCwdForSession(session, sessions, runs));
 }
 
@@ -266,7 +255,6 @@ export function codeDestinationForSession(
   runs: Readonly<Record<string, AgentRun>>,
   previous: CodeDestination,
 ): CodeDestination {
-  if (session.agent?.kind === "beam") return { kind: "beam-session", path: session.path, returnTo: projectReturnOf(previous) };
   const project = codeProjectForSession(session, sessions, runs, mainCodeProject({ phase: "ready-code", intent: 0, code: previous }));
   return project ? { kind: "project-session", project, path: session.path } : previous;
 }
@@ -274,6 +262,8 @@ export function codeDestinationForSession(
 export interface MainCreationTarget {
   readonly cwd: string;
   readonly agentName?: string | undefined;
+  /** `"chat"` when this landing starts a plain conversation (`docs/plain-chat.md`). */
+  readonly sessionKind?: SessionKind | undefined;
   readonly intent: number;
 }
 
@@ -284,7 +274,7 @@ export function creationTargetForDestination(
 ): MainCreationTarget | undefined {
   if (destination.phase === "ready-chat") {
     return destination.chat.kind === "landing" && chatWorkspace
-      ? { cwd: chatWorkspace, agentName: "chat", intent: destination.intent }
+      ? { cwd: chatWorkspace, sessionKind: "chat", intent: destination.intent }
       : undefined;
   }
   if (destination.phase !== "ready-code") return undefined;

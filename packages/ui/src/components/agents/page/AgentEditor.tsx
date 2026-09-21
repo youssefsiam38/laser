@@ -162,7 +162,7 @@ export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, sett
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
   const byField = useMemo(() => agentIssuesByField(issues), [issues]);
-  const localTemplateIssue = !draft.engineInstructions ? instructionTemplateIssue(draft.instructions, "agent") : null;
+  const localTemplateIssue = !draft.engineInstructions ? instructionTemplateIssue(draft.instructions) : null;
   const patch = useCallback((changes: Partial<AgentDefinitionInput>) => {
     setServerError(undefined);
     setDraft((current) => ({ ...current, ...changes }));
@@ -445,7 +445,6 @@ export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, sett
           ) : (
             <>
               <InstructionTemplateEditor
-                target="agent"
                 context={{
                   agentName: draft.name,
                   agentDescription: draft.description,

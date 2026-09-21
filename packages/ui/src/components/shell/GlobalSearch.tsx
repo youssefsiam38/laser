@@ -1,3 +1,4 @@
+import { sessionKindOf } from "@lasercode/protocol";
 import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { ThreadListSearch } from "@/components/assistant-ui/elements/thread-list.aui";
@@ -47,7 +48,7 @@ function GlobalSearchBody({ close }: { close: () => void }) {
   const rows = useMemo<SearchableThread[]>(() => {
     const hits = new Map(search.hits.map(h => [h.path, h]));
     return sessions.filter(s => !search.after || s.modifiedAt >= search.after).map(s => {
-      const kind = s.agent?.kind === "beam" || s.agent?.kind === "chat" ? s.agent.kind : workspaceKindOf(s.cwd, workspaces);
+      const kind = s.agent && sessionKindOf(s.agent.kind) === "chat" ? ("chat" as const) : workspaceKindOf(s.cwd, workspaces);
       return { id: s.path, title: sessionTitle(s, views[s.path]), group: kind ? groupNameOf(s.cwd, kind) : shortCwd(s.cwd), preview: s.firstMessage ?? "", modifiedAt: s.modifiedAt, status: sessionStatus(views[s.path], s), matchCount: hits.get(s.path)?.count, excerpt: hits.get(s.path)?.excerpt, matchSource: hits.get(s.path)?.source };
     }).filter(s => matchesThread(s, query)).sort(rankSearchThreads);
   }, [sessions, views, search.hits, search.after, query, workspaces]);

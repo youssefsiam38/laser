@@ -46,13 +46,6 @@ import type { EarlierPage } from "@/runtime/history-loader.js";
  */
 export interface ThreadProps {
   statusSlot?: ReactNode;
-  /**
-   * The Beam bubble (`components/beam`) renders this same thread for a session
-   * that is not about a project: it swaps the project empty state and the
-   * repository follow-ups for its own. Absent, the project ones stand.
-   */
-  emptyState?: ReactNode;
-  followUps?: ReadonlyArray<{ title: string; label: string; prompt: string }>;
 }
 
 /**
@@ -84,7 +77,7 @@ export function Thread(props: ThreadProps = {}) {
   return <TranscriptViewportProvider><ToolRowScope scope={path}><ThreadContent {...props} /></ToolRowScope></TranscriptViewportProvider>;
 }
 
-function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
+function ThreadContent({ statusSlot }: ThreadProps) {
   // Narrow reads only. The session's own view carries `lastSeq` and its blocks,
   // which change with every streamed token; reading it here re-rendered the
   // whole column — viewport, map, footer, composer and every mounted row — per
@@ -97,7 +90,6 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
     const history = target ? s.open[target]?.history : undefined;
     return Boolean(history && !history.complete);
   });
-  const suggestions = useMemo(() => (followUps ? AuiConfig({ suggestions: Suggestions([...followUps]) }) : FOLLOW_UPS), [followUps]);
   const { actions, destination } = useLaserStable();
   const open = useLaserState(s => sessionOpenPhase(s, visibleSessionPath(s)), sameSessionOpenPhase);
   const connected = useLaserState(s => s.connection === "open");
@@ -144,7 +136,7 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
     <FindQueryContext value={find.query}>
     <ThreadSlotsProvider slots={slots}>
       <TooltipProvider>
-        <AuiProvider extends={aui} config={suggestions}>
+        <AuiProvider extends={aui} config={FOLLOW_UPS}>
           <FileOpenerProvider scope={path}>
           <ThreadPrimitive.Root ref={find.root} data-slot="thread" className="relative flex h-full min-h-0 flex-col bg-bg">
             {find.bar}
@@ -185,7 +177,7 @@ function ThreadContent({ statusSlot, emptyState, followUps }: ThreadProps) {
                        store already has the transcript, and that frame must
                        not read as "new session". */
                     empty={<AuiIf condition={(s) => s.thread.isEmpty}>
-                      {(open.phase === "idle" || (open.phase !== "failed" && !open.expectsTranscript)) && (emptyState ?? <EmptyState />)}
+                      {(open.phase === "idle" || (open.phase !== "failed" && !open.expectsTranscript)) && <EmptyState />}
                     </AuiIf>}
                     head={<>
                     {cwd && (

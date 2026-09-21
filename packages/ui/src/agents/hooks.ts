@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useLaserStable, useLaserState } from "../runtime/LaserProvider.js";
 import type { AgentsSlice, AppState } from "../store.js";
 import type { AgentsActions } from "./actions.js";
-import { agentKindOf, latestRunForSession, runsForRoot, sessionAgentName } from "./model.js";
+import { agentKindOf, latestRunForSession, runsForRoot, sessionAgentName, sessionKindFor } from "./model.js";
 import { buildAgentTree, sameAgentTree, type AgentTree } from "./run-tree.js";
 
 const EMPTY_RUNS: readonly AgentRun[] = Object.freeze([]);
@@ -133,9 +133,11 @@ export function useSessionAgent(path: string | undefined): SessionAgentInfo | un
       const info = view?.state.agent ?? summary?.agent;
       const shape = summary ?? { cwd: view!.state.cwd, ...(info !== undefined ? { agent: info } : {}) };
       const run = latestRunForSession(s.agents.runs, path);
+      const agentName = info?.agentName ?? sessionAgentName(shape, s.agents.snapshot);
       return {
-        agentName: info?.agentName ?? sessionAgentName(shape, s.agents.snapshot),
+        ...(agentName !== undefined ? { agentName } : {}),
         kind: info?.kind ?? agentKindOf(shape, s.agents.snapshot),
+        sessionKind: info?.sessionKind ?? sessionKindFor(shape, s.agents.snapshot),
         ...(info?.subagentName !== undefined ? { subagentName: info.subagentName } : {}),
         ...(info?.parentPath !== undefined ? { parentPath: info.parentPath } : {}),
         ...(info?.rootPath !== undefined ? { rootPath: info.rootPath } : {}),
@@ -153,6 +155,7 @@ function sameAgentInfo(a: SessionAgentInfo | undefined, b: SessionAgentInfo | un
   return (
     a.agentName === b.agentName &&
     a.kind === b.kind &&
+    a.sessionKind === b.sessionKind &&
     a.subagentName === b.subagentName &&
     a.parentPath === b.parentPath &&
     a.rootPath === b.rootPath &&

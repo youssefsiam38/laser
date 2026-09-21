@@ -66,15 +66,14 @@ export function DictateButton({ className, size, touchSized = false }: DictateBu
   const { destination } = useLaserStable();
   const supported = env.microphone && PhraseDictationAdapter.isSupported();
   // Where a recording would be filed before a session exists: the project the
-  // landing is for, or the built-in workspace's directory. The workspace
-  // directories are known before "New chat" is offered at all (the sessions
-  // panel gates the button on them), so this is not a wait either.
+  // landing is for, or the Chat workspace's directory. That directory is known
+  // before "New chat" is offered at all (every entry point gates on it), so
+  // this is not a wait either.
   const workspaces = useLaserState(s => s.agents.snapshot?.workspaces);
   const landing = destination ? landingWorkspaceOf(destination) : undefined;
   const landingCwd = landing?.kind === "project" ? landing.cwd
     : landing?.kind === "chat" ? workspaces?.chat
-      : landing?.kind === "beam" ? workspaces?.beam
-        : undefined;
+      : undefined;
   const cwd = sessionCwd ?? landingCwd;
 
   if (!supported || !cwd) return null;
@@ -94,7 +93,7 @@ function DictateControls({ className, size, touchSized, cwd, path }: DictateButt
   const insertTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   /**
    * This composer, so a phrase lands in the box it was spoken into. More than
-   * one composer can be mounted (Beam's bubble over the session's own), and a
+   * one composer can be mounted (a scoped surface over the session's own), and a
    * document-wide query for a textarea would always find the first one.
    */
   const root = useRef<HTMLSpanElement>(null);

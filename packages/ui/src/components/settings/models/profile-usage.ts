@@ -15,7 +15,6 @@ import {
   PROFILE_NAME_MAX,
   profileByName,
   type AgentDefinition,
-  type BuiltinProfiles,
   type ModelProfile,
   type ProfileAssignments,
   type ProfileModelRef,
@@ -52,25 +51,17 @@ export interface ProfileUsage {
   referenced: boolean;
 }
 
-/**
- * Everything that points at `profileId`, written as a person would say it.
- *
- * Built-ins count as agents while they exist: from the person's side a
- * built-in is an agent with a profile, and a "used by" line that leaves one
- * out would make a delete refuse for a reason the line did not mention.
- */
+/** Everything that points at `profileId`, written as a person would say it. */
 export function profileUsage(
   profileId: string,
   assignments: ProfileAssignments,
   agents: readonly AgentDefinition[] = [],
-  builtins?: BuiltinProfiles | undefined,
 ): ProfileUsage {
   const labels: string[] = [];
   for (const { setting, label } of ASSIGNMENT_LABELS) {
     if (assignments[setting] === profileId) labels.push(label);
   }
-  const named = agents.filter((agent) => agent.profileId === profileId).length
-    + (builtins ? Object.values(builtins).filter((id) => id === profileId).length : 0);
+  const named = agents.filter((agent) => agent.profileId === profileId).length;
   if (named > 0) labels.push(`${named} ${named === 1 ? "agent" : "agents"}`);
   return { labels, referenced: labels.length > 0 };
 }

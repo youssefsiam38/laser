@@ -3,7 +3,6 @@ import {
   instructionTemplateFieldRanges,
   instructionTemplateFields,
   type InstructionTemplateField,
-  type InstructionTemplateTarget,
   type ThinkingLevel,
 } from "@lasercode/protocol";
 
@@ -30,9 +29,9 @@ export interface InstructionTemplateVariable {
 }
 
 /** Maps the protocol parser's valid field locations onto their editor metadata. */
-export function instructionTemplateVariables(source: string, target: InstructionTemplateTarget): InstructionTemplateVariable[] {
-  const fields = new Map(instructionTemplateFields(target).map((field) => [field.key, field]));
-  return instructionTemplateFieldRanges(source, target).flatMap(({ key, start, end }) => {
+export function instructionTemplateVariables(source: string): InstructionTemplateVariable[] {
+  const fields = new Map(instructionTemplateFields().map((field) => [field.key, field]));
+  return instructionTemplateFieldRanges(source).flatMap(({ key, start, end }) => {
     const field = fields.get(key);
     return field ? [{ start, end, token: source.slice(start, end), key, field }] : [];
   });
@@ -41,7 +40,7 @@ export function instructionTemplateVariables(source: string, target: Instruction
 function runtimeReason(key: string): string {
   switch (key) {
     case "model":
-      return "The model comes from this agent's profile when the session or naming request starts: the first one in it that can answer.";
+      return "The model comes from this agent's profile when the session starts: the first one in it that can answer.";
     case "thinkingLevel":
       return "This agent follows the reasoning level selected when the session starts.";
     case "workingDirectory":
@@ -65,8 +64,6 @@ function runtimeReason(key: string): string {
     case "projectsFile":
     case "logsFile":
       return "The exact local path comes from the running app’s worker configuration.";
-    case "sourceText":
-      return "A value exists only when Namer receives the first message of the session it must name.";
     default:
       return "This value is resolved when the agent runs.";
   }

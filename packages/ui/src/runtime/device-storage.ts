@@ -69,7 +69,6 @@ export const DEVICE_KEYS = {
   project: "project",
   /** `{v:1, view, projectCwd?}` — the explicit Settings target. */
   settingsScope: "settings-scope",
-  beamSession: "beam-session",
   archived: "archived",
   sessionGroups: "session-groups",
   sessionPins: "session-pins",
@@ -111,6 +110,8 @@ export const LEGACY_EXACT_KEYS: readonly string[] = [
   storageKey("session"),
   storageKey("project"),
   storageKey("session-tab-last"),
+  // Written by a surface this version does not have any more (M23). Still
+  // purged: a key nothing reads is exactly the kind of orphan this list is for.
   storageKey("beam-session"),
   storageKey("archived"),
   storageKey("session-groups"),

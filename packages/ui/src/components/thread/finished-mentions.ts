@@ -55,7 +55,7 @@ import {
  * record itself is kept, because typing `Hello: ` in front of a mention passes
  * through exactly that state on its way to a boundary that is whole again.
  *
- * Records are per composer: more than one can be on screen (Beam's bubble
+ * Records are per composer: more than one can be on screen (a scoped surface
  * over the session's own), and each owns its own draft.
  */
 /** What a mention names. The picker has no fourth kind, and neither has a tag. */

@@ -7,10 +7,10 @@
  * single-choice catalogues, so they share its combobox, listbox, focus and
  * empty/error behavior rather than growing a second hand-rolled picker.
  *
- * Built-in agents never enter the options. Beam and Chat keep their dedicated
- * channels, and Namer is not a session agent. Once the first prompt exists the
- * whole control unmounts; changing a started session's identity is not an
- * operation the app exposes.
+ * A Chat conversation runs no definition at all (`docs/plain-chat.md`), so
+ * this control is offered to project sessions only. Once the first prompt
+ * exists the whole control unmounts; changing a started session's identity is
+ * not an operation the app exposes.
  */
 import { Bot } from "lucide-react";
 import { useMemo } from "react";
@@ -50,9 +50,9 @@ export function SessionAgentSelector({ className, allowProjectLanding = true }: 
   const status = useAgentsStatus();
   const { firstTurn, chooseAgent, pending: preparingSession } = useSessionPreparation();
 
-  const sessionKind = session?.agent?.kind ?? workspaceKindOf(session?.cwd, snapshot?.workspaces ?? {});
+  const agentKind = session?.agent?.kind ?? workspaceKindOf(session?.cwd, snapshot?.workspaces ?? {});
   const canChoose = session
-    ? (sessionKind === "root" || (sessionKind == null && snapshot !== null)) && unstarted === true
+    ? (agentKind === "root" || (agentKind == null && snapshot !== null)) && unstarted === true
     : allowProjectLanding && currentProject !== undefined;
   const cwd = session?.cwd ?? currentProject;
   const selected = firstTurn?.agentName ?? session?.agent?.agentName ?? snapshot?.defaultAgent;

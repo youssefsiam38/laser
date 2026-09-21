@@ -59,6 +59,7 @@ function groups(mod: string): BindingGroup[] {
         { keys: [[mod, "F"]], what: "Find in this conversation", detail: "Includes folded reasoning and tools. Enter / Shift+Enter moves between matches; Esc closes." },
         { keys: [[mod, "Shift", "F"]], what: "Search all sessions", detail: "Recent history first. Search older periods on demand; your messages rank before assistant replies and tool activity." },
         { keys: [[mod, "N"]], what: "New session", detail: "In the project the rail has selected." },
+        { keys: [[mod, "Shift", "N"]], what: "New chat", detail: "A conversation that is not about a project. Nothing it does touches your code." },
         { keys: [["["]], what: "Show or hide the sessions list" },
         { keys: [["]"]], what: "Show or hide telemetry", detail: "On a narrow window this opens the history sheet instead." },
         { keys: [["Esc"]], what: "Close a sheet, a dialog or the palette" },

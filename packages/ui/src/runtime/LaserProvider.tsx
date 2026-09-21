@@ -113,7 +113,6 @@ import { createHistoryWindows, MAIN_WINDOW_SCOPE, type HistoryWindowOwner, type 
 import { sessionsList } from "../components/shell/session-groups.js";
 import { sessionFolds } from "../components/assistant-ui/elements/session-folds.js";
 import { rehydrateFleetState } from "../fleet/fleet-state.js";
-import { beamStore } from "../components/beam/beam-store.js";
 import { createShellSnapshot } from "./presentation-state.js";
 import { startVisiblePoll } from "./visible-poll.js";
 import { useWorkerReadiness } from "./worker-readiness.js";
@@ -131,6 +130,7 @@ import {
   threadListSignature,
   visibleProjectCwds,
   type ArchiveStore,
+  type CreationTarget,
 } from "./threadList.js";
 
 
@@ -255,7 +255,7 @@ export interface LaserActions {
   takeEditorText(path: string): void;
   dismissToast(id: number): void;
   toast(level: "info" | "warning" | "error", text: string): void;
-  /** Agent definitions, runs, Beam and Namer (`agents/*`). See agents/actions.ts for failure styles. */
+  /** Agent definitions and runs (`agents/*`). See agents/actions.ts for failure styles. */
   agents: AgentsActions;
   /** Background commands the agent left running (`tasks/*`). See fleet/actions.ts. */
   tasks: TasksActions;
@@ -446,7 +446,7 @@ export function LaserStoreProvider({ store, children }: { store: StateStore; chi
   return <LaserStateContext.Provider value={store}>{children}</LaserStateContext.Provider>;
 }
 
-/** The canonical presentation owner is shared by main and Beam, not their DOM placement. */
+/** The canonical presentation owner is shared by every surface, not their DOM placement. */
 export function useTranscriptPresentation(): TranscriptPresentation {
   const store = useContext(LaserStateContext);
   // A row mounted outside the app's store (a harness, a preview) still gets an
@@ -811,13 +811,11 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
     ])],
     include: () => {
       const pending = pendingSessionPath(readState().destination);
-      const beam = beamStore.getSnapshot().path;
       const memory = readDestinationMemory();
       const code = memory.code;
       return [...new Set([...(readState().current ? [readState().current!] : []), ...scopedPaths.current.keys(), ...sessionsList.get().pinned,
-        ...(pending ? [pending] : []), ...(beam ? [beam] : []),
+        ...(pending ? [pending] : []),
         ...("path" in code ? [code.path] : []),
-        ...(code.kind === "beam-session" && "path" in code.returnTo ? [code.returnTo.path] : []),
       ])];
     },
   }), [archive, client]);
@@ -1137,6 +1135,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       const { state: session } = await client.request("session/new", {
         cwd,
         ...(options.agentName !== undefined ? { agentName: options.agentName } : {}),
+        ...(options.sessionKind !== undefined ? { sessionKind: options.sessionKind } : {}),
       });
       if (options.landing) transcriptMembership.holdLanding(session.path);
       try {
@@ -1487,7 +1486,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
    * the real store, so "the current session" is `state.current`; a
    * `LaserThreadScope` builds a second set over a store whose `current` is its
    * own session, and every session-bound verb below follows it — the composer
-   * inside the Beam bubble sets Beam's model, not the main session's.
+   * inside a scoped surface sets that session's model, not the main one's.
    */
   const buildActions = useCallback((readScoped: () => AppState, history: HistoryReads = historyLoader): LaserActions => {
     const requireCurrent = (): string => {
@@ -1878,7 +1877,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
   // half of the context.
   const projectsKey = useMemo(() => {
     const workspaces = state.agents.snapshot?.workspaces;
-    return visibleProjectCwds(projectList, state.sessions, state.open, archive, { exclude: workspaces ? [workspaces.beam, workspaces.chat].filter((cwd): cwd is string => typeof cwd === "string") : [],
+    return visibleProjectCwds(projectList, state.sessions, state.open, archive, { exclude: workspaces ? [workspaces.chat].filter((cwd): cwd is string => typeof cwd === "string") : [],
       ...(state.catalogGroups ? { visibleCounts: Object.fromEntries(state.catalogGroups.map(group => [group.cwd, group.total])) } : {}),
       holdsProject: (path) => holdsProject(state, path),
     }).join("\n");
@@ -1947,6 +1946,7 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
         createSession: async (target) => {
           const path = await launchSession(target.cwd, {
             ...(target.agentName !== undefined ? { agentName: target.agentName } : {}),
+            ...(target.sessionKind !== undefined ? { sessionKind: target.sessionKind } : {}),
             select: false,
             landing: true,
           });
@@ -2310,7 +2310,7 @@ function useThreadRuntime(store: SnapshotStore<RuntimeSnapshot>): AssistantRunti
 }
 
 // ---------------------------------------------------------------------------
-// A second thread, scoped: the Beam bubble
+// A second thread, scoped
 // ---------------------------------------------------------------------------
 
 /**
@@ -2360,7 +2360,7 @@ export interface LaserThreadScopeProps {
    * (the host has not said yet) refuses creation with `unavailable`, written
    * for the person who just pressed Enter.
    */
-  createIn: (state: AppState) => { cwd: string; agentName?: string } | undefined;
+  createIn: (state: AppState) => CreationTarget | undefined;
   unavailable: string;
   children: ReactNode;
 }
@@ -2387,7 +2387,7 @@ export interface ThreadScopeRefusal {
 
 const ThreadScopeRefusalContext = createContext<ThreadScopeRefusal>({ refusal: undefined, dismissRefusal: () => {} });
 
-/** The scope's refusal, for a notice rendered inside the scope (the Beam bubble). */
+/** The scope's refusal, for a notice rendered inside the scope. */
 export function useThreadScopeRefusal(): ThreadScopeRefusal {
   return useContext(ThreadScopeRefusalContext);
 }
@@ -2397,11 +2397,11 @@ export function useThreadScopeRefusal(): ThreadScopeRefusal {
  * (AGENTS.md invariant 8 holds: one session is still written by one worker;
  * this only reads it from a second place).
  *
- * The bubble and the main view show different sessions at once, so the scope
- * owns three things: a state store whose `current` is its own session (so the
- * ordinary `Thread`, composer and status line inside read it), a set of
- * actions bound to that store (so "set model" inside the bubble sets Beam's
- * model), and its own `useRemoteThreadListRuntime` under an isolated aui root
+ * A scoped surface and the main view show different sessions at once, so the
+ * scope owns three things: a state store whose `current` is its own session
+ * (so the ordinary `Thread`, composer and status line inside read it), a set
+ * of actions bound to that store (so "set model" inside the scope sets that
+ * session's model), and its own `useRemoteThreadListRuntime` under an isolated aui root
  * — nested under the main runtime it would silently become a no-op bound to
  * the main thread. Sessions it opens are opened quietly (`select: false`),
  * so the main view never moves.
@@ -2430,9 +2430,15 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
   // composer must not refuse to send for want of a project, and what it asks
   // about a directory (commands, files, the default model) is asked there.
   const workspace = useLaserState(useCallback((s: AppState) => createInRef.current(s)?.cwd, []));
-  const scopedDestination = useMemo<MainDestination>(() => path
-    ? { phase: "ready-code", intent: 0, code: { kind: "beam-session", path, returnTo: workspace ? { kind: "project-landing", project: workspace } : { kind: "no-project-landing" } } }
-    : { phase: "ready-code", intent: 0, code: workspace ? { kind: "project-landing", project: workspace } : { kind: "no-project-landing" } }, [path, workspace]);
+  const scopedDestination = useMemo<MainDestination>(() => ({
+    phase: "ready-code",
+    intent: 0,
+    code: path !== undefined && workspace !== undefined
+      ? { kind: "project-session", project: workspace, path }
+      : workspace !== undefined
+        ? { kind: "project-landing", project: workspace }
+        : { kind: "no-project-landing" },
+  }), [path, workspace]);
   const scopedStore = useMemo(() => createScopedStateStore(store, path, scopedDestination, owner), [store, path, scopedDestination, owner]);
   const scopedHistory = useMemo(() => createHistoryLoader({
     // A scoped surface shows exactly one conversation: the one it was given.
@@ -2461,7 +2467,7 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
   // On screen means attached, for as long as the scope holds the session.
   useEffect(() => (path ? attach(path) : undefined), [attach, path]);
 
-  // A first message the host refused (no model Beam can call, no workspace
+  // A first message the host refused (no model it can call, no workspace
   // yet): said inside the scope, and the message handed back to the composer,
   // rather than lost to a corner toast. `lastText` is the composer's last
   // non-empty text, remembered because a send clears it before the host answers.
@@ -2503,6 +2509,7 @@ export function LaserThreadScope({ path, onPathChange, filter, createIn, unavail
             }
             const created = await newSessionRef.current(requested.cwd, {
               ...(target.agentName !== undefined ? { agentName: target.agentName } : {}),
+              ...(target.sessionKind !== undefined ? { sessionKind: target.sessionKind } : {}),
               select: false,
             });
             // Adopt once assistant-ui has mapped the new thread onto this path

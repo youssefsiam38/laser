@@ -23,8 +23,6 @@ import {
 import { mapUi, useMapUi } from "@/components/agents/map";
 import { useSessionAgent } from "@/agents/hooks";
 import { ContextRingButton } from "@/components/assistant-ui/elements/context-display";
-// Beam: the quiet mark on one of its sessions (view styling, not an entry point).
-import { BeamSessionMark } from "@/components/beam/BeamSessionMark";
 import { StatusDot } from "@/components/status";
 import { viewFirstUserText } from "@/view-summary";
 import type { SessionView } from "@/store";
@@ -234,7 +232,6 @@ export function TopBar() {
         ) : (
           landingProject && <span data-slot="topbar-workspace" className="eyebrow hidden sm:inline">{shortCwd(landingProject)}</span>
         )}
-        <BeamSessionMark path={view?.path} />
 
         {/* Agents leap (Lane U2): a child session an agent started shows where
             it came from — its parent's title, one press away — before its own. */}

@@ -12,7 +12,7 @@
  *
  * What is never released:
  *
- * - the session a person is looking at, the Beam bubble, and every scope;
+ * - the session a person is looking at, and every scope;
  *
  * Visible and user-owned views may exceed the ordinary cache share. Their
  * logical conversation is not a reconstructible inactive cache, so soft byte
@@ -161,7 +161,7 @@ export const VIEW_HEAP_MODEL = Object.freeze({
 
 /** What the cache needs from the surfaces it cannot see from the store. */
 export interface ViewCacheEnvironment {
-  /** Sessions a `LaserThreadScope` is showing right now (the Beam bubble). */
+  /** Sessions a `LaserThreadScope` is showing right now. */
   scoped(): Iterable<string>;
   /**
    * This session's composer holds a person's unsent words: non-empty text, an

@@ -8,9 +8,9 @@
  *   `save`, `remove`, `skills`, `engineInstructions`, `stopRun`) reject.
  *   The form, dialog or sheet that asked shows the message where the person
  *   is looking; a toast over a form is the wrong place.
- * - Methods that only *settle* (`setDefault`, `setPolicy`, `setBuiltinProfile`)
- *   toast on failure and resolve; the
- *   snapshot only moves on success, so a toggle that failed snaps back.
+ * - Methods that only *settle* (`setDefault`, `setPolicy`) toast on failure
+ *   and resolve; the snapshot only moves on success, so a toggle that failed
+ *   snaps back.
  * - `refresh` and `runs` record failure in `state.agents.error`, where the
  *   Agents page draws its error state with a retry.
  */
@@ -23,7 +23,6 @@ import type {
   AgentRun,
   AgentSkillsListing,
   AgentWorktreeStatus,
-  BuiltinAgentName,
 } from "@lasercode/protocol";
 import type { HostClient } from "../client.js";
 import { OPEN_AUTHORITY, type MutationAuthority } from "../runtime/provisional-authority.js";
@@ -63,13 +62,6 @@ export interface AgentsActions {
    * when it still carries unmerged work and `force` was not given.
    */
   removeWorktree(path: string, force?: boolean): Promise<{ removed: boolean; worktree: AgentWorktreeStatus | null }>;
-  /**
-   * `agents/builtin/set-profile` for Beam, Chat or Namer; `null` returns that
-   * agent to the profile new conversations use. Toasts on failure.
-   */
-  setBuiltinProfile(name: BuiltinAgentName, profileId: string | null): Promise<void>;
-  /** Replace one built-in's system instructions; `null` restores the shipped prompt. Rejects so the editor can show the failure inline. */
-  setBuiltinInstructions(name: BuiltinAgentName, instructions: string | null): Promise<void>;
 }
 
 export interface AgentsActionsDeps {
@@ -150,15 +142,6 @@ export function createAgentsActions({ client, dispatch, guard, authority = OPEN_
     removeWorktree: async (path, force) => {
       authority.assertSession(path);
       return client.request("agents/worktree/remove", { path, ...(force !== undefined ? { force } : {}) });
-    },
-    setBuiltinProfile: (name, profileId) =>
-      settle(async () => {
-        const { snapshot } = await client.request("agents/builtin/set-profile", { name, profileId });
-        dispatch({ type: "agents/updated", snapshot });
-      }),
-    setBuiltinInstructions: async (name, instructions) => {
-      const { snapshot } = await client.request("agents/builtin/set-instructions", { name, instructions });
-      dispatch({ type: "agents/updated", snapshot });
     },
   };
 }

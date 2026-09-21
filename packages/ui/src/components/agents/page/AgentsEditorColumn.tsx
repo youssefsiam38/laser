@@ -8,12 +8,10 @@ import type {
 } from "@lasercode/protocol";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 
-import { isBuiltinAgent } from "@/agents";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { AgentEditor, type EditorFocus } from "./AgentEditor.js";
-import { BuiltinPanel } from "./BuiltinPanel.js";
 import { HarnessPanel } from "./HarnessPanel.js";
 import { locationOfAgent, type AgentsScopeView, type AgentsSelection } from "./model.js";
 
@@ -112,13 +110,6 @@ export function AgentsEditorColumn(props: AgentsEditorColumnProps) {
         <div className="p-4">
           <DefinitionGone name={selection.name} onBack={onBack} />
         </div>
-      ) : isBuiltinAgent(displayedAgent) ? (
-        <BuiltinPanel
-          name={displayedAgent.name as "beam" | "chat" | "namer"}
-          snapshot={snapshot}
-          routeCwd={routeCwd}
-          writable={environmentWritable && scopeView === "global"}
-        />
       ) : (
         <>
           {inheritedGlobal ? (

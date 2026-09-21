@@ -1,4 +1,4 @@
-import { Activity, Bot, FileClock, FolderPlus, GitBranch, GitFork, Moon, PanelLeft, Plus, Settings, Shrink, Sun } from "lucide-react";
+import { Activity, Bot, FileClock, FolderPlus, GitBranch, GitFork, MessageSquarePlus, Moon, PanelLeft, Plus, Settings, Shrink, Sun } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CommandPalette as CommandPaletteElement, matchesCommand, type PaletteCommand } from "@/components/assistant-ui/elements/command-palette";
@@ -109,6 +109,8 @@ function usePaletteCommands(active: boolean): RunnableCommand[] {
       : [];
     const app: RunnableCommand[] = [
       ...(createSession.state === "available" ? [{ id: "new", group: "App", label: currentProject ? `New session in ${shortCwd(currentProject)}` : "New session", keys: [shortcutLabel("N")], icon: Plus, disabled: !shell.canCreate, run: () => void shell.newSession() } satisfies RunnableCommand] : []),
+      // A conversation that belongs to no project (`docs/plain-chat.md`).
+      ...(createSession.state === "available" ? [{ id: "new-chat", group: "App", label: "New chat", detail: "A conversation that is not about a project", keys: [shortcutLabel("N", { shift: true })], icon: MessageSquarePlus, disabled: !shell.canChat, run: () => void shell.newChat() } satisfies RunnableCommand] : []),
       ...(addProject.state === "available" ? [{ id: "add-project", group: "App", label: "Add a project", icon: FolderPlus, run: () => shell.setAddProjectOpen(true) } satisfies RunnableCommand] : []),
       { id: "sessions", group: "App", label: shell.sessionsOpen ? "Hide sessions" : "Show sessions", keys: ["["], icon: PanelLeft, run: () => shell.toggleSessions() },
       { id: "telemetry", group: "App", label: shell.telemetryOpen ? "Hide telemetry" : "Show telemetry", keys: ["]"], icon: Activity, run: () => shell.toggleTelemetry() },

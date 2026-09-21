@@ -268,7 +268,7 @@ function PickerSurface({ title, notice, onQueryChange, onOpenChange, onComplete,
       const viewport = window.visualViewport;
       const margin = parseFloat(getComputedStyle(popup).marginBottom) || 0;
       let top = viewport?.offsetTop ?? 0;
-      // Beam and sheets clip their children. Available space is inside that
+      // Sheets and panels clip their children. Available space is inside that
       // surface, not all the way to the top of the browser window.
       for (let parent = popup.parentElement; parent; parent = parent.parentElement) {
         if (/(hidden|clip|auto|scroll)/.test(getComputedStyle(parent).overflowY)) top = Math.max(top, parent.getBoundingClientRect().top);

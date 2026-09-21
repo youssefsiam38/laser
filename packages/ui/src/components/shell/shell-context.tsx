@@ -28,8 +28,16 @@ export interface ShellContextValue {
   setAddProjectOpen(open: boolean): void;
   /** Open an unstarted session in the current project (Cmd+N). Surfaces its own errors. */
   newSession(): Promise<void>;
+  /**
+   * Start an empty Chat: a conversation that belongs to no project
+   * (`docs/plain-chat.md`). The sidebar `+` on the Chat tab, the palette's
+   * New chat and Cmd+Shift+N are the same verb. Surfaces its own errors.
+   */
+  newChat(): Promise<void>;
   /** A project is selected and the host is reachable. */
   canCreate: boolean;
+  /** The host is reachable and has said where Chat conversations live. */
+  canChat: boolean;
   /**
    * A session was chosen: leave everything that covers the chat — the agent
    * map, the fullscreen map, the workbench, the fleet sheet and the compact

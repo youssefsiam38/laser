@@ -22,8 +22,6 @@ import { FileClock, FolderPlus, Moon, Settings, Sun } from "lucide-react";
 import { StatusRing, STATUS_LABEL } from "@/components/status";
 // Agents page (M13-T5): the rail's way in, with its warning mark.
 import { AgentsButton } from "@/components/agents/page/AgentsButton";
-// Beam: its one entry point, the spark below Settings (docs/agents.md "Beam").
-import { BeamSpark } from "@/components/beam/BeamSpark";
 import { LaserLogo } from "@/components/brand/Logo";
 import { useWorkbench } from "@/components/workbench";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -68,7 +66,6 @@ export function Rail() {
   const { theme, toggle } = useTheme();
   const workbench = useWorkbench();
   const logs = useCapability("pi/logs/query");
-  const createSession = useCapability("session/new");
 
   return (
     <nav
@@ -114,8 +111,6 @@ export function Rail() {
         >
           <Settings />
         </TooltipIconButton>
-        {/* Beam's spark: the last item, directly below Settings. */}
-        {createSession.state === "available" ? <BeamSpark side="right" size="icon" /> : null}
       </div>
     </nav>
   );

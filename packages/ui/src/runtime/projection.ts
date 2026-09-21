@@ -286,7 +286,7 @@ function toolPartOf(block: ToolBlock, dialog: UiDialogRequest | undefined): Proj
     if (cached) return cached;
   }
   // assistant-ui treats *any* result as terminal. Progress belongs in its
-  // UI-only artifact channel, otherwise the first output chunk stops the beam.
+  // UI-only artifact channel, otherwise the first output chunk stops the sweep.
   const result = block.done ? (block.result ?? null) : undefined;
   const part: ProjectedToolCallPart = {
     type: "tool-call",
