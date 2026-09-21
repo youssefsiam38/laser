@@ -22,7 +22,13 @@ vi.mock("@/runtime", async () => ({
   ...await import("../../src/runtime/threadList.js"),
   useCapability: () => ({ state: "available" }),
   useLaserState: (selector: (s: unknown) => unknown) => selector(fixture.state),
-  useLaserStable: () => ({ currentProject: "/one", actions: { toast: vi.fn(), removeProject: vi.fn() }, archive: { add: vi.fn() } }),
+  // The list names each row's profile, so it reads them once (M22-T8).
+  useLaserStable: () => ({
+    currentProject: "/one",
+    client: { request: async () => ({ profiles: [], assignments: {} }), subscribe: () => () => {} },
+    actions: { toast: vi.fn(), removeProject: vi.fn() },
+    archive: { add: vi.fn() },
+  }),
 }));
 const metadata = fixture.state.sessions.map(s => ({ remoteId: s.path, externalId: s.path, title: s.name, status: "regular" as const, custom: { cwd: s.cwd, modifiedAt: s.modifiedAt, attention: s.attention } }));
 const archived = { remoteId: "/one/archived.jsonl", externalId: "/one/archived.jsonl", title: "Saved archive", status: "archived" as const, custom: { cwd: "/one" } };
