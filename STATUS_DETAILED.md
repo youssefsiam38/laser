@@ -6203,20 +6203,27 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M22-T0 | Binding contract and affected-area inventory | done | codex-2026-09-21-model-profiles | `docs/model-profiles.md`; `PLAN.md` M22; D-346; `git diff --check -- docs PLAN.md STATUS.md STATUS_DETAILED.md` | see notes |
-| M22-T1 | Protocol: profiles, assignments, methods, policy | in-progress | claude-2026-09-21-leap | — | see notes |
-| M22-T2 | Worker settings, migration and seeds | todo | — | — | `PLAN.md` M22 |
-| M22-T3 | Worker runtime on profiles | todo | — | — | `PLAN.md` M22 |
-| M22-T4 | Agents and naming on profiles | todo | — | — | `PLAN.md` M22 |
-| M22-T5 | Host authority and projections | todo | — | — | `PLAN.md` M22 |
-| M22-T6 | Settings: Model profiles tab and assignment pickers | todo | — | — | `PLAN.md` M22 |
-| M22-T7 | Onboarding profile review | todo | — | — | `PLAN.md` M22 |
-| M22-T8 | Composer, status line, fleet and logs | todo | — | — | `PLAN.md` M22 |
-| M22-T9 | Agents page and CLI | todo | — | — | `PLAN.md` M22 |
+| M22-T1 | Protocol: profiles, assignments, methods, policy | done | claude-2026-09-21-leap | `e692e4b9`; `pnpm -F @lasercode/protocol build && pnpm -F @lasercode/protocol test` (464 passed) | see notes |
+| M22-T2 | Worker settings, migration and seeds | in-progress | claude-2026-09-21-leap | — | see notes |
+| M22-T3 | Worker runtime on profiles | in-progress | claude-2026-09-21-leap | — | see notes |
+| M22-T4 | Agents and naming on profiles | in-progress | claude-2026-09-21-leap | — | see notes |
+| M22-T5 | Host authority and projections | in-progress | claude-2026-09-21-leap | — | see notes |
+| M22-T6 | Settings: Model profiles tab and assignment pickers | in-progress | claude-2026-09-21-leap | — | see notes |
+| M22-T7 | Onboarding profile review | in-progress | claude-2026-09-21-leap | — | see notes |
+| M22-T8 | Composer, status line, fleet and logs | in-progress | claude-2026-09-21-leap | — | see notes |
+| M22-T9 | Agents page and CLI | in-progress | claude-2026-09-21-leap | — | see notes |
 | M22-T10 | Documents, identity guard and reconciliation | todo | — | — | `PLAN.md` M22 |
 | M22-T11 | Migration acceptance and release | todo | — | — | `PLAN.md` M22 |
 
 #### M22-T1 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap (goal `docs/goal-project-lifecycle-leap.md`): add `ModelProfile`/`MODEL_PROFILES_SETTING`/validation, `SessionState.profile`, `AgentDefinition.profileId`, assignment settings, `models/profiles/*`, `session/profile/set`, `session/model/pin`; remove `agents/builtin/set-model`, `agents/beam/choose-model`, `agents/namer/qualify`. Delegated to a worker in an isolated worktree; the same owner continues through M22-T5.
+- 2026-09-21 done, evidence `e692e4b9`: protocol domain in `packages/protocol/src/fallback.ts` (profiles, bounds, `profileById`, `validateModelProfiles`, `FallbackActivation.profileId` + snapshot, legacy `chainKey` read as history), `SessionState.profile`/`pinned`, `ProfileAssignments` (default, naming, oracle, design index), `AgentDefinition.profileId`, `AgentsSnapshot.builtinProfiles`, `AgentRun.profileId`/`substitutedProfile`, methods + schemas + policy rows, notification `models/profiles/seeded` replacing `agents/beam/choose-model`, telemetry `profileId`. Worker decisions D-a–D-d recorded in `docs/leap/m22-backend-plan.md`. Downstream packages red until M22-T2–T9 land (expected; integration in one release).
+
+#### M22-T2–T5 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: backend worker session continues from M22-T1 on branch `agents/model-profiles-backend-819b3a73` (worker → host), one commit per task; plan and checkpoints in `docs/leap/m22-backend-plan.md`.
+
+#### M22-T6–T9 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: UI/CLI worker on branch `agents/model-profiles-ui-and-cli-0d93c72c` based on `e692e4b9`, in parallel with the backend (write sets disjoint: packages/ui, packages/cli); plan and host assumptions in `docs/leap/m22-ui-plan.md`.
 
 #### M22-T0 notes
 - 2026-09-21 claimed by codex-2026-09-21-model-profiles: the person settled that fallback chains and the proposed model tiers collapse into one unlimited, person-named Model Profile concept; write the binding contract with the full breaking-change inventory.
