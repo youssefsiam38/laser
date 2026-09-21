@@ -353,7 +353,7 @@ project ships.
 | Laser workspace and composition canvas | React, tokenized through Laser's visual system |
 | Saved `DesignTree` | framework-neutral nodes, token references, variants, states, flows and stable ids |
 | Project design system | the project's real tokens, components, assets, themes, constraints and philosophy |
-| Native validation | the project's actual framework, build system and components |
+| Native evidence | produced only at Build: an M20 checkpoint preview the person accepts, linked `verified_at` to the Design (D-353) |
 | Production implementation | the project's actual framework and repository conventions |
 
 A `DesignSystemManifest` normalizes stack, token sources, themes, typography,
@@ -363,40 +363,40 @@ a derived index: existing project code remains authoritative. Each field is
 labelled `declared`, `observed`, `inferred` or `proposed` and cites its source.
 Conflicts and gaps remain visible.
 
-Discovery is adapter-driven and non-executing by default:
+Discovery is parse-only — **the Design phase never runs the project**
+(D-353): no dev server, no preview runner, no browser, no serve-time tagging.
+The operational contract — the two-layer Design Index (static facts, then
+Smart-profile synthesis), its review, storage in `.laser/design/`, re-index,
+Foundation mode, design in context with a static host capture, and the
+Conform/Island strategies — is fixed in [`design-phase.md`](design-phase.md).
+In brief:
 
 - parse manifests, lockfiles, design documents, CSS variables, DTCG data,
-  Tailwind themes and typed token objects without importing project config;
-- inspect exports, prop types, registries, Storybook/Ladle/Cosmos examples,
-  consuming screens and framework metadata;
-- after explicit trust, run the project's own preview to observe computed
-  styles, component stacks, responsive behavior and interaction states;
+  Tailwind themes, typed token objects, stories and docs as text, without
+  importing or evaluating project config;
+- inspect exports, prop types, registries, consuming screens, routes and
+  templates statically;
 - preserve original token and component identities instead of translating the
   project into a generic house design system;
 - cache by source digest and mark every dependent Design stale when an
-  authoritative source changes materially.
+  authoritative source it links to changes materially.
 
-The workspace has two complementary renderers:
+The workspace has one renderer, **Composition**: the React canvas renders
+`DesignTree` through the reviewed index. In context, the new subtree is shown
+in place on a static host outline or over a person-supplied reference image.
 
-1. **Composition** — the React canvas renders `DesignTree` through the project's
-   design-system adapter. React projects may mount actual components; other
-   frameworks use verified design-time mappings without claiming native
-   execution.
-2. **Native validation** — an isolated runner renders the proposed screen with
-   the project's actual Vue, Svelte, Angular, React, Web Components, Flutter,
-   SwiftUI, Compose or other supported adapter. It proves framework behavior,
-   provider requirements and responsive states.
-
-Every design node records one fidelity label: **Native** (actual project
-runtime), **Mapped** (verified design contract and tokens) or **Proposed**
-(new foundation/component). A screen shows the conservative aggregate and can
-reveal the per-node labels. Mapped is never presented as Native. Approval may
-require Native evidence per project policy; the person may explicitly accept a
-Mapped limitation with its reason.
+Every design node records one fidelity label: **Mapped** (composed from
+reviewed index entries or parsed from real templates) or **Proposed** (new
+foundation, component, token or a supplied image). **Native** exists only as
+Build evidence — an accepted M20 checkpoint preview linked `verified_at` to the
+Design revision. A screen shows the conservative aggregate and can reveal the
+per-node labels. Mapped is never presented as Native, and the Design gate
+cannot require Native.
 
 A Design revision contains foundation decisions, Design Profile digest, flows,
 screens, applicable themes, viewports, interaction states, fixtures, component
-nodes, token references, assets and native-validation evidence. Loading, empty,
+nodes, token references, assets and, for a design in context, the host page
+outline, insertion region and Conform/Island strategy. Loading, empty,
 error, permission, offline, focus, keyboard, touch and reduced-motion states are
 included where applicable or skipped with a reason. The model cannot submit raw
 HTML, executable JavaScript, free-form CSS, event handlers or unvalidated URLs.
@@ -620,17 +620,15 @@ an agent run as a design operation or make the resulting entity session-owned.
 
 ## Security, privacy and resource rules
 
-- Static discovery parses source without executing project configuration.
-  Running a native preview or project build requires explicit project trust and
-  names the command/capability before it starts.
-- Preview code runs outside the main renderer with sandboxing, context isolation,
-  no Node bridge, scrubbed credentials, an environment allow-list, navigation
-  guards and network off unless the person explicitly enables it.
+- Design discovery parses source without executing project configuration or
+  code; the Design phase starts no server, build or browser (D-353). Project
+  builds and previews happen only at Build through M20 checkpoints, under the
+  source-control leap's trust and sandbox rules.
 - Project output is untrusted text/data. No raw HTML, JSX, script, CSS or SVG
   reaches the Laser renderer; URLs, assets and component props are validated.
-- The React composition engine and native preview are lazy chunks/services.
-  Closing the workspace stops preview infrastructure after a bounded idle period;
-  it never becomes hidden permanent fleet work.
+- The React composition engine is a lazy chunk; index builds are bounded fleet
+  Commands the person can stop. Closing the workspace leaves no hidden
+  permanent fleet work.
 - Phone and relay clients receive bounded frames, semantic hit regions and typed
   artifact data, not executable project bundles. Environment policy may make
   preview read-only while retaining comments and approval.
@@ -675,6 +673,7 @@ with the decisions already taken.
 | Plain Chat and built-in agent removal | [`plain-chat.md`](plain-chat.md) | binding (M23, D-347) | Beam, Chat and Namer stop being `AgentDefinition`s; Chat is a `sessionKind: "chat"` session on `defaultProfileId` whose whole instruction template is `{{availableTools}}`, `{{toolGuidelines}}`, `{{availableSkills}}`; naming is a one-shot request on `namingProfileId`; Beam and its spark are removed |
 | Ask Oracle | [`ask-oracle.md`](ask-oracle.md) | binding (M24, D-348) | `ask_oracle` is a one-shot, tool-less consultation on `oracleProfileId` with the caller's agent instructions and trust policy, explicit bounded `text`/`work`/`repo` context only, no history, no session, no fleet row, no model switch; usage and logs attribute it as a consultation |
 | External work links (Jira) | [`external-work-links.md`](external-work-links.md) | binding (M25, D-349) | `ExternalWorkLink` records the exact revision exported to a Jira issue; creation, update and transition are explicit and previewed, never automatic sync; Jira never approves, completes or mutates Laser work; issue property carries Laser identity, remote link points back; least-privilege OAuth in the keychain, host-only calls |
+| Design | [`design-phase.md`](design-phase.md) | binding (M21-T10–T14 as amended, D-353) | Design never runs the project; two-layer Design Index (static facts, Smart synthesis) reviewed by the person and stored in `.laser/design/`; eras with `useForNewWork`; Foundation mode for greenfield; design in context with static host grounding, insertion region and explicit Conform/Island strategy; fidelity `Mapped`/`Proposed` only, `Native` is Build evidence |
 | Research | [`research-phase.md`](research-phase.md) | binding (M21-T7, M21-T26, D-351, D-352) | standalone `/research` from any chat, no Spec required, project picker when projectless; Research body as a question tree resolved by cited findings; `SourceRef` with digest, licence and trust; confidence assigned by rule (`declared`/`observed`/`inferred`/`proposed`); one adapter per source kind (`web`, `project`, `repository`, `package`, `document`, then `scholarly`, `tracker`), no undocumented endpoints; `search_sources`/`read_source`/`record_finding`/`resolve_question` under the tool contract; the agent ranks itself and never delegates retrieval; visible budgets; no free-text research document |
 | Agent-facing tool contract | [`agent-tool-contract.md`](agent-tool-contract.md) | binding (M26, D-350) | one standard for every Laser-owned tool: intent-named, single-purpose, closed schemas, opaque ids, exact revisions with digests, annotations, reads separated from mutations, `expectedRevisionId` and idempotency keys, previews for external or destructive writes, host-side authorization, summary-by-default with pagination and references, actionable errors; `toolContract()` lint and an evaluation harness across every configured profile |
 

@@ -57,6 +57,7 @@ except the explicit per-session override below.
 | New sessions in a project or projectless chat | `defaultProfileId` | Balanced |
 | Session naming (title generation) | `namingProfileId` | Fast |
 | Fresh-context consultation (Ask Oracle, when it lands) | `oracleProfileId` | Smart |
+| Design Index synthesis and Foundation proposals (`design-phase.md`) | `designIndexProfileId` | Smart |
 | Each agent definition | `profile:` in the agent file | inherit `defaultProfileId` |
 | Built-in agents while they exist | per-built-in profile choice | Balanced / Balanced / Fast |
 

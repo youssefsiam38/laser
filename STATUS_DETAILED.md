@@ -6012,6 +6012,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-20 correction claimed: move the binding contract into its own document and reduce `PLAN.md` M21 to the repository's dependency index.
 - 2026-09-20 correction done: `docs/project-lifecycle-leap.md` is the binding contract; `PLAN.md` retains only the stable milestone summary and dependency-ordered task index.
 - 2026-09-20 correction claimed by codex-2026-09-20-git-revisions: make artifact-revision ↔ repository-state provenance a typed, exact, many-to-many contract rather than leaving commits and diffs as generic evidence.
+- 2026-09-21 design bound (D-353): `docs/design-phase.md` — parse-only Design Index (L0/L1), review, `.laser/design/` storage, re-index, Foundation mode, design in context with static host grounding and Conform/Island; native runner dropped; leap Design contract, fidelity and M21-T10/T12/T13/T19 amended.
 - 2026-09-21 loosened (D-352, corrected after the person's review): every artifact kind alone, any order, links optional in every direction, gates only when chosen, `/plan <text>` with the text as the brief; projectless Chat uses the project picker — the "personal workspace" owner from the first draft is withdrawn. Leap "Flexibility" section, Design/Plan/commands text and `docs/research-phase.md` updated.
 - 2026-09-21 addition by codex-2026-09-21-model-profiles: `docs/research-phase.md` binds the Research phase (body, sources/adapters, tools, loop, budgets, entry points, surfaces, security); indexed in the leap document and its Research contract; M21-T7 acceptance extended and M21-T26 added; D-351 recorded. OpenResearch reviewed and rejected as a base (peer Rust product for ML experiments); its retrieval-ranker and evidence-in-logs ideas are adopted.
 - 2026-09-20 correction done: `RepositoryLink`, stable repository identity, exact state/change targets, durable gate evidence and the four relation semantics are binding in `docs/project-lifecycle-leap.md`; M21-T1/T2/T18/T20/T21 acceptance carries the implementation work; D-345 records the decision; documentation diff check passes.
@@ -6272,6 +6273,37 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 #### M26-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/agent-tool-contract.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M26 tasks added; D-350 recorded. Implementation not started.
+
+### D-353 · 2026-09-21 · Design never runs the project; the Design Index is reviewed and parse-only
+
+Decision: the Design phase is bound by `docs/design-phase.md`. It never
+executes project code, starts a dev server, opens a browser or injects a
+serve-time tagger. A project with UI source gets a two-layer **Design Index**
+— deterministic static facts, then Smart-profile synthesis — that the person
+reviews (accept/rename/merge/reject, deprecate components, mark eras
+`useForNewWork`) and that is stored in `.laser/design/index.json` and
+`review.json` in the repository, with parse caches in Laser state. Greenfield
+projects run Foundation mode first. A design inside an existing page grounds
+the host statically (template parse, optional person-supplied screenshot),
+records an insertion region, and chooses **Conform** or **Island** explicitly.
+Fidelity in Design records is `Mapped` or `Proposed`; `Native` exists only as
+Build evidence from an accepted M20 checkpoint preview linked `verified_at`.
+The native validation runner is dropped; M21-T10 becomes the Design Index and
+M21-T12 becomes static host grounding and source selection.
+
+Why: the person's call after review — running the project inside the Design
+phase would drag the agent into build and environment problems and make
+design slow; parse-only work finishes in seconds to minutes and Build already
+proves rendering through M20 checkpoints. Comparable tools (Builder.io Fusion,
+Magic Patterns, v0 registries) index components statically and report ~70 %
+mapping accuracy, which is why the review step is mandatory rather than
+optional.
+
+Consequences: the leap's Design contract, fidelity labels and Design-revision
+contents are amended; M21-T10/T12/T13/T19 acceptance rewritten; the Design
+gate cannot require Native; `designIndexProfileId` joins the M22 assignment
+settings (default Smart); a parse-only guarantee is a tested invariant of the
+index code.
 
 ### D-352 · 2026-09-21 · Any artifact alone, in any order; links optional; the lifecycle is the maximum path
 
