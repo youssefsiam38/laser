@@ -40,12 +40,20 @@ import {
   PRODUCT_NAME,
   PROFILE_ASSIGNMENT_SETTINGS,
   PROJECT_DIR_NAME,
+  RESEARCH_ADAPTERS,
+  RESEARCH_BUDGET_DEFAULTS,
+  RESEARCH_BUDGET_MAX,
+  RESEARCH_CACHE_DEFAULT_MAX_BYTES,
+  RESEARCH_CACHE_MAX_BYTES,
+  RESEARCH_SETTING_KEY,
   isModelProfileId,
+  readResearchSources,
   profileById,
   readModelProfilesValue,
   validateModelProfiles,
   type ModelProfile,
   type ProfileAssignments,
+  type ResearchSources,
 } from "@lasercode/protocol";
 import {
   SettingsManager,
@@ -155,6 +163,7 @@ export const LASER_SETTINGS_KEYS: readonly string[] = [
   "disabledModels",
   MODEL_PROFILES_SETTING,
   ...PROFILE_ASSIGNMENT_SETTINGS,
+  RESEARCH_SETTING_KEY,
 ];
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
@@ -171,6 +180,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "network", title: "Network", description: "Proxying and connection timeouts." },
   { id: "privacy", title: "Trust and telemetry", description: "Project trust fallback, install ping, analytics." },
   { id: "warnings", title: "Warnings", description: "Which advisory notices the agent shows." },
+  { id: "research", title: "Research sources", description: "Which sources research may use, which hosts it may reach, and how much one research run may spend." },
   { id: "terminal", title: "Terminal display", description: `The agent's own terminal interface. ${PRODUCT_NAME} does not read these; they change how the agent looks when it is run in a terminal.` },
   { id: "markdown", title: "Markdown rendering", description: "How the agent renders markdown in a terminal." },
   { id: "managed", title: "Managed by the agent", description: `Written by the agent itself. Shown for completeness; ${PRODUCT_NAME} will not change them.` },
@@ -185,6 +195,7 @@ const PRODUCT_SECTIONS: readonly SettingsSection[] = [
   { id: "network", title: "Network", description: "Proxy and connection controls for unusual environments." },
   { id: "shell", title: "Command environment", description: "How project commands are launched." },
   { id: "warnings", title: "Safety notices", description: "Provider-specific notices that protect against unexpected usage." },
+  { id: "research", title: "Research sources", description: "Which sources research may use, which hosts it may reach, and how much one research run may spend." },
 ];
 
 const GENERAL_KEYS = new Set([
@@ -1105,6 +1116,93 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     terminalOnly: true,
   },
 
+  // --- research sources --------------------------------------------------
+  // Generated from `RESEARCH_ADAPTERS` (docs/research-phase.md, "Sources and
+  // adapters"), so an adapter added later needs no settings change: only the
+  // ones that ship become fields, because a switch for something that does
+  // not exist is a promise the product cannot keep.
+  ...RESEARCH_ADAPTERS.filter((adapter) => adapter.shipped).map((adapter): SettingDescriptor => ({
+    path: `${RESEARCH_SETTING_KEY}.adapters.${adapter.id}`,
+    key: RESEARCH_SETTING_KEY,
+    label: adapter.title,
+    description: `${adapter.what}${adapter.authNote ? ` ${adapter.authNote}` : ""} Switched off, research neither offers nor mentions it.`,
+    section: "research",
+    type: { control: "boolean" },
+    default: true,
+    scopes: BOTH,
+  })),
+  {
+    path: `${RESEARCH_SETTING_KEY}.allowDomains`,
+    key: RESEARCH_SETTING_KEY,
+    label: "Hosts research may reach",
+    description: "Limit web research to these hosts, one per line. Leave it empty for every host that is not on the blocked list.",
+    section: "research",
+    type: { control: "string-list", placeholder: "developer.mozilla.org", hint: "A host covers its subdomains. The project list replaces the global one; it does not extend it." },
+    scopes: BOTH,
+  },
+  {
+    path: `${RESEARCH_SETTING_KEY}.denyDomains`,
+    key: RESEARCH_SETTING_KEY,
+    label: "Hosts research must not reach",
+    description: "Never fetch anything from these hosts, one per line. This list wins over the one above.",
+    section: "research",
+    type: { control: "string-list", placeholder: "internal.example.com", hint: "A host covers its subdomains. The project list replaces the global one; it does not extend it." },
+    scopes: BOTH,
+  },
+  {
+    path: `${RESEARCH_SETTING_KEY}.budget.maxSearches`,
+    key: RESEARCH_SETTING_KEY,
+    label: "Searches per research",
+    description: "How many searches one research run may make before it stops and reports what it found.",
+    section: "research",
+    type: { control: "number", min: 1, max: RESEARCH_BUDGET_MAX.maxSearches, integer: true, unit: "searches" },
+    default: RESEARCH_BUDGET_DEFAULTS.maxSearches,
+    scopes: BOTH,
+  },
+  {
+    path: `${RESEARCH_SETTING_KEY}.budget.maxReads`,
+    key: RESEARCH_SETTING_KEY,
+    label: "Sources read per research",
+    description: "How many sources one research run may open. Re-reading a source it already read costs nothing.",
+    section: "research",
+    type: { control: "number", min: 1, max: RESEARCH_BUDGET_MAX.maxReads, integer: true, unit: "sources" },
+    default: RESEARCH_BUDGET_DEFAULTS.maxReads,
+    scopes: BOTH,
+  },
+  {
+    path: `${RESEARCH_SETTING_KEY}.budget.maxBytes`,
+    key: RESEARCH_SETTING_KEY,
+    label: "Text read per research",
+    description: "How much source text one research run may read in total.",
+    section: "research",
+    type: { control: "number", min: 1024, max: RESEARCH_BUDGET_MAX.maxBytes, integer: true, unit: "bytes" },
+    default: RESEARCH_BUDGET_DEFAULTS.maxBytes,
+    scopes: BOTH,
+    advanced: true,
+  },
+  {
+    path: `${RESEARCH_SETTING_KEY}.budget.maxWallClockMs`,
+    key: RESEARCH_SETTING_KEY,
+    label: "Time per research",
+    description: "How long one research run may take before it stops itself and reports.",
+    section: "research",
+    type: { control: "number", min: 1000, max: RESEARCH_BUDGET_MAX.maxWallClockMs, integer: true, unit: "milliseconds" },
+    default: RESEARCH_BUDGET_DEFAULTS.maxWallClockMs,
+    scopes: BOTH,
+    advanced: true,
+  },
+  {
+    path: `${RESEARCH_SETTING_KEY}.cacheMaxBytes`,
+    key: RESEARCH_SETTING_KEY,
+    label: "Research cache size",
+    description: "How much fetched source text this project keeps, so a page is fetched once and read many times. The oldest is dropped first.",
+    section: "research",
+    type: { control: "number", min: 1024 * 1024, max: RESEARCH_CACHE_MAX_BYTES, integer: true, unit: "bytes" },
+    default: RESEARCH_CACHE_DEFAULT_MAX_BYTES,
+    scopes: BOTH,
+    advanced: true,
+  },
+
   // --- managed -----------------------------------------------------------
   {
     path: "lastChangelogVersion",
@@ -1427,6 +1525,19 @@ export function mergeSettings(base: Doc, overrides: Doc): Doc {
     result[key] = isPlainObject(current) && isPlainObject(override) ? mergeSettings(current, override) : override;
   }
   return result;
+}
+
+/**
+ * Settings → Research sources, as one research run reads them: the global
+ * document, then the project's own on top (nested objects merge, lists
+ * replace — the same rule every other setting follows).
+ *
+ * Tolerant by construction: `readResearchSources` keeps whatever validates
+ * and falls back to the defaults for the rest, so a typo in one budget number
+ * never switches every source off.
+ */
+export function researchSourcesFrom(globalDoc: Doc, projectDoc: Doc = {}): ResearchSources {
+  return readResearchSources(mergeSettings(globalDoc, projectDoc)[RESEARCH_SETTING_KEY]);
 }
 
 // ------------------------------------------------------------- validation

@@ -1,0 +1,6 @@
+{
+  "url": "https://registry.npmjs.org/pdf-text",
+  "status": 200,
+  "contentType": "application/json",
+  "body": "{\"name\":\"pdf-text\",\"dist-tags\":{\"latest\":\"3.2.0\"},\"description\":\"Extract the text layer of a PDF in pure JavaScript.\",\"homepage\":\"https://docs.example.org/guides/pdf-text\",\"repository\":{\"type\":\"git\",\"url\":\"git+https://github.com/example-org/pdf-text.git\"},\"time\":{\"3.2.0\":\"2026-02-10T09:12:00.000Z\"},\"versions\":{\"3.1.0\":{\"name\":\"pdf-text\",\"version\":\"3.1.0\",\"license\":\"MIT\",\"dependencies\":{}},\"3.2.0\":{\"name\":\"pdf-text\",\"version\":\"3.2.0\",\"license\":\"MIT\",\"description\":\"Extract the text layer of a PDF in pure JavaScript.\",\"homepage\":\"https://docs.example.org/guides/pdf-text\",\"repository\":{\"type\":\"git\",\"url\":\"git+https://github.com/example-org/pdf-text.git\"},\"dependencies\":{\"utf8-stream\":\"^2.0.0\"}}}}"
+}

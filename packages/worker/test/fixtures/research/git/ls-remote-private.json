@@ -1,0 +1,5 @@
+{
+  "args": "ls-remote --quiet https://github.com/example-org/secret.git HEAD",
+  "code": 128,
+  "stderr": "fatal: could not read Username for 'https://github.com': terminal prompts disabled\n"
+}

@@ -1,0 +1,85 @@
+{
+  "tool": "resolve_question",
+  "task": "Answer the licence question from what the guide declares, and hand the adoption question to the person.",
+  "expectedTool": "resolve_question",
+  "allowedTools": ["read_source", "record_finding", "resolve_question"],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 7,
+    "inputTokens": 40000,
+    "outputTokens": 500
+  },
+  "measures": ["retry"],
+  "world": {
+    "role": "root",
+    "research": { "project": "project" }
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "read_source",
+        "args": {
+          "source_id": "https://docs.example.org/guides/pdf-text",
+          "adapter": "web",
+          "activity_label": "Reading the guide"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "record_finding",
+        "args": {
+          "expected_revision_id": "{{revision}}",
+          "idempotency_key": "resolve-fixture-finding",
+          "question_id": "q2",
+          "claim": "pdf-text is released under the MIT licence.",
+          "confidence": "declared",
+          "source_id": "https://docs.example.org/guides/pdf-text",
+          "excerpt": "It is released under the MIT licence and has no native dependencies.",
+          "licence": "permissive"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "resolve_question",
+        "args": {
+          "expected_revision_id": "{{revision}}",
+          "idempotency_key": "resolve-libraries-1",
+          "question_id": "q1",
+          "state": "answered",
+          "answer": "Three libraries do."
+        }
+      },
+      "fails": true
+    },
+    {
+      "toolCall": {
+        "name": "resolve_question",
+        "args": {
+          "expected_revision_id": "{{revision}}",
+          "idempotency_key": "resolve-licence-2",
+          "question_id": "q2",
+          "state": "answered",
+          "answer": "pdf-text is MIT licensed, as its own guide declares.",
+          "findings": ["{{finding}}"]
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "resolve_question",
+        "args": {
+          "expected_revision_id": "{{revision}}",
+          "idempotency_key": "resolve-adoption-1",
+          "question_id": "q3",
+          "state": "handed_to_person",
+          "answer": "Which library to adopt is a preference about maintenance and risk, not a fact I can settle."
+        }
+      }
+    },
+    {
+      "text": "The licence question is answered and cited. Which library to adopt is yours to decide, so I have raised it for you."
+    }
+  ]
+}

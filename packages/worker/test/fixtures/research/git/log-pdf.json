@@ -1,0 +1,4 @@
+{
+  "args": "log -n 5 --no-merges --date=short --pretty=format:%H\u0000%ad\u0000%s\u0000%b\u001e --regexp-ignore-case --grep=pdf",
+  "stdout": "1111111111111111111111111111111111111111\u00002026-01-09\u0000Add the PDF import note\u0000We decided to postpone PDF support.\u001e"
+}

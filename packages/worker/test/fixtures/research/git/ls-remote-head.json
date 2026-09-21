@@ -1,0 +1,4 @@
+{
+  "args": "ls-remote --quiet https://github.com/example-org/pdf-text.git HEAD",
+  "stdout": "9f2b1c4e5a6d7f8091a2b3c4d5e6f708192a3b4c\tHEAD\n"
+}

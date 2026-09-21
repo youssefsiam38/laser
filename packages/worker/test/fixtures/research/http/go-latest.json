@@ -1,0 +1,6 @@
+{
+  "url": "https://proxy.golang.org/github.com/example-org/pdftext/@latest",
+  "status": 200,
+  "contentType": "application/json",
+  "body": "{\"Version\":\"v1.6.0\",\"Time\":\"2026-01-20T10:00:00Z\"}"
+}

@@ -1,0 +1,4 @@
+{
+  "args": "show --stat --no-color --date=iso 1111111111111111111111111111111111111111",
+  "stdout": "commit 1111111111111111111111111111111111111111\nAuthor: A Person <a@example.org>\nDate:   2026-01-09 10:00:00 +0000\n\n    Add the PDF import note\n\n docs/notes.md | 3 +++\n 1 file changed, 3 insertions(+)\n"
+}

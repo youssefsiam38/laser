@@ -117,7 +117,9 @@ describe("settings catalogue", () => {
       expect(exposed.has(classification.key)).toBe(classification.disposition === "general" || classification.disposition === "advanced");
     }
     for (const key of LASER_SETTINGS_KEYS) expect(exposed.has(key), key).toBe(true);
-    expect(catalog.sections.map(({ id }) => id)).toEqual(["model", "delivery", "context", "images", "retry", "network", "shell", "warnings"]);
+    // "research" is the product's own section (M21-T26): Research sources,
+    // its domain lists and its budgets are Laser's settings, not the engine's.
+    expect(catalog.sections.map(({ id }) => id)).toEqual(["model", "delivery", "context", "images", "retry", "network", "shell", "warnings", "research"]);
   });
 
   it("gives every field a real section, a unique path, and a description", () => {
