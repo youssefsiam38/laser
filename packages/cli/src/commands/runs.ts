@@ -11,8 +11,8 @@
  * cannot see a run, neither can the terminal, and that is the correct answer
  * rather than a second opinion.
  */
-import { PRODUCT_NAME, isTerminalRunStatus } from "@lasercode/protocol";
-import type { AgentRun, AgentRunStatus, BackgroundTask, SessionSummary } from "@lasercode/protocol";
+import { EMPTY_PROFILE_ASSIGNMENTS, PRODUCT_NAME, isTerminalRunStatus } from "@lasercode/protocol";
+import type { AgentRun, AgentRunStatus, BackgroundTask, ModelProfile, SessionSummary } from "@lasercode/protocol";
 import { bool, str } from "../args.js";
 import type { Command, CommandContext } from "../command.js";
 import { CliError, ExitCode } from "../errors.js";
@@ -32,6 +32,11 @@ export interface FleetRow {
   handle: string | null;
   state: FleetState;
   live: boolean;
+  /** The profile this run was started on: the intent (`docs/model-profiles.md`). */
+  profile: string | null;
+  /** The profile the definition named, when another one stood in for it. */
+  substitutedFor: string | null;
+  /** The model that actually answered: the evidence. */
   model: string | null;
   activity: string | null;
   terminalReason: string | null;
@@ -73,6 +78,13 @@ export async function readFleet(rpc: HostRpc, sessions: readonly SessionSummary[
 
   const { runs } = await ask(() => rpc.request("agents/runs/list", {}), { runs: [] as AgentRun[] });
   const { tasks } = await ask(() => rpc.request("tasks/list", {}), { tasks: [] as BackgroundTask[] });
+  // A run carries the profile it was started on as an id; the rows say the
+  // name. One read for the whole table (`docs/model-profiles.md`).
+  const { profiles } = await ask(
+    () => rpc.request("models/profiles/list", {}),
+    { profiles: [] as ModelProfile[], assignments: EMPTY_PROFILE_ASSIGNMENTS },
+  );
+  const profileNames = new Map(profiles.map((profile) => [profile.id, profile.name]));
 
   // Every string below this line is agent-authored: a subagent's name, a task's
   // command, a run's activity label. Escapes are stripped once, here, rather
@@ -88,6 +100,8 @@ export async function readFleet(rpc: HostRpc, sessions: readonly SessionSummary[
       handle: run.subagentName || null,
       state: run.status,
       live: !isTerminalRunStatus(run.status),
+      profile: profileNames.get(run.profileId ?? "") ?? (run.profileId ? "a profile that is gone" : null),
+      substitutedFor: run.substitutedProfile ? profileNames.get(run.substitutedProfile.requested) ?? run.substitutedProfile.requested : null,
       model: run.model ? `${run.model.provider}/${run.model.id}` : null,
       // A run paused on a question is "doing" the question (M13-T45).
       activity: run.status === "needs_input" && run.question ? `Asking: ${run.question.title}` : (run.activity?.label ?? (run.activity?.currentTool ? `Running ${run.activity.currentTool}` : null)),
@@ -108,6 +122,8 @@ export async function readFleet(rpc: HostRpc, sessions: readonly SessionSummary[
       handle: task.id,
       state: task.status,
       live: task.status === "running",
+      profile: null,
+      substitutedFor: null,
       model: null,
       activity: task.activity ?? null,
       terminalReason: task.terminalReason ?? null,
@@ -243,6 +259,8 @@ this is exactly what the app shows.`,
           live: row.live,
           terminalReason: row.terminalReason,
           activity: row.activity,
+          profile: row.profile,
+          substitutedFor: row.substitutedFor,
           model: row.model,
           startedAt: row.startedAt,
           endedAt: row.endedAt,
@@ -270,6 +288,9 @@ this is exactly what the app shows.`,
           { header: "kind", get: (row) => (row.kind === "agent" ? "agent" : "task") },
           { header: "what", get: (row) => row.title },
           { header: "name", get: (row) => row.handle ?? "—" },
+          // Intent, then evidence: the profile the run was started on, and the
+          // model that answered inside it (`docs/model-profiles.md`).
+          { header: "profile", get: (row) => (row.substitutedFor ? `${row.profile ?? "—"} (for ${row.substitutedFor})` : row.profile ?? "—") },
           { header: "model", get: (row) => row.model ?? "—" },
           { header: "elapsed", get: (row) => { const ms = elapsedOf(row, now); return ms === undefined ? "—" : formatElapsed(ms); }, align: "right" },
           { header: "project", get: (row) => shortCwd(row.session.cwd) },

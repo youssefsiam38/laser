@@ -2,7 +2,6 @@ import {
   PRODUCT_DISPLAY_NAME,
   instructionTemplateFieldRanges,
   instructionTemplateFields,
-  type AgentModelChoice,
   type InstructionTemplateField,
   type InstructionTemplateTarget,
   type ThinkingLevel,
@@ -11,7 +10,8 @@ import {
 export interface InstructionTemplateValueContext {
   agentName: string;
   agentDescription: string;
-  model: AgentModelChoice | null;
+  /** The profile this agent runs on, or `null` while it follows the default. */
+  profileName: string | null;
   thinkingLevel: ThinkingLevel | null;
   /** Names whether the value comes from unsaved form state or the current definition. */
   provenance: "Current draft" | "Current agent setting";
@@ -41,7 +41,7 @@ export function instructionTemplateVariables(source: string, target: Instruction
 function runtimeReason(key: string): string {
   switch (key) {
     case "model":
-      return "This agent follows the model selected when the session or naming request starts.";
+      return "The model comes from this agent's profile when the session or naming request starts: the first one in it that can answer.";
     case "thinkingLevel":
       return "This agent follows the reasoning level selected when the session starts.";
     case "workingDirectory":
@@ -82,9 +82,11 @@ export function instructionTemplateValue(key: string, context: InstructionTempla
     case "agentDescription":
       return { status: "known", value: context.agentDescription, provenance: context.provenance };
     case "model":
-      return context.model
-        ? { status: "known", value: `${context.model.provider}/${context.model.id}`, provenance: context.provenance }
-        : { status: "runtime", reason: runtimeReason(key) };
+      return { status: "runtime", reason: runtimeReason(key) };
+    case "profile":
+      return context.profileName
+        ? { status: "known", value: context.profileName, provenance: context.provenance }
+        : { status: "runtime", reason: "This agent runs on the profile new conversations use, which is read when the session starts." };
     case "thinkingLevel":
       return context.thinkingLevel
         ? { status: "known", value: context.thinkingLevel, provenance: context.provenance }

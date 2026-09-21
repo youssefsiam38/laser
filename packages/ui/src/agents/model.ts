@@ -236,7 +236,7 @@ export function defaultAgentDefinitionInput(_snapshot?: AgentsSnapshot | null): 
     instructions: "",
     engineInstructions: false,
     excludeCoreInstructions: false,
-    model: null,
+    profileId: null,
     thinkingLevel: null,
     // An agent that starts nothing lists nothing: the pair has to agree or the
     // host refuses the definition, and a blank form must never open on a state

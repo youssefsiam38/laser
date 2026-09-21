@@ -190,6 +190,9 @@ directory. The session appears in the app immediately.
       term.note(`${term.err.green("started")} a session in ${shortCwd(cwd)}`);
       term.print(state.path);
       term.note(`  ${term.err.dim("id")}    ${state.id}`);
+      // Intent, then evidence (`docs/model-profiles.md`): the profile this
+      // conversation runs on, and the model answering inside it.
+      term.note(`  ${term.err.dim("profile")} ${state.profile ? state.profile.name : "pinned to one model"}`);
       term.note(`  ${term.err.dim("model")} ${state.model ? `${state.model.provider}/${state.model.id}` : "none resolved"}`);
       term.note(`  ${term.err.dim("app")}   ${url}`);
     } finally {

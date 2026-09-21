@@ -205,7 +205,7 @@ describe("definitions, warnings and issues", () => {
       instructions: "",
       engineInstructions: false,
       excludeCoreInstructions: false,
-      model: null,
+      profileId: null,
       thinkingLevel: null,
       supportsSubagents: false,
       allowedAgents: [],

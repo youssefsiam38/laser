@@ -5,9 +5,9 @@ import type { CSSProperties } from "react";
 import { useAgentsSnapshot } from "@/agents";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useLaserStable } from "@/runtime";
 
-import { BEAM_DEFAULT_MODEL_NOTE, BEAM_NAME, BEAM_SUGGESTIONS, BEAM_TAGLINE } from "./beam-model.js";
+import { beamProfileDialog } from "./BeamProfileDialog.js";
+import { BEAM_DEFAULT_PROFILE_NOTE, BEAM_NAME, BEAM_SUGGESTIONS, BEAM_TAGLINE } from "./beam-model.js";
 
 /**
  * The bubble before its first message: a quiet, centred hint that Beam is the
@@ -23,10 +23,10 @@ import { BEAM_DEFAULT_MODEL_NOTE, BEAM_NAME, BEAM_SUGGESTIONS, BEAM_TAGLINE } fr
  */
 export function BeamEmptyState() {
   const snapshot = useAgentsSnapshot();
-  const { dispatch } = useLaserStable();
   const disabled = useAuiState((s) => s.thread.isDisabled);
-  const beam = snapshot?.beam;
-  const needsModel = beam !== undefined && beam.model === null && beam.needsChoice;
+  // Following the profile new conversations use is a working state, so this is
+  // an offer, never a warning (M22-T9).
+  const needsProfile = snapshot !== null && snapshot.builtinProfiles.beam === null;
 
   return (
     <div data-slot="beam-empty-state" className="my-auto flex w-full flex-col items-center gap-6 px-2 py-10 text-center">
@@ -68,16 +68,11 @@ export function BeamEmptyState() {
           </li>
         ))}
       </ul>
-      {needsModel && (
-        <p data-slot="beam-model-note" className="flex flex-wrap items-center justify-center gap-x-1 text-xs leading-xs text-ink-3">
-          {BEAM_DEFAULT_MODEL_NOTE}
-          <Button
-            variant="link"
-            size="xs"
-            className="text-xs"
-            onClick={() => dispatch({ type: "agents/choose-beam-model", suggested: beam.suggested })}
-          >
-            Choose a model
+      {needsProfile && (
+        <p data-slot="beam-profile-note" className="flex flex-wrap items-center justify-center gap-x-1 text-xs leading-xs text-ink-3">
+          {BEAM_DEFAULT_PROFILE_NOTE}
+          <Button variant="link" size="xs" className="text-xs" onClick={() => beamProfileDialog.open()}>
+            Choose a profile
           </Button>
         </p>
       )}

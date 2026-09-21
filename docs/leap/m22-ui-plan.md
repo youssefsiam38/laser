@@ -166,8 +166,37 @@ M22-T9's.
 
 ## M22-T9 · Agents page and CLI
 
-Status: planned.
+Status: done.
 
-Changed: `agents/page/{model.ts,BuiltinPanel.tsx,dialogs.tsx,AgentEditor*.tsx}`,
-`beam/{BeamModelDialog.tsx,beam-model.ts}`, `agents/actions.ts`;
-CLI `commands/{doctor,runs,session}.ts`.
+UI changed:
+- `agents/page/model.ts`: the editor section `model` → `profile` (a legacy
+  `model` warning field routes there too), `describeProfile`,
+  `profileIsMissing`, `thinkingLevelsFor(profile, catalog)`; the model-choice
+  and Namer-qualification helpers are gone.
+- `agents/page/AgentEditorFields.tsx`: `ModelField` → `ProfileField`, with the
+  unknown-profile hint; `AgentEditor.tsx` draws the Profile section, the card
+  fact and the thinking levels from the profile.
+- `agents/page/BuiltinPanel.tsx`: one `BuiltinProfileCard` for Beam, Chat and
+  Namer; qualification, candidates and latencies are gone with the method.
+- `agents/page/dialogs.tsx`: `BuiltinModelDialog` → `BuiltinProfileDialog`.
+- `agents/page/instruction-template-model.ts`: the context carries
+  `profileName`; `{{model}}` is a runtime value now, `{{profile}}` is known.
+- `beam/BeamProfileDialog.tsx` replaces `BeamModelDialog.tsx`: opened from
+  Beam's empty state (nothing is pending any more), saved with
+  `agents/builtin/set-profile`. `beam-model.ts` copy follows.
+- `agents/model.ts`, `agents/index.ts`: blank definitions carry `profileId`.
+
+CLI changed:
+- `commands/doctor.ts`: the "default model" / "model auth" pair becomes
+  "session profile" (the profile a real session opened on and the model that
+  answered) plus one row per profile — every model of every profile, asked
+  about once each, capped at 24 model checks per run. A profile passes as soon
+  as one of its models can answer and fails only when none can.
+- `commands/runs.ts`: `FleetRow` carries `profile` and `substitutedFor`; the
+  table has a profile column before the model one, and `--json` carries both.
+- `commands/session.ts`: `session start` prints the profile above the model.
+
+Tests: `test/beam/profile-dialog.test.tsx` replaces `model-dialog.test.tsx`;
+`test/agents/page/{model,screen,phone,instruction-template-editor}` updated
+(the built-in model test became "lets every built-in run on a profile");
+CLI `test/runs.test.ts` gains the profile/substitution case.

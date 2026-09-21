@@ -3,8 +3,8 @@
  *
  * Beam is the app's own assistant (docs/agents.md "Beam"): one entry point,
  * the spark beside Settings; a fresh bubble chat on every spark press, with
- * earlier sessions kept in Beam's sidebar group; a model chosen once, when
- * the first provider connects.
+ * earlier sessions kept in Beam's sidebar group; a Model Profile chosen once,
+ * or left following the one new conversations use.
  */
 import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import type { AgentsSnapshot, SessionAgentInfo } from "@lasercode/protocol";
@@ -15,13 +15,13 @@ export const BEAM_AGENT_NAME = "beam";
 /** The one sentence under the mark, before the first message. */
 export const BEAM_TAGLINE = `Your assistant for ${PRODUCT_DISPLAY_NAME}. Ask about your sessions, logs, agents or settings.`;
 
-/** What Beam is for, in the model choice dialog. */
+/** What Beam is for, in the profile choice dialog. */
 export const BEAM_PURPOSE =
   `Beam is the helper in the corner of ${PRODUCT_DISPLAY_NAME}. It reads your sessions, logs, agents and settings and answers questions about them. ` +
-  "It runs often, so a fast, capable, inexpensive model is the best fit.";
+  "It runs often, so a fast, inexpensive profile is the best fit.";
 
-/** Shown in the empty state while Beam has no model of its own. */
-export const BEAM_DEFAULT_MODEL_NOTE = "Beam uses the default model until you choose one.";
+/** Shown in the empty state while Beam has no profile of its own. */
+export const BEAM_DEFAULT_PROFILE_NOTE = "Beam follows the profile new conversations use until you choose one.";
 
 /** Chips under the tagline. They fill the composer; the person decides to send. */
 export const BEAM_SUGGESTIONS: readonly string[] = [

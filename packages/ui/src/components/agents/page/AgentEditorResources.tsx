@@ -56,7 +56,7 @@ export function EngineInstructions({
           context={{
             agentName: draft.name,
             agentDescription: draft.description,
-            model: draft.model,
+            profileName: null,
             thinkingLevel: draft.thinkingLevel,
             provenance: "Current agent setting",
           }}

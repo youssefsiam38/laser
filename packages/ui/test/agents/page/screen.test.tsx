@@ -51,15 +51,13 @@ const mocks = vi.hoisted(() => {
     engineInstructions: vi.fn(async () => "You are the product's default agent."),
     runs: vi.fn(async () => undefined),
     stopRun: vi.fn(),
-    setBuiltinModel: vi.fn(async (name: "beam" | "chat" | "namer", model: { provider: string; id: string } | null) => {
+    setBuiltinProfile: vi.fn(async (name: "beam" | "chat" | "namer", profileId: string | null) => {
       const snap = current();
       publish({
         ...snap,
         revision: snap.revision + 1,
-        agents: snap.agents.map((a) => (a.name === name ? { ...a, model } : a)),
-        ...(name === "beam" ? { beam: { ...snap.beam, model, needsChoice: false } } : {}),
-        ...(name === "chat" ? { chat: { model } } : {}),
-        ...(name === "namer" ? { namer: { ...snap.namer, model, status: model ? ("ready" as const) : ("unqualified" as const) } } : {}),
+        agents: snap.agents.map((a) => (a.name === name ? { ...a, profileId } : a)),
+        builtinProfiles: { ...snap.builtinProfiles, [name]: profileId },
       });
     }),
     setBuiltinInstructions: vi.fn(async (name: "beam" | "chat" | "namer", instructions: string | null) => {
@@ -72,11 +70,18 @@ const mocks = vi.hoisted(() => {
         agents: snap.agents.map((agent) => (agent.name === name ? { ...agent, instructions: instructions ?? shipped } : agent)),
       });
     }),
-    qualifyNamer: vi.fn(async (): Promise<NamerState> => ({ status: "ready", model: { provider: "openai", id: "mini" }, candidates: [{ model: { provider: "openai", id: "mini" }, latencyMs: 300, valid: true }] })),
-    dismissBeamChoice: vi.fn(),
   };
+  const profiles = [
+    { id: "mp_balanced0000000000", name: "Balanced", models: [{ provider: "openai", id: "gpt-5" }], origin: "seeded" as const, updatedAt: "" },
+    { id: "mp_fast00000000000000", name: "Fast", models: [{ provider: "openai", id: "gpt-5" }], origin: "seeded" as const, updatedAt: "" },
+  ];
   const request = vi.fn(async (method: string) => {
     if (method === "pi/setup/state") return { cwd: "/state/beam" };
+    if (method === "models/profiles/list")
+      return {
+        profiles,
+        assignments: { defaultProfileId: "mp_balanced0000000000", namingProfileId: "mp_fast00000000000000", oracleProfileId: null, designIndexProfileId: null },
+      };
     if (method === "pi/models/catalog")
       return {
         models: [
@@ -92,7 +97,7 @@ const mocks = vi.hoisted(() => {
     if (method === "feature/list") return { features: [{ manifest: { id: "web-search" }, enabled: false }] };
     throw new Error(`unexpected ${method}`);
   });
-  const stable = { client: { request }, currentProject: "/p", projects: ["/p"], projectInfo: { "/p": { name: "p" } }, actions: { agents, toast: vi.fn(), newSession: vi.fn(async () => "/p/new.jsonl") } };
+  const stable = { client: { request, subscribe: () => () => {} }, currentProject: "/p", projects: ["/p"], projectInfo: { "/p": { name: "p" } }, actions: { agents, toast: vi.fn(), newSession: vi.fn(async () => "/p/new.jsonl") } };
   return { state, agents, request, stable };
 });
 
@@ -394,7 +399,7 @@ describe("Agents page", () => {
       allowedAgents: ["reviewer"],
       scopedSkills: false,
       skills: [],
-      model: null,
+      profileId: null,
     });
     // The saved agent is now selected and listed among yours.
     expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("code-reviewer");
@@ -763,9 +768,9 @@ describe("Agents page", () => {
       await act(async () => { resolveSetup({ cwd: "/neutral/settings" }); await Promise.resolve(); });
       await settle();
       expect(q('[data-slot="agent-card"][data-agent="beam"]')).toBeTruthy();
-      await click(button("Choose a model"));
+      await click(button("Choose a profile"));
       await settle();
-      expect(mocks.request).toHaveBeenCalledWith("pi/models/catalog", { cwd: "/neutral/settings", settingsView: "global" });
+      expect(mocks.request).toHaveBeenCalledWith("models/profiles/list", { cwd: "/neutral/settings" });
       expect(mocks.request.mock.calls.some(([, params]) => JSON.stringify(params).includes("/state/beam"))).toBe(false);
     } finally {
       mocks.request.mockImplementation(original);
@@ -774,17 +779,17 @@ describe("Agents page", () => {
 
   it("does not reuse a model catalog across environment activations", async () => {
     await mount();
-    await click(row("beam"));
-    await click(button("Choose a model"));
+    await click(row("default"));
     await settle();
-    await click([...q('[data-slot="builtin-model-dialog"]').querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === "Cancel")!);
     const beforeSwitch = mocks.request.mock.calls.filter(([method]) => method === "pi/models/catalog").length;
 
+    // A different environment is a different machine: nothing cached under the
+    // old one may answer for it.
     await act(async () => { deviceStore.activate(testDescriptor({ environmentKey: "e1.CCCCCCCCCCCCCCCCCCCCCC" })); });
     await settle(100);
-    await click(button("Choose a model"));
+    await click(row("default"));
     await settle();
-    expect(mocks.request.mock.calls.filter(([method]) => method === "pi/models/catalog")).toHaveLength(beforeSwitch + 1);
+    expect(mocks.request.mock.calls.filter(([method]) => method === "pi/models/catalog").length).toBeGreaterThan(beforeSwitch);
   });
 
   it("edits the default agent from the product's instructions", async () => {
@@ -894,157 +899,61 @@ describe("Agents page", () => {
     expect(mocks.request).not.toHaveBeenCalledWith("pi/models/catalog", { cwd: "/p", settingsView: expect.any(String) });
   });
 
-  it("shows Namer's qualification states and runs the check", async () => {
-    await mount();
-    await click(row("namer"));
-    const card = () => q('[data-slot="agent-card"][data-agent="namer"]');
-    expect(card().dataset.namerStatus).toBe("unqualified");
-    expect(card().textContent).toContain("Not qualified yet");
-    await act(async () => store.dispatch({ type: "agents/updated", snapshot: { ...snapshot(), revision: 2, namer: { status: "qualifying", model: null, candidates: [] } } }));
-    expect(card().dataset.namerStatus).toBe("qualifying");
-    expect(card().textContent).toContain("Qualifying…");
-    await act(async () =>
-      store.dispatch({
-        type: "agents/updated",
-        snapshot: {
-          ...snapshot(),
-          revision: 3,
-          namer: {
-            status: "ready",
-            model: { provider: "openai", id: "mini" },
-            qualifiedAt: "2026-09-08T10:00:00.000Z",
-            candidates: [
-              { model: { provider: "openai", id: "mini" }, latencyMs: 312, valid: true },
-              { model: { provider: "anthropic", id: "haiku" }, latencyMs: 1480, valid: false, error: "Name too long" },
-            ],
-          },
-        },
-      }),
-    );
-    expect(card().dataset.namerStatus).toBe("ready");
-    expect(card().textContent).toContain("openai/mini");
-    expect(card().textContent).toContain("312 ms on the check");
-    const rows = [...card().querySelectorAll("tbody tr")];
-    expect(rows).toHaveLength(2);
-    expect(rows[0]?.textContent).toContain("312 ms");
-    expect(rows[0]?.textContent).toContain("Yes");
-    expect(rows[1]?.textContent).toContain("1.5 s");
-    expect(rows[1]?.textContent).toContain("No");
-    await act(async () => store.dispatch({ type: "agents/updated", snapshot: { ...snapshot(), revision: 4, namer: { status: "unavailable", model: null, candidates: [], reason: "No provider is connected." } } }));
-    expect(card().textContent).toContain("Unavailable");
-    expect(card().textContent).toContain("No provider is connected.");
-    await click(button("Run qualification again"));
-    await settle();
-    expect(mocks.agents.qualifyNamer).toHaveBeenCalledWith("/state/beam");
-    expect(card().textContent).toContain("openai/mini");
-  });
-
-  it("lets every built-in's model be changed through the same picker, connected providers only", async () => {
+  it("lets every built-in run on a profile, chosen through the same picker", async () => {
     await mount();
 
-    // Beam: no model yet, and the suggestion is said without apology.
+    // Beam: nothing chosen is a working state, said as the rule it is.
     await click(row("beam"));
-    expect(q('[data-slot="agent-card"][data-agent="beam"]').textContent).toContain("Not chosen yet");
-    await click(button("Choose a model"));
-    const beamDialog = q('[data-slot="builtin-model-dialog"][data-agent="beam"]');
-    expect(beamDialog.textContent).toContain("Beam\u2019s model");
+    expect(q('[data-slot="agent-card"][data-agent="beam"]').textContent).toContain("Follows the profile new conversations use");
+    await click(button("Choose a profile"));
+    const beamDialog = q('[data-slot="builtin-profile-dialog"][data-agent="beam"]');
+    expect(beamDialog.textContent).toContain("Beam\u2019s profile");
     await settle();
-    expect(beamDialog.querySelector('[data-slot="model-selector-trigger"]')?.textContent).toContain("Choose a model");
-    expect([...beamDialog.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use this model")?.disabled).toBe(true);
+    expect([...beamDialog.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use this profile")?.disabled).toBe(true);
     // Nothing is chosen, so there is nothing to clear.
-    expect([...beamDialog.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Follow the default model")).toBe(false);
+    expect([...beamDialog.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Follow the profile new conversations use")).toBe(false);
     await click([...beamDialog.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Cancel")!);
-    expect(document.body.querySelector('[data-slot="builtin-model-dialog"]')).toBeNull();
+    expect(document.body.querySelector('[data-slot="builtin-profile-dialog"]')).toBeNull();
 
-    // Reopening after a Cancel says what the agent runs on now, not what was
-    // highlighted last time: the picker is remounted with the dialog.
-    await click(button("Choose a model"));
-    const reopened = q('[data-slot="builtin-model-dialog"][data-agent="beam"]');
-    await settle();
-    await click(reopened.querySelector<HTMLElement>('[data-slot="model-selector-trigger"]')!);
-    await settle();
-    const beamMenu = reopened.querySelector('[data-slot="model-selector-content"]')!;
-    expect(reopened.querySelector('[data-slot="model-picker-portal"]')?.contains(beamMenu)).toBe(true);
-    await click([...document.body.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"], [role="option"]')].find((n) => n.textContent?.includes("GPT-5"))!);
-    await settle();
-    expect(q('[data-slot="builtin-model-dialog"][data-agent="beam"]').querySelector('[data-slot="model-selector-trigger"]')?.textContent).toContain("GPT-5");
-    await click([...q('[data-slot="builtin-model-dialog"][data-agent="beam"]').querySelectorAll("button")].find((b) => b.textContent?.trim() === "Cancel")!);
-    await click(button("Choose a model"));
-    await settle();
-    const again = q('[data-slot="builtin-model-dialog"][data-agent="beam"]');
-    expect(again.querySelector('[data-slot="model-selector-trigger"]')?.textContent).toContain("Choose a model");
-    expect([...again.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use this model")?.disabled).toBe(true);
-    await click([...again.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Cancel")!);
-
-    // Chat: the resting state is the rule, not an apology, and the control is there.
+    // Chat: pick a profile, and the card says what it runs on.
     await click(row("chat"));
-    const chatCard = q('[data-slot="agent-card"][data-agent="chat"]');
-    expect(chatCard.textContent).toContain("Follows the default model");
-    await click(button("Choose a model"));
-    const chatDialog = q('[data-slot="builtin-model-dialog"][data-agent="chat"]');
-    expect(chatDialog.textContent).toContain("Chat\u2019s model");
+    expect(q('[data-slot="agent-card"][data-agent="chat"]').textContent).toContain("Follows the profile new conversations use");
+    await click(button("Choose a profile"));
+    const chatDialog = q('[data-slot="builtin-profile-dialog"][data-agent="chat"]');
+    expect(chatDialog.textContent).toContain("Chat\u2019s profile");
     await settle();
-    // Only providers the person has connected are offered (D-145).
-    await click(chatDialog.querySelector<HTMLElement>('[data-slot="model-selector-trigger"]')!);
+    await click(chatDialog.querySelector<HTMLElement>('[data-slot="profile-picker-trigger"]')!);
     await settle();
-    const modelMenu = chatDialog.querySelector<HTMLElement>('[data-slot="model-selector-content"]')!;
-    expect(chatDialog.querySelector('[data-slot="model-picker-portal"]')?.contains(modelMenu)).toBe(true);
-    const providerTrigger = modelMenu.querySelector<HTMLButtonElement>('[aria-label="Filter by provider"]')!;
-    await click(providerTrigger);
+    await click([...document.body.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')].find((n) => n.textContent?.includes("Fast"))!);
     await settle();
-    const providerSearch = chatDialog.querySelector<HTMLInputElement>('input[aria-label="Search providers"]');
-    expect(providerSearch).not.toBeNull();
-    expect(document.activeElement).toBe(providerSearch);
-    const providerMenu = chatDialog.querySelector('[data-slot="popover-content"]')!;
-    expect(chatDialog.querySelector('[data-slot="model-picker-portal"]')?.contains(providerMenu)).toBe(true);
-    await act(async () => providerSearch!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await click([...q('[data-slot="builtin-profile-dialog"][data-agent="chat"]').querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use this profile")!);
     await settle();
-    expect(chatDialog.querySelector('input[aria-label="Search providers"]')).toBeNull();
-    expect(chatDialog.querySelector('[data-slot="model-selector-content"]')).toBe(modelMenu);
-    expect(document.activeElement).toBe(providerTrigger);
-    const listed = [...chatDialog.querySelectorAll('[data-slot="model-selector-item"], [role="option"]')].map((n) => n.textContent ?? "").join(" ");
-    expect(listed).toContain("GPT-5");
-    expect(listed).not.toContain("Mistral");
-    await click([...document.body.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"], [role="option"]')].find((n) => n.textContent?.includes("GPT-5"))!);
-    await settle();
-    await click([...q('[data-slot="builtin-model-dialog"][data-agent="chat"]').querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use this model")!);
-    await settle();
-    expect(mocks.agents.setBuiltinModel).toHaveBeenCalledWith("chat", { provider: "openai", id: "gpt-5" });
-    // A saved choice closes the dialog and lands on the card.
-    expect(document.body.querySelector('[data-slot="builtin-model-dialog"]')).toBeNull();
-    expect(q('[data-slot="agent-card"][data-agent="chat"]').textContent).toContain("openai/gpt-5");
+    expect(mocks.agents.setBuiltinProfile).toHaveBeenCalledWith("chat", "mp_fast00000000000000");
+    expect(document.body.querySelector('[data-slot="builtin-profile-dialog"]')).toBeNull();
+    expect(q('[data-slot="agent-card"][data-agent="chat"]').textContent).toContain("Fast");
 
-    // And back to the default, from the same dialog.
-    await click(button("Change model"));
+    // And back to following the default, from the same dialog.
+    await click(button("Change profile"));
     await settle();
-    await click([...q('[data-slot="builtin-model-dialog"][data-agent="chat"]').querySelectorAll("button")].find((b) => b.textContent?.trim() === "Follow the default model")!);
+    await click([...q('[data-slot="builtin-profile-dialog"][data-agent="chat"]').querySelectorAll("button")].find((b) => b.textContent?.trim() === "Follow the profile new conversations use")!);
     await settle();
-    expect(mocks.agents.setBuiltinModel).toHaveBeenLastCalledWith("chat", null);
-    expect(document.body.querySelector('[data-slot="builtin-model-dialog"]')).toBeNull();
-    expect(q('[data-slot="agent-card"][data-agent="chat"]').textContent).toContain("Follows the default model");
+    expect(mocks.agents.setBuiltinProfile).toHaveBeenLastCalledWith("chat", null);
+    expect(q('[data-slot="agent-card"][data-agent="chat"]').textContent).toContain("Follows the profile new conversations use");
 
-    // Namer: choosing by hand sits beside qualification, never instead of it.
+    // Namer: the same choice, no qualification anywhere near it.
     await click(row("namer"));
-    const namerCard = q('[data-slot="agent-card"][data-agent="namer"]');
-    expect(namerCard.textContent).toContain("Run qualification");
-    await click(button("Choose a model"));
-    const namerDialog = q('[data-slot="builtin-model-dialog"][data-agent="namer"]');
-    expect(namerDialog.textContent).toContain("Namer\u2019s model");
+    expect(q('[data-slot="agent-card"][data-agent="namer"]').textContent).not.toContain("qualification");
+    await click(button("Choose a profile"));
+    const namerDialog = q('[data-slot="builtin-profile-dialog"][data-agent="namer"]');
+    expect(namerDialog.textContent).toContain("Namer\u2019s profile");
     await settle();
-    await click(namerDialog.querySelector<HTMLElement>('[data-slot="model-selector-trigger"]')!);
+    await click(namerDialog.querySelector<HTMLElement>('[data-slot="profile-picker-trigger"]')!);
     await settle();
-    const namerMenu = namerDialog.querySelector('[data-slot="model-selector-content"]')!;
-    expect(namerDialog.querySelector('[data-slot="model-picker-portal"]')?.contains(namerMenu)).toBe(true);
-    await click([...document.body.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"], [role="option"]')].find((n) => n.textContent?.includes("GPT-5"))!);
+    await click([...document.body.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')].find((n) => n.textContent?.includes("Fast"))!);
     await settle();
-    await click([...q('[data-slot="builtin-model-dialog"][data-agent="namer"]').querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use this model")!);
+    await click([...q('[data-slot="builtin-profile-dialog"][data-agent="namer"]').querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use this profile")!);
     await settle();
-    expect(mocks.agents.setBuiltinModel).toHaveBeenLastCalledWith("namer", { provider: "openai", id: "gpt-5" });
-    // The hand-picked model stands, and qualification is still on offer.
-    const named = q('[data-slot="agent-card"][data-agent="namer"]');
-    expect(named.textContent).toContain("openai/gpt-5");
-    expect(named.textContent).toContain("Run qualification");
-    expect(mocks.agents.qualifyNamer).not.toHaveBeenCalled();
+    expect(mocks.agents.setBuiltinProfile).toHaveBeenLastCalledWith("namer", "mp_fast00000000000000");
   });
 
   it("keeps an invalid stored Namer override visible with removed-field guidance and Restore", async () => {
