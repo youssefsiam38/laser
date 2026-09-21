@@ -5993,7 +5993,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T13 | Design workspace and anchored review | todo | — | — | `PLAN.md` M21 |
 | M21-T14 | Greenfield design foundation | todo | — | — | `PLAN.md` M21 |
 | M21-T15 | Plan DAG and Project Task engine | done | claude-2026-09-21-leap | `2d2b5778` (merged `aa33ffbf`); host 1121 passed (`project-work/task-engine.test.ts` 17 over the wire), protocol 631 (`project-work-plan-graph.test.ts` 12) | see notes |
-| M21-T16 | Plans and Tasks workspace | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T16 | Plans and Tasks workspace | done | claude-2026-09-21-leap | `faf53146` (merged with T7 conflicts resolved by the orchestrator in `store.ts`/`WorkDetail.tsx`/`Inspector.tsx`); `pnpm -F @lasercode/ui test` (`plan-graph`, `plan-detail`, `task-detail`, `board-transitions` 42) | see notes |
 | M21-T17 | Model tools and execution linking | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T18 | Checkpoints, changes and delivery evidence | todo | — | — | `PLAN.md` M21 |
 | M21-T19 | Verification and convergence | todo | — | — | `PLAN.md` M21 |
@@ -6024,6 +6024,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap: worker `project-work` companion module + typed bridge to the host authority, the compact tool surface, engine registration of the Design Index and Research tools, host-side research enforcement, context packet, `/design implement` hand-off packet, execution linking; T9's composer adapter is consumed later — the packet takes refs directly.
 
 #### M21-T16 notes
+- 2026-09-21 done (`faf53146`): `PlanDetail`/`PlanGraph` (Document ↔ Dependencies, nodes key+badge+state, host refusals verbatim, orphans, keyboard), `TaskDetail`/`TaskStart`/`TaskInspector`/`TaskCancel` (attempts, evidence with exact revisions, git checkpoints, blocked/stale/refusal banners, conflicts with person-only shared-checkout acceptance, assignment, `project/task/link-execution` to a session in this project), Board finished (cascades said, phone `todo-list` columns, cancel with reason); `agent-plan` reinstalled and de-demoed. Pointer drag proven as `dropFor` + the menu path (happy-dom has no layout); starting new sessions/agent runs is T17's.
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI worker on the Plan document/graph, Task detail and Board over the T15 shapes; write set disjoint from T7's (plan/task/board components only).
 
 #### M21-T15 notes
