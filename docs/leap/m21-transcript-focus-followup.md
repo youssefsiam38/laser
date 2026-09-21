@@ -362,3 +362,9 @@ installed copy of `@legendapp/list` (link count 1, not store-hardlinked), backed
 up first and restored byte-identical afterwards (`sha256sum` equal to the
 backups). The native `moveBefore` path, the same-node/`preventScroll`/no-steal/
 stale-offset/disconnected guards and the `try`/`catch` are unchanged.
+
+## Integrated verification
+
+Source/review/final correction merged as `abfe5f7c` (planning-only checkpoint `b30dc243`). Parent independently passed the 41 focused tests, UI test types and identity, then ran a fresh frozen install and **`pnpm verify && pnpm identity:check`**, clean launch environment with graphical variables preserved: **exit 0, verify 152.7 s**. Evidence: task `t-4d8fdf93`, `/tmp/laser-mention-focus-merged-verify.log`. No source edits during the gate. The prior exact trim-focus failure is now covered by the integrated green suite; earlier failed runs remain historical evidence, not relabelled green.
+
+The gate's `test:browser-check` command is the existing `node --test scripts/browser-check/test/*.test.mjs` unit suite (helpers/fake boundaries and startup-cleanup tests), not a browser acceptance run. No browser was opened. The iPhone/person-owned checks above remain unclaimed. All three merged source/review worktrees were removed after verified preservation.
