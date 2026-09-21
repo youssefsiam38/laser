@@ -4,52 +4,56 @@ import type {
   AgentDefinition,
   AgentDefinitionInput,
   ModelCatalogEntry,
+  ModelProfile,
   ThinkingLevel,
 } from "@lasercode/protocol";
 import { useEffect, useId, useState, type KeyboardEvent } from "react";
 
 import { agentDisplayName } from "@/agents";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
-import { ProviderModelPicker } from "@/components/assistant-ui/elements/model-selector";
+import { ProfilePicker } from "@/components/assistant-ui/elements/model-profiles";
 import { SettingsToggleRow } from "@/components/assistant-ui/elements/settings-panel";
 import { Button } from "@/components/ui/button";
 import { useLogicalArrowKeys } from "@/hooks/use-direction";
 import { cn } from "@/lib/utils";
 
 import { CheckRow, Hint } from "./fields.js";
-import {
-  modelChoiceId,
-  parseModelChoice,
-  THINKING_LABEL,
-} from "./model.js";
+import { THINKING_LABEL } from "./model.js";
 
-export function ModelField({
+/**
+ * Which profile an agent runs on (M22-T9). `null` inherits the profile new
+ * conversations use; a profile id nothing answers to is a warning on the
+ * `profile` field, not a refusal, so the picker still shows what was named.
+ */
+export function ProfileField({
   value,
+  profiles,
   models,
   loading,
   error,
   onRetry,
   onChange,
 }: {
-  value: AgentDefinitionInput["model"];
+  value: AgentDefinitionInput["profileId"];
+  profiles: readonly ModelProfile[];
   models: readonly ModelCatalogEntry[];
   loading: boolean;
   error: string | undefined;
   onRetry(): void;
-  onChange(model: AgentDefinitionInput["model"]): void;
+  onChange(profileId: AgentDefinitionInput["profileId"]): void;
 }) {
   const [choosing, setChoosing] = useState(value !== null);
   useEffect(() => {
     if (value !== null) setChoosing(true);
   }, [value]);
   const id = useId();
-  const picked = value ? modelChoiceId(value) : undefined;
+  const missing = value !== null && !profiles.some((profile) => profile.id === value);
   return (
     <div className="flex flex-col gap-2">
       <SettingsToggleRow
         id={id}
-        label="Follow the default model"
-        detail={choosing ? "Off: this agent always uses the model chosen below." : "On: this agent uses the model new sessions use."}
+        label="Follow the profile new conversations use"
+        detail={choosing ? "Off: this agent always runs on the profile chosen below." : "On: this agent runs on whatever new conversations run on."}
         checked={!choosing}
         onCheckedChange={(follow) => {
           setChoosing(!follow);
@@ -58,21 +62,25 @@ export function ModelField({
       />
       {choosing ? (
         <div className="flex flex-col gap-1.5">
-          <ProviderModelPicker
-            models={models}
-            {...(picked !== undefined ? { value: picked } : {})}
+          <ProfilePicker
+            profiles={profiles}
+            catalogue={models}
+            value={value}
             loading={loading}
             {...(error !== undefined ? { error } : {})}
-            placeholder="Choose a model"
-            onValueChange={(next) => {
-              const choice = parseModelChoice(next);
-              if (choice) onChange(choice);
-            }}
+            placeholder="Choose a profile"
+            aria-label="Profile for this agent"
+            onValueChange={onChange}
           />
           {error !== undefined ? (
-            <ErrorState title="Couldn’t load the model list" detail={error} onRetry={onRetry} />
+            <ErrorState title="Couldn’t load your profiles" detail={error} onRetry={onRetry} />
+          ) : missing ? (
+            <Hint>
+              This agent names a profile that is not there any more. It runs on the profile new conversations use until you
+              choose another.
+            </Hint>
           ) : value === null ? (
-            <Hint>No model chosen yet: the default applies until you pick one.</Hint>
+            <Hint>No profile chosen yet: the one new conversations use applies until you pick one.</Hint>
           ) : null}
         </div>
       ) : null}

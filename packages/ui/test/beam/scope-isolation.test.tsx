@@ -138,7 +138,7 @@ describe("scope isolation", () => {
     await act(async () => settle(20));
     await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="scoped-set-model"]')!.click());
     await act(async () => settle(5));
-    const set = world.calls.filter((call) => call.method === "pi/model/set");
+    const set = world.calls.filter((call) => call.method === "session/model/pin");
     expect(set).toHaveLength(1);
     expect(set[0]!.params).toMatchObject({ path: BEAM, model: { provider: "openai", id: "gpt-fast" } });
     expect(container.querySelector('[data-slot="probe-beam"]')?.getAttribute("data-model")).toBe("gpt-fast");

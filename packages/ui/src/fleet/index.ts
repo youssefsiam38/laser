@@ -49,6 +49,7 @@ export {
   agentStrip,
   agentTintIndex,
   headlineText,
+  profileLabel,
   stripText,
   taskHeadline,
   taskStatusLabel,

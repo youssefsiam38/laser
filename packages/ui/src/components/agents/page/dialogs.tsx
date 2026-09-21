@@ -1,20 +1,18 @@
 "use client";
 /**
  * The page's three questions: delete an agent, leave unsaved changes, pick a
- * built-in's model. Each names what it is about and what it affects; none is a
- * bare "Are you sure?".
+ * built-in's profile. Each names what it is about and what it affects; none is
+ * a bare "Are you sure?".
  */
-import type { AgentModelChoice, BuiltinAgentName } from "@lasercode/protocol";
+import type { BuiltinAgentName, ModelProfile } from "@lasercode/protocol";
 import { RotateCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
-import { ModelPickerDialogPortal, ProviderModelPicker } from "@/components/assistant-ui/elements/model-selector";
+import { ProfilePicker } from "@/components/assistant-ui/elements/model-profiles";
+import { ModelPickerDialogPortal } from "@/components/assistant-ui/elements/model-selector";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-
-import { modelChoiceId, parseModelChoice } from "./model.js";
-import { useModelCatalog } from "./use-page-data.js";
 
 export function DeleteAgentDialog({
   name,
@@ -56,15 +54,17 @@ export function DeleteAgentDialog({
 }
 
 /**
- * One built-in's model, chosen from the same provider-first picker every agent
- * uses. Beam, Chat and Namer share this dialog: the choice is the same choice,
- * and only the words around it change. `onClear` returns the agent to the
- * default model, so a person is never stuck with what they picked.
+ * One built-in's profile, chosen from the same picker every agent uses. Beam,
+ * Chat and Namer share this dialog: the choice is the same choice, and only
+ * the words around it change. `onClear` returns the agent to the profile new
+ * conversations use, so a person is never stuck with what they picked.
  */
-export function BuiltinModelDialog({
+export function BuiltinProfileDialog({
   name,
   open,
-  cwd,
+  profiles,
+  loading = false,
+  error,
   current,
   busy = false,
   onOpenChange,
@@ -73,43 +73,40 @@ export function BuiltinModelDialog({
 }: {
   name: BuiltinAgentName;
   open: boolean;
-  /** The directory the catalog is routed through. */
-  cwd: string | undefined;
-  current: AgentModelChoice | null;
+  profiles: readonly ModelProfile[];
+  loading?: boolean | undefined;
+  error?: string | undefined;
+  current: string | null;
   busy?: boolean | undefined;
   onOpenChange(open: boolean): void;
-  onPick(model: AgentModelChoice): void;
-  /** Back to the default model (for Namer, to the next qualification). */
+  onPick(profileId: string): void;
+  /** Back to the profile new conversations use. */
   onClear?: (() => void) | undefined;
 }) {
-  const catalog = useModelCatalog(cwd, "global", open);
-  const [choice, setChoice] = useState<AgentModelChoice | null>(current);
+  const [choice, setChoice] = useState<string | null>(current);
   const [portalContainer, setPortalContainer] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     if (open) setChoice(current);
   }, [open, current]);
-  const picked = choice ? modelChoiceId(choice) : NO_MODEL_CHOSEN;
-  const copy = BUILTIN_MODEL_COPY[name];
+  const copy = BUILTIN_PROFILE_COPY[name];
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent data-slot="builtin-model-dialog" data-agent={name}>
+      <DialogContent data-slot="builtin-profile-dialog" data-agent={name}>
         <DialogHeader>
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
-        {catalog.error !== undefined ? (
-          <ErrorState title="Couldn’t load the model list" detail={catalog.error} onRetry={catalog.reload} />
+        {error !== undefined ? (
+          <ErrorState title="Couldn’t load your profiles" detail={error} />
         ) : (
-          <ProviderModelPicker
-            models={catalog.data ?? []}
-            value={picked}
-            loading={catalog.loading}
-            placeholder="Choose a model"
+          <ProfilePicker
+            profiles={profiles}
+            value={choice}
+            loading={loading}
+            placeholder="Choose a profile"
+            aria-label={`Profile for ${name}`}
             container={portalContainer}
-            onValueChange={(next) => {
-              const parsed = parseModelChoice(next);
-              if (parsed) setChoice(parsed);
-            }}
+            onValueChange={setChoice}
           />
         )}
         <DialogFooter>
@@ -123,7 +120,7 @@ export function BuiltinModelDialog({
           </Button>
           <Button type="button" disabled={busy || choice === null} aria-busy={busy || undefined} onClick={() => choice && onPick(choice)}>
             {busy ? <RotateCw className="motion-safe:animate-busy" /> : null}
-            {busy ? "Saving…" : "Use this model"}
+            {busy ? "Saving…" : "Use this profile"}
           </Button>
         </DialogFooter>
         <ModelPickerDialogPortal ref={setPortalContainer} />
@@ -132,35 +129,24 @@ export function BuiltinModelDialog({
   );
 }
 
-/**
- * "Nothing chosen", as a value the picker can hold.
- *
- * The picker is uncontrolled while its `value` is empty, and an uncontrolled
- * one selects the first model in the list — so a dialog opened with no model
- * would show one it is not going to save, beside a disabled button. Every real
- * option is `provider/id`, so a sentinel without a slash matches nothing and
- * the placeholder stands.
- */
-const NO_MODEL_CHOSEN = "no-model-chosen";
-
-/** What each built-in's model dialog says. One voice, three subjects. */
-const BUILTIN_MODEL_COPY: Readonly<Record<BuiltinAgentName, { title: string; description: string; clear: string }>> = {
+/** What each built-in's profile dialog says. One voice, three subjects. */
+const BUILTIN_PROFILE_COPY: Readonly<Record<BuiltinAgentName, { title: string; description: string; clear: string }>> = {
   beam: {
-    title: "Beam’s model",
+    title: "Beam’s profile",
     description:
-      "Beam answers questions about your sessions, agents, settings and logs. A quick, capable model keeps it feeling instant; the most powerful one is rarely worth the wait here.",
-    clear: "Follow the default model",
+      "Beam answers questions about your sessions, agents, settings and logs. A quick profile keeps it feeling instant; the strongest models are rarely worth the wait here.",
+    clear: "Follow the profile new conversations use",
   },
   chat: {
-    title: "Chat’s model",
+    title: "Chat’s profile",
     description:
-      "Chat is for conversations that belong to no project: questions, drafts, explanations. Pick the model that answers them, or leave it following the model new sessions use.",
-    clear: "Follow the default model",
+      "Chat is for conversations that belong to no project: questions, drafts, explanations. Pick the profile that answers them, or leave it following the one new conversations use.",
+    clear: "Follow the profile new conversations use",
   },
   namer: {
-    title: "Namer’s model",
+    title: "Namer’s profile",
     description:
-      "Namer titles sessions. It runs once on a small task when a session begins, so the fastest inexpensive model is usually right. Qualification suggests one; this choice overrides it until you clear it.",
-    clear: "Back to qualification",
+      "Namer titles conversations. It runs once on a small task when a conversation begins, so a fast profile is usually right.",
+    clear: "Follow the profile new conversations use",
   },
 };

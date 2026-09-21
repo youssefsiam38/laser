@@ -171,7 +171,13 @@ export interface LaserActions {
   send(content: ContentBlock[], behavior: SendBehavior): Promise<void>;
   abort(): Promise<void>;
   answerDialog(response: UiDialogResponse): Promise<void>;
+  /**
+   * Pin this conversation to one model: it leaves its profile and has nothing
+   * to move to (`docs/model-profiles.md` "Per-session override").
+   */
   setModel(model: ModelRef | null): Promise<void>;
+  /** Re-anchor this conversation to a profile; it continues on that profile's first model. */
+  setProfile(profileId: string): Promise<void>;
   setThinking(level: ThinkingLevel): Promise<void>;
   listModels(): Promise<ModelRef[]>;
   rename(name: string): Promise<void>;
@@ -1632,10 +1638,15 @@ export function LaserProvider({ children, url }: LaserProviderProps): ReactNode 
       setModel: (model) =>
         guard(async () => {
           if (!model) return;
-          const { state: session } = await client.request("pi/model/set", {
+          const { state: session } = await client.request("session/model/pin", {
             path: requireCurrent(),
             model: { provider: model.provider, id: model.id },
           });
+          applyState(session);
+        }).then(() => undefined),
+      setProfile: (profileId) =>
+        guard(async () => {
+          const { state: session } = await client.request("session/profile/set", { path: requireCurrent(), profileId });
           applyState(session);
         }).then(() => undefined),
       setThinking: (level) =>

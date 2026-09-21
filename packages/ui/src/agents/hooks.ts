@@ -176,7 +176,7 @@ export function useAgentWarnings(): readonly AgentWarning[] {
   return useLaserState((s) => s.agents.snapshot?.warnings ?? EMPTY_WARNINGS, sameList);
 }
 
-/** The pending Beam model choice, or `null` when none is open. */
-export function useBeamChoice(): AgentsSlice["chooseBeamModel"] {
-  return useLaserState((s) => s.agents.chooseBeamModel);
+/** The profiles Laser filled in when a provider was first connected, or `null`. */
+export function useSeededProfiles(): AgentsSlice["seededProfiles"] {
+  return useLaserState((s) => s.agents.seededProfiles);
 }

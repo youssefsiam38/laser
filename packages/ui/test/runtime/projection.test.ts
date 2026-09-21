@@ -20,6 +20,7 @@ const sessionState: SessionState = {
   path: "/s.jsonl",
   id: "sess1234",
   cwd: "/p",
+  profile: null,
   model: null,
   thinkingLevel: "medium",
   isStreaming: false,

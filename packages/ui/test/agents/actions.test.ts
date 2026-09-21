@@ -82,13 +82,12 @@ describe("agents actions", () => {
     expect(broken.state.agents.snapshot).toBeNull();
   });
 
-  it("returns skills and engine instructions, stops runs into the store and qualifies Namer", async () => {
+  it("returns skills and engine instructions, and stops runs into the store", async () => {
     const stopped = run({ runId: "r1", sessionPath: "/p/a.jsonl", status: "cancelled", endedBy: { initiator: "user", reason: "Not needed" } });
     const h = harness({
       "agents/skills": { skills: [], roots: [{ path: "/p/.skills", scope: "project", exists: false }] },
       "agents/engine-instructions": { text: "You are a coding agent." },
       "agents/runs/stop": ({ runId, reason }: { runId: string; reason?: string }) => ({ run: { ...stopped, runId, ...(reason !== undefined ? { endedBy: { initiator: "user", reason } } : {}) } }),
-      "agents/namer/qualify": { status: "ready", model: { provider: "openai", id: "mini" }, candidates: [] },
     });
     await expect(h.actions.skills("/p")).resolves.toMatchObject({ roots: [{ scope: "project" }] });
     await expect(h.actions.engineInstructions("/p")).resolves.toBe("You are a coding agent.");
@@ -97,53 +96,32 @@ describe("agents actions", () => {
     expect(h.state.agents.runs.r1?.status).toBe("cancelled");
     await h.actions.stopRun("r1");
     expect(h.request).toHaveBeenLastCalledWith("agents/runs/stop", { runId: "r1" });
-    await expect(h.actions.qualifyNamer("/state/beam")).resolves.toMatchObject({ status: "ready" });
     const broken = harness({});
     await expect(broken.actions.stopRun("r1")).rejects.toThrow();
     await expect(broken.actions.skills("/p")).rejects.toThrow();
-    await expect(broken.actions.qualifyNamer("/p")).rejects.toThrow();
   });
 
-  it("sets each built-in's model through one method, clearing the pending Beam choice on success only", async () => {
-    const choice = { suggested: { provider: "openai", id: "gpt-5.6-luna" } };
+  it("sets each built-in's profile through one method, and leaves the snapshot alone when it fails", async () => {
     const h = harness({
-      "agents/builtin/set-model": ({ name, model }: { name: string; model: { provider: string; id: string } | null }) => ({
-        snapshot: snapshot({
-          revision: 8,
-          ...(name === "beam" ? { beam: { model, suggested: null, needsChoice: false } } : {}),
-          ...(name === "chat" ? { chat: { model } } : {}),
-          ...(name === "namer" ? { namer: { status: model ? "ready" : "unqualified", model, candidates: [] } } : {}),
-        }),
+      "agents/builtin/set-profile": ({ name, profileId }: { name: "beam" | "chat" | "namer"; profileId: string | null }) => ({
+        snapshot: snapshot({ revision: 8, builtinProfiles: { beam: null, chat: null, namer: null, [name]: profileId } }),
       }),
     });
-    h.dispatch({ type: "notification", method: "agents/beam/choose-model", params: choice });
-    expect(h.state.agents.chooseBeamModel).toEqual(choice);
 
-    await h.actions.setBuiltinModel("beam", choice.suggested);
-    expect(h.request).toHaveBeenLastCalledWith("agents/builtin/set-model", { name: "beam", model: choice.suggested });
-    expect(h.state.agents.snapshot?.beam.model).toEqual(choice.suggested);
-    expect(h.state.agents.chooseBeamModel).toBeNull();
+    await h.actions.setBuiltinProfile("beam", "mp_balanced0000000000");
+    expect(h.request).toHaveBeenLastCalledWith("agents/builtin/set-profile", { name: "beam", profileId: "mp_balanced0000000000" });
+    expect(h.state.agents.snapshot?.builtinProfiles.beam).toBe("mp_balanced0000000000");
 
-    const chatModel = { provider: "anthropic", id: "claude-haiku" };
-    await h.actions.setBuiltinModel("chat", chatModel);
-    expect(h.state.agents.snapshot?.chat.model).toEqual(chatModel);
-    await h.actions.setBuiltinModel("chat", null);
-    expect(h.state.agents.snapshot?.chat.model).toBeNull();
-
-    await h.actions.setBuiltinModel("namer", null);
-    expect(h.state.agents.snapshot?.namer.model).toBeNull();
+    await h.actions.setBuiltinProfile("chat", "mp_fast00000000000000");
+    expect(h.state.agents.snapshot?.builtinProfiles.chat).toBe("mp_fast00000000000000");
+    // `null` is "follow the profile new conversations use", not an error.
+    await h.actions.setBuiltinProfile("chat", null);
+    expect(h.state.agents.snapshot?.builtinProfiles.chat).toBeNull();
 
     const broken = harness({});
-    broken.dispatch({ type: "notification", method: "agents/beam/choose-model", params: choice });
-    await broken.actions.setBuiltinModel("beam", choice.suggested);
-    expect(broken.toasts).toEqual(["unknown method agents/builtin/set-model"]);
-    // A failure leaves the choice open: the person still has to make it.
-    expect(broken.state.agents.chooseBeamModel).toEqual(choice);
-    // A failed Chat or Namer choice toasts and changes nothing.
-    await broken.actions.setBuiltinModel("chat", choice.suggested);
-    expect(broken.state.agents.snapshot?.chat.model ?? null).toBeNull();
-    broken.actions.dismissBeamChoice();
-    expect(broken.state.agents.chooseBeamModel).toBeNull();
+    await broken.actions.setBuiltinProfile("beam", "mp_balanced0000000000");
+    expect(broken.toasts).toEqual(["unknown method agents/builtin/set-profile"]);
+    expect(broken.state.agents.snapshot?.builtinProfiles.beam ?? null).toBeNull();
   });
 
   it("sets and restores a built-in's instructions, keeping failures with the editor", async () => {

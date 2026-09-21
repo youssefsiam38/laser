@@ -10,8 +10,8 @@ import {
   fileWarningIsVisible,
   isFirstRun,
   missingSkills,
-  namerSummary,
-  parseModelChoice,
+  describeProfile,
+  profileIsMissing,
   sameDefinitionInput,
   sameSelection,
   selectionOfAgent,
@@ -86,7 +86,10 @@ describe("agents page model", () => {
     expect(sectionOfField("file")).toBe("file");
     expect(sectionOfField("scope")).toBe("file");
     expect(sectionOfField("projectCwd")).toBe("file");
-    expect(sectionOfField("model")).toBe("model");
+    // A definition written before profiles named a model; the warning lands
+    // where that choice lives now (M22-T9).
+    expect(sectionOfField("profile")).toBe("profile");
+    expect(sectionOfField("model")).toBe("profile");
     expect(sectionOfField("name")).toBe("name");
     expect(sectionOfField("something-else")).toBe("name");
   });
@@ -139,25 +142,20 @@ describe("agents page model", () => {
     expect(missingSkills(chosen, undefined)).toEqual([]);
   });
 
-  it("says Namer's state in words", () => {
-    expect(namerSummary({ status: "unqualified", model: null, candidates: [] }).title).toBe("Not qualified yet");
-    expect(namerSummary({ status: "qualifying", model: null, candidates: [] }).title).toBe("Qualifying…");
-    const ready = namerSummary({
-      status: "ready",
-      model: { provider: "openai", id: "gpt-mini" },
-      candidates: [{ model: { provider: "openai", id: "gpt-mini" }, latencyMs: 412, valid: true }],
-    });
-    expect(ready.title).toBe("openai/gpt-mini");
-    expect(ready.detail).toBe("412 ms on the check");
-    expect(namerSummary({ status: "unavailable", model: null, candidates: [], reason: "No provider is connected." })).toEqual({ status: "unavailable", title: "Unavailable", detail: "No provider is connected." });
+  it("says which profile an agent runs on, including one that is no longer there", () => {
+    const profiles = [{ id: "mp_balanced0000000000", name: "Balanced", models: [{ provider: "openai", id: "m" }], origin: "seeded" as const, updatedAt: "" }];
+    expect(describeProfile(null, profiles)).toBe("Follows the profile new conversations use");
+    expect(describeProfile("mp_balanced0000000000", profiles)).toBe("Balanced");
+    // An id nothing answers to is a warning, not a refusal: the agent still runs.
+    expect(describeProfile("mp_gone000000000000", profiles)).toBe("A profile that is not there");
+    expect(profileIsMissing("mp_gone000000000000", profiles)).toBe(true);
+    expect(profileIsMissing("mp_balanced0000000000", profiles)).toBe(false);
+    expect(profileIsMissing(null, profiles)).toBe(false);
   });
 
-  it("shapes a typed name into an agent_name and parses model choices", () => {
+  it("shapes a typed name into an agent_name", () => {
     expect(shapeAgentName("Code Reviewer!")).toBe("code-reviewer");
     expect(shapeAgentName("a".repeat(50))).toHaveLength(40);
-    expect(parseModelChoice("openai/gpt-5")).toEqual({ provider: "openai", id: "gpt-5" });
-    expect(parseModelChoice("openrouter/openai/gpt-5")).toEqual({ provider: "openrouter", id: "openai/gpt-5" });
-    expect(parseModelChoice("nope")).toBeUndefined();
   });
 
   it("checks whole numbers within a range and compares definitions structurally", () => {
@@ -173,10 +171,13 @@ describe("agents page model", () => {
     expect(describeStarts({ supportsSubagents: true, allowedAgents: ["a", "b"] })).toBe("May start a, b");
   });
 
-  it("offers only the thinking levels the chosen model accepts", () => {
+  it("offers only the thinking levels the profile's first model accepts", () => {
     const catalog = [{ provider: "openai", id: "m", thinkingLevels: ["off", "low"] as const, enabled: true }];
-    expect(thinkingLevelsFor({ provider: "openai", id: "m" }, catalog as never)).toEqual(["off", "low"]);
-    expect(thinkingLevelsFor(null, catalog as never)).toHaveLength(7);
-    expect(thinkingLevelsFor({ provider: "openai", id: "unknown" }, catalog as never)).toHaveLength(7);
+    const profile = (id: string) => ({ id: "mp_one0000000000000", name: "One", models: [{ provider: "openai", id }], origin: "person" as const, updatedAt: "" });
+    expect(thinkingLevelsFor(profile("m"), catalog as never)).toEqual(["off", "low"]);
+    // Following the default profile, or naming a model the catalogue does not
+    // carry, offers everything rather than hiding a working control.
+    expect(thinkingLevelsFor(undefined, catalog as never)).toHaveLength(7);
+    expect(thinkingLevelsFor(profile("unknown"), catalog as never)).toHaveLength(7);
   });
 });

@@ -46,7 +46,13 @@ const DEFAULT_AGENT_LABEL = `Agent: ${agentDisplayName("default")}`;
 function pristine(world: World, path: string): void {
   addSession(world, path, PROJECT_CWD);
   const agent = { agentName: "default", kind: "root" as const };
-  world.states[path] = { ...world.states[path]!, messageCount: 0, model: { provider: "openai", id: "gpt-fast" }, agent };
+  world.states[path] = {
+    ...world.states[path]!,
+    messageCount: 0,
+    model: { provider: "openai", id: "gpt-fast" },
+    profile: { id: "mp_fast00000000000000", name: "Fast" },
+    agent,
+  };
   const index = world.sessions.findIndex((session) => session.path === path);
   world.sessions[index] = { ...world.sessions[index]!, messageCount: 0, agent };
 }
@@ -112,7 +118,7 @@ beforeEach(() => {
   world.snapshot = {
     ...world.snapshot,
     agents: world.snapshot.agents.map((agent) => agent.name === "reviewer"
-      ? { ...agent, model: { provider: "openai", id: "gpt-big" }, thinkingLevel: "high" }
+      ? { ...agent, profileId: "mp_smart0000000000000", thinkingLevel: "high" }
       : agent),
   };
   prompt = () => ({ accepted: true });
@@ -136,7 +142,8 @@ const probe = (name: string) => container.querySelector<HTMLElement>(`[data-slot
 const input = (name: string) => tree(name).querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!;
 const agentLabel = (name: string) => tree(name).querySelector('button[aria-label^="Agent:"]')?.getAttribute("aria-label");
 const thinkingLabel = (name: string) => tree(name).querySelector('button[aria-label^="Thinking:"]')?.getAttribute("aria-label");
-const modelLabel = (name: string) => tree(name).querySelector('button[aria-label^="Model:"]')?.getAttribute("aria-label");
+/** The model the composer's control says is answering: its second line (M22-T8). */
+const modelText = (name: string) => tree(name).querySelector('[data-slot="session-model-secondary"]')?.textContent;
 const composerState = (name: string) => handles[name]!.aui.composer.getState();
 const calls = (method: string) => world.calls.filter((call) => call.method === method);
 const prompts = (path?: string) => calls("session/prompt").map((call) => call.params as { path: string; content: unknown; firstTurn?: unknown }).filter((params) => !path || params.path === path);
@@ -157,9 +164,11 @@ const chooseThinking = async (name: string, level: string) => {
   await act(async () => settle(0));
 };
 const chooseModel = async (name: string, label: string) => {
-  await act(async () => tree(name).querySelector<HTMLButtonElement>('button[aria-label^="Model:"]')!.click());
+  await act(async () => tree(name).querySelector<HTMLButtonElement>('[data-slot="session-model-trigger"]')!.click());
   await act(async () => settle(0));
-  const item = [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')]
+  // A profile row can name the same model in its second line, so this picks
+  // from the "pin one model" group on purpose (M22-T8).
+  const item = [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"][data-option="model"]')]
     .find((candidate) => candidate.textContent?.includes(label))!;
   expect(item).toBeTruthy();
   await act(async () => item.click());
@@ -191,7 +200,7 @@ const chooseReviewerHigh = async (name = "main") => {
   await chooseAgent(name, "reviewer");
   await chooseThinking(name, "high");
   expect(agentLabel(name)).toBe("Agent: reviewer");
-  expect(modelLabel(name)).toBe("Model: gpt-big");
+  expect(modelText(name)).toBe("GPT Big");
   expect(thinkingLabel(name)).toBe("Thinking: high");
 };
 
@@ -203,7 +212,7 @@ describe("a refused first-turn prompt (U1)", () => {
     const firstTurn = firstTurnFromRunConfig(composerState("main").runConfig);
     expect(firstTurn).toEqual({ agentName: "default", thinkingLevel: "high" });
     expect(Object.hasOwn(firstTurn!, "model")).toBe(false);
-    expect(modelLabel("main")).toBe("Model: gpt-big");
+    expect(modelText("main")).toBe("GPT Big");
   });
 
   it("shows the selected agent thinking default instead of a stale compatible pristine level", async () => {
@@ -233,14 +242,14 @@ describe("a refused first-turn prompt (U1)", () => {
       { provider: "openai", id: "gpt-big", name: "GPT Big" },
     ] })) as never;
     await mount();
-    expect(modelLabel("main")).toBe("Model: gpt-fast");
+    expect(modelText("main")).toBe("GPT Fast");
 
     await chooseAgent("main", "reviewer");
-    expect(modelLabel("main")).toBe("Model: gpt-big");
+    expect(modelText("main")).toBe("GPT Big");
     expect(firstTurnFromRunConfig(composerState("main").runConfig)).toEqual({ agentName: "reviewer", model: null });
 
     await chooseModel("main", "GPT Fast");
-    expect(modelLabel("main")).toBe("Model: GPT Fast");
+    expect(modelText("main")).toBe("GPT Fast");
     expect(firstTurnFromRunConfig(composerState("main").runConfig)).toEqual({
       agentName: "reviewer",
       model: { provider: "openai", id: "gpt-fast", name: "GPT Fast" },
@@ -249,7 +258,7 @@ describe("a refused first-turn prompt (U1)", () => {
 
     await chooseAgent("main", agentDisplayName("default"));
     expect(firstTurnFromRunConfig(composerState("main").runConfig)).toEqual({ agentName: "default", model: null });
-    expect(modelLabel("main")).toBe("Model: GPT Fast");
+    expect(modelText("main")).toBe("GPT Fast");
   });
 
   it("forwards a later explicit model choice on the first request", async () => {

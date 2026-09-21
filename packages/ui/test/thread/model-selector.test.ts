@@ -1,16 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  defaultModelChanges,
+  defaultProfileChanges,
   modelOption,
   providerFilterForModel,
 } from "../../src/components/assistant-ui/elements/model-selector.js";
 
 describe("the new-session model picker", () => {
-  it("writes provider and model together before a session exists", () => {
-    expect(defaultModelChanges({ provider: "workers-ai", id: "deepseek-ai/deepseek-r1" })).toEqual([
-      { path: "defaultProvider", op: "set", value: "workers-ai" },
-      { path: "defaultModel", op: "set", value: "deepseek-ai/deepseek-r1" },
+  it("points new conversations at a profile, never at a raw model", () => {
+    expect(defaultProfileChanges("mp_balanced0000000000")).toEqual([
+      { path: "defaultProfileId", op: "set", value: "mp_balanced0000000000" },
     ]);
   });
 

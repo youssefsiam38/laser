@@ -70,7 +70,7 @@ export {
   useAgentsActions,
   useAgentsSnapshot,
   useAgentsStatus,
-  useBeamChoice,
+  useSeededProfiles,
   useLatestRun,
   useRunsForRoot,
   useSessionAgent,

@@ -8,9 +8,9 @@ import { describe, expect, it } from "vitest";
 
 import { firstIncomplete, resumeStep, sortProviders } from "../../src/components/onboarding/setup-model.js";
 
-const facts = (providersConfigured: number | undefined, hasDefaultModel: boolean | undefined, projects: number) => ({
+const facts = (providersConfigured: number | undefined, hasProfiles: boolean | undefined, projects: number) => ({
   providersConfigured,
-  hasDefaultModel,
+  hasProfiles,
   projects,
 });
 
@@ -21,19 +21,19 @@ describe("resumeStep", () => {
   });
   it("goes from the welcome to the first thing that is missing", () => {
     expect(resumeStep(facts(0, false, 0), "welcome")).toBe("provider");
-    expect(resumeStep(facts(1, false, 0), "welcome")).toBe("model");
+    expect(resumeStep(facts(1, false, 0), "welcome")).toBe("profiles");
     expect(resumeStep(facts(1, true, 0), "welcome")).toBe("project");
     expect(resumeStep(facts(1, true, 1), "welcome")).toBe("ready");
   });
   it("returns to the remembered step, unless something before it is no longer done", () => {
     expect(resumeStep(facts(1, true, 0), "project")).toBe("project");
-    expect(resumeStep(facts(1, false, 0), "project")).toBe("model");
+    expect(resumeStep(facts(1, false, 0), "project")).toBe("profiles");
     expect(resumeStep(facts(0, false, 0), "ready")).toBe("provider");
     // Left on a step that has since been completed elsewhere: still shown, it says so itself.
     expect(resumeStep(facts(1, true, 1), "provider")).toBe("provider");
   });
   it("honours the remembered step while the host has not answered", () => {
-    expect(resumeStep(facts(undefined, undefined, 0), "model")).toBe("model");
+    expect(resumeStep(facts(undefined, undefined, 0), "profiles")).toBe("profiles");
     expect(firstIncomplete(facts(undefined, true, 0))).toBeUndefined();
   });
 });

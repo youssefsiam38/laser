@@ -34,7 +34,7 @@ describe("a switch, as it happens", () => {
       { kind: "model_fallback", phase: "switched", from: sonnet, to: deepseek, reason: "rate_limit", detail: "Sonnet 4.5 is being rate-limited.", position: 1 },
     ]);
     expect(notices(v)).toHaveLength(1);
-    expect(notices(v)[0]).toMatchObject({ level: "info", text: "Continued on DeepSeek V3 · Sonnet 4.5 is being rate-limited." });
+    expect(notices(v)[0]).toMatchObject({ level: "info", text: "Moved to DeepSeek V3 · Sonnet 4.5 is being rate-limited." });
   });
 
   it("says nothing in the conversation while it is still trying", () => {
@@ -76,7 +76,7 @@ describe("the same switch, read back from the session file", () => {
   const names = modelNamesOf({
     ...state,
     fallback: {
-      chain: [
+      models: [
         { provider: "anthropic", id: "claude-sonnet-4-5", name: "Sonnet 4.5" },
         { provider: "deepseek", id: "deepseek-chat", name: "DeepSeek V3" },
       ],
@@ -100,7 +100,7 @@ describe("the same switch, read back from the session file", () => {
     expect(blocks[0]).toMatchObject({
       kind: "notice",
       level: "info",
-      text: "Continued on DeepSeek V3 · Sonnet 4.5 is being rate-limited.",
+      text: "Moved to DeepSeek V3 · Sonnet 4.5 is being rate-limited.",
       at: "2026-09-11T12:00:00.000Z",
     });
   });
@@ -109,7 +109,7 @@ describe("the same switch, read back from the session file", () => {
     const blocks = blocksFromEntries([
       entry("switched", { from: { provider: "anthropic", id: "claude-sonnet-4-5" }, to: { provider: "deepseek", id: "deepseek-chat" }, failure: { class: "rate_limit", at: "x" } }),
     ]);
-    expect((blocks[0] as { text: string }).text).toBe("Continued on deepseek-chat · claude-sonnet-4-5 is being rate-limited.");
+    expect((blocks[0] as { text: string }).text).toBe("Moved to deepseek-chat · claude-sonnet-4-5 is being rate-limited.");
   });
 
   it("draws an exhausted chain as the same warning it was live", () => {
@@ -118,7 +118,7 @@ describe("the same switch, read back from the session file", () => {
     ]);
     expect(blocks).toHaveLength(1);
     expect(blocks[0]).toMatchObject({ kind: "notice", level: "warning" });
-    expect((blocks[0] as { text: string }).text).toBe("deepseek-chat has no credit left. No other model in this chain could take over.");
+    expect((blocks[0] as { text: string }).text).toBe("deepseek-chat has no credit left. No other model in this profile could take over.");
   });
 
   it("ignores a record it cannot read rather than drawing half a sentence", () => {

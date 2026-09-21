@@ -17,7 +17,6 @@ import {
   type AgentDefinition,
   type AgentDefinitionInput,
   type AgentLocation,
-  type AgentModelChoice,
   type AgentSkillRef,
   type AgentSkillScope,
   type AgentSkillsListing,
@@ -25,7 +24,7 @@ import {
   type AgentsSnapshot,
   type BuiltinAgentName,
   type ModelCatalogEntry,
-  type NamerState,
+  type ModelProfile,
   type ThinkingLevel,
 } from "@lasercode/protocol";
 
@@ -79,7 +78,7 @@ export const EDITOR_SECTIONS = [
   "name",
   "description",
   "instructions",
-  "model",
+  "profile",
   "thinkingLevel",
   "allowedAgents",
   "skills",
@@ -112,6 +111,10 @@ export function sectionOfField(field: string): EditorSection {
       return "instructions";
     case "thinking":
       return "thinkingLevel";
+    // A definition written before profiles named a model; its warning belongs
+    // where that choice lives now.
+    case "model":
+      return "profile";
     default:
       return (EDITOR_SECTIONS as readonly string[]).includes(root) ? (root as EditorSection) : "name";
   }
@@ -274,7 +277,7 @@ export function builtinBlurb(name: BuiltinAgentName): string {
     case "chat":
       return "Plain conversations that belong to no project. Each Chat session gets its own private working directory and stays under the Chat tab until you move it into a project.";
     case "namer":
-      return "Names things while they happen: a session from its first prompt, a running tool call, a stretch of activity. It runs often on a small task, so it uses the fastest inexpensive model that passes a short check.";
+      return "Names things while they happen: a session from its first prompt, a running tool call, a stretch of activity. It runs often on a small task, so a quick profile suits it.";
   }
 }
 
@@ -305,27 +308,34 @@ export const THINKING_LABEL: Readonly<Record<ThinkingLevel, string>> = {
   max: "Max",
 };
 
-/** The levels a chosen model accepts, or every level when the model is not in the catalog. */
-export function thinkingLevelsFor(model: AgentModelChoice | null, catalog: readonly ModelCatalogEntry[]): readonly ThinkingLevel[] {
+/**
+ * The levels the profile's preferred model accepts, or every level when that
+ * model is not in the catalogue (or the agent follows the default profile).
+ */
+export function thinkingLevelsFor(
+  profile: ModelProfile | undefined,
+  catalog: readonly ModelCatalogEntry[],
+): readonly ThinkingLevel[] {
+  const model = profile?.models[0];
   if (!model) return THINKING_LEVELS;
   const entry = catalog.find((candidate) => candidate.provider === model.provider && candidate.id === model.id);
   if (!entry || entry.thinkingLevels.length === 0) return THINKING_LEVELS;
   return THINKING_LEVELS.filter((level) => entry.thinkingLevels.includes(level));
 }
 
-export const modelChoiceId = (model: Pick<AgentModelChoice, "provider" | "id">): string => `${model.provider}/${model.id}`;
-
-/** `provider/id` back into a choice; `undefined` when the string is not one. */
-export function parseModelChoice(value: string): AgentModelChoice | undefined {
-  const slash = value.indexOf("/");
-  if (slash <= 0 || slash === value.length - 1) return undefined;
-  return { provider: value.slice(0, slash), id: value.slice(slash + 1) };
+/**
+ * What a card says about an agent's profile. A `null` id inherits, and an id
+ * nothing answers to is the unknown-profile warning's subject: the agent still
+ * runs, on the profile new conversations use (`docs/model-profiles.md`).
+ */
+export function describeProfile(profileId: string | null, profiles: readonly ModelProfile[] = []): string {
+  if (profileId === null) return "Follows the profile new conversations use";
+  return profiles.find((profile) => profile.id === profileId)?.name ?? "A profile that is not there";
 }
 
-export function describeModel(model: AgentModelChoice | null, catalog?: readonly ModelCatalogEntry[]): string {
-  if (!model) return "Follows the default model";
-  const entry = catalog?.find((candidate) => candidate.provider === model.provider && candidate.id === model.id);
-  return entry?.name ?? model.id;
+/** True when this agent names a profile the settings no longer hold. */
+export function profileIsMissing(profileId: string | null, profiles: readonly ModelProfile[]): boolean {
+  return profileId !== null && !profiles.some((profile) => profile.id === profileId);
 }
 
 export function describeThinking(level: ThinkingLevel | null): string {
@@ -342,40 +352,6 @@ export function describeStarts(agent: Pick<AgentDefinitionInput, "supportsSubage
   if (!agent.supportsSubagents) return "Works alone";
   const n = agent.allowedAgents.length;
   return n === 0 ? "May start agents, none chosen yet" : `May start ${agent.allowedAgents.join(", ")}`;
-}
-
-/** Latency for a table cell: whole milliseconds under a second, else seconds with one decimal. */
-export function formatLatency(ms: number | null | undefined): string {
-  if (ms === null || ms === undefined || !Number.isFinite(ms)) return "—";
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  return `${(ms / 1000).toFixed(1)} s`;
-}
-
-export interface NamerSummary {
-  status: NamerState["status"];
-  title: string;
-  detail: string | undefined;
-}
-
-/** The three-plus-one states of Namer's qualification, as the card says them. */
-export function namerSummary(state: NamerState): NamerSummary {
-  switch (state.status) {
-    case "unqualified":
-      return { status: state.status, title: "Not qualified yet", detail: state.reason ?? "Run the check once a provider is connected; it takes a few seconds." };
-    case "qualifying":
-      return { status: state.status, title: "Qualifying…", detail: "Testing connected models on session titles." };
-    case "ready": {
-      const chosen = state.candidates.find((candidate) => state.model && candidate.model.provider === state.model.provider && candidate.model.id === state.model.id);
-      const latency = chosen?.latencyMs;
-      return {
-        status: state.status,
-        title: state.model ? modelChoiceId(state.model) : "Ready",
-        detail: state.reason ?? (latency === null || latency === undefined ? undefined : `${formatLatency(latency)} on the check`),
-      };
-    }
-    case "unavailable":
-      return { status: state.status, title: "Unavailable", detail: state.reason ?? "No connected model could be checked." };
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -409,8 +385,7 @@ export function sameDefinitionInput(a: AgentDefinitionInput, b: AgentDefinitionI
     a.instructions === b.instructions &&
     a.engineInstructions === b.engineInstructions &&
     a.excludeCoreInstructions === b.excludeCoreInstructions &&
-    (a.model?.provider ?? null) === (b.model?.provider ?? null) &&
-    (a.model?.id ?? null) === (b.model?.id ?? null) &&
+    a.profileId === b.profileId &&
     a.thinkingLevel === b.thinkingLevel &&
     a.supportsSubagents === b.supportsSubagents &&
     sameStrings(a.allowedAgents, b.allowedAgents) &&

@@ -19,7 +19,7 @@
  *     "check your configuration";
  *   - a check that cannot run says so (SKIP) instead of passing quietly.
  */
-import { ENV, PRODUCT_DISPLAY_NAME, PRODUCT_NAME } from "@lasercode/protocol";
+import { ENV, MODEL_PROFILES_SETTING, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, modelKey, readModelProfilesValue } from "@lasercode/protocol";
 import { execFile } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statfsSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -27,7 +27,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WorkerClient } from "@lasercode/host";
-import type { ModelRef, SessionState } from "@lasercode/protocol";
+import type { ModelIdentity, ModelProfile, ModelRef, SessionState } from "@lasercode/protocol";
 import { bool } from "../args.js";
 import type { Command } from "../command.js";
 import { hostUrl, type LaserPaths } from "../config.js";
@@ -104,8 +104,8 @@ Exits 1 if any check FAILs, 0 if the worst is a WARN, so it is safe in CI.
         detail: "skipped (--skip-worker)",
         fix: `Run \`${PRODUCT_NAME} doctor\` without --skip-worker to prove a session really opens.`,
       });
-      checks.push({ name: "default model", status: "skip", detail: "needs the worker check" });
-      checks.push({ name: "model auth", status: "skip", detail: "needs the worker check" });
+      checks.push({ name: "session profile", status: "skip", detail: "needs the worker check" });
+      checks.push(...(await checkProfiles(paths, timeoutMs)));
     } else if (!agent.ok) {
       checks.push({
         name: "worker",
@@ -113,11 +113,15 @@ Exits 1 if any check FAILs, 0 if the worst is a WARN, so it is safe in CI.
         detail: `skipped: the agent ${PRODUCT_NAME} ships did not resolve`,
         fix: "Fix the agent first; this check cannot run without it.",
       });
-      checks.push({ name: "default model", status: "skip", detail: "needs the worker check" });
-      checks.push({ name: "model auth", status: "skip", detail: "needs the worker check" });
+      checks.push({ name: "session profile", status: "skip", detail: "needs the worker check" });
+      checks.push(...(await checkProfiles(paths, timeoutMs)));
     } else {
       const worker = await checkWorker(paths, timeoutMs);
-      checks.push(worker.check, worker.model, worker.auth);
+      checks.push(worker.check, worker.profile);
+      // Every model of every profile, named by the profile that reaches for
+      // it: a profile is only broken when nothing in it can answer
+      // (`docs/model-profiles.md` "Runtime").
+      checks.push(...(await checkProfiles(paths, timeoutMs)));
     }
 
     const failed = checks.filter((check) => check.status === "fail").length;
@@ -607,7 +611,7 @@ async function checkPort(paths: LaserPaths): Promise<Check> {
 async function checkWorker(
   paths: LaserPaths,
   timeoutMs: number,
-): Promise<{ check: Check; model: Check; auth: Check }> {
+): Promise<{ check: Check; profile: Check }> {
   const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-doctor-`));
   const cwd = join(root, "project");
   const sessionDir = join(root, "sessions");
@@ -654,25 +658,25 @@ async function checkWorker(
     if (!state.model) {
       return {
         check,
-        model: {
-          name: "default model",
+        profile: {
+          name: "session profile",
           status: "fail",
-          detail: "a session opened but no model resolved",
+          detail: "a session opened but no model in its profile answered",
           fix:
-            "Choose a default model in Settings → Providers and models. If one is already chosen, the provider it " +
-            "names has no credentials — sign in to that provider on the same screen.",
-          data: { available: models.length },
+            "Open Settings → Providers and models → Model profiles and point new conversations at a profile whose " +
+            "models you are signed in to.",
+          data: { available: models.length, profile: state.profile },
         },
-        auth: { name: "model auth", status: "skip", detail: "no model to check" },
       };
     }
-    const model: Check = {
-      name: "default model",
+    const intent = state.profile ? `${state.profile.name} → ` : "pinned to ";
+    const profile: Check = {
+      name: "session profile",
       status: "pass",
-      detail: `${state.model.provider}/${state.model.id}${models.length > 0 ? ` (${models.length} available)` : ""}`,
-      data: { model: state.model, available: models.length },
+      detail: `${intent}${state.model.provider}/${state.model.id}${models.length > 0 ? ` (${models.length} available)` : ""}`,
+      data: { profile: state.profile, model: state.model, available: models.length },
     };
-    return { check, model, auth: await checkModelAuth(paths, state.model, timeoutMs) };
+    return { check, profile };
   } catch (error) {
     return {
       check: {
@@ -684,13 +688,98 @@ async function checkWorker(
           : `Build the workspace (\`pnpm -r build\`), then run \`${PRODUCT_NAME} doctor\` again.`,
         data: { stderr: stderr.slice(-2000) },
       },
-      model: { name: "default model", status: "skip", detail: "the worker did not start" },
-      auth: { name: "model auth", status: "skip", detail: "the worker did not start" },
+      profile: { name: "session profile", status: "skip", detail: "the worker did not start" },
     };
   } finally {
     await client?.stop().catch(() => {});
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+/** Models checked in one run, however many profiles name them. A bound, not a tier. */
+const MAX_PROFILE_MODEL_CHECKS = 24;
+
+/**
+ * Every model of every profile, named by the profile that reaches for it
+ * (`docs/model-profiles.md`).
+ *
+ * A profile is the unit a person chose, so it is the unit reported: one row per
+ * profile, listing each of its models and what the provider says about it. A
+ * profile passes as soon as one of its models can answer — that is exactly what
+ * a profile is for — and fails only when none of them can. Each distinct model
+ * is asked about once, however many profiles name it.
+ */
+async function checkProfiles(paths: LaserPaths, timeoutMs: number): Promise<Check[]> {
+  const settingsPath = join(paths.agentDir, "settings.json");
+  let profiles: ModelProfile[] = [];
+  if (existsSync(settingsPath)) {
+    try {
+      const raw = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+      profiles = readModelProfilesValue(raw[MODEL_PROFILES_SETTING]);
+    } catch (error) {
+      return [{
+        name: "model profiles",
+        status: "fail",
+        detail: `${settingsPath} is not readable as JSON: ${messageOf(error)}`,
+        fix: `${PRODUCT_DISPLAY_NAME} cannot read your profiles from a broken settings file. Repair or remove it, then run doctor again.`,
+      }];
+    }
+  }
+  if (profiles.length === 0) {
+    return [{
+      name: "model profiles",
+      status: "warn",
+      detail: "no profiles are written yet",
+      fix: `Connect a provider — ${PRODUCT_DISPLAY_NAME} fills in Smart, Balanced and Fast from what it offers — or make one in Settings → Providers and models → Model profiles.`,
+      data: { profiles: 0 },
+    }];
+  }
+
+  const answers = new Map<string, Promise<Check>>();
+  let asked = 0;
+  const ask = (model: ModelIdentity): Promise<Check> | undefined => {
+    const key = modelKey(model);
+    const known = answers.get(key);
+    if (known) return known;
+    if (asked >= MAX_PROFILE_MODEL_CHECKS) return undefined;
+    asked += 1;
+    const pending = checkModelAuth(paths, { provider: model.provider, id: model.id }, timeoutMs);
+    answers.set(key, pending);
+    return pending;
+  };
+
+  const checks: Check[] = [];
+  for (const profile of profiles) {
+    const lines: string[] = [];
+    let usable = 0;
+    let unchecked = 0;
+    for (const model of profile.models) {
+      const pending = ask(model);
+      if (!pending) {
+        unchecked += 1;
+        continue;
+      }
+      const answer = await pending;
+      if (answer.status === "pass") usable += 1;
+      lines.push(`${model.provider}/${model.id}: ${answer.detail}`);
+    }
+    const status: Status = usable > 0 ? "pass" : unchecked > 0 ? "skip" : "fail";
+    checks.push({
+      name: `profile “${profile.name}”`,
+      status,
+      detail:
+        status === "pass"
+          ? `${usable} of ${profile.models.length} model${profile.models.length === 1 ? "" : "s"} ready · ${lines.join(" · ")}`
+          : status === "skip"
+            ? `not checked: ${MAX_PROFILE_MODEL_CHECKS} models is as far as one run goes`
+            : `no model in this profile can answer · ${lines.join(" · ")}`,
+      ...(status === "fail"
+        ? { fix: `Sign in to one of these providers in Settings → Providers and models, or give “${profile.name}” a model you can use.` }
+        : {}),
+      data: { profile: profile.name, models: profile.models.length, usable },
+    });
+  }
+  return checks;
 }
 
 /**

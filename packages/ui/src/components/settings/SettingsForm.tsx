@@ -11,13 +11,13 @@ import { ChevronRight, RotateCcw, ShieldAlert, Terminal, X } from "lucide-react"
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { ProviderModelMultiPicker, ProviderModelPicker, ProviderPicker, modelProvenance, modelOptionId } from "@/components/assistant-ui/elements/model-selector";
+import { ProviderModelMultiPicker } from "@/components/assistant-ui/elements/model-selector";
+import { ProfilePicker, useModelProfiles } from "@/components/assistant-ui/elements/model-profiles";
 import { narrowToConnected } from "@/components/assistant-ui/elements/connected-models";
-import { ProviderLogo } from "@/components/assistant-ui/elements/logos";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useLaserStable, type SettingsScopeView } from "@/runtime";
-import type { ModelCatalogEntry, SettingChange, SettingDescriptor, SettingsCatalog, SettingsScope, SettingsSnapshot, ThinkingLevel } from "@lasercode/protocol";
+import { PROFILE_ASSIGNMENT_SETTINGS, type ModelCatalogEntry, type ModelProfile, type SettingChange, type SettingDescriptor, type SettingsCatalog, type SettingsScope, type SettingsSnapshot } from "@lasercode/protocol";
 
 import type { CapabilityDecision } from "@/runtime/environment-capabilities";
 import { SettingField } from "./fields.js";
@@ -40,7 +40,11 @@ export function SettingsForm({ audience, view, cwd, catalog, snapshot, decision,
   const [section, setSection] = useState<string>(catalog.sections[0]?.id ?? "model");
   const [query, setQuery] = useState("");
   const [showFull, setShowFull] = useState(false);
-  const [modelCatalog, setModelCatalog] = useState<{ models: ModelCatalogEntry[]; connected: ModelCatalogEntry[]; defaultProvider?: string; defaultModel?: string }>({ models: [], connected: [] });
+  const [modelCatalog, setModelCatalog] = useState<{ models: ModelCatalogEntry[]; connected: ModelCatalogEntry[] }>({ models: [], connected: [] });
+  // Profiles, not models: every "which model" setting became "which profile"
+  // (`docs/model-profiles.md`, D-346), and they are global wherever this form
+  // is pointed.
+  const profiles = useModelProfiles(cwd);
   const [modelCatalogLoading, setModelCatalogLoading] = useState(true);
   const [modelCatalogError, setModelCatalogError] = useState<string>();
 
@@ -60,8 +64,6 @@ export function SettingsForm({ audience, view, cwd, catalog, snapshot, decision,
       setModelCatalog({
         models: result.models,
         connected: narrowToConnected(result.models, providers).models,
-        ...(result.defaultProvider ? { defaultProvider: result.defaultProvider } : {}),
-        ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
       });
     }).catch((error) => {
       if (live) {
@@ -193,6 +195,9 @@ export function SettingsForm({ audience, view, cwd, catalog, snapshot, decision,
                   modelCatalog={modelCatalog}
                   modelCatalogLoading={modelCatalogLoading}
                   modelCatalogError={modelCatalogError}
+                  profiles={profiles.profiles}
+                  profilesLoading={profiles.loading}
+                  profilesError={profiles.error}
                   environmentWritable={writable}
                   onApply={onApply}
                 />
@@ -260,6 +265,9 @@ function FieldRowView({
   modelCatalog,
   modelCatalogLoading,
   modelCatalogError,
+  profiles,
+  profilesLoading,
+  profilesError,
   environmentWritable,
   onApply,
 }: {
@@ -269,9 +277,12 @@ function FieldRowView({
   showSection: boolean;
   catalog: SettingsCatalog;
   /** `models` is the whole catalogue (curating it); `connected` is what a person can choose to use (D-145). */
-  modelCatalog: { models: ModelCatalogEntry[]; connected: ModelCatalogEntry[]; defaultProvider?: string; defaultModel?: string };
+  modelCatalog: { models: ModelCatalogEntry[]; connected: ModelCatalogEntry[] };
   modelCatalogLoading: boolean;
   modelCatalogError: string | undefined;
+  profiles: readonly ModelProfile[];
+  profilesLoading: boolean;
+  profilesError: string | undefined;
   environmentWritable: boolean;
   onApply: (scope: SettingsScope, changes: SettingChange[]) => Promise<boolean>;
 }) {
@@ -281,7 +292,7 @@ function FieldRowView({
   const displayed = scoped ?? row.effective ?? field.default;
   const writable = environmentWritable && !field.managed && (scope === "global" || snapshot.projectTrust.writable);
   const section = catalog.sections.find((s) => s.id === field.section);
-  const provider = String(getAtPath(snapshot.effective, "defaultProvider") ?? modelCatalog.defaultProvider ?? "");
+  const isAssignment = (PROFILE_ASSIGNMENT_SETTINGS as readonly string[]).includes(field.path);
 
   return (
     <div className="flex flex-col gap-2 border-t border-line py-3 first:border-t-0 sm:flex-row sm:gap-6">
@@ -310,33 +321,19 @@ function FieldRowView({
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-        {field.path === "defaultProvider" ? (
-          <ProviderPicker
-            models={modelCatalog.connected}
-            {...((typeof displayed === "string" ? displayed : modelCatalog.defaultProvider) ? { value: typeof displayed === "string" ? displayed : modelCatalog.defaultProvider } : {})}
-            disabled={!writable || modelCatalogLoading}
-            loading={modelCatalogLoading}
-            {...(modelCatalogError ? { error: modelCatalogError } : {})}
-            onValueChange={(value) => void onApply(scope, [{ path: field.path, op: "set", value }])}
-          />
-        ) : field.path === "defaultModel" ? (
-          <ProviderModelPicker
-            models={modelCatalog.connected}
-            {...((typeof displayed === "string" ? displayed : modelCatalog.defaultModel) && provider
-              ? { value: `${provider}/${typeof displayed === "string" ? displayed : modelCatalog.defaultModel}` }
-              : {})}
-            disabled={!writable || modelCatalogLoading}
-            loading={modelCatalogLoading}
-            {...(modelCatalogError ? { error: modelCatalogError } : {})}
-            onValueChange={(value) => {
-              const slash = value.indexOf("/");
-              const nextProvider = value.slice(0, slash);
-              const nextModel = value.slice(slash + 1);
-              void onApply(scope, [
-                { path: "defaultProvider", op: "set", value: nextProvider },
-                { path: "defaultModel", op: "set", value: nextModel },
-              ]);
-            }}
+        {isAssignment ? (
+          <ProfilePicker
+            profiles={profiles}
+            catalogue={modelCatalog.connected}
+            value={typeof displayed === "string" ? displayed : null}
+            disabled={!writable || profilesLoading}
+            loading={profilesLoading}
+            {...(profilesError ? { error: profilesError } : {})}
+            placeholder="Not chosen yet"
+            aria-label={field.label}
+            onValueChange={(id) =>
+              void onApply(scope, [id === null ? { path: field.path, op: "unset" } : { path: field.path, op: "set", value: id }])
+            }
           />
         ) : field.path === "enabledModels" ? (
           <ProviderModelMultiPicker
@@ -346,13 +343,6 @@ function FieldRowView({
             loading={modelCatalogLoading}
             {...(modelCatalogError ? { error: modelCatalogError } : {})}
             onValuesChange={(value) => void onApply(scope, [value.length === 0 ? { path: field.path, op: "unset" } : { path: field.path, op: "set", value }])}
-          />
-        ) : field.path === "modelThinkingLevels" ? (
-          <ModelThinkingMapField
-            models={modelCatalog.connected}
-            value={displayed}
-            disabled={!writable}
-            onCommit={(value) => void onApply(scope, [value === undefined ? { path: field.path, op: "unset" } : { path: field.path, op: "set", value }])}
           />
         ) : (
           <SettingField
@@ -388,48 +378,6 @@ function FieldRowView({
           </>
         </div>
       </div>
-    </div>
-  );
-}
-
-function ModelThinkingMapField({ models, value, disabled, onCommit }: { models: readonly ModelCatalogEntry[]; value: unknown; disabled: boolean; onCommit(value: unknown): void }) {
-  const map = typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  const entries = Object.entries(map);
-  const replace = (next: Record<string, unknown>) => onCommit(Object.keys(next).length === 0 ? undefined : next);
-  return (
-    <div className="flex max-w-140 flex-col gap-1.5">
-      {entries.map(([key, level]) => {
-        const slash = key.indexOf("/");
-        const provider = slash > 0 ? key.slice(0, slash) : "";
-        const model = models.find((entry) => modelOptionId(entry) === key);
-        const provenance = model ? modelProvenance(model) : undefined;
-        const levels = model?.thinkingLevels.length ? model.thinkingLevels : (["off", "minimal", "low", "medium", "high", "xhigh", "max"] as ThinkingLevel[]);
-        return (
-          <div key={key} className="flex min-w-0 items-center gap-2 rounded-lg border border-line bg-surface px-2 py-1.5">
-            <ProviderLogo provider={provider} className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1 truncate typed" title={key}>{provenance?.modelId ?? key}</span>
-            <select
-              aria-label={`Thinking level for ${key}`}
-              value={String(level)}
-              disabled={disabled}
-              onChange={(event) => replace({ ...map, [key]: event.target.value })}
-              className="h-7 rounded-md border border-line bg-surface px-2 text-xs text-ink outline-none focus-visible:border-live"
-            >
-              {levels.map((option) => <option key={option} value={option}>{option}</option>)}
-            </select>
-            <Button type="button" variant="ghost" size="icon-xs" aria-label={`Remove ${key}`} disabled={disabled} onClick={() => { const next = { ...map }; delete next[key]; replace(next); }}>
-              <X />
-            </Button>
-          </div>
-        );
-      })}
-      <ProviderModelPicker
-        key={entries.length}
-        models={models.filter((model) => !Object.prototype.hasOwnProperty.call(map, modelOptionId(model)))}
-        disabled={disabled}
-        placeholder="Add a model override"
-        onValueChange={(key) => replace({ ...map, [key]: "medium" })}
-      />
     </div>
   );
 }

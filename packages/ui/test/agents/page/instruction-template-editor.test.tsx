@@ -15,7 +15,7 @@ import {
 const context: InstructionTemplateValueContext = {
   agentName: "reviewer",
   agentDescription: "Reviews every changed file",
-  model: { provider: "openai", id: "gpt-5" },
+  profileName: "Balanced",
   thinkingLevel: "high",
   provenance: "Current draft",
 };
@@ -70,7 +70,10 @@ describe("instruction template source", () => {
 
   it("reports editor-known values separately from values that only exist during a run", () => {
     expect(instructionTemplateValue("agentName", context)).toEqual({ status: "known", value: "reviewer", provenance: "Current draft" });
-    expect(instructionTemplateValue("model", context)).toEqual({ status: "known", value: "openai/gpt-5", provenance: "Current draft" });
+    // The model is the profile's business now: it is whichever model in the
+    // profile answers when the request goes out (M22-T9).
+    expect(instructionTemplateValue("profile", context)).toEqual({ status: "known", value: "Balanced", provenance: "Current draft" });
+    expect(instructionTemplateValue("model", context)).toMatchObject({ status: "runtime", reason: expect.stringContaining("profile") });
     expect(instructionTemplateValue("agentDescription", { ...context, agentDescription: "" })).toEqual({ status: "known", value: "", provenance: "Current draft" });
     expect(instructionTemplateValue("availableTools", context)).toMatchObject({ status: "runtime", reason: expect.stringContaining("session") });
     expect(instructionTemplateValue("workingDirectory", context)).toMatchObject({ status: "runtime", reason: expect.stringContaining("worktree") });

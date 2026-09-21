@@ -2,7 +2,7 @@ export { FirstRunFlow, useSetupPending, type FirstRunFlowProps, type SetupPendin
 export { SetupCard, type SetupCardProps } from "./SetupCard.js";
 export { ProviderStep, type ProviderStepProps } from "./ProviderStep.js";
 export { ProviderSignIn, type ProviderSignInProps } from "./ProviderSignIn.js";
-export { ModelStep, type ModelStepProps } from "./ModelStep.js";
+export { ProfilesStep, type ProfilesStepProps } from "./ProfilesStep.js";
 export { ProjectStep, type ProjectStepProps } from "./ProjectStep.js";
 export {
   SETUP_STEPS,

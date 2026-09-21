@@ -18,7 +18,7 @@ import { closeFleetSheet, setFleetSheetOpen, useFleetReconcile, useFleetSheetOpe
 import { EndAgentDialog } from "@/components/agents/EndAgentDialog";
 import { RemoveWorktreeDialog } from "@/components/agents/RemoveWorktreeDialog";
 // Beam: the bubble and its model choice, mounted once (docs/agents.md "Beam").
-import { BeamBubble, BeamModelDialog } from "@/components/beam";
+import { BeamBubble, BeamProfileDialog } from "@/components/beam";
 import { mergeSessions, sessionTitle, useCapability, useLaserStable, useLaserState } from "@/runtime";
 import { currentView, samePresentationView } from "@/runtime/presentation-state";
 
@@ -455,7 +455,7 @@ function ShellFrame() {
         <EndAgentDialog />
         <RemoveWorktreeDialog />
         <BeamBubble />
-        <BeamModelDialog />
+        <BeamProfileDialog />
         <Toasts />
         {/* The reconnect guard and service-worker plumbing on every width; the
             phone's notices and install sheet only under 768px. */}

@@ -13,7 +13,7 @@ import type {
   HistoryWindow,
   AgentEvent,
   BackgroundTask,
-  AgentModelChoice,
+  ModelProfile,
   AgentRun,
   AgentsSnapshot,
   HostNotificationMethod,
@@ -337,8 +337,12 @@ export interface AgentsSlice {
   runs: Record<string, AgentRun>;
   /** Newest last, capped at {@link AGENT_EVENTS_MAX}, deduplicated by id. */
   events: AgentEvent[];
-  /** `agents/beam/choose-model` is pending until the UI picks or dismisses. */
-  chooseBeamModel: { suggested: AgentModelChoice | null } | null;
+  /**
+   * The profiles Laser filled in when a first provider was connected
+   * (`models/profiles/seeded`). Nothing is pending: they are already written,
+   * and the surfaces that care show them for review (M22-T7).
+   */
+  seededProfiles: ModelProfile[] | null;
 }
 
 /**
@@ -363,7 +367,7 @@ export const initialAgents: AgentsSlice = {
   error: null,
   runs: {},
   events: [],
-  chooseBeamModel: null,
+  seededProfiles: null,
 };
 
 /**
@@ -546,8 +550,8 @@ export type Action =
    */
   | { type: "agents/runs/loaded"; runs: AgentRun[]; path?: string }
   | { type: "agents/event"; event: AgentEvent }
-  | { type: "agents/choose-beam-model"; suggested: AgentModelChoice | null }
-  | { type: "agents/choose-beam-model/clear" }
+  /** Laser filled in the seeded profiles; a review surface may show them. */
+  | { type: "models/profiles/seeded"; profiles: ModelProfile[] }
   | { type: "agents/error"; error: string }
   // --- background tasks ---
   | { type: "tasks/update"; task: BackgroundTask }
@@ -898,10 +902,8 @@ export function reduce(state: AppState, action: Action): AppState {
         const events = [...a.events, action.event];
         return { ...a, events: events.length > AGENT_EVENTS_MAX ? events.slice(events.length - AGENT_EVENTS_MAX) : events };
       });
-    case "agents/choose-beam-model":
-      return updateAgents(state, (a) => ({ ...a, chooseBeamModel: { suggested: action.suggested } }));
-    case "agents/choose-beam-model/clear":
-      return updateAgents(state, (a) => (a.chooseBeamModel === null ? a : { ...a, chooseBeamModel: null }));
+    case "models/profiles/seeded":
+      return updateAgents(state, (a) => ({ ...a, seededProfiles: action.profiles }));
     case "agents/error":
       return updateAgents(state, (a) => ({ ...a, loading: false, error: action.error }));
     case "tasks/update":
@@ -1115,8 +1117,8 @@ function applyNotification(state: AppState, method: HostNotificationMethod, para
       return reduce(state, { type: "agents/run", run: (params as HostNotifications["agents/run"]).run });
     case "agents/event":
       return reduce(state, { type: "agents/event", event: params as HostNotifications["agents/event"] });
-    case "agents/beam/choose-model":
-      return reduce(state, { type: "agents/choose-beam-model", suggested: (params as HostNotifications["agents/beam/choose-model"]).suggested });
+    case "models/profiles/seeded":
+      return reduce(state, { type: "models/profiles/seeded", profiles: (params as HostNotifications["models/profiles/seeded"]).profiles });
     case "tasks/update":
       return reduce(state, { type: "tasks/update", task: (params as HostNotifications["tasks/update"]).task });
     default:
@@ -2179,7 +2181,7 @@ function sentByOfMarker(raw: unknown): SentByParent | undefined {
 /**
  * Display names by `provider/id`, for a record that stores identities only.
  *
- * The chain snapshot the worker publishes on the session state carries the
+ * The profile snapshot the worker publishes on the session state carries the
  * catalogue's names, and it holds exactly the models a record can name — so a
  * line read back from the file says "Sonnet 4.5", like the one the person saw
  * when it happened, rather than `claude-sonnet-4-5`.
@@ -2188,21 +2190,21 @@ export type ModelNames = ReadonlyMap<string, string>;
 
 export function modelNamesOf(state: SessionState | undefined): ModelNames {
   const names = new Map<string, string>();
-  for (const model of state?.fallback?.chain ?? []) {
+  for (const model of state?.fallback?.models ?? []) {
     names.set(`${model.provider}/${model.id}`.toLowerCase(), model.name ?? model.id);
   }
   if (state?.model) names.set(`${state.model.provider}/${state.model.id}`.toLowerCase(), state.model.name ?? state.model.id);
   return names;
 }
 
-/** "Continued on X · Y is not answering." — one line, both live and on reload. */
+/** "Moved to X · Y is not answering." — one line, both live and on reload. */
 function switchedText(to: { name?: string; id: string } | undefined, detail: string | undefined): string {
   const model = to ? (to.name ?? to.id) : "another model";
-  return detail ? `Continued on ${model} · ${detail}` : `Continued on ${model}.`;
+  return detail ? `Moved to ${model} · ${detail}` : `Moved to ${model}.`;
 }
 
 function exhaustedText(detail: string | undefined): string {
-  return detail ?? "No other model in this chain could take over.";
+  return detail ?? "No other model in this profile could take over.";
 }
 
 /**
@@ -2237,7 +2239,7 @@ function fallbackRecord(raw: unknown, at: string | undefined, names?: ModelNames
       id: nextBlockId(),
       ...(at ? { at } : {}),
       level: "warning",
-      text: because ? `${because} No other model in this chain could take over.` : exhaustedText(undefined),
+      text: because ? `${because} No other model in this profile could take over.` : exhaustedText(undefined),
     };
   }
   return undefined;

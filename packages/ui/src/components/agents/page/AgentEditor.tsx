@@ -36,6 +36,7 @@ import {
 
 import { agentDefinitionInputOf, agentDisplayName, agentIssuesByField, defaultAgentDefinitionInput, useAgentsActions } from "@/agents";
 import { AgentCard, type AgentCardFact } from "@/components/assistant-ui/elements/agent-card";
+import { useModelProfiles } from "@/components/assistant-ui/elements/model-profiles";
 import { ErrorState } from "@/components/assistant-ui/elements/error-state";
 import { SettingsToggleRow } from "@/components/assistant-ui/elements/settings-panel";
 import { Badge } from "@/components/ui/badge";
@@ -52,17 +53,17 @@ import { DefinitionLocation, DefinitionDestination } from "./DefinitionFileSecti
 import { DeleteAgentDialog } from "./dialogs.js";
 import { CheckRow, Hint, IssueNotice, Section, WarningNotice } from "./fields.js";
 import { InstructionTemplateEditor } from "./InstructionTemplateEditor.js";
-import { AllowedAgentsField, ModelField, ThinkingField } from "./AgentEditorFields.js";
+import { AllowedAgentsField, ProfileField, ThinkingField } from "./AgentEditorFields.js";
 import { EngineInstructions, SkillsField } from "./AgentEditorResources.js";
 import {
   checkRange,
   deletability,
-  describeModel,
+  describeProfile,
   describeSkills,
   describeStarts,
   describeThinking,
   locationOfAgent,
-  modelChoiceId,
+  profileIsMissing,
   projectFolderName,
   sameDefinitionInput,
   sectionDomId,
@@ -289,6 +290,7 @@ export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, sett
   // --- data ------------------------------------------------------------------
   const catalog = useModelCatalog(routeCwd, settingsView);
   const models = catalog.data ?? [];
+  const profiles = useModelProfiles(routeCwd);
   const startable = useMemo(() => startableAgents(snapshot, draft), [draft.projectCwd, draft.scope, snapshot]);
   const isDefault = agent?.scope === "global" && snapshot.defaultAgent === agent.name;
   const deletable = agent ? deletability(agent, snapshot) : { ok: false, reason: "Save the agent first." };
@@ -298,7 +300,7 @@ export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, sett
   // --- header card -------------------------------------------------------------
   const facts: AgentCardFact[] = [
     { label: "scope", value: draft.scope === "project" ? `Project · ${projectFolderName(draft.projectCwd ?? projectCwd ?? "Project")}` : "Global" },
-    { label: "model", value: describeModel(draft.model, models), typed: draft.model !== null, title: draft.model ? modelChoiceId(draft.model) : undefined },
+    { label: "profile", value: describeProfile(draft.profileId, profiles.profiles), typed: draft.profileId !== null, tone: profileIsMissing(draft.profileId, profiles.profiles) ? "attention" : undefined },
     { label: "thinking", value: describeThinking(draft.thinkingLevel) },
     { label: "starts", value: describeStarts(draft), tone: sectionWarnings("allowedAgents").length > 0 ? "attention" : undefined },
     { label: "skills", value: describeSkills(draft), tone: sectionWarnings("skills").length > 0 ? "attention" : undefined },
@@ -447,7 +449,7 @@ export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, sett
                 context={{
                   agentName: draft.name,
                   agentDescription: draft.description,
-                  model: draft.model,
+                  profileName: draft.profileId === null ? null : describeProfile(draft.profileId, profiles.profiles),
                   thinkingLevel: draft.thinkingLevel,
                   provenance: "Current draft",
                 }}
@@ -476,25 +478,26 @@ export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, sett
           />
         </Section>
 
-        {/* Model */}
+        {/* Profile */}
         <Section
-          id="model"
-          title="Model"
-          description="Which model runs this agent. Following the default keeps it on whatever new sessions use."
+          id="profile"
+          title="Model profile"
+          description="Which profile runs this agent: the model it reaches for first, and what steps in if that one cannot answer. Following the default keeps it on whatever new conversations use."
           notices={
             <>
-              <WarningNotice warnings={sectionWarnings("model")} />
-              <IssueNotice messages={byField.root.model ?? []} />
+              <WarningNotice warnings={sectionWarnings("profile")} />
+              <IssueNotice messages={byField.root.profile ?? []} />
             </>
           }
         >
-          <ModelField
-            value={draft.model}
+          <ProfileField
+            value={draft.profileId}
+            profiles={profiles.profiles}
             models={models}
-            loading={catalog.loading}
-            error={catalog.error}
-            onRetry={catalog.reload}
-            onChange={(model) => patch({ model, thinkingLevel: model === null ? draft.thinkingLevel : null })}
+            loading={profiles.loading}
+            error={profiles.error}
+            onRetry={profiles.reload}
+            onChange={(profileId) => patch({ profileId, thinkingLevel: profileId === null ? draft.thinkingLevel : null })}
           />
         </Section>
 
@@ -505,7 +508,11 @@ export function AgentEditor({ agent, snapshot, destination, seed, routeCwd, sett
           description="How much the model reasons before it answers. Only the levels the chosen model accepts are offered."
           notices={<IssueNotice messages={byField.root.thinkingLevel ?? []} />}
         >
-          <ThinkingField value={draft.thinkingLevel} levels={thinkingLevelsFor(draft.model, models)} onChange={(thinkingLevel) => patch({ thinkingLevel })} />
+          <ThinkingField
+            value={draft.thinkingLevel}
+            levels={thinkingLevelsFor(profiles.profiles.find((profile) => profile.id === draft.profileId), models)}
+            onChange={(thinkingLevel) => patch({ thinkingLevel })}
+          />
         </Section>
 
         {/* Starting other agents */}

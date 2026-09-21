@@ -13,10 +13,17 @@ const MODEL_BUDGET = 20;
 
 export function ModelSection({
   model,
+  profileName,
   open,
   onOpenChange,
 }: {
   model: TelemetryModel | undefined;
+  /**
+   * The profile this conversation was started on: the intent beside the model
+   * that answered (`docs/model-profiles.md`). Absent for a pinned conversation
+   * and for one older than profiles, which is not a gap but a fact.
+   */
+  profileName?: string | undefined;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -42,6 +49,13 @@ export function ModelSection({
               </span>
               <span className="ms-auto min-w-0 truncate text-xs leading-xs text-ink-3" title={model?.provider}>
                 {model?.provider ?? "provider not reported"}
+              </span>
+            </p>
+            <p className="flex min-w-0 items-baseline gap-2 text-xs leading-xs text-ink-2">
+              <span className="min-w-0 truncate" data-slot="telemetry-profile">
+                {model?.profileId === undefined
+                  ? "Pinned to this model"
+                  : <>Profile <span className="text-ink">{profileName ?? "since deleted"}</span></>}
               </span>
             </p>
             <p className="flex min-w-0 items-baseline gap-2 text-xs leading-xs text-ink-2">

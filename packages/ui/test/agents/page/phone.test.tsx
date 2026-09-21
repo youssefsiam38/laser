@@ -21,10 +21,8 @@ const mocks = vi.hoisted(() => {
     engineInstructions: vi.fn(async () => "engine"),
     runs: vi.fn(),
     stopRun: vi.fn(),
-    setBuiltinModel: vi.fn(),
+    setBuiltinProfile: vi.fn(),
     setBuiltinInstructions: vi.fn(),
-    qualifyNamer: vi.fn(),
-    dismissBeamChoice: vi.fn(),
   };
   const request = vi.fn(async (method: string) => {
     if (method === "pi/setup/state") return { cwd: "/state/beam" };
@@ -32,7 +30,7 @@ const mocks = vi.hoisted(() => {
     if (method === "feature/list") return { features: [] };
     throw new Error(`unexpected ${method}`);
   });
-  return { stable: { client: { request }, currentProject: "/p", projects: ["/p"], actions: { agents, toast: vi.fn(), newSession: vi.fn() } } };
+  return { stable: { client: { request, subscribe: () => () => {} }, currentProject: "/p", projects: ["/p"], actions: { agents, toast: vi.fn(), newSession: vi.fn() } } };
 });
 
 vi.mock("../../../src/runtime/LaserProvider.js", async (importOriginal) => ({

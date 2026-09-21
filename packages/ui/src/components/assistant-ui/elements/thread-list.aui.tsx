@@ -124,7 +124,7 @@ import { cn } from "@/lib/utils";
 import { mergeSessions, useCapability, useLaserStable, useLaserState } from "@/runtime";
 import { mainPath, pendingSessionPath } from "@/runtime/main-destination";
 import { sessionSubtreePaths } from "@/runtime/threadList";
-import type { AppState } from "@/store";
+import type { AppState, SessionView } from "@/store";
 
 // ---------------------------------------------------------------------------
 // Grouping
@@ -1144,6 +1144,13 @@ interface RowModel {
   /** The newest run in this session, when the registry knows one. */
   runId: string | undefined;
   runStatus: AgentRunStatus | undefined;
+  /**
+   * What this conversation runs on, for the row's tooltip: the profile it is
+   * on and the model answering, or that it is pinned to one model
+   * (`docs/model-profiles.md`). Known only for a conversation this client has
+   * opened; the catalog row does not carry it.
+   */
+  runningOn: string | undefined;
 }
 
 const sameRow = (a: RowModel, b: RowModel): boolean =>
@@ -1159,7 +1166,8 @@ const sameRow = (a: RowModel, b: RowModel): boolean =>
   a.workspaceKind === b.workspaceKind &&
   a.subagentName === b.subagentName &&
   a.runId === b.runId &&
-  a.runStatus === b.runStatus;
+  a.runStatus === b.runStatus &&
+  a.runningOn === b.runningOn;
 
 // `mergeSessions` per row per store change is O(rows × sessions); one merge
 // per (catalog, views) pair is O(sessions), and both only change on a catalog
@@ -1173,7 +1181,16 @@ function mergedByPath(s: AppState): ReadonlyMap<string, SessionSummary> {
   return byPath;
 }
 
-const NO_ROW: RowModel = { cwd: "", status: "idle", untitled: true, sub: { text: "No messages yet", mono: false, tone: "muted" }, modifiedAt: undefined, messageCount: 0, child: false, workspaceKind: undefined, subagentName: undefined, runId: undefined, runStatus: undefined };
+const NO_ROW: RowModel = { cwd: "", status: "idle", untitled: true, sub: { text: "No messages yet", mono: false, tone: "muted" }, modifiedAt: undefined, messageCount: 0, child: false, workspaceKind: undefined, subagentName: undefined, runId: undefined, runStatus: undefined, runningOn: undefined };
+
+/** "Balanced · Sonnet 4.5", or the pinned form; undefined when nothing is known. */
+function runningOnText(view: SessionView | undefined): string | undefined {
+  const state = view?.state;
+  if (!state) return undefined;
+  const model = state.model ? (state.model.name ?? state.model.id) : undefined;
+  if (state.profile) return model ? `${state.profile.name} · ${model}` : state.profile.name;
+  return model ? `Pinned · ${model}` : undefined;
+}
 
 /** What the runtime's item state lacks, from the laser store, for one path. */
 function useRowModel(path: string | undefined): RowModel {
@@ -1197,6 +1214,7 @@ function useRowModel(path: string | undefined): RowModel {
           subagentName: info?.subagentName === undefined ? undefined : humanizeLabel(info.subagentName),
           runId: run?.runId ?? info?.runId,
           runStatus: run?.status ?? info?.runStatus,
+          runningOn: runningOnText(view),
         };
       },
       [path],
@@ -1298,7 +1316,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
           ref={triggerRef}
           data-slot="aui_thread-list-item-trigger"
           aria-current={active ? "page" : undefined}
-          title={[childLabel ? `${childLabel} · ${shownTitle}` : shownTitle, row.cwd, row.runStatus && row.child ? runStatusLabel(row.runStatus) : "", info?.total ? branchSummary(info) : "", row.sub.text, row.modifiedAt ? dateTime(row.modifiedAt) : ""].filter(Boolean).join("\n")}
+          title={[childLabel ? `${childLabel} · ${shownTitle}` : shownTitle, row.cwd, row.runStatus && row.child ? runStatusLabel(row.runStatus) : "", info?.total ? branchSummary(info) : "", row.sub.text, row.runningOn ?? "", row.modifiedAt ? dateTime(row.modifiedAt) : ""].filter(Boolean).join("\n")}
           onClick={(event) => {
             // The main destination owns acceptance. Suppress the primitive's
             // optimistic switch, which would mount this chat before resolving it.

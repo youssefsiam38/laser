@@ -3,7 +3,7 @@ import type { PendingMessage, SessionState, SessionUpdate } from "@lasercode/pro
 import { applyUpdate, blocksFromEntries, initialState, reduce, type SessionView } from "../src/store.js";
 
 const state: SessionState = {
-  path: "/s.jsonl", id: "s", cwd: "/p", model: null, thinkingLevel: "medium", isStreaming: false, isCompacting: false,
+  path: "/s.jsonl", id: "s", cwd: "/p", model: null, profile: null, thinkingLevel: "medium", isStreaming: false, isCompacting: false,
   steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", autoCompactionEnabled: true, messageCount: 0, pendingMessageCount: 0,
 };
 
