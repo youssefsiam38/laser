@@ -1008,3 +1008,119 @@ This is implementation of D-363, not a new lifecycle authority. Preserve all `a4
 4. **History must be inspectable beyond a prefix.** Replace boolean per-link flatMap history with a strict bounded typed read selection/page (at most 50 rows TOTAL per response, stable cursor or explicit association lookup, next-page indication). It may be an extension of the existing project-work get/read surface. Support association history and the approval/completion proof bindings above, scoped to the requested project/entity. Do not add unbounded nested arrays. Migration preserves existing capture associations, and normal quota/integrity/refusal rules include the new canonical metadata.
 
 Required direct Router/store tests: attempted parent-basis substitution refusal; existing valid changed/zero-change paths; approval and Task-Done bind exact association; correction afterward leaves old decision proof accessible; failed/stale-binding decision writes no binding and no approval/completion; same-timestamp decisions have explicit keys; legacy baseline does not certify old acceptance; history over 50 records and multiple links pages completely without exceeding the total bound. Preserve all no-write source-refusal, multi-repository, scoped zero-change, and post-GC tests. No timeout inflation, full-suite parallelism, or browser acceptance. This plan is approved for implementation; only a genuinely different authority/interface boundary needs another decision.
+
+## Final proof-binding continuation · what was implemented (M21-T18/T19)
+
+The approved continuation above is implemented in place. Nothing of `a44248c2`
+was reverted, cherry-picked or rewritten: the whole of
+`agents/implement-durable-proof-corrections-0eb51a71` at `9fa1ce26` (carrying
+`a44248c2` / `fa48751a` / `78c078d3` / `b203a44a` / `34c1790c` / `618c874a` /
+`d534a3b4` / `209eac6c`) was merged into the isolated base `df42de20` with no
+conflicts — the `server.ts` import block that conflicted last round is already
+resolved inside `fa48751a`, so both the queued `SessionMentionContext` carrier
+and the `VerificationService` / Foundation thunks arrive intact. The pinned SDK
+patch and the lockfile are untouched.
+
+### 1 · A basis follows the recorded authority
+
+- `required-facts.ts`: `basesFor(link, attemptBacked)` is decided **after** the
+  attempt record is read. A state the record ties to an attempt allows
+  `attempt_base_to_state` or `complete_bounded_state` and **not**
+  `commit_parent_to_commit`; a state with no attempt behind it allows its own
+  parent (and the zero-change scope), because there is no recorded base to
+  check it against; an accepted delivery allows `accepted_change` **or**
+  `complete_bounded_state`, which is what keeps an admitted zero-change
+  delivery capture — the selector's own answer for an empty difference — from
+  being refused by the basis check.
+- `captures.ts provesLink`: the recorded base is now checked for **every**
+  basis. There is no per-basis exemption, so a proof cannot select its way out
+  of the check.
+- `captures.ts buildStateCapture`: a parented commit no longer overrides the
+  origin's basis and base. The manifest is still read from `commit^ → commit`;
+  the set the decision rests on is the attempt's recorded base → this exact
+  state. A five-commit attempt therefore keeps five commits' worth of sources,
+  not the last commit's.
+- Test: `capture-completeness.test.ts` "refuses a parent-only proof of a
+  multi-commit attempt, and keeps the whole attempt instead" — the router's own
+  capture covers both commits and proves the link; a real parent-only capture
+  of the same state, internally perfect, is refused.
+
+### 2 · A successful decision binds the proof it consumed
+
+- `gate.ts keepEvidenceReviewable` now returns `DecisionProofPreparation` — the
+  gate sentence and one `{ linkId, blobId, associationRevisionId,
+  associationSeq }` per link it checked. A link whose pointer and newest
+  association disagree refuses during preparation rather than binding a guess.
+- Schema 5: `decision_capture_bindings` (append-only, `UNIQUE(project_id,
+  decision_kind, decision_id, link_id)`) and `decision_capture_binding_sets`
+  (one row per decision that was bound, including an empty set). Two tables
+  because "rested on nothing" and "not known" are different facts; the
+  migration backfills neither.
+- `store.approve` / `store.taskAction` take `proof` and call the private
+  `bindDecisionProof` inside their own transaction: every reference is
+  rechecked against the canonical pointer **and** the newest association, a
+  mismatch throws, and the approval or completion rolls back with it. Keys are
+  the real approval id and the completion's own event sequence — never a
+  timestamp. A small closed kind list (`DECISION_PROOF_KINDS`), not a decision
+  engine.
+- Preparation alone still binds nothing; a refused gate binds nothing.
+- Tests (`decision-proof.test.ts`, router + real store): an approval binds the
+  exact association; a completion binds its event sequence and its capture is
+  still readable after a later correction, addressable by association id; an
+  approval that rested on nothing records the empty set while an id nobody
+  decided under reads `known: false`; a proof that moves between preparation
+  and decision refuses both the approval and the completion and writes no
+  binding, no approval and no state change; two decisions at one frozen instant
+  have two keys and their own proofs.
+
+### 3 · Unknown legacy consumption stays unknown
+
+`store.originalCaptureAssociation` answers only for `first_capture` — the row
+written inside the link's own insert. A `legacy_baseline` is what the migration
+saw, never what an older acceptance consumed, so `methods.ts` no longer falls
+back to it: convergence reads the acceptance's own `captureBlobId`, then the
+link's original association, and otherwise says the criterion needs the person
+again. An old partial Native acceptance still never becomes native because a
+pointer was corrected later.
+
+### 4 · History is inspectable beyond a prefix
+
+- `include.captureHistory` is a typed selection instead of a boolean:
+  `{ of: "associations" | "decisions", linkId?, revisionId?, decisionId?,
+  cursor?, limit? }`, refused at the protocol boundary for an unknown selection
+  or a limit past `REPOSITORY_CAPTURE_HISTORY_MAX`.
+- `store.captureHistoryPage` answers at most 50 rows **in total** (not per
+  link), ordered `link_id ASC, seq DESC`, with `nextCursor` present exactly
+  when there is more, scoped to the links of the entity being read; the
+  decisions selection is scoped by entity/decision/link and carries `known` for
+  a named decision. `project/work/get` answers it even for an entity with no
+  repository links, because "what did this approval rest on" has an answer
+  there too.
+- `deleteProjectWork` and `decisionRestsOn` include the new tables: a link a
+  recorded decision bound cannot be unlinked.
+- A bounded consumer, not an unused flag: `ProofTrail.tsx` (in the verification
+  surface) reads one page on demand, labels each row for what it is — kept with
+  the record, corrected while a decision was being prepared, a migration
+  baseline whose past is not known — and marks a decision's proof `superseded`
+  rather than borrowing the current pointer's authority. `Show 50 more` carries
+  the cursor.
+
+### Validation
+
+Frozen install, `pnpm -r build`, then:
+
+| Command | Result |
+| --- | --- |
+| `env -i PATH HOME pnpm -F @lasercode/host exec vitest run test/project-work` | 311 passed (20 files) |
+| `pnpm -F @lasercode/protocol test` | 752 passed, no type errors |
+| `env -i … pnpm -F @lasercode/ui exec vitest run test/project-work/native-acceptance.test.tsx test/project-work/verification.test.tsx` | 35 passed |
+| `pnpm -r typecheck` | clean |
+| `pnpm identity:check` | passes |
+
+No skips, no retries, no timeout inflation; no suite-wide timeout was added.
+
+**Not proven here, and the person's:** how the proof trail and the new
+refusals read in the app, in both themes and at both widths, and a real
+project's round trip (D-342). The optimistic-race refusals are exercised by
+moving the pointer between a real preparation and the real decision — a
+deterministic barrier over the real store, not a timing retry.

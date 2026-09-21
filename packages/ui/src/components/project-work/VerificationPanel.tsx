@@ -45,6 +45,7 @@ import type { ProjectWorkStore } from "@/project-work";
 
 import { Section } from "./bodies/fields.js";
 import { NativeAcceptanceButton, NativeAcceptanceDialog } from "./NativeAcceptance.js";
+import { ProofTrail } from "./ProofTrail.js";
 import { acceptanceCheckpoints, acceptanceObstacle, acceptanceSubjects } from "./native-acceptance.js";
 import { WorkRefusal } from "./states.js";
 import { VerificationReportView } from "./VerificationReport.js";
@@ -268,6 +269,11 @@ export function VerificationPanel({
         open={accepting}
         onOpenChange={setAccepting}
       />
+
+      {/* Which evidence the decisions here were really made on, and how this
+          work's evidence changed — read on demand, one bounded page at a time,
+          and never confused with what the record points at today (D-363). */}
+      <ProofTrail store={store} detail={detail} />
 
       {report ? (
         <VerificationReportView report={report} onAcceptDeviation={(deviation) => void accept(deviation)} busy={busy} />

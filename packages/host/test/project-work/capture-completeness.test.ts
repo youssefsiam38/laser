@@ -388,7 +388,7 @@ describe.runIf(haveGit)("the sources a review rests on", () => {
     expect(libCapture.state?.commitObjectId).toBe(libCommit);
   });
 
-  it("takes a parented commit's own difference as its set", async () => {
+  it("takes a parented commit's set from the attempt's recorded base, not from its parent", async () => {
     const { app } = workspace();
     const task = await create("task", "An ordinary commit", taskBody());
     await startAttempt(task);
@@ -402,7 +402,8 @@ describe.runIf(haveGit)("the sources a review rests on", () => {
       await accept({ subject: task, repositoryId: run.repositoryId("app"), commitObjectId: made, attempt: run.attempt, acceptance: false }),
     );
     const capture = await captureOf(task.entity.entityId, linkIdOf(written));
-    expect(capture.required?.basis).toBe("commit_parent_to_commit");
+    expect(capture.required?.basis, "the record says where this work started, so that is the basis").toBe("attempt_base_to_state");
+    expect(capture.required?.from.baseCommitObjectId).toBe(run.base("app"));
     expect(requiredPaths(capture)).toEqual(["src/a.ts"]);
     expect(sourceOf(capture, "src/a.ts")).toBe("committed\n");
     const link = (await detail(task.entity.entityId)).repositoryLinks.find((row) => row.linkId === linkIdOf(written))!;
@@ -1216,9 +1217,9 @@ describe.runIf(haveGit)("evidence that outlives what it came from", () => {
         projectId: h.projectId,
         entityId: task.entity.entityId,
         body: { mode: "none" },
-        include: { links: true, captureHistory: true },
+        include: { links: true, captureHistory: { of: "associations", linkId } },
       }),
-    ).captureHistory!.filter((row) => row.linkId === linkId);
+    ).captureHistory!.associations;
     expect(history.map((row) => row.blobId), "and both associations are readable, newest first").toEqual([
       corrected.blobId,
       stored.blobId,
@@ -1353,6 +1354,59 @@ describe.runIf(haveGit)("what a capture has to say about the link it proves", ()
     });
     expect(otherAttempt?.state?.commitObjectId, "the same commit, to the letter").toBe(first.commitObjectId);
     expect(requiredComplete(otherAttempt!, expected), "and still not this link's proof").toBe(false);
+  });
+
+  it("refuses a parent-only proof of a multi-commit attempt, and keeps the whole attempt instead", async () => {
+    const { app } = workspace();
+    const task = await create("task", "Five files, two commits", taskBody());
+    await startAttempt(task);
+    // Two commits in one attempt: the work the decision is about is both of
+    // them, and the parent of the second one is not where this work started.
+    write(app, { "src/first.ts": "the first commit's work\n" });
+    const firstCommit = commit(app, "first");
+    write(app, { "src/second.ts": "the second commit's work\n" });
+    const made = commit(app, "second");
+    const run = await endAttempt(task);
+    expect(firstCommit, "two commits, not one").not.toBe(made);
+
+    const written = ok<ProjectWorkLinkResult>(
+      await accept({ subject: task, repositoryId: run.repositoryId("app"), commitObjectId: made, attempt: run.attempt, acceptance: false }),
+    );
+    const link = await acceptedLink(task.entity.entityId, written);
+    const expected = expectedRequiredFacts(h.store, h.projectId, link);
+    const honest = await captureOf(task.entity.entityId, link.linkId);
+    expect(requiredPaths(honest), "the whole attempt's work, both commits of it").toEqual(["src/first.ts", "src/second.ts"]);
+    expect(requiredComplete(honest, expected), "and it proves the link the record describes").toBe(true);
+
+    // The same state, proved from the last commit's own parent: internally
+    // perfect, complete by its own lights, and quietly missing everything the
+    // first commit did. The record knows where this attempt started, so this
+    // is a proof of something nobody decided about.
+    const parentOnly = await buildStateCapture({
+      repository: repositoryAt(app),
+      repositoryId: run.repositoryId("app"),
+      state: { vcs: "git", objectFormat: "sha1", commitObjectId: made },
+      now: new Date().toISOString(),
+      required: {
+        basis: "commit_parent_to_commit",
+        base: firstCommit,
+        executionLinkId: run.attempt.executionLinkId,
+        taskEntityId: task.entity.entityId,
+      },
+    });
+    expect(parentOnly?.required?.basis).toBe("commit_parent_to_commit");
+    expect(
+      parentOnly!.required!.entries.map((entry) => entry.path),
+      "self-consistent, and one commit short of the work",
+    ).toEqual(["src/second.ts"]);
+    expect(requiredComplete(parentOnly!, expected), "a basis does not get to exempt itself from the recorded base").toBe(false);
+    expect(
+      expectedRequiredFacts(h.store, h.projectId, { ...link, executionLinkId: undefined }).bases,
+      "a state with no attempt behind it has no recorded base, so its own parent is all it has",
+    ).toContain("commit_parent_to_commit");
+    expect(expected.bases, "and a state the record ties to an attempt may not be proved that way at all").not.toContain(
+      "commit_parent_to_commit",
+    );
   });
 
   it("refuses a basis the link's shape does not allow", async () => {

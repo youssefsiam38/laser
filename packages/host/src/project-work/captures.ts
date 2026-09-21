@@ -371,11 +371,15 @@ function provesLink(capture: RepositoryCapture, required: RepositoryCaptureRequi
     return false;
   }
   if (!expected.bases.includes(required.basis)) return false;
-  // The base is checked wherever the record knows it. `commit_parent_to_commit`
-  // is the exception on purpose: its base is the commit's own parent, which is
-  // a fact about git rather than one the record holds.
-  if (required.basis !== "commit_parent_to_commit" && expected.baseCommitObjectId !== undefined) {
-    if (required.from.baseCommitObjectId !== expected.baseCommitObjectId) return false;
+  // The base is checked wherever the record knows it, for **every** basis the
+  // record allows. No basis is its own exemption: the parent of the last
+  // commit of a multi-commit attempt is a self-consistent starting point that
+  // silently drops most of the work the decision is about, so a state the
+  // record ties to an attempt may not be proved from it at all (the allowed
+  // set above), and one it does not tie to an attempt has no recorded base to
+  // check.
+  if (expected.baseCommitObjectId !== undefined && required.from.baseCommitObjectId !== expected.baseCommitObjectId) {
+    return false;
   }
   if (required.basis === "complete_bounded_state" && required.from.scopePath !== expected.scopePath) return false;
   if (required.from.executionLinkId !== expected.executionLinkId) return false;
@@ -564,15 +568,17 @@ export async function buildStateCapture(input: {
       diffDigest: (await diffBetween(input.repository, parent, input.state.commitObjectId))?.digest ?? "",
     };
     if (change.diffDigest === "") return undefined;
-    // A parented commit's own parent is its base, whatever an attempt recorded:
-    // the smallest complete record of what that commit introduced.
+    // The difference the *manifest* is read from is this commit's own parent;
+    // the set the *decision* rests on is whatever the record says, and for a
+    // state that came out of an attempt that is the attempt's recorded base.
+    // Overriding it with the parent here would have quietly narrowed a
+    // five-commit attempt to its last commit — complete-looking, self
+    // consistent, and not the work anybody reviewed.
     const required = input.required
       ? await selectRequired({
           repository: input.repository,
           origin: {
             ...input.required,
-            basis: "commit_parent_to_commit",
-            base: parent,
             ...(input.state.path !== undefined ? { scopePath: input.state.path } : {}),
           },
           at: input.state.commitObjectId,

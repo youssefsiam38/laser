@@ -11,6 +11,8 @@ import {
   verificationReportSchema,
   type ClientRequests,
   type ProjectWorkEvidence,
+  type RepositoryCaptureHistoryPage,
+  type RepositoryLink,
   type VerificationAuthority,
   type VerificationCriterion,
   type VerificationFinding,
@@ -107,6 +109,82 @@ export function matrixRows(report: VerificationReport): VerificationRow[] {
 export function progressSentence(run: { line: string; phase: string } | undefined): string {
   if (!run) return "";
   return run.line;
+}
+
+// ------------------------------------------------- what a decision rests on
+
+/**
+ * One row of the proof trail, as a person reads it (D-363).
+ *
+ * Two kinds of question share one row shape, because the answer a person
+ * wants is the same in both: which evidence, kept when, and is that still
+ * what this record points at. `current` is the one thing that must never be
+ * implied — a decision's proof is the capture it was made on, and saying it is
+ * the record's evidence *today* when the pointer has since moved would be the
+ * exact confusion this history exists to prevent.
+ */
+export interface ProofTrailRow {
+  id: string;
+  headline: string;
+  detail: string;
+  /** The capture's own address, shortened for reading; the full one is the title. */
+  proof: string;
+  proofId: string;
+  current: boolean;
+}
+
+const DECISION_HEADLINE = {
+  approval: "An approval",
+  task_completion: "Marked done",
+} as const;
+
+const ASSOCIATION_DETAIL = {
+  first_capture: "Kept with this record when it was made.",
+  gate_preparation: "Kept while a decision was being prepared, which is not a decision that happened.",
+  legacy_baseline: "The only evidence this app could attest for this record when it upgraded; what came before it is not known.",
+} as const;
+
+/** Which evidence each decision on this item was actually made on. */
+export function decisionProofRows(page: RepositoryCaptureHistoryPage, links: readonly RepositoryLink[]): ProofTrailRow[] {
+  return page.bindings.map((binding) => {
+    const link = links.find((row) => row.linkId === binding.linkId);
+    const current = link?.captureBlobId === binding.blobId;
+    return {
+      id: `${binding.decisionId}-${binding.linkId}`,
+      headline: DECISION_HEADLINE[binding.kind],
+      detail: current
+        ? "Rests on the evidence kept for it, which is still what this record points at."
+        : "Rests on the evidence kept for it. This record's evidence has been corrected since, and that correction is not what was decided on.",
+      proof: short(binding.blobId),
+      proofId: binding.blobId,
+      current,
+    };
+  });
+}
+
+/** How the evidence behind this item's repository records changed, newest first. */
+export function associationProofRows(page: RepositoryCaptureHistoryPage, links: readonly RepositoryLink[]): ProofTrailRow[] {
+  return page.associations.map((association) => {
+    const link = links.find((row) => row.linkId === association.linkId);
+    const current = link?.captureBlobId === association.blobId;
+    return {
+      id: association.revisionId,
+      headline: link ? repositoryRecordHeadline(link) : "A repository record",
+      detail: ASSOCIATION_DETAIL[association.reason],
+      proof: short(association.blobId),
+      proofId: association.blobId,
+      current,
+    };
+  });
+}
+
+function repositoryRecordHeadline(link: RepositoryLink): string {
+  const at = "change" in link.target ? link.target.change.head.commitObjectId : link.target.state.commitObjectId;
+  return link.relation === "implemented_by" ? `The change delivered at ${short(at)}` : `The state reviewed at ${short(at)}`;
+}
+
+function short(id: string): string {
+  return id.length > 12 ? id.slice(0, 12) : id;
 }
 
 /**

@@ -26,7 +26,7 @@ import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { ProjectWorkUnavailableError } from "./errors.js";
 
 /** The shape of the tables this file owns. Bump with a migration step. */
-export const PROJECT_WORK_SCHEMA_VERSION = 4;
+export const PROJECT_WORK_SCHEMA_VERSION = 5;
 
 export interface ProjectWorkDatabase {
   exec(sql: string): void;
@@ -128,6 +128,50 @@ export function migrate(db: ProjectWorkDatabase, file: string, log: (message: st
 }
 
 function step(db: ProjectWorkDatabase, from: number): void {
+  if (from === 4) {
+    // D-363. Which capture a decision actually consumed. The association
+    // history says which proof was current when; this says which of those a
+    // person's approval or a Task's completion was taken on — written inside
+    // the decision's own transaction, from the associations the gate really
+    // read, so a later correction of the link's pointer cannot retroactively
+    // become what somebody decided on.
+    //
+    // Two tables, because "this decision rested on nothing" and "this store
+    // does not know what this decision rested on" are different facts and
+    // only one of them may ever be inferred: a set row records that a decision
+    // was bound at all, including when it bound nothing, and a decision older
+    // than this history has no set row and stays honestly unknown. Nothing is
+    // backfilled: there is no record of what an older decision consumed, and
+    // inventing one would be exactly the fabricated history D-363 forbids.
+    db.exec(`
+      CREATE TABLE decision_capture_binding_sets (
+        project_id    TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+        decision_kind TEXT NOT NULL,
+        decision_id   TEXT NOT NULL,
+        entity_id     TEXT NOT NULL,
+        bindings      INTEGER NOT NULL,
+        bound_at      TEXT NOT NULL,
+        PRIMARY KEY (project_id, decision_kind, decision_id)
+      );
+
+      CREATE TABLE decision_capture_bindings (
+        binding_id              TEXT PRIMARY KEY,
+        project_id              TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+        decision_kind           TEXT NOT NULL,
+        decision_id             TEXT NOT NULL,
+        entity_id               TEXT NOT NULL,
+        link_id                 TEXT NOT NULL,
+        blob_id                 TEXT NOT NULL,
+        association_revision_id TEXT NOT NULL,
+        association_seq         INTEGER NOT NULL,
+        bound_at                TEXT NOT NULL,
+        UNIQUE (project_id, decision_kind, decision_id, link_id)
+      );
+      CREATE INDEX decision_capture_bindings_entity ON decision_capture_bindings(project_id, entity_id, decision_kind, decision_id);
+      CREATE INDEX decision_capture_bindings_link ON decision_capture_bindings(project_id, link_id);
+    `);
+    return;
+  }
   if (from === 3) {
     // D-363. Which capture proved a repository link, and when. The link's
     // `capture_blob_id` stays exactly what it was — the current pointer every

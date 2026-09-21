@@ -18,7 +18,15 @@
  *   invented past;
  * - and the capture a decision was made against stays readable afterwards.
  */
-import { PRODUCT_NAME, type ProjectWorkGetResult, type ProjectWorkLinkResult, type ProjectWorkWriteResult } from "@lasercode/protocol";
+import {
+  PRODUCT_NAME,
+  REPOSITORY_CAPTURE_HISTORY_MAX,
+  type ProjectWorkGetResult,
+  type ProjectWorkLinkResult,
+  type ProjectWorkWriteResult,
+  type RepositoryCaptureHistoryQuery,
+  type RepositoryLinkCaptureRevision,
+} from "@lasercode/protocol";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -57,15 +65,20 @@ function workspace(): string {
   return app;
 }
 
-async function detail(entityId: string, captureHistory = false): Promise<ProjectWorkGetResult> {
+async function detail(entityId: string, captureHistory?: RepositoryCaptureHistoryQuery): Promise<ProjectWorkGetResult> {
   return ok<ProjectWorkGetResult>(
     await h.call("project/work/get", {
       projectId: h.projectId,
       entityId,
       body: { mode: "none" },
-      include: { links: true, evidence: true, ...(captureHistory ? { captureHistory: true } : {}) },
+      include: { links: true, evidence: true, ...(captureHistory ? { captureHistory } : {}) },
     }),
   );
+}
+
+/** One link's associations, newest first, through the store's bounded page. */
+function associations(linkId: string, store: ProjectWorkStore = h.store, projectId = h.projectId): RepositoryLinkCaptureRevision[] {
+  return store.captureHistoryPage(projectId, { of: "associations", linkId, linkIds: [linkId] }).associations;
 }
 
 /**
@@ -175,7 +188,7 @@ async function deliveredWithOldCapture(): Promise<{
 describe.runIf(haveGit)("what proved a link, and when", () => {
   it("records the capture a link was written with, as the association it is", async () => {
     const world = await deliveredWithOldCapture();
-    const history = h.store.captureHistory(h.projectId, world.linkId);
+    const history = associations(world.linkId);
     const first = history[history.length - 1]!;
     expect(first.blobId, "the capture the acceptance stored").toBe(world.acceptedBlobId);
     expect(first.reason).toBe("first_capture");
@@ -198,7 +211,7 @@ describe.runIf(haveGit)("what proved a link, and when", () => {
     );
     expect((await detail(world.task.entity.entityId)).entity.state).toBe("done");
 
-    const history = h.store.captureHistory(h.projectId, world.linkId);
+    const history = associations(world.linkId);
     expect(history.map((row) => row.seq), "newest first, one row per association, nothing rewritten").toEqual([3, 2, 1]);
     const correction = history[0]!;
     expect(correction.supersedesBlobId, "it names the capture it replaced").toBe(world.partialBlobId);
@@ -232,12 +245,12 @@ describe.runIf(haveGit)("what proved a link, and when", () => {
       capture: another!,
       gate: "A test",
     });
-    const before = h.store.captureHistory(h.projectId, world.linkId).length;
+    const before = associations(world.linkId).length;
 
     // The blob this caller read is no longer what the link points at: the
     // pointer moved to `partialBlobId` before it got here.
     expect(h.store.attachCapture(h.projectId, world.linkId, stored.blobId, world.acceptedBlobId)).toBe(false);
-    expect(h.store.captureHistory(h.projectId, world.linkId).length, "a loser appends nothing").toBe(before);
+    expect(associations(world.linkId).length, "a loser appends nothing").toBe(before);
     expect(
       (await detail(world.task.entity.entityId)).repositoryLinks.find((row) => row.linkId === world.linkId)?.captureBlobId,
       "and moves nothing",
@@ -275,10 +288,85 @@ describe.runIf(haveGit)("what proved a link, and when", () => {
     const without = await detail(world.task.entity.entityId);
     expect(without.captureHistory, "off unless it is asked for").toBeUndefined();
 
-    const withHistory = await detail(world.task.entity.entityId, true);
-    const rows = withHistory.captureHistory!.filter((row) => row.linkId === world.linkId);
+    const withHistory = await detail(world.task.entity.entityId, { of: "associations", linkId: world.linkId });
+    const rows = withHistory.captureHistory!.associations;
     expect(rows.map((row) => row.blobId)).toEqual([world.partialBlobId, world.acceptedBlobId]);
     expect(rows[0]?.supersedesBlobId).toBe(world.acceptedBlobId);
+    expect(withHistory.captureHistory!.nextCursor, "two associations fit in one page").toBeUndefined();
+
+    // And one exact association, which is how a decision's stored binding is
+    // read back to the proof it names.
+    const one = await detail(world.task.entity.entityId, { of: "associations", revisionId: rows[1]!.revisionId });
+    expect(one.captureHistory!.associations.map((row) => row.revisionId)).toEqual([rows[1]!.revisionId]);
+  });
+
+  it("pages every association of every link without ever answering with more than the bound", async () => {
+    const world = await deliveredWithOldCapture();
+    // A second link on the same Task, so the page has to walk two of them, and
+    // more associations on the first than one page can hold.
+    const second = h.store.link({
+      projectId: h.projectId,
+      expectedRevisionId: world.task.revision.revisionId,
+      link: {
+        type: "repository",
+        relation: "based_on",
+        subjectEntityId: world.task.entity.entityId,
+        subjectRevisionId: world.task.revision.revisionId,
+        repositoryId: (await detail(world.task.entity.entityId)).repositoryLinks[0]!.repositoryId,
+        target: { state: { vcs: "git", objectFormat: "sha1", commitObjectId: "d".repeat(40) } },
+      },
+      origin: person,
+      idempotencyKey: idem("second-link"),
+    });
+    if (second.link.type !== "repository") throw new Error("unreachable");
+    const secondLinkId = second.link.repository.linkId;
+
+    // Sixty-one associations across the two links: fifty-nine corrections on
+    // the delivery link (which already has two) and two on the other.
+    let current = world.partialBlobId;
+    for (let i = 0; i < 59; i++) {
+      const next = h.store.putBlob({
+        projectId: h.projectId,
+        mediaType: "application/json",
+        data: Buffer.from(`capture ${String(i)}`, "utf8"),
+      }).blobId;
+      expect(h.store.attachCapture(h.projectId, world.linkId, next, current, { gate: "A test" })).toBe(true);
+      current = next;
+    }
+    const other = h.store.putBlob({ projectId: h.projectId, mediaType: "application/json", data: Buffer.from("other", "utf8") }).blobId;
+    const otherAgain = h.store.putBlob({ projectId: h.projectId, mediaType: "application/json", data: Buffer.from("again", "utf8") }).blobId;
+    expect(h.store.attachCapture(h.projectId, secondLinkId, other)).toBe(true);
+    expect(h.store.attachCapture(h.projectId, secondLinkId, otherAgain, other, { gate: "A test" })).toBe(true);
+
+    const seen: RepositoryLinkCaptureRevision[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const page = (
+        await detail(world.task.entity.entityId, { of: "associations", ...(cursor !== undefined ? { cursor } : {}) })
+      ).captureHistory!;
+      expect(page.associations.length, "never more rows than the bound, across every link together").toBeLessThanOrEqual(
+        REPOSITORY_CAPTURE_HISTORY_MAX,
+      );
+      seen.push(...page.associations);
+      cursor = page.nextCursor;
+      pages += 1;
+      expect(pages, "and it terminates").toBeLessThan(10);
+    } while (cursor !== undefined);
+
+    expect(pages, "sixty-three rows do not fit in one page").toBeGreaterThan(1);
+    expect(new Set(seen.map((row) => row.revisionId)).size, "every row exactly once").toBe(seen.length);
+    expect(seen.filter((row) => row.linkId === world.linkId).length, "all sixty-one of the busiest link").toBe(61);
+    expect(seen.filter((row) => row.linkId === secondLinkId).length, "and both of the other one").toBe(2);
+    expect(
+      seen.some((row) => row.linkId === world.linkId && row.seq === 1 && row.blobId === world.acceptedBlobId),
+      "including the first association of all, which no single page could reach",
+    ).toBe(true);
+
+    // A smaller page is honoured, and still complete.
+    const small = (await detail(world.task.entity.entityId, { of: "associations", limit: 5 })).captureHistory!;
+    expect(small.associations.length).toBe(5);
+    expect(small.nextCursor).toBeDefined();
   });
 });
 
@@ -325,7 +413,7 @@ describe("associations of one link, without a repository in sight", () => {
       expect(store.attachCapture(projectId, linkId, second, first, { gate: "Approving this" })).toBe(true);
       expect(store.attachCapture(projectId, linkId, third, second, { gate: "Completing this" })).toBe(true);
 
-      const history = store.captureHistory(projectId, linkId);
+      const history = associations(linkId, store, projectId);
       expect(history.map((row) => row.attachedAt), "one instant, three associations").toEqual([
         "2026-03-01T09:00:00.000Z",
         "2026-03-01T09:00:00.000Z",
@@ -335,9 +423,10 @@ describe("associations of one link, without a repository in sight", () => {
       expect(new Set(history.map((row) => row.revisionId)).size).toBe(3);
       expect(history.map((row) => row.blobId)).toEqual([third, second, first]);
       expect(history[0]?.supersedesRevisionId).toBe(history[1]?.revisionId);
-      expect(store.firstCaptureAssociation(projectId, linkId)?.blobId, "the first one is what a decision without a binding rests on").toBe(
-        first,
-      );
+      expect(
+        store.originalCaptureAssociation(projectId, linkId)?.blobId,
+        "the link's own original association is what a decision without a binding may rest on",
+      ).toBe(first);
     } finally {
       store.close();
     }
@@ -364,11 +453,11 @@ describe("associations of one link, without a repository in sight", () => {
       });
       if (written.link.type !== "repository") throw new Error("unreachable");
       const linkId = written.link.repository.linkId;
-      expect(store.captureHistory(projectId, linkId), "a link written without a capture has no association").toEqual([]);
+      expect(associations(linkId, store, projectId), "a link written without a capture has no association").toEqual([]);
 
       expect(store.attachCapture(projectId, linkId, only), "the first attach takes").toBe(true);
       expect(store.attachCapture(projectId, linkId, only), "the same attach again moves nothing").toBe(false);
-      expect(store.captureHistory(projectId, linkId).length).toBe(1);
+      expect(associations(linkId, store, projectId).length).toBe(1);
     } finally {
       store.close();
     }
@@ -411,21 +500,34 @@ describe("a database from before this history", () => {
       store.close();
     }
 
-    // Wind the file back to the format before this table existed: the link and
-    // its capture pointer survive, the history does not exist at all.
+    // Wind the file back to the format before either of these tables existed:
+    // the link and its capture pointer survive, the history does not exist at
+    // all. Format 3 is the last one without it, whatever the current version
+    // has reached.
     const raw = new DatabaseSync(file);
     raw.exec("DROP TABLE repository_link_captures");
-    raw.exec(`PRAGMA user_version = ${PROJECT_WORK_SCHEMA_VERSION - 1}`);
+    raw.exec("DROP TABLE decision_capture_bindings");
+    raw.exec("DROP TABLE decision_capture_binding_sets");
+    raw.exec("PRAGMA user_version = 3");
     raw.close();
+    expect(PROJECT_WORK_SCHEMA_VERSION, "and there is more than one step to walk back up").toBeGreaterThan(3);
 
     const upgraded = new ProjectWorkStore({ file });
     try {
-      const history = upgraded.captureHistory(projectId, linkId);
+      const history = associations(linkId, upgraded, projectId);
       expect(history.length, "exactly one row: the association this database knows").toBe(1);
       expect(history[0]?.blobId).toBe(blobId);
       expect(history[0]?.reason, "and it says it is a baseline, not a history it does not have").toBe("legacy_baseline");
       expect(history[0]?.supersedesBlobId).toBeUndefined();
       expect(history[0]?.gate).toBeUndefined();
+      expect(
+        upgraded.originalCaptureAssociation(projectId, linkId),
+        "and a baseline is not attributable to a decision taken before it was recorded",
+      ).toBeUndefined();
+      expect(
+        upgraded.captureHistoryPage(projectId, { of: "decisions", decisionId: "apv_whatever", linkIds: [linkId] }),
+        "a decision older than this history is unknown, never known to have rested on nothing",
+      ).toEqual({ of: "decisions", associations: [], bindings: [], known: false });
     } finally {
       upgraded.close();
     }

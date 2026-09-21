@@ -51,8 +51,12 @@ export interface ExpectedRequiredFacts {
    * record knows it: the attempt's own recorded base for a state that came out
    * of an attempt, the change's own base for an accepted delivery.
    *
-   * Absent for `commit_parent_to_commit`, whose base is the commit's parent
-   * and is therefore a fact about git rather than about the record.
+   * Absent only where the record holds no base at all: a state link with no
+   * attempt behind it, whose difference can only be its own parent's.
+   *
+   * When it is present it is checked, whatever basis the capture claims. A
+   * basis does not get to exempt itself from the check by naming a different
+   * pair of commits.
    */
   baseCommitObjectId?: string;
   /** The scope a `complete_bounded_state` capture must name: the link's own path. */
@@ -68,13 +72,32 @@ export interface ExpectedRequiredFacts {
   unresolved?: string;
 }
 
-/** Which bases a link of this shape may honestly have been captured on. */
-function basesFor(link: RequiredFactsLink): RepositoryCaptureBasis[] {
-  if ("change" in link.target) return ["accepted_change"];
-  // A state is captured from the attempt it came out of, from its own parent
-  // when it has one, or — when nothing changed at all — as the whole of one
-  // bounded scope.
-  return ["attempt_base_to_state", "commit_parent_to_commit", "complete_bounded_state"];
+/**
+ * Which bases a link of this shape may honestly have been captured on —
+ * decided by what the **record** knows, never by the capture itself.
+ *
+ * The distinction that matters is whether the record holds a base of its own:
+ *
+ * - **A state the record ties to an attempt** was captured from that
+ *   attempt's recorded base, or — when nothing changed between the two at all
+ *   — as the whole of one bounded scope, whose `from` still names that same
+ *   base. `commit_parent_to_commit` is *not* one of its options: the parent of
+ *   the last commit of a five-commit attempt is a perfectly self-consistent
+ *   base that quietly drops four commits' worth of the work the decision is
+ *   about, and a basis must never be able to select its own exemption from the
+ *   base check.
+ * - **A state with no attempt behind it** has no recorded base to be checked
+ *   against, so its own parent is the only honest difference it has, and a
+ *   claim to have been taken from an attempt is a claim this record cannot
+ *   support.
+ * - **An accepted delivery** is its own `base → head`, and — when that
+ *   difference is empty — the complete bounded scope that keeps a person's
+ *   review of unchanged code honest. Both name the change's own base.
+ */
+function basesFor(link: RequiredFactsLink, attemptBacked: boolean): RepositoryCaptureBasis[] {
+  if ("change" in link.target) return ["accepted_change", "complete_bounded_state"];
+  if (attemptBacked) return ["attempt_base_to_state", "complete_bounded_state"];
+  return ["commit_parent_to_commit", "complete_bounded_state"];
 }
 
 /**
@@ -86,11 +109,12 @@ function basesFor(link: RequiredFactsLink): RepositoryCaptureBasis[] {
  * wants a sentence reads the field.
  */
 export function expectedRequiredFacts(store: RequiredFactsStore, projectId: string, link: RequiredFactsLink): ExpectedRequiredFacts {
-  const bases = basesFor(link);
   const base: ExpectedRequiredFacts = {
     repositoryId: link.repositoryId,
     target: link.target,
-    bases,
+    // Provisional: a state link that names an attempt has its bases decided
+    // below, once the record it names has actually been read.
+    bases: basesFor(link, false),
     ...("change" in link.target ? { baseCommitObjectId: link.target.change.base.commitObjectId } : {}),
     ...(scopeOf(link) !== undefined ? { scopePath: scopeOf(link) as string } : {}),
     ...(link.executionLinkId ? { executionLinkId: link.executionLinkId } : {}),
@@ -108,7 +132,10 @@ export function expectedRequiredFacts(store: RequiredFactsStore, projectId: stri
   if (!record) {
     return { ...facts, unresolved: "that attempt recorded nothing about this repository" };
   }
-  return { ...facts, baseCommitObjectId: record.base.commitObjectId };
+  // The record holds a base for this repository, so that base is the authority
+  // this capture is checked against — and the bases it may claim are the two
+  // that are taken from it.
+  return { ...facts, bases: basesFor(link, true), baseCommitObjectId: record.base.commitObjectId };
 }
 
 /** The bounded scope a link names, when it names one. */

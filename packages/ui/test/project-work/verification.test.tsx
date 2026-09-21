@@ -21,7 +21,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   VERIFICATION_REPORT_MEDIA_TYPE,
+  type DecisionCaptureBinding,
   type ProjectWorkBody,
+  type RepositoryCaptureHistoryPage,
+  type RepositoryLink,
+  type RepositoryLinkCaptureRevision,
   type VerificationReport,
   type VerificationRunState,
 } from "@lasercode/protocol";
@@ -164,6 +168,8 @@ let root: Root;
 let container: HTMLDivElement;
 let storeCalls: Array<{ method: ProjectWorkMethod; params: Record<string, unknown> }>;
 let blob: VerificationReport | undefined;
+/** What the host answers the next `project/work/get` with, in order. */
+let getAnswers: Array<Record<string, unknown>>;
 
 const settle = (ms = 5): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -183,6 +189,11 @@ const makeStore = (): ProjectWorkStore => {
           bytes: 1,
           data: Buffer.from(JSON.stringify(blob), "utf8").toString("base64"),
         };
+      }
+      if (method === "project/work/get") {
+        const answer = getAnswers.shift();
+        if (!answer) throw new Error("no detail answer was prepared");
+        return answer;
       }
       if (method === "project/work/list") {
         return { projectId: "p1", seq: 1, items: [], counts: { total: 0, needsAttention: 0, byKind: { spec: 0, research: 0, design: 0, plan: 0, task: 0 } } };
@@ -215,6 +226,7 @@ const mount = async (value: Detail, store: ProjectWorkStore): Promise<void> => {
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   storeCalls = [];
+  getAnswers = [];
   hostCalls = [];
   hostAnswers = {};
   sessions = [SESSION];
@@ -414,5 +426,129 @@ describe("deviations", () => {
     await mount(withReport(blob), makeStore());
     expect(button("Accept and revise SPEC-1")).toBeUndefined();
     expect(button("Open SPEC-1")).toBeTruthy();
+  });
+});
+
+/**
+ * D-363 · which evidence a decision was really made on.
+ *
+ * The panel already shows what a repository record points at now. These are
+ * the two things that are *not* that, and that a person needs when they come
+ * back to a decision months later: the capture an approval or a completion was
+ * bound to, and how this work's evidence changed since. Both are read one
+ * bounded page at a time, and a decision whose proof has been corrected since
+ * says so rather than borrowing the current pointer's authority.
+ */
+describe("what a decision rests on", () => {
+  const LINK: RepositoryLink = {
+    projectId: "p1",
+    linkId: "rl_1",
+    subject: { entityId: "e-task-44", revisionId: "e-task-44r1", kind: "task", key: "TASK-44", digest: "a".repeat(64) },
+    relation: "implemented_by",
+    repositoryId: "repo_1",
+    target: {
+      change: {
+        base: { vcs: "git", objectFormat: "sha1", commitObjectId: "1".repeat(40) },
+        head: { vcs: "git", objectFormat: "sha1", commitObjectId: "2".repeat(40) },
+        diffDigest: "d".repeat(64),
+      },
+    },
+    createdBy: { kind: "person", label: "You" },
+    createdAt: "2026-03-01T09:00:00.000Z",
+    captureBlobId: "blb_corrected",
+  };
+
+  const binding = (over: Partial<DecisionCaptureBinding> = {}): DecisionCaptureBinding => ({
+    kind: "task_completion",
+    decisionId: "42",
+    entityId: "e-task-44",
+    linkId: "rl_1",
+    blobId: "blb_atthetime",
+    associationRevisionId: "rlc_1",
+    associationSeq: 2,
+    boundAt: "2026-03-01T09:06:00.000Z",
+    ...over,
+  });
+
+  const association = (over: Partial<RepositoryLinkCaptureRevision> = {}): RepositoryLinkCaptureRevision => ({
+    revisionId: "rlc_1",
+    linkId: "rl_1",
+    blobId: "blb_atthetime",
+    attachedAt: "2026-03-01T09:05:00.000Z",
+    seq: 2,
+    reason: "gate_preparation",
+    actor: { kind: "person", label: "You" },
+    ...over,
+  });
+
+  const page = (over: Partial<RepositoryCaptureHistoryPage>): Record<string, unknown> => ({
+    ...withReport(report()),
+    repositoryLinks: [LINK],
+    captureHistory: { of: "associations", associations: [], bindings: [], ...over },
+  });
+
+  const withLink = (): Detail => ({ ...withReport(report()), repositoryLinks: [LINK] });
+
+  it("asks for nothing until a person asks, then reads one bounded page", async () => {
+    blob = report();
+    await mount(withLink(), makeStore());
+    expect(storeCalls.some((call) => call.method === "project/work/get"), "nothing is read on mount").toBe(false);
+    expect(button("What decisions here rest on")).toBeTruthy();
+
+    getAnswers = [page({ of: "decisions", bindings: [binding()] })];
+    await click(button("What decisions here rest on"));
+    const asked = storeCalls.find((call) => call.method === "project/work/get");
+    expect((asked?.params["include"] as { captureHistory?: unknown }).captureHistory, "one selection, no cursor, no flag").toEqual({
+      of: "decisions",
+    });
+    expect(text()).toContain("Marked done");
+    expect(text(), "the capture it was bound to, not the one the record points at now").toContain("blb_atthetim");
+    expect(text()).toContain("has been corrected since");
+  });
+
+  it("says when a decision's evidence is still what the record points at", async () => {
+    blob = report();
+    await mount(withLink(), makeStore());
+    getAnswers = [page({ of: "decisions", bindings: [binding({ blobId: "blb_corrected", kind: "approval" })] })];
+    await click(button("What decisions here rest on"));
+    expect(text()).toContain("An approval");
+    expect(text()).toContain("still what this record points at");
+    expect(text()).not.toContain("has been corrected since");
+  });
+
+  it("reads the rest of a long history only when asked, and carries the cursor", async () => {
+    blob = report();
+    await mount(withLink(), makeStore());
+    getAnswers = [
+      page({
+        of: "associations",
+        associations: [association(), association({ revisionId: "rlc_0", seq: 1, reason: "first_capture", blobId: "blb_first" })],
+        nextCursor: "rl_1:1",
+      }),
+    ];
+    await click(button("Every proof this work has had"));
+    expect(text()).toContain("Kept with this record when it was made.");
+    expect(text()).toContain("which is not a decision that happened");
+    const more = button("Show 50 more");
+    expect(more, "there is more, and it says so rather than looking complete").toBeTruthy();
+
+    getAnswers = [page({ of: "associations", associations: [association({ revisionId: "rlc_old", seq: 0, reason: "legacy_baseline" })] })];
+    await click(more);
+    const second = storeCalls.filter((call) => call.method === "project/work/get")[1];
+    expect((second?.params["include"] as { captureHistory?: { cursor?: string } }).captureHistory?.cursor).toBe("rl_1:1");
+    expect(text(), "and a baseline says what it is, rather than standing in for a history").toContain(
+      "what came before it is not known",
+    );
+    expect(button("Show 50 more"), "the last page offers nothing more").toBeUndefined();
+    expect(text()).toContain("All 3 of them.");
+  });
+
+  it("says plainly when this app cannot attest what a decision rested on", async () => {
+    blob = report();
+    await mount(withLink(), makeStore());
+    getAnswers = [page({ of: "decisions", bindings: [] })];
+    await click(button("What decisions here rest on"));
+    expect(text()).toContain("No decision here has recorded evidence it rests on yet.");
+    expect(text(), "and it does not pretend the absence is an answer").toContain("not something this app can attest");
   });
 });

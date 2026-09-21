@@ -59,7 +59,7 @@ import {
 import { ProjectWorkRefusedError } from "./errors.js";
 import { expectedRequiredFacts } from "./required-facts.js";
 import { gatherAuthorities, readerOf } from "./verification/authorities.js";
-import type { ProjectWorkStore } from "./store.js";
+import type { DecisionProofPreparation, DecisionProofRef, ProjectWorkStore } from "./store.js";
 
 /** Who is asking, and where git is read for them. */
 export interface GateCaller {
@@ -106,15 +106,21 @@ export class ProjectWorkGate {
       ...(params.body ? { body: params.body } : {}),
       ...(params.include ? { include: params.include } : {}),
     });
-    if (detail.repositoryLinks.length === 0) return detail;
-    // The capture history is a store read per link and no git at all, so it is
+    // The capture history is a bounded store read and no git at all, so it is
     // answered on its own: asking which proof was current when must not cost a
-    // git spawn per repository (D-363).
+    // git spawn per repository (D-363). One page, bounded across the whole
+    // response and scoped to the links this read is about — and answered even
+    // for an entity with no repository links at all, because "what did this
+    // approval rest on" has an answer there too, and it is "nothing".
     const history =
-      params.include?.captureHistory === true
-        ? detail.repositoryLinks.flatMap((link) => this.store.captureHistory(params.projectId, link.linkId))
+      params.include?.captureHistory !== undefined
+        ? this.store.captureHistoryPage(params.projectId, {
+            ...params.include.captureHistory,
+            linkIds: detail.repositoryLinks.map((link) => link.linkId),
+            entityId: detail.entity.entityId,
+          })
         : undefined;
-    if (params.include?.repositoryStatus !== true) {
+    if (detail.repositoryLinks.length === 0 || params.include?.repositoryStatus !== true) {
       return history ? { ...detail, captureHistory: history } : detail;
     }
     const repositories = await this.repositories(params.projectId);
@@ -601,15 +607,25 @@ export class ProjectWorkGate {
    * A state link is captured here too, which is what makes the backfill
    * meaningful: before D-361 it was skipped whenever git still had the commit,
    * and routine checkpoint pruning then took the evidence with it.
+   *
+   * What comes back is **which exact proofs this preparation checked** (D-363)
+   * — a blob and the association that made it current, per link. Preparation
+   * is not a decision: the decision's own transaction rechecks every one of
+   * them and binds them to the approval id or the completion it really wrote,
+   * so a proof that moves in between refuses the decision instead of being
+   * silently swapped for whatever is current by then. An empty list is an
+   * answer too: this decision rested on no repository evidence, which is not
+   * the same as nobody knowing what it rested on.
    */
-  async keepEvidenceReviewable(projectId: string, entityIds: readonly string[], gate: string): Promise<void> {
+  async keepEvidenceReviewable(projectId: string, entityIds: readonly string[], gate: string): Promise<DecisionProofPreparation> {
     const links: RepositoryLink[] = [];
     for (const entityId of new Set(entityIds)) {
       for (const link of this.store.repositoryLinksOf(projectId, entityId)) {
         if (link.relation === "implemented_by" || link.relation === "verified_at") links.push(link);
       }
     }
-    if (links.length === 0) return;
+    const refs: DecisionProofRef[] = [];
+    if (links.length === 0) return { gate, refs };
     const repositories = await this.repositories(projectId);
     for (const link of links) {
       const existing = readCapture(this.store, projectId, link);
@@ -622,8 +638,14 @@ export class ProjectWorkGate {
       // Whole means whole *of this link*: the capture is checked against what
       // the record says it must be, never against itself (review F2).
       const expected = expectedRequiredFacts(this.store, projectId, link);
-      if (existing && (!needsWhole || requiredComplete(existing, expected))) continue;
-      if (!needsWhole && captureReadable(this.store, projectId, link)) continue;
+      if (existing && (!needsWhole || requiredComplete(existing, expected))) {
+        refs.push(this.proofRef(projectId, link.linkId, link.captureBlobId as string, gate));
+        continue;
+      }
+      if (!needsWhole && captureReadable(this.store, projectId, link)) {
+        refs.push(this.proofRef(projectId, link.linkId, link.captureBlobId as string, gate));
+        continue;
+      }
       const repository = repositoryFor(repositories, link.repositoryId)?.repository;
       const availability = await linkAvailability(link, repository, false);
       if (!repository || !availability.sourceAvailable) {
@@ -675,7 +697,28 @@ export class ProjectWorkGate {
           `${gate} was being prepared when this record's evidence changed somewhere else, so it was not decided on what you were looking at. Try again.`,
         );
       }
+      refs.push(this.proofRef(projectId, link.linkId, stored.blobId, gate));
     }
+    return { gate, refs };
+  }
+
+  /**
+   * The association that makes one capture this link's proof, as this
+   * preparation read it (D-363).
+   *
+   * The pointer and the newest association have to agree, and on this exact
+   * blob: if they do not, somebody moved the proof while this gate was being
+   * prepared, and a decision bound to a guess about which of them is right is
+   * worse than a refusal a person can act on.
+   */
+  private proofRef(projectId: string, linkId: string, blobId: string, gate: string): DecisionProofRef {
+    const association = this.store.currentCaptureAssociation(projectId, linkId);
+    if (!association || association.blobId !== blobId) {
+      throw new ProjectWorkRefusedError(
+        `${gate} was being prepared when this record's evidence changed somewhere else, so it was not decided on what you were looking at. Try again.`,
+      );
+    }
+    return { linkId, blobId, associationRevisionId: association.revisionId, associationSeq: association.seq };
   }
 
   private async repositoryOrRefuse(projectId: string, repositoryId: string): Promise<HostRepository> {

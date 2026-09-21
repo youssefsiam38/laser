@@ -86,10 +86,12 @@ import {
   type PlanGraphReport,
   repositoryLinkContextSchema,
   type AttemptRepositoryRecord,
+  type RepositoryCaptureHistoryPage,
+  type RepositoryCaptureHistoryQuery,
+  repositoryCaptureHistoryQuerySchema,
   type RepositoryChangeRef,
   type RepositoryLink,
   type RepositoryLinkAvailability,
-  type RepositoryLinkCaptureRevision,
   type RepositoryLinkContext,
   type RepositoryLinkRelation,
   type RepositoryStateRef,
@@ -301,12 +303,15 @@ export interface ProjectWorkGetParams {
      */
     repositoryStatus?: boolean;
     /**
-     * The immutable capture associations behind each repository link on this
-     * read (D-363). Off by default, bounded per link, and never a substitute
-     * for the link's own current pointer: it says which proof was current
-     * when, so a decision can be read against the capture it rested on.
+     * One bounded page of immutable capture history behind this read (D-363).
+     *
+     * Off by default, and a **selection** rather than a flag: which link's
+     * associations, or which decision's proof bindings, with a cursor for the
+     * rest. Never a substitute for a link's own current pointer — it says
+     * which proof was current when, and which proof a decision consumed, so a
+     * decision can be read against the capture it actually rested on.
      */
-    captureHistory?: boolean;
+    captureHistory?: RepositoryCaptureHistoryQuery;
   };
 }
 
@@ -346,11 +351,11 @@ export interface ProjectWorkGetResult {
    */
   repositoryStatus?: RepositoryLinkAvailability[];
   /**
-   * The capture associations of the links on this read, newest first per link
-   * and bounded by {@link REPOSITORY_CAPTURE_HISTORY_MAX}, when
-   * `include.captureHistory` asked (D-363).
+   * One page of capture history, bounded by
+   * {@link REPOSITORY_CAPTURE_HISTORY_MAX} rows in total and carrying the
+   * cursor for the next one, when `include.captureHistory` asked (D-363).
    */
-  captureHistory?: RepositoryLinkCaptureRevision[];
+  captureHistory?: RepositoryCaptureHistoryPage;
   /**
    * The three hard gates of the Spec this entity belongs to, and where each
    * one stands (M21-T8).
@@ -1013,7 +1018,7 @@ export const projectWorkParamsSchemas = {
           links: z.boolean().optional(),
           history: z.boolean().optional(),
           repositoryStatus: z.boolean().optional(),
-          captureHistory: z.boolean().optional(),
+          captureHistory: repositoryCaptureHistoryQuerySchema.optional(),
         })
         .strict()
         .optional(),

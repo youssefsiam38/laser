@@ -925,8 +925,108 @@ export interface RepositoryLinkCaptureRevision {
   actor: ProjectWorkActor;
 }
 
-/** The most capture associations one read returns for one link. */
+/**
+ * The most rows one capture-history read answers with — **in total**, not per
+ * link (D-363).
+ *
+ * A per-link bound over an unbounded number of links is not a bound: a read
+ * that walked forty links would carry two thousand rows, and the older
+ * associations of the first link would still be unreachable. So the page is
+ * bounded once, across the whole response, and what did not fit is reached
+ * with the cursor it hands back.
+ */
 export const REPOSITORY_CAPTURE_HISTORY_MAX = 50;
+
+/**
+ * The decisions that bind the exact proof they were made on (D-363).
+ *
+ * Deliberately a short closed list rather than a generic "decision" notion:
+ * these are the two acts that may not be taken on evidence nobody can read
+ * afterwards — a person's approval, and a Task being marked done. Adding a
+ * third is a decision with its own row, not a shape that quietly accepts one.
+ */
+export const DECISION_PROOF_KINDS = ["approval", "task_completion"] as const;
+export type DecisionProofKind = (typeof DECISION_PROOF_KINDS)[number];
+
+/**
+ * One immutable binding between a decision and the capture association it
+ * consumed (D-363).
+ *
+ * Written inside the decision's own transaction, from the associations the
+ * gate really read while it was preparing — so "which proof did this approval
+ * rest on" is answered by a record, and stays answered after the link's
+ * current pointer is corrected. Never inferred from a timestamp, and never
+ * from the pointer of the day.
+ */
+export interface DecisionCaptureBinding {
+  kind: DecisionProofKind;
+  /**
+   * The decision's own identity: the approval id, or — for a completion, which
+   * has no id of its own — the project event sequence the completion was
+   * raised at, as text. Two decisions in one millisecond therefore still have
+   * two different keys.
+   */
+  decisionId: string;
+  /** The entity the decision was made on. */
+  entityId: string;
+  linkId: string;
+  /** The capture blob the decision was made on, readable after any correction. */
+  blobId: string;
+  /** The association that had made that blob this link's proof. */
+  associationRevisionId: string;
+  associationSeq: number;
+  boundAt: string;
+}
+
+/**
+ * What one bounded capture-history read asks for (D-363).
+ *
+ * Two selections, because they answer two different questions and a person
+ * reads them in different places: which proof of one link was current when,
+ * and which proof a decision actually consumed. Both are scoped to the project
+ * and entity of the read they hang off; neither ever answers with more than
+ * {@link REPOSITORY_CAPTURE_HISTORY_MAX} rows.
+ */
+export interface RepositoryCaptureHistoryQuery {
+  of: "associations" | "decisions";
+  /** One link's associations. Omitted reads the links on this entity, in a stable order. */
+  linkId?: string;
+  /** One association, by its own id — the lookup a stored binding is read through. */
+  revisionId?: string;
+  /** One decision's bindings: an approval id, or a completion's event sequence. */
+  decisionId?: string;
+  /** Where the previous page stopped. Opaque, and only ever this host's own. */
+  cursor?: string;
+  limit?: number;
+}
+
+export const repositoryCaptureHistoryQuerySchema = z
+  .object({
+    of: z.enum(["associations", "decisions"]),
+    linkId: opaqueId.optional(),
+    revisionId: opaqueId.optional(),
+    decisionId: z.string().min(1).max(120).optional(),
+    cursor: z.string().min(1).max(200).optional(),
+    limit: z.number().int().min(1).max(REPOSITORY_CAPTURE_HISTORY_MAX).optional(),
+  })
+  .strict();
+
+/**
+ * One bounded page of capture history (D-363).
+ *
+ * `nextCursor` is present exactly when there is more, so a surface never has
+ * to guess from a full page whether it is looking at the end. For a named
+ * decision, `known` is the difference between "this decision recorded that it
+ * rested on nothing" and "this store does not know what it rested on" — the
+ * second is a legacy decision, and it is never dressed up as the first.
+ */
+export interface RepositoryCaptureHistoryPage {
+  of: "associations" | "decisions";
+  associations: RepositoryLinkCaptureRevision[];
+  bindings: DecisionCaptureBinding[];
+  nextCursor?: string;
+  known?: boolean;
+}
 
 export interface RepositoryLinkContext {
   branch?: string;

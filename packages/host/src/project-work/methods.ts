@@ -460,10 +460,18 @@ export class ProjectWorkMethods {
         // provenance"). A full durable budget refuses the gate here — with
         // nothing approved — rather than accepting a digest and losing the
         // evidence to the next pruning.
-        if (params.decision === "approved") {
-          const covered = [params.entityId, ...params.covers.map((revision) => revision.entityId)];
-          await this.gate(caller, origin).keepEvidenceReviewable(params.projectId, covered, "This approval");
-        }
+        // And the approval binds the exact proofs that preparation checked, in
+        // the transaction that writes it: a capture corrected in between
+        // refuses the approval rather than becoming, after the fact, what the
+        // person approved on (D-363).
+        const proof =
+          params.decision === "approved"
+            ? await this.gate(caller, origin).keepEvidenceReviewable(
+                params.projectId,
+                [params.entityId, ...params.covers.map((revision) => revision.entityId)],
+                "This approval",
+              )
+            : undefined;
         const result = this.store.approve({
           projectId: params.projectId,
           entityId: params.entityId,
@@ -474,6 +482,7 @@ export class ProjectWorkMethods {
           ...(params.mode !== undefined ? { mode: params.mode } : {}),
           ...(params.skipReason !== undefined ? { skipReason: params.skipReason } : {}),
           ...(params.note !== undefined ? { note: params.note } : {}),
+          ...(proof ? { proof } : {}),
           origin,
           idempotencyKey: params.idempotencyKey,
         });
@@ -564,9 +573,10 @@ export class ProjectWorkMethods {
         // Done rests on evidence, and evidence that cannot be read is not
         // evidence: everything this Task's delivery links name is captured
         // before the Task can be completed.
-        if (params.action === "complete") {
-          await this.gate(caller, origin).keepEvidenceReviewable(params.projectId, [params.entityId], "Marking this task done");
-        }
+        const proof =
+          params.action === "complete"
+            ? await this.gate(caller, origin).keepEvidenceReviewable(params.projectId, [params.entityId], "Marking this task done")
+            : undefined;
         return this.store.taskAction({
           projectId: params.projectId,
           entityId: params.entityId,
@@ -574,6 +584,7 @@ export class ProjectWorkMethods {
           action: params.action,
           ...(params.evidenceId !== undefined ? { evidenceId: params.evidenceId } : {}),
           ...(params.note !== undefined ? { note: params.note } : {}),
+          ...(proof ? { proof } : {}),
           origin,
           idempotencyKey: params.idempotencyKey,
         });
@@ -1015,15 +1026,19 @@ export class ProjectWorkMethods {
       // link's current pointer (D-363): a partial acceptance never becomes
       // native evidence because somebody later corrected what the link points
       // at. An acceptance written before that binding existed is read against
-      // the link's first recorded association, which is the only proof this
-      // store can honestly attribute to it — never the newest one.
+      // the link's own original association — the row written inside the
+      // link's insert, which this store can attribute to it independently —
+      // and never against a migration baseline, which is only what the
+      // migration happened to see and says nothing about what that acceptance
+      // consumed. With neither, the honest answer is that this is not proved
+      // here, and the criterion asks for the review again.
       //
       // Answered once per link: several visual criteria commonly rest on the
       // same acceptance, and a capture is up to four megabytes.
       captureComplete: (link) => {
         const known = completeness.get(link.linkId);
         if (known !== undefined) return known;
-        const bound = link.acceptance?.captureBlobId ?? this.store.firstCaptureAssociation(projectId, link.linkId)?.blobId;
+        const bound = link.acceptance?.captureBlobId ?? this.store.originalCaptureAssociation(projectId, link.linkId)?.blobId;
         const capture = bound === undefined ? undefined : readCaptureBlob(this.store, projectId, bound);
         const answer = capture !== undefined && requiredComplete(capture, expectedRequiredFacts(this.store, projectId, link));
         completeness.set(link.linkId, answer);
