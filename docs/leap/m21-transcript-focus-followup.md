@@ -1,12 +1,12 @@
 # M21 · transcript focus loss under the list's own DOM-order pass
 
-Investigation only. No production, patch, dependency or planning file was
-changed by this report; the two instrumentation files it cites were temporary
-and are not in the tree (copies: `/tmp/m21-transcript-focus/`).
+Diagnosis, then the approved correction. The mechanism section below is the
+investigation as it was proven; "What shipped" at the end records the change,
+its tests and exactly what is unit-proven versus person-acceptance.
 
 - Base: `9bcdd23a` · branch `agents/diagnose-transcript-focus-regression-645832b4`
-- Dirty at write time: this file only.
 - Area: transcript viewport / windowed list / view cache focus identity.
+- Temporary instrumentation is not in the tree (copies: `/tmp/m21-transcript-focus/`).
 
 ## The failure this explains
 
@@ -130,7 +130,8 @@ separate finding, not this fix.
 function this repository already added, in both `react.js` and `react.mjs`.
 That is the one place that knows a state-preserving move was wanted and did not
 happen. The patch belongs to M16-T91 (`STATUS_DETAILED.md:2472`), which owns the
-list and its three web hunks; this is a fourth correction to the same function,
+list and its three web hunks; this is a fourth correction (number 3 in
+`docs/transcript-virtualization.md`'s list) inside a function already ours,
 not a new authority.
 
 Rejected alternatives, with reasons:
@@ -145,37 +146,17 @@ Rejected alternatives, with reasons:
   invariant 4 in spirit, `docs/transcript-virtualization.md`); `moveBefore` is not
   Baseline, so no upstream version removes the fallback.
 
-## Proposed correction (smallest complete)
+## The correction
 
 ### 1 · Patch hunk, `moveChildBefore`, both `react.js` and `react.mjs`
 
-Keep the focused node inside the moved subtree when the fallback path runs, and
-never scroll doing it:
-
-```js
-function moveChildBefore(container, element, reference) {
-  if (typeof container.moveBefore === "function") {
-    container.moveBefore(element, reference);
-    return;
-  }
-  // Without the state-preserving move (Safari, and test DOMs), an insert is a
-  // removal and an insertion: the browser blurs whatever had focus inside the
-  // subtree being moved. Put it back on the same node, without scrolling.
-  const doc = container.ownerDocument;
-  const active = doc ? doc.activeElement : null;
-  const focused = active && active !== doc.body && typeof active.focus === "function"
-    && element.contains(active) ? active : null;
-  if (reference) container.insertBefore(element, reference);
-  else container.appendChild(element);
-  if (focused && doc.activeElement !== focused && focused.isConnected) focused.focus({ preventScroll: true });
-}
-```
-
-Four small hunks total (two files × the function), exactly the pinned `3.3.5`,
-no other hunk touched, no version change, no lock regeneration. Probe 2 validated the
-equivalent shape (`activeElement instanceof HTMLElement` rather than the duck
-check above) as the behaviour that turns the failing test green with every
-assertion intact and `scrollTop` unchanged.
+One function, in the pinned `3.3.5`: the native `moveBefore` path returns
+untouched, and the fallback holds what a removal destroys — the focused node
+(with its caret, if it is a field) and the selection endpoints inside the moved
+subtree — then puts them back after the insert. No other hunk, no version
+change, no lock regeneration. The shipped text is in
+`patches/@legendapp__list@3.3.5.patch`; "What shipped" below records the exact
+rules and the tests that hold them.
 
 Known limits to state in the patch comment, not to fix here: `contains` does not
 cross a shadow boundary (Laser's rows have none), and refocusing an `iframe`
@@ -193,23 +174,15 @@ I will produce only those three lines and the parent merges, or the parent
 applies the hash itself after merging the patch. No `pnpm install` without
 `--frozen-lockfile` beyond `patch-commit`, no unrelated lock churn.
 
-### 3 · Tests (fail before, pass after, at the real integration boundary)
+### 3 · Tests
 
-- `packages/ui/test/thread/trim-interaction.test.tsx`, the focus test: fake only
-  `setTimeout`/`clearTimeout` for this test and advance the list's own debounce
-  (500 ms, named and commented as `useDOMOrder`'s boundary) after the trim, then
-  keep **every** existing assertion — exact focus node, `isConnected`, standing
-  `focusedEntryId`, anchor top within one line, draft, prompt ordinal, row set,
-  no empty frame. Add two: `viewport.scrollTop` unchanged across the pass (the
-  repair must not scroll), and the row still holds the focused node. This is the
-  regression test: it fails on `9bcdd23a` (probe 2) and passes with the hunk.
-  No timeout is changed, no sleep is added, no assertion is weakened or skipped.
-- One new focused case in the same file (or `transcript-viewport.test.ts`'s
-  neighbour, whichever keeps the mounted fixture single): the same pass with a
-  `moveBefore` present on the container — the repair must not run and focus must
-  still be on the same node, so Chromium's path stays untouched.
-- Optionally one keyboard-shaped case: focus moved by `Tab` rather than
-  `.focus()`, to prove the repair is about the node and not the call.
+The list's pass is driven at its own boundary (faked `setTimeout`/`clearTimeout`,
+advanced by exactly the debounce) and every case asserts the pass really
+re-sorted the containers, so none of them can pass by doing nothing. The
+existing trim test keeps all of its assertions and gains the pass in front of
+them; the new file carries the keyboard, no-stealing, blur-handover, forward and
+backward selection, caret and native-path cases. Details and results in "What
+shipped".
 
 ### 4 · Docs
 
@@ -243,16 +216,69 @@ applies the hash itself after merging the patch. No `pnpm install` without
   Tab (or move the VoiceOver cursor) and check that focus is still on that
   action.
 
-## Validation planned for the fix
-
-```
-pnpm -F @lasercode/ui exec vitest run test/thread/trim-interaction.test.tsx
-pnpm -F @lasercode/ui exec vitest run test/thread/transcript-viewport.test.ts
-pnpm identity:check
-```
-
-Full `pnpm verify` stays the parent's: this change is UI-test plus one pinned
+Full `pnpm verify` stays the parent's: this change is UI tests plus one pinned
 patch, and the gate it must re-green is the parent's integrated run.
+
+## What shipped
+
+| Path | Change |
+| --- | --- |
+| `patches/@legendapp__list@3.3.5.patch` | `moveChildBefore` (both `react.js` and `react.mjs`): the native `moveBefore` path returns untouched; the fallback holds the focused node, its caret, and the selection's endpoints for the moved subtree, and restores them after the insert. |
+| `pnpm-lock.yaml` | the three `@legendapp/list@3.3.5` hash references only (`patchedDependencies`, the `packages/ui` importer, the snapshot key). Every other entry, including the MCP SDK resolutions `pnpm patch-commit` wanted to rewrite, is byte-identical to `9bcdd23a`. |
+| `packages/ui/test/thread/list-dom-order.ts` | the debounce constant and why a test drives the pass instead of racing it. |
+| `packages/ui/test/thread/list-dom-order.test.tsx` | seven cases over the mounted transcript (new file). |
+| `packages/ui/test/thread/trim-interaction.test.tsx` | the focus test now drives the list's pass at its boundary before its original assertions, and adds "the pass re-sorted", "the pass did not scroll" and "the row still holds the node". No original assertion changed, no timeout changed, nothing skipped. |
+| `docs/transcript-virtualization.md`, `docs/upstream.md` | correction 3 of the patch, and the upstream row with the proposal. |
+
+The repair, exactly: capture only when the focused node (or a selection
+endpoint) is inside the subtree about to move; restore focus only if the move
+left `activeElement` at `null`/`<body>` and the node is still connected, so a
+control focused meanwhile — a synchronous blur handler moving focus on — keeps
+it; `focus({ preventScroll: true })`; `setSelectionRange` only if the caret
+actually changed; `setBaseAndExtent` with the held endpoints, which keeps a
+backward selection backward. Nothing outside the moved subtree is read or
+written, and no geometry, scroll position or motion is touched.
+
+### Evidence
+
+Revision under test: this branch's tree with `9bcdd23a` as base.
+
+| Command | Result |
+| --- | --- |
+| `pnpm -F @lasercode/ui exec vitest run test/thread/trim-interaction.test.tsx` | 9 passed |
+| same, with the fallback reverted in the installed package | **1 failed** — `expected <body>…</body> to be <button …>`, the gate's exact assertion |
+| `pnpm -F @lasercode/ui exec vitest run test/thread/list-dom-order.test.tsx` | 7 passed |
+| same, with the fallback reverted | **4 failed** (keyboard focus, forward selection, backward selection, caret), 3 passed — the three that must pass either way: no stealing, blur-time handover, native path |
+| `pnpm -F @lasercode/ui exec vitest run test/thread/transcript-viewport.test.ts` | see the handoff report |
+| `pnpm -F @lasercode/ui exec tsc -p tsconfig.test.json --noEmit`, `pnpm install --frozen-lockfile`, `pnpm identity:check`, full `pnpm -F @lasercode/ui test` | see the handoff report |
+
+### Acceptance scope — unit versus a real iPhone
+
+Unit-proven, on the real integration boundary (mounted store, viewport, list,
+rows; only row geometry stubbed): the list's pass re-sorts containers; focus
+stays on the same node in the same row; the pass does not scroll; no focus is
+taken when nothing inside a moved row had it; focus stays where a blur-time
+handover put it; a selection outside the transcript is untouched; the caret in a
+focused field inside a moved row survives; the native `moveBefore` path runs
+without the repair.
+
+Named proxies, because happy-dom cannot produce the browser behaviour:
+
+| Proxy | Why | Where |
+| --- | --- | --- |
+| Keyboard traversal | happy-dom does not move focus on `Tab`; the node is focused directly and the key is still sent to the viewport | keyboard case |
+| No `blur`/`focusout` on removal | happy-dom fires neither, so the handler's effect (focus moving on) is applied at the moment of the insert | blur-time case |
+| Range mutation on removal | happy-dom keeps a range whose endpoint was removed; the case collapses it at exactly the moment a browser would | both selection cases |
+| `Element.moveBefore` | absent in happy-dom, so the native path is exercised through a stub that moves but cannot preserve state | native-path case |
+
+Person-acceptance, on a real engine, not inferable from any of the above
+(D-342 — no agent browser run): on **iOS Safari**, focus a message action in a
+long conversation, cause a scroll or a history change, wait half a second
+without touching the screen, then press Tab (or move the VoiceOver cursor) and
+check focus is still on that action; repeat with text selected across two
+messages, and with a caret inside a message edit field. On Chromium (the
+desktop app) the native `moveBefore` path is the one that runs and was never
+affected.
 
 ## Risks
 
@@ -261,4 +287,6 @@ patch, and the gate it must re-green is the parent's integrated run.
 | The refocus fires an extra `focus`/`focusin` pair | Same row, same node; `transcript-viewport.tsx`'s handler recomputes the same id and `setStandingRows` dedupes on equality (`anchored-messages.ts:52`). Synchronous inside the same task, so nothing paints between. |
 | A patch that grows with each finding | Four hunks in one function already ours; the upstream row is filed with the proposal so it can leave the patch. |
 | `pnpm-lock.yaml` contention with the SDK-patch owner | Three lines, named above, parent merges. |
-| Fake timers destabilising the fixture | Already validated: probe 2 faked only `setTimeout`/`clearTimeout` around the real mount and the fixture behaved identically (same rows, same anchor, same counters). |
+| Fake timers destabilising the fixture | Validated: only `setTimeout`/`clearTimeout` are faked, around the real mount; both files behave identically and `vi.useRealTimers()` runs in `afterEach`. |
+| A selection spanning rows the pass moves one at a time | Each move restores its own endpoints, so the whole pass preserves a multi-row selection; the backward case selects across two moved rows to hold that. |
+| happy-dom hiding a real-engine difference | Every proxy is named above and in the test names; the iPhone check is the person's. |

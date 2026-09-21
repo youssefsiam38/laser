@@ -1,5 +1,5 @@
 diff --git a/react.js b/react.js
-index 914d2dafaafa001c9ab6791a0a0581659295e333..0c2917d82ba02b50fccf3ee2619ebbd62c87ae4c 100644
+index 914d2dafaafa001c9ab6791a0a0581659295e333..90d469372b4de872b367804023ac55c1e995e2b4 100644
 --- a/react.js
 +++ b/react.js
 @@ -4702,7 +4702,8 @@ function maybeUpdateAnchoredEndSpace(ctx) {
@@ -25,7 +25,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..0c2917d82ba02b50fccf3ee2619ebbd6
    }
    return nextSize;
  }
-@@ -5651,6 +5658,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5651,6 +5658,61 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  });
  
  // src/utils/reordering.ts
@@ -35,16 +35,59 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..0c2917d82ba02b50fccf3ee2619ebbd6
 +function moveChildBefore(container, element, reference) {
 +  if (typeof container.moveBefore === "function") {
 +    container.moveBefore(element, reference);
-+  } else if (reference) {
++    return;
++  }
++  // Without the state-preserving move (Safari, and test DOMs), an insert is a
++  // removal and an insertion: the browser blurs whatever had focus inside the
++  // subtree being moved and collapses a selection with an endpoint inside it.
++  // Hold both, for this subtree only, and put them back on the same nodes —
++  // never over another control focused while the move happened, and never by
++  // scrolling. `contains` does not cross a shadow boundary, and refocusing an
++  // iframe element restores the outer focus only; the moveBefore path above is
++  // the one that keeps inner state.
++  const doc = container.ownerDocument;
++  const active = doc ? doc.activeElement : null;
++  const focused = active && active !== doc.body && typeof active.focus === "function" && element.contains(active)
++    ? active
++    : null;
++  const caret = focused && typeof focused.selectionStart === "number" && typeof focused.setSelectionRange === "function"
++    ? { start: focused.selectionStart, end: focused.selectionEnd, direction: focused.selectionDirection }
++    : null;
++  const selection = doc && typeof doc.getSelection === "function" ? doc.getSelection() : null;
++  const held = selection && selection.rangeCount && selection.anchorNode && selection.focusNode
++    && (element.contains(selection.anchorNode) || element.contains(selection.focusNode))
++    ? {
++        anchorNode: selection.anchorNode,
++        anchorOffset: selection.anchorOffset,
++        focusNode: selection.focusNode,
++        focusOffset: selection.focusOffset
++      }
++    : null;
++  if (reference) {
 +    container.insertBefore(element, reference);
 +  } else {
 +    container.appendChild(element);
++  }
++  // Only a focus the move itself dropped is restored: anything focused while it
++  // happened — a synchronous blur handler moving focus on — stays where it is.
++  if (focused && focused.isConnected && (!doc.activeElement || doc.activeElement === doc.body)) {
++    focused.focus({ preventScroll: true });
++    if (caret && (focused.selectionStart !== caret.start || focused.selectionEnd !== caret.end)) {
++      focused.setSelectionRange(caret.start, caret.end, caret.direction || void 0);
++    }
++  }
++  // setBaseAndExtent restores the endpoints in the order they were made, so a
++  // backward selection stays backward. Nothing outside this subtree is touched.
++  if (held && held.anchorNode.isConnected && held.focusNode.isConnected
++    && (selection.anchorNode !== held.anchorNode || selection.anchorOffset !== held.anchorOffset
++      || selection.focusNode !== held.focusNode || selection.focusOffset !== held.focusOffset)) {
++    selection.setBaseAndExtent(held.anchorNode, held.anchorOffset, held.focusNode, held.focusOffset);
 +  }
 +}
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
-@@ -5690,9 +5709,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5690,9 +5752,9 @@ function sortDOMElements(container, indexByElement) {
          }
        }
        if (nextStableElement) {
@@ -56,7 +99,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..0c2917d82ba02b50fccf3ee2619ebbd6
        }
      }
    }
-@@ -6446,8 +6465,8 @@ function ScrollAdjust() {
+@@ -6446,8 +6508,8 @@ function ScrollAdjust() {
                window.getComputedStyle(contentNode)[axis.paddingEndProp]
              );
              const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
@@ -67,7 +110,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..0c2917d82ba02b50fccf3ee2619ebbd6
              scrollBy();
              if (resetPaddingRafRef.current !== void 0) {
 diff --git a/react.mjs b/react.mjs
-index 95465f2ab89ce41a10553f58af83618f7310e83c..b73bfdf7b3b33a5b73f1d875f2b56b904019a066 100644
+index 95465f2ab89ce41a10553f58af83618f7310e83c..7e80db0f99c8c5a4390c516b5802997e36fa086c 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -4681,7 +4681,8 @@ function maybeUpdateAnchoredEndSpace(ctx) {
@@ -93,7 +136,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..b73bfdf7b3b33a5b73f1d875f2b56b90
    }
    return nextSize;
  }
-@@ -5630,6 +5637,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5630,6 +5637,61 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  });
  
  // src/utils/reordering.ts
@@ -103,16 +146,59 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..b73bfdf7b3b33a5b73f1d875f2b56b90
 +function moveChildBefore(container, element, reference) {
 +  if (typeof container.moveBefore === "function") {
 +    container.moveBefore(element, reference);
-+  } else if (reference) {
++    return;
++  }
++  // Without the state-preserving move (Safari, and test DOMs), an insert is a
++  // removal and an insertion: the browser blurs whatever had focus inside the
++  // subtree being moved and collapses a selection with an endpoint inside it.
++  // Hold both, for this subtree only, and put them back on the same nodes —
++  // never over another control focused while the move happened, and never by
++  // scrolling. `contains` does not cross a shadow boundary, and refocusing an
++  // iframe element restores the outer focus only; the moveBefore path above is
++  // the one that keeps inner state.
++  const doc = container.ownerDocument;
++  const active = doc ? doc.activeElement : null;
++  const focused = active && active !== doc.body && typeof active.focus === "function" && element.contains(active)
++    ? active
++    : null;
++  const caret = focused && typeof focused.selectionStart === "number" && typeof focused.setSelectionRange === "function"
++    ? { start: focused.selectionStart, end: focused.selectionEnd, direction: focused.selectionDirection }
++    : null;
++  const selection = doc && typeof doc.getSelection === "function" ? doc.getSelection() : null;
++  const held = selection && selection.rangeCount && selection.anchorNode && selection.focusNode
++    && (element.contains(selection.anchorNode) || element.contains(selection.focusNode))
++    ? {
++        anchorNode: selection.anchorNode,
++        anchorOffset: selection.anchorOffset,
++        focusNode: selection.focusNode,
++        focusOffset: selection.focusOffset
++      }
++    : null;
++  if (reference) {
 +    container.insertBefore(element, reference);
 +  } else {
 +    container.appendChild(element);
++  }
++  // Only a focus the move itself dropped is restored: anything focused while it
++  // happened — a synchronous blur handler moving focus on — stays where it is.
++  if (focused && focused.isConnected && (!doc.activeElement || doc.activeElement === doc.body)) {
++    focused.focus({ preventScroll: true });
++    if (caret && (focused.selectionStart !== caret.start || focused.selectionEnd !== caret.end)) {
++      focused.setSelectionRange(caret.start, caret.end, caret.direction || void 0);
++    }
++  }
++  // setBaseAndExtent restores the endpoints in the order they were made, so a
++  // backward selection stays backward. Nothing outside this subtree is touched.
++  if (held && held.anchorNode.isConnected && held.focusNode.isConnected
++    && (selection.anchorNode !== held.anchorNode || selection.anchorOffset !== held.anchorOffset
++      || selection.focusNode !== held.focusNode || selection.focusOffset !== held.focusOffset)) {
++    selection.setBaseAndExtent(held.anchorNode, held.anchorOffset, held.focusNode, held.focusOffset);
 +  }
 +}
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
-@@ -5669,9 +5688,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5669,9 +5731,9 @@ function sortDOMElements(container, indexByElement) {
          }
        }
        if (nextStableElement) {
@@ -124,7 +210,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..b73bfdf7b3b33a5b73f1d875f2b56b90
        }
      }
    }
-@@ -6425,8 +6444,8 @@ function ScrollAdjust() {
+@@ -6425,8 +6487,8 @@ function ScrollAdjust() {
                window.getComputedStyle(contentNode)[axis.paddingEndProp]
              );
              const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
