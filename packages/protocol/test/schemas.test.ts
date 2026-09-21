@@ -178,6 +178,9 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/pr/checkout": { cwd: "/p", number: 12, confirm: true },
   "pi/project/pr/merge": { cwd: "/p", number: 12, method: "squash", confirm: true },
   "pi/project/pr/viewed": { cwd: "/p", number: 12, path: "src/a.ts", viewed: true },
+  "pi/project/verify/start": { cwd: "/p", key: "TASK-44" },
+  "pi/project/verify/state": { cwd: "/p", runId: "ver_0001" },
+  "pi/project/verify/stop": { cwd: "/p", runId: "ver_0001", reason: "you stopped it" },
   "pi/project/browse": { path: "~\\code", explorer: { mode: "explorer", cwd: "/home/me/code", prefix: "node", offset: 80, limit: 80 } },
   "pi/project/env/status": { cwd: "/home/me/code/app" },
   "pi/project/env/set": {
