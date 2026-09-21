@@ -37,7 +37,7 @@
 
 **Active owners:**
 - T10/T13: done; reviewed source merged `b4ed1003` + correction `d408e8ea`. Parent450 focused tests and merged full verify/identity pass.
-- T18/T19: backend/protocol checkpoint `36e163ed` settled; source-text reader and structural fence implemented at `bedf8b40`; bounded navigation/UTF8/copy corrections continue (`run_74e26cf4`). D-364 verification runtime implementation runs independently (`run_801faae2`). First full T19 review remains pending.
+- T18/T19: backend/protocol checkpoint `36e163ed` settled; proof consumer `59468295` parent-validated (52 UI tests), ready for review. Runtime `33d3163e` returned with five correctness gaps; approved correction batch is active (`run_f6eeac5e`). First full T19 review remains pending.
 - T2: canonical metadata/history quota repair is implementing under approved D-365 (`run_57787ee2`); accounting, migration and cross-decision deletion protection.
 - Integrated: T9/T17 mentions, T14 Foundation, T21 interop, image fixture and transcript continuity repairs. Exact ancestry/owners in `STATUS_DETAILED.md`.
 
