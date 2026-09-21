@@ -37,7 +37,7 @@
 
 **Active owners:**
 - T10/T13: done; reviewed source merged `b4ed1003` + correction `d408e8ea`. Parent450 focused tests and merged full verify/identity pass.
-- T18/T19: backend/protocol checkpoint `36e163ed` settled; proof consumer `59468295` parent-validated (52 UI tests), ready for review. Runtime `00f6b934` parent-validated (worker203/UI57/host40 + build/identity); combined proof/runtime review candidate is being assembled. First full T19 review is next.
+- T18/T19: backend/protocol checkpoint `36e163ed` settled; proof consumer `59468295` parent-validated (52 UI tests), ready for review. Runtime `00f6b934` parent-validated (worker203/UI57/host40 + build/identity); combined candidate `7115a976` passes build/host347/protocol71/identity. First full T19 review active (`run_b77f0884`); source remains unmerged into integration.
 - T2: canonical quota corrections `8e69281b` parent-validated (344 host tests); first independent storage review active (`run_3a28ca40`).
 - Integrated: T9/T17 mentions, T14 Foundation, T21 interop, image fixture and transcript continuity repairs. Exact ancestry/owners in `STATUS_DETAILED.md`.
 
