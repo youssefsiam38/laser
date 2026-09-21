@@ -21,6 +21,7 @@
  *   revision that does not look like one is refused before git sees it
  *   (`docs/source-control-leap.md` §G.4).
  */
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import {
@@ -30,7 +31,7 @@ import {
   type FileChangeStatus,
 } from "@lasercode/protocol";
 import { checkpointSessionKey } from "@lasercode/protocol/checkpoint-key";
-import { runGit } from "@lasercode/protocol/git-run";
+import { gitEnv, runGit } from "@lasercode/protocol/git-run";
 import { createWorkspaceResolver } from "../workspace.js";
 
 const resolver = createWorkspaceResolver();
@@ -103,6 +104,37 @@ async function read(repo: HostRepository, args: readonly string[]): Promise<stri
   const result = await runGit({ cwd: repo.path, args, timeoutMs: READ_TIMEOUT_MS, maxBuffer: READ_MAX_BYTES }).catch(() => undefined);
   if (!result || result.timedOut || result.overflow || result.exitCode !== 0) return undefined;
   return result.stdout;
+}
+
+/**
+ * One read's **raw bytes**, bounded, with nothing decoded.
+ *
+ * `runGit` hands back a string, and a string is already a decision about what
+ * the bytes were: Node's lossy UTF-8 decode turns an invalid sequence into
+ * U+FFFD, which re-encodes to three bytes of its own. `f0 90 80` — a
+ * truncated four-byte sequence — therefore comes back as something that
+ * weighs exactly what the file weighed and says something else entirely, so
+ * no comparison made after the decode can tell the two apart (review F9).
+ * Anything that has to know what a file *is* reads it through here.
+ *
+ * Same rules as {@link read}: no shell, a timeout, a bounded buffer, and a
+ * failure is an absent answer rather than a thrown git error.
+ */
+function readBytes(repo: HostRepository, args: readonly string[], maxBuffer: number): Promise<Buffer | undefined> {
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      [...args],
+      { cwd: repo.path, timeout: READ_TIMEOUT_MS, maxBuffer, encoding: "buffer", env: gitEnv() },
+      (error, stdout) => {
+        if (error) {
+          resolve(undefined);
+          return;
+        }
+        resolve(Buffer.isBuffer(stdout) ? stdout : Buffer.from(String(stdout ?? ""), "utf8"));
+      },
+    );
+  });
 }
 
 /** `sha1` or `sha256`, as this repository declares it. */
@@ -280,12 +312,17 @@ export async function treeManifest(repo: HostRepository, commit: string, limit: 
 /**
  * One file's bytes at one commit.
  *
- * `bytes` is the file's **true** size, from git, not the length of whatever
- * came back decoded: git hands this process a string, so bytes that are not
- * valid UTF-8 would otherwise be captured as mojibake and counted wrong
- * (review F9). A file whose decoded form does not weigh what git says it
- * weighs is reported as `binary: true` and its bytes are not captured — its
- * identity is.
+ * The blob is read as **bytes** and only then decoded, strictly: a sequence
+ * that is not valid UTF-8 is a decode failure here rather than a silent
+ * U+FFFD, and a file that genuinely contains U+FFFD is valid UTF-8 and is
+ * captured as the text it is. A byte-length comparison after a lossy decode
+ * cannot tell those two apart — which is why the decision is made on the
+ * bytes (review F9).
+ *
+ * `bytes` is always the file's **true** size, from git. A file that is not
+ * UTF-8 text, or that carries a NUL, is reported as `binary: true`: its
+ * identity and its size are the record, its bytes are not captured, and
+ * nothing pretends they were text a person could review.
  */
 export async function fileAt(
   repo: HostRepository,
@@ -298,22 +335,19 @@ export async function fileAt(
   const size = Number((await read(repo, ["cat-file", "-s", spec]))?.trim() ?? Number.NaN);
   if (!Number.isFinite(size)) return undefined;
   const blobObjectId = (await read(repo, ["rev-parse", "--verify", "--quiet", spec]))?.trim();
-  const result = await runGit({
-    cwd: repo.path,
-    args: ["cat-file", "blob", spec],
-    timeoutMs: READ_TIMEOUT_MS,
-    maxBuffer: Math.max(limitBytes * 2, 64 * 1024),
-  }).catch(() => undefined);
-  if (!result || result.timedOut || result.overflow || result.exitCode !== 0) return undefined;
-  const whole = Buffer.from(result.stdout, "utf8");
-  // A lossy decode weighs a different number of bytes than the file does, and
-  // a NUL is the other tell. Either way the bytes are not text a person can
-  // review, so they are not captured as if they were.
-  const binary = whole.byteLength !== size || looksBinary(result.stdout);
+  const whole = await readBytes(repo, ["cat-file", "blob", spec], Math.max(limitBytes * 2, 64 * 1024));
+  if (!whole) return undefined;
+  // Fewer bytes than git said the blob weighs is a read this process cannot
+  // account for — not a fact about the file — so it answers nothing rather
+  // than recording a partial file as if it were whole.
+  if (whole.byteLength !== size) return undefined;
+  const text = looksBinaryBytes(whole) ? undefined : decodeUtf8(whole);
+  const binary = text === undefined;
   const truncated = !binary && whole.byteLength > limitBytes;
-  const kept = truncated ? sliceOnCharacterBoundary(whole, limitBytes) : whole;
+  // A prefix of valid UTF-8 cut on a character boundary is still valid UTF-8.
+  const kept = truncated ? sliceOnCharacterBoundary(whole, limitBytes).toString("utf8") : (text ?? "");
   return {
-    text: binary ? "" : kept.toString("utf8"),
+    text: binary ? "" : kept,
     bytes: size,
     truncated,
     binary,
@@ -324,6 +358,27 @@ export async function fileAt(
 /** Bytes that look like text a person can review. Anything else is not captured. */
 export function looksBinary(text: string): boolean {
   return text.includes("\u0000");
+}
+
+/** The same tell, asked of bytes: git's own heuristic is a NUL in the file. */
+function looksBinaryBytes(bytes: Buffer): boolean {
+  return bytes.includes(0);
+}
+
+/**
+ * Strict UTF-8, or nothing.
+ *
+ * `fatal` is the whole point: an invalid or truncated sequence throws instead
+ * of becoming U+FFFD, so "this is text" is something this module establishes
+ * rather than assumes. A file that really contains U+FFFD decodes cleanly and
+ * is text like any other.
+ */
+function decodeUtf8(bytes: Buffer): string | undefined {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
 }
 
 export function isObjectId(value: string): boolean {
