@@ -366,16 +366,21 @@ function looksBinaryBytes(bytes: Buffer): boolean {
 }
 
 /**
- * Strict UTF-8, or nothing.
+ * Strict UTF-8, or nothing — and exactly the file's own characters.
  *
  * `fatal` is the whole point: an invalid or truncated sequence throws instead
  * of becoming U+FFFD, so "this is text" is something this module establishes
  * rather than assumes. A file that really contains U+FFFD decodes cleanly and
  * is text like any other.
+ *
+ * `ignoreBOM` is the other half: by default a decoder *eats* a leading
+ * byte-order mark, so a file that starts with one would be captured without
+ * it, weigh less than git says it does and digest differently from its own
+ * bytes. A BOM is a character of the file here, like any other.
  */
 function decodeUtf8(bytes: Buffer): string | undefined {
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
     return undefined;
   }

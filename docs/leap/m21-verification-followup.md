@@ -194,7 +194,11 @@ U+FFFD passed it too — correctly, but for no reason.
 
 `source-control/read.ts` now reads the blob as **raw bytes** (`readBytes`, a
 bounded `execFile` with `encoding: "buffer"` over the same `gitEnv`, no shell,
-same timeout) and decodes with `TextDecoder("utf-8", { fatal: true })`. Invalid
+same timeout) and decodes with
+`TextDecoder("utf-8", { fatal: true, ignoreBOM: true })`. `ignoreBOM` is not a
+detail: a decoder eats a leading byte-order mark by default, so a file that
+starts with one would be captured without it, weigh less than git says it does
+and digest differently from its own bytes. Invalid
 or truncated UTF-8 is a decode failure, a NUL is checked on the bytes, and a
 file that really contains U+FFFD is ordinary text and is kept — there is no
 blanket rejection of valid source. `bytes` stays git's own size, the blob id
@@ -205,8 +209,14 @@ than storing a partial file as a whole one.
 Proved in `packages/host/test/project-work/source-read.test.ts` over real
 repositories: the invalid-sequence file (with the byte-length coincidence
 asserted in the test, so the old check is shown to have passed it), a valid
-Unicode file including U+FFFD, a NUL-carrying file, and a long multi-byte file
-cut on a boundary.
+Unicode file including U+FFFD, a file whose leading BOM round-trips to the
+exact bytes, a NUL-carrying file, and a long multi-byte file cut on a
+boundary. The BOM and invalid-sequence tests were both run against the
+previous code and fail there.
+
+(The parent found the same lossy conversion in the interop importer's
+`readTextFile` and fixed `export/paths.ts` at `d405e5d5`; no file overlaps
+this one.)
 
 ### Closed: the person's way in (N2 refinement 4)
 
@@ -346,6 +356,35 @@ pruned and gc'd; and a refused acceptance leaving the blob count unchanged.
 
 No browser was opened; every claim above rests on unit tests over the real
 components and the real worker dispatch.
+
+### Batch 3 · the person's door and the byte-level capture fix
+
+After merging this branch into the reviewed design/Foundation line
+(`688f014d`), at `7133fb60`:
+
+| Command | Result |
+| --- | --- |
+| `pnpm -F @lasercode/protocol test` | 745 passed, 47 files, no type errors |
+| `env -i PATH="$PATH" HOME="$HOME" pnpm -F @lasercode/host test` | 1241 passed, 115 files (new `project-work/source-read.test.ts`, over real repositories) |
+| `pnpm -F @lasercode/worker test` | 1663 passed / 4 skipped |
+| `pnpm -F @lasercode/ui test` | 3322 passed / 1 skipped (new `project-work/native-acceptance.test.tsx` 20) |
+| `pnpm -r build` · `pnpm -r typecheck` · `pnpm identity:check` | clean |
+| `pnpm verify` (with the display environment preserved) | passed |
+
+Three of the new tests are regression proofs in the strict sense — they were
+run against the previous code and fail there: the invalid-UTF-8 capture (the
+old byte comparison called it text), the leading BOM (the decoder ate it), and
+the checkpoint question asked once per checkpoint (the old effect asked three
+times in the same scenario).
+
+**Not proven here, and left for the person:** that the dialog looks right in
+both themes, at both widths and with a pointer or touch, and that the whole
+round trip (verify → record a review → verify again finds native evidence)
+behaves on a real project. Steps: open a Task with a design-backed visual
+criterion, Verify…, then **Record my review…**, tick the attestation, type the
+subject's key, record, and verify again — the visual criterion should read
+*satisfied* naming the commit, and the Task's evidence list should carry a
+`person_acceptance` row.
 
 ## Shared files this batch touched, and the one overlap to watch
 

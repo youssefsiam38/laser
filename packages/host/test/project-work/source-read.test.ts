@@ -102,6 +102,21 @@ describe.skipIf(!haveGit)("one file's bytes at one commit", () => {
     expect(read?.blobObjectId).toMatch(/^[0-9a-f]{7,64}$/);
   });
 
+  it("keeps a byte-order mark, which is a character of the file and not noise", async () => {
+    // A decoder eats a leading BOM unless told not to, and a capture that ate
+    // it would weigh less than git says the file does and digest differently
+    // from the file's own bytes.
+    const source = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("export const x = 1;\n", "utf8")]);
+    const { repo, commit } = await repoWith({ "bom.ts": source });
+
+    const read = await fileAt(repo, commit, "bom.ts", LIMIT);
+
+    expect(read?.binary).toBe(false);
+    expect(read?.bytes).toBe(source.byteLength);
+    expect(read?.text.codePointAt(0)).toBe(0xfeff);
+    expect(Buffer.from(read?.text ?? "", "utf8").equals(source)).toBe(true);
+  });
+
   it("does not capture the bytes of a file with a NUL in it, and says what it weighs", async () => {
     const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x1a, 0x0a, 0x41]);
     const { repo, commit } = await repoWith({ "image.png": binary });
