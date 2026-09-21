@@ -37,7 +37,7 @@
 
 **Active owners:**
 - T10/T13: done; reviewed source merged `b4ed1003` + correction `d408e8ea`. Parent450 focused tests and merged full verify/identity pass.
-- T18/T19: backend/protocol checkpoint `36e163ed` settled; proof consumer `59468295` parent-validated (52 UI tests), ready for review. Runtime `33d3163e` returned with five correctness gaps; approved correction batch is active (`run_f6eeac5e`). First full T19 review remains pending.
+- T18/T19: backend/protocol checkpoint `36e163ed` settled; proof consumer `59468295` parent-validated (52 UI tests), ready for review. Runtime `13514908` closes drain/identity/Stop gaps; same-path reload safety and visible diagnostic follow-up is active (`run_2924c270`). First full T19 review remains pending.
 - T2: canonical quota source `40c89aa1` returned; bounded migration, global recovery and historical-reference corrections active (`run_f4e5c207`). First storage review pending.
 - Integrated: T9/T17 mentions, T14 Foundation, T21 interop, image fixture and transcript continuity repairs. Exact ancestry/owners in `STATUS_DETAILED.md`.
 
