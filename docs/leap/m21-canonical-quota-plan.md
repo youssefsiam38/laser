@@ -288,3 +288,57 @@ stay exactly as they are.
 5. Tests T-1…T-15, red first where the behaviour is new.
 6. `pnpm -F @lasercode/host test`, then the full `pnpm verify` at a stable
    point, evidence into the T2 row the parent owns.
+
+## Parent approval with required amendments (D-365)
+
+The source audit and cohesive accounting approach are accepted. The amendment
+message to the stopped investigator was refused by the runtime, not delivered.
+This section resolves §11 and overrides the conflicting implementation details
+above; implementation still requires a named owner.
+
+- **A-1:** enforce explicit canonical-record caps: 200,000 per project and
+  1,000,000 globally, configurable through the existing store quota options.
+  Existing byte/entity limits are unchanged. Add accurate count-refusal data
+  through the minimal existing protocol shape if needed; never label counts as
+  `usedBytes`. These are new admission ceilings, not raised existing limits.
+- **A-2:** explicit permanent entity deletion may remove that entity's own
+  capture/decision history and credit its persisted charges. First refuse a
+  deletion that would destroy a blob, association or link proof consumed by a
+  **surviving other-entity decision**. Do not blindly delete those other
+  bindings or leave them pointing at missing proof. Explicit deletion is not
+  automatic eviction and does not permit silently amputating another record.
+- **A-3/A-4:** charge durable idempotency receipts, do not prune them; uniformly
+  charge revision/entity metadata. Update old body-only assertions with exact
+  evidence, not arbitrary larger test budgets.
+- **A-5/A-6:** bounded derived search/events remain separately classified and
+  uncharged by the canonical budget. A 64-byte logical row floor is accepted;
+  it is not a physical SQLite size guarantee. No unmeasured 1.2–1.6× claim or
+  disk-size multiplier is approved.
+- `project_paths` and `repositories` are canonical identity mappings, not
+  actually bounded merely by saying 'workspace shape': charge them too.
+  Include project metadata and blob **row metadata**, with blob payload charged
+  once under its deduplication rule. Counter/key-sequence bookkeeping must have
+  an explicit, genuinely bounded classification; no free arbitrary history.
+- Admission must respect **net transaction deltas** against entry usage and
+  limits. Per-statement positive checks cannot make an already-over-cap,
+  net-shrinking deletion fail merely because `remember()` adds its receipt
+  after the credits. Permit net-nongrowth recovery even if usage remains above
+  a newly enforced limit. Keep each operation bounded; do not scan all rows per
+  mutation. Test mixed credits/updates/receipt writes and final rollback.
+- The accounting invariant must independently derive charges from **raw stored
+  values**, not only sum `charged_bytes`: summing stale stored charges would
+  miss a forgotten recharge after an UPDATE. Credits use persisted charges;
+  migration/reconciliation recomputes honestly and without double charging.
+- Recovery copy must distinguish a refused decision transaction from evidence
+  prepared in an earlier transaction, and must not suggest archive frees
+  canonical history. Account for project-scoped receipts that intentionally
+  survive entity deletion when explaining explicit cleanup.
+
+The backend at `36e163ed` is frozen. Its old owner is UI-only; the runtime owner
+writes worker code and the separate verification-stopping protocol field.
+The canonical-accounting owner may merge that entire checkpoint into this
+parent line and write host accounting/schema/blob helpers/tests plus minimal
+quota protocol types. No UI or worker writes. Use focused host project-work
+and relevant protocol suites, build/types/identity; parent owns the full gate.
+One independent storage review follows implementation. No general budget
+framework, raised limits, silent canonical deletion or unbounded per-write scan.
