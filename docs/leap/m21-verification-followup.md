@@ -1124,3 +1124,54 @@ refusals read in the app, in both themes and at both widths, and a real
 project's round trip (D-342). The optimistic-race refusals are exercised by
 moving the pointer between a real preparation and the real decision — a
 deterministic barrier over the real store, not a timing retry.
+
+### Proof-consumer corrections (parent review of `29032c86`)
+
+Four concrete gaps closed as one batch; no source claims, ancestry or runtime
+worker code touched (the worker `VerificationService` lifetime work stays with
+the read-only plan `b7a4b290`).
+
+1. **The bound capture can be opened.** `ProofTrail` now reads the capture a
+   row names **by its own content address** — `row.proofId`, the blob the
+   decision bound, never the link's current pointer — paging
+   `project/work/blob/read` up to `PROOF_CAPTURE_MAX_PAGES`, parsing it with
+   the protocol's own `repositoryCaptureSchema` (`proofCaptureFrom`) and
+   showing a bounded summary (`proofCaptureSummary`: repository, the exact
+   state or change, what the required set was taken from, the files kept whole
+   up to `PROOF_CAPTURE_FILES_SHOWN`, the count of what is not listed, and the
+   capture's own truncation sentence). Released, deleted/damaged, unparseable
+   and too-large-to-show each get their own sentence, and all of them say the
+   decision still stands — it is the proof that cannot be shown. Because the
+   read is by blob id, a later correction of the pointer and a pruned/collected
+   git are both irrelevant to it.
+2. **Pages no longer accumulate.** `setRows([...rows, ...next])` is gone: a
+   page *replaces* the one before it, `Next 50` pushes the cursor it was handed
+   onto a trail and `Back` pops it, and the place line says `Page N · n
+   records, and (no) more after them` without ever claiming a total nobody
+   counted.
+3. **Scope and generation fence.** Every read is stamped with a generation that
+   is bumped on each request **and** when the subject changes
+   (project id from the store snapshot, entity id, current revision). A reply
+   from an older generation is dropped, and the rows, cursor trail, selected
+   decision, opened proof and any refusal are cleared on a scope change — a
+   prop change, not just a disabled button. Proven deterministically: the test
+   holds a detail read open, re-renders the panel at another Task, then
+   releases the read and asserts nothing of the old answer appears. Removing
+   the fence makes exactly that test fail (checked).
+4. **`known` is scoped like the rows beside it.** `decisionBindingPage` applies
+   the same `entity_id` filter to the binding-set lookup, so another item's
+   decision now reads `known: false` here instead of "known, and it rested on
+   nothing". Tested both ways in `decision-proof.test.ts` (cross-entity unknown
+   + empty, own entity known with its own blob), and the distinction is
+   consumed for real: selecting one of the entity's decisions by name sends
+   `decisionId` and renders three different sentences for bound rows,
+   known-empty and legacy-unknown.
+
+| Command | Result |
+| --- | --- |
+| `pnpm install --frozen-lockfile` + `pnpm -r build` | clean |
+| `env -i PATH HOME pnpm -F @lasercode/host exec vitest run test/project-work` | 311 passed (20 files) |
+| `pnpm -F @lasercode/protocol test` | 752 passed, no type errors |
+| `env -i … pnpm -F @lasercode/ui exec vitest run test/project-work/{native-acceptance,verification}.test.tsx` | 39 passed |
+| `pnpm -r typecheck` | clean |
+| `pnpm identity:check` | passes |

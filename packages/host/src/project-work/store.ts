@@ -2161,13 +2161,20 @@ export class ProjectWorkStore {
     // even when the set is empty, and a decision older than this history holds
     // none and stays unknown rather than being read as having rested on
     // nothing.
+    //
+    // Scoped exactly like the rows beside it. Answering `known` across the
+    // whole project while the bindings are filtered by entity would tell a
+    // read about one item that some *other* item's decision rested on nothing
+    // — a true row about the wrong subject, which is the one kind of answer
+    // this history may not give.
     const known =
       query.decisionId === undefined
         ? undefined
-        : this.statement("SELECT 1 AS present FROM decision_capture_binding_sets WHERE project_id = ? AND decision_id = ? LIMIT 1").get(
-            projectId,
-            query.decisionId,
-          ) !== undefined;
+        : this.statement(
+            "SELECT 1 AS present FROM decision_capture_binding_sets WHERE project_id = ? AND decision_id = ?" +
+              (query.entityId !== undefined ? " AND entity_id = ?" : "") +
+              " LIMIT 1",
+          ).get(projectId, query.decisionId, ...(query.entityId !== undefined ? [query.entityId] : [])) !== undefined;
     return {
       of: "decisions",
       associations: [],

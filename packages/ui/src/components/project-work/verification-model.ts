@@ -11,6 +11,8 @@ import {
   verificationReportSchema,
   type ClientRequests,
   type ProjectWorkEvidence,
+  repositoryCaptureSchema,
+  type RepositoryCapture,
   type RepositoryCaptureHistoryPage,
   type RepositoryLink,
   type VerificationAuthority,
@@ -185,6 +187,79 @@ function repositoryRecordHeadline(link: RepositoryLink): string {
 
 function short(id: string): string {
   return id.length > 12 ? id.slice(0, 12) : id;
+}
+
+/** Files one opened proof lists at a time. A capture holds at most a hundred. */
+export const PROOF_CAPTURE_FILES_SHOWN = 20;
+
+/** What an opened proof says, bounded, in the words of the thing it proves. */
+export interface ProofCaptureSummary {
+  repository: string;
+  /** The exact code this proof is of, as the capture recorded it. */
+  at: string;
+  /** Where the set it keeps whole was taken from, when it says. */
+  from?: string;
+  files: Array<{ path: string; note: string }>;
+  /** Said only when there are more than are listed. */
+  more?: string;
+  /** The capture's own sentence about what it left out. */
+  truncated?: string;
+}
+
+const BASIS_SENTENCE = {
+  attempt_base_to_state: "everything the attempt changed, from where it started to this exact state",
+  commit_parent_to_commit: "everything this commit introduced over the one before it",
+  accepted_change: "everything the accepted change touched",
+  complete_bounded_state: "the whole of one named part of the repository, because nothing had changed",
+} as const;
+
+const STATUS_NOTE = {
+  added: "added",
+  modified: "changed",
+  deleted: "removed",
+  present: "kept whole",
+} as const;
+
+/** One stored capture, read as the bounded record a person can check. */
+export function proofCaptureFrom(text: string): RepositoryCapture | undefined {
+  try {
+    const parsed = repositoryCaptureSchema.safeParse(JSON.parse(text));
+    return parsed.success ? (parsed.data as RepositoryCapture) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * What to show of an opened proof (D-363).
+ *
+ * The sources it kept whole come first, because they are what a review of the
+ * decision reads; the manifest behind them is not listed here, and the count
+ * says so rather than the list quietly stopping.
+ */
+export function proofCaptureSummary(capture: RepositoryCapture): ProofCaptureSummary {
+  const required = capture.required;
+  const kept = required?.entries ?? [];
+  const files = kept.slice(0, PROOF_CAPTURE_FILES_SHOWN).map((entry) => ({
+    path: entry.path,
+    note: `${STATUS_NOTE[entry.status]}${entry.side === "before" ? ", as it was before" : ""}`,
+  }));
+  return {
+    // A capture written before the name was recorded says "a repository"
+    // rather than inventing one.
+    repository: capture.repositoryName ?? "A repository",
+    at: capture.state
+      ? `the state at ${short(capture.state.commitObjectId)}${capture.state.checkpointId ? " (a checkpoint)" : ""}`
+      : capture.change
+        ? `the change from ${short(capture.change.base.commitObjectId)} to ${short(capture.change.head.commitObjectId)}`
+        : "code this capture does not name",
+    ...(required ? { from: BASIS_SENTENCE[required.basis] } : {}),
+    files,
+    ...(kept.length > files.length
+      ? { more: `${String(kept.length - files.length)} more files this proof keeps whole are not listed here.` }
+      : {}),
+    ...(capture.truncated ? { truncated: capture.truncated } : {}),
+  };
 }
 
 /**

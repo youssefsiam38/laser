@@ -20,8 +20,12 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  REPOSITORY_CAPTURE_HISTORY_MAX,
+  REPOSITORY_CAPTURE_MEDIA_TYPE,
   VERIFICATION_REPORT_MEDIA_TYPE,
   type DecisionCaptureBinding,
+  type ProjectWorkApproval,
+  type RepositoryCapture,
   type ProjectWorkBody,
   type RepositoryCaptureHistoryPage,
   type RepositoryLink,
@@ -170,6 +174,11 @@ let storeCalls: Array<{ method: ProjectWorkMethod; params: Record<string, unknow
 let blob: VerificationReport | undefined;
 /** What the host answers the next `project/work/get` with, in order. */
 let getAnswers: Array<Record<string, unknown>>;
+/** What `project/work/blob/read` answers for one blob id, or throws for it. */
+let blobAnswers: Record<string, unknown>;
+/** Detail reads wait for the test to let them through while this is on. */
+let deferGets: boolean;
+let pendingGets: Array<() => void>;
 
 const settle = (ms = 5): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -179,6 +188,12 @@ const makeStore = (): ProjectWorkStore => {
     request: (async (method: ProjectWorkMethod, params: unknown) => {
       storeCalls.push({ method, params: params as Record<string, unknown> });
       if (method === "project/work/blob/read") {
+        const wanted = (params as { blobId: string }).blobId;
+        const prepared = blobAnswers[wanted];
+        if (prepared) {
+          if (prepared instanceof Error) throw prepared;
+          return prepared;
+        }
         if (!blob) throw new Error("no blob");
         return {
           blobId: "blb_1",
@@ -193,6 +208,9 @@ const makeStore = (): ProjectWorkStore => {
       if (method === "project/work/get") {
         const answer = getAnswers.shift();
         if (!answer) throw new Error("no detail answer was prepared");
+        // A read a test holds open on purpose: the only way to prove that an
+        // answer arriving after the panel moved on is dropped.
+        if (deferGets) return new Promise((resolve) => pendingGets.push(() => resolve(answer)));
         return answer;
       }
       if (method === "project/work/list") {
@@ -227,6 +245,9 @@ beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   storeCalls = [];
   getAnswers = [];
+  blobAnswers = {};
+  deferGets = false;
+  pendingGets = [];
   hostCalls = [];
   hostAnswers = {};
   sessions = [SESSION];
@@ -439,6 +460,18 @@ describe("deviations", () => {
  * bounded page at a time, and a decision whose proof has been corrected since
  * says so rather than borrowing the current pointer's authority.
  */
+
+/**
+ * D-363 · which evidence a decision was really made on, and what is in it.
+ *
+ * The panel already shows what a repository record points at now. These are
+ * the things that are *not* that, and that a person needs when they come back
+ * to a decision months later: the capture an approval or a completion was
+ * bound to, what that capture holds, and how this work's evidence changed
+ * since. Everything here is bounded — one page at a time, replaced rather than
+ * piled up — fenced to the item it was asked about, and honest about a proof
+ * that is gone and about a decision this app cannot attest.
+ */
 describe("what a decision rests on", () => {
   const LINK: RepositoryLink = {
     projectId: "p1",
@@ -481,19 +514,62 @@ describe("what a decision rests on", () => {
     ...over,
   });
 
-  const page = (over: Partial<RepositoryCaptureHistoryPage>): Record<string, unknown> => ({
+  const approval = (over: Partial<ProjectWorkApproval> = {}): ProjectWorkApproval => ({
+    projectId: "p1",
+    approvalId: "apv_1",
+    entityId: "e-task-44",
+    gate: "build",
+    decision: "approved",
+    covers: [],
+    at: "2026-03-01T09:04:00.000Z",
+    origin: { actor: { kind: "person", label: "You" } },
+    ...over,
+  });
+
+  /** The capture a decision bound, as the store holds it. */
+  const capture = (): RepositoryCapture => ({
+    version: 1,
+    createdAt: "2026-03-01T09:05:00.000Z",
+    repositoryId: "repo_1",
+    repositoryName: "app",
+    change: {
+      base: { vcs: "git", objectFormat: "sha1", commitObjectId: "1".repeat(40) },
+      head: { vcs: "git", objectFormat: "sha1", commitObjectId: "2".repeat(40) },
+      diffDigest: "d".repeat(64),
+    },
+    files: [{ path: "src/a.ts", status: "modified", added: 2, removed: 1 }],
+    sources: [{ path: "src/a.ts", bytes: 12, contentDigest: "e".repeat(64), text: "delivered\n" }],
+    required: {
+      basis: "accepted_change",
+      from: { baseCommitObjectId: "1".repeat(40) },
+      entries: [{ path: "src/a.ts", status: "modified", side: "after", contentDigest: "e".repeat(64) }],
+      complete: true,
+    },
+  });
+
+  const blobPage = (value: unknown): Record<string, unknown> => ({
+    blobId: "blb_atthetime",
+    mediaType: REPOSITORY_CAPTURE_MEDIA_TYPE,
+    digest: "f".repeat(64),
+    totalBytes: 1,
+    offset: 0,
+    bytes: 1,
+    data: Buffer.from(JSON.stringify(value), "utf8").toString("base64"),
+  });
+
+  const page = (over: Partial<RepositoryCaptureHistoryPage>, extra: Partial<Detail> = {}): Record<string, unknown> => ({
     ...withReport(report()),
     repositoryLinks: [LINK],
+    ...extra,
     captureHistory: { of: "associations", associations: [], bindings: [], ...over },
   });
 
-  const withLink = (): Detail => ({ ...withReport(report()), repositoryLinks: [LINK] });
+  const withLink = (over: Partial<Detail> = {}): Detail => ({ ...withReport(report()), repositoryLinks: [LINK], ...over });
 
   it("asks for nothing until a person asks, then reads one bounded page", async () => {
     blob = report();
     await mount(withLink(), makeStore());
     expect(storeCalls.some((call) => call.method === "project/work/get"), "nothing is read on mount").toBe(false);
-    expect(button("What decisions here rest on")).toBeTruthy();
 
     getAnswers = [page({ of: "decisions", bindings: [binding()] })];
     await click(button("What decisions here rest on"));
@@ -504,6 +580,7 @@ describe("what a decision rests on", () => {
     expect(text()).toContain("Marked done");
     expect(text(), "the capture it was bound to, not the one the record points at now").toContain("blb_atthetim");
     expect(text()).toContain("has been corrected since");
+    expect(text()).toContain("one record, and no more after them.");
   });
 
   it("says when a decision's evidence is still what the record points at", async () => {
@@ -516,7 +593,51 @@ describe("what a decision rests on", () => {
     expect(text()).not.toContain("has been corrected since");
   });
 
-  it("reads the rest of a long history only when asked, and carries the cursor", async () => {
+  it("opens the capture a decision bound, by its own address, and not the record's current one", async () => {
+    blob = report();
+    blobAnswers = { blb_atthetime: blobPage(capture()) };
+    await mount(withLink(), makeStore());
+    getAnswers = [page({ of: "decisions", bindings: [binding()] })];
+    await click(button("What decisions here rest on"));
+    await click(button("Open this proof"));
+
+    const read = storeCalls.filter((call) => call.method === "project/work/blob/read").at(-1);
+    expect(read?.params["blobId"], "the bound blob, even though the record now points elsewhere").toBe("blb_atthetime");
+    expect(text()).toContain("app · the change from 111111111111 to 222222222222");
+    expect(text()).toContain("It keeps everything the accepted change touched.");
+    expect(text()).toContain("src/a.ts");
+    expect(text()).toContain("changed");
+  });
+
+  it("says what has happened to a proof it cannot read, and leaves the decision standing", async () => {
+    blob = report();
+    blobAnswers = { blb_atthetime: { ...blobPage({}), data: undefined, released: { reason: "quota", detail: "This proof's bytes were released to make room." } } };
+    await mount(withLink(), makeStore());
+    getAnswers = [page({ of: "decisions", bindings: [binding()] })];
+    await click(button("What decisions here rest on"));
+    await click(button("Open this proof"));
+    expect(text()).toContain("This proof's bytes were released to make room.");
+    expect(text()).toContain("The decision that rests on it stands");
+
+    // …and a blob the store cannot answer for at all, which is what a deleted
+    // or damaged one looks like from here.
+    blobAnswers = { blb_atthetime: new Error("That attachment is stored damaged and cannot be read.") };
+    await click(button("Open this proof"));
+    expect(text()).toContain("stored damaged");
+  });
+
+  it("refuses to read a proof it cannot make sense of, rather than showing half of one", async () => {
+    blob = report();
+    blobAnswers = { blb_atthetime: blobPage({ version: 1, notACapture: true }) };
+    await mount(withLink(), makeStore());
+    getAnswers = [page({ of: "decisions", bindings: [binding()] })];
+    await click(button("What decisions here rest on"));
+    await click(button("Open this proof"));
+    expect(text()).toContain("stored in a form this window cannot read");
+    expect(text(), "and nothing of a capture is claimed").not.toContain("It keeps everything");
+  });
+
+  it("replaces a page rather than piling pages up, and walks back the way it came", async () => {
     blob = report();
     await mount(withLink(), makeStore());
     getAnswers = [
@@ -528,27 +649,82 @@ describe("what a decision rests on", () => {
     ];
     await click(button("Every proof this work has had"));
     expect(text()).toContain("Kept with this record when it was made.");
-    expect(text()).toContain("which is not a decision that happened");
-    const more = button("Show 50 more");
-    expect(more, "there is more, and it says so rather than looking complete").toBeTruthy();
+    expect(text()).toContain("2 records, and more after them.");
+    expect(button("Back"), "the first page has nowhere to go back to").toBeUndefined();
 
-    getAnswers = [page({ of: "associations", associations: [association({ revisionId: "rlc_old", seq: 0, reason: "legacy_baseline" })] })];
-    await click(more);
+    getAnswers = [page({ of: "associations", associations: [association({ revisionId: "rlc_old", seq: 0, reason: "legacy_baseline", blobId: "blb_old" })] })];
+    await click(button(`Next ${String(REPOSITORY_CAPTURE_HISTORY_MAX)}`));
     const second = storeCalls.filter((call) => call.method === "project/work/get")[1];
     expect((second?.params["include"] as { captureHistory?: { cursor?: string } }).captureHistory?.cursor).toBe("rl_1:1");
-    expect(text(), "and a baseline says what it is, rather than standing in for a history").toContain(
-      "what came before it is not known",
-    );
-    expect(button("Show 50 more"), "the last page offers nothing more").toBeUndefined();
-    expect(text()).toContain("All 3 of them.");
+    expect(text(), "a baseline says what it is rather than standing in for a history").toContain("what came before it is not known");
+    expect(text(), "and the page before it is gone, not appended to").not.toContain("Kept with this record when it was made.");
+    expect(text()).toContain("Page 2 · one record, and no more after them.");
+    expect(button(`Next ${String(REPOSITORY_CAPTURE_HISTORY_MAX)}`), "the last page offers nothing more").toBeUndefined();
+
+    getAnswers = [page({ of: "associations", associations: [association(), association({ revisionId: "rlc_0", seq: 1, reason: "first_capture" })], nextCursor: "rl_1:1" })];
+    await click(button("Back"));
+    const third = storeCalls.filter((call) => call.method === "project/work/get")[2];
+    expect((third?.params["include"] as { captureHistory?: { cursor?: string } }).captureHistory?.cursor, "back to the first page").toBeUndefined();
+    expect(text()).toContain("Kept with this record when it was made.");
+    expect(text()).not.toContain("what came before it is not known");
   });
 
-  it("says plainly when this app cannot attest what a decision rested on", async () => {
+  it("tells a decision that rested on nothing from one nobody kept a record for", async () => {
     blob = report();
-    await mount(withLink(), makeStore());
-    getAnswers = [page({ of: "decisions", bindings: [] })];
+    const detailWithApproval = withLink({ approvals: [approval()] });
+    await mount(detailWithApproval, makeStore());
+    getAnswers = [page({ of: "decisions", bindings: [] }, { approvals: [approval()] })];
     await click(button("What decisions here rest on"));
-    expect(text()).toContain("No decision here has recorded evidence it rests on yet.");
-    expect(text(), "and it does not pretend the absence is an answer").toContain("not something this app can attest");
+    const named = button("build ·");
+    expect(named, "each decision can be asked about by name").toBeTruthy();
+
+    getAnswers = [page({ of: "decisions", bindings: [], known: true }, { approvals: [approval()] })];
+    await click(named);
+    const asked = storeCalls.filter((call) => call.method === "project/work/get").at(-1);
+    expect((asked?.params["include"] as { captureHistory?: { decisionId?: string } }).captureHistory?.decisionId).toBe("apv_1");
+    expect(text()).toContain("recorded that it rested on no repository evidence at all");
+
+    getAnswers = [page({ of: "decisions", bindings: [], known: false }, { approvals: [approval()] })];
+    await click(named);
+    expect(text()).toContain("no record of what this decision rested on");
+    expect(text()).toContain("Review it again if it matters");
+  });
+
+  it("drops an answer that arrives after the subject has changed, and clears what was on screen", async () => {
+    blob = report();
+    const store = makeStore();
+    await mount(withLink(), store);
+    getAnswers = [page({ of: "decisions", bindings: [binding()] })];
+    await click(button("What decisions here rest on"));
+    expect(text()).toContain("Marked done");
+
+    // A second read is held open, and the panel is pointed at another item
+    // while it is in flight.
+    deferGets = true;
+    getAnswers = [page({ of: "associations", associations: [association()] })];
+    await click(button("Every proof this work has had"));
+    const other = detail({
+      entityId: "e-task-45",
+      kind: "task",
+      number: 45,
+      state: "in_progress",
+      body: taskBody({ verificationCommands: [] }) as unknown as ProjectWorkBody,
+      executionLinks: owned(),
+    });
+    await act(async () => {
+      root.render(<VerificationPanel store={store} detail={other} cwd="/work/app" pollMs={5} />);
+      await settle(10);
+    });
+    expect(text(), "the rows of the item we left are gone").not.toContain("Marked done");
+
+    deferGets = false;
+    await act(async () => {
+      for (const release of pendingGets.splice(0)) release();
+      await settle(10);
+    });
+    expect(text(), "and the answer to the old question is not shown against the new one").not.toContain(
+      "Kept while a decision was being prepared",
+    );
+    expect(document.querySelector('[data-slot="proof-trail-rows"]'), "nothing is listed until this item is asked about").toBeNull();
   });
 });

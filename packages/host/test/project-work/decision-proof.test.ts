@@ -635,6 +635,31 @@ describe("two decisions in one instant", () => {
         linkIds: [first.linkId, second.linkId],
       });
       expect(scoped.bindings.map((row) => row.decisionId)).toEqual([first.approvalId]);
+
+      // …including the answer to "is this decision's proof known at all". Asked
+      // about one item, the other item's decision is not this item's decision:
+      // answering `known` across the project would say, truthfully and about
+      // the wrong subject, that a decision here rested on nothing.
+      const crossed = store.captureHistoryPage(projectId, {
+        of: "decisions",
+        entityId: first.entityId,
+        decisionId: second.approvalId,
+        linkIds: [first.linkId],
+      });
+      expect(crossed, "another item's decision is unknown here, and empty").toEqual({
+        of: "decisions",
+        associations: [],
+        bindings: [],
+        known: false,
+      });
+      const own = store.captureHistoryPage(projectId, {
+        of: "decisions",
+        entityId: second.entityId,
+        decisionId: second.approvalId,
+        linkIds: [second.linkId],
+      });
+      expect(own.known, "and known on the item it was decided on").toBe(true);
+      expect(own.bindings.map((row) => row.blobId)).toEqual([second.blobId]);
     } finally {
       store.close();
     }
