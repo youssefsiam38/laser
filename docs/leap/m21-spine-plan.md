@@ -114,3 +114,62 @@ Notifications: `project/work/updated` (`{ projectId, seq, change }`) and
 `state` in `NOTIFICATION_PRESSURE` — a client re-reads them with
 `project/work/list { sinceSeq }`, but losing one silently would leave the
 workspace stale, and the reconcile path is the recovery, not the design.
+
+---
+
+## M21-T2 · Stable project identity and canonical store
+
+### What landed
+
+| File | What it owns |
+| --- | --- |
+| `packages/host/src/project-work/schema.ts` | opening the database, versioning, atomic migrations, backup-before-migrate, newer-version refusal |
+| `packages/host/src/project-work/store.ts` | `ProjectWorkStore`: identity, keys, revisions, review, links, tasks, events, quotas, reads |
+| `packages/host/src/project-work/blobs.ts` | content-addressed blobs, chunked above 1 MiB, ranged reads that verify every chunk |
+| `packages/host/src/project-work/ids.ts` | opaque id minting, canonical JSON + digest, repository identity key |
+| `packages/host/src/project-work/errors.ts` | conflict, quota, not-found, refusal, unavailable — each written for a person |
+| `packages/host/test/project-work/*` | store, migrations, crash (a real SIGKILL), bounds |
+
+`server.ts` gained the store's lifecycle only: it is opened at
+`<stateDir>/project-work.db` (overridable with `projectWorkFile`) and closed
+with the host. Routing is M21-T3.
+
+### Decisions where the contract is silent
+
+1. **One database, partitioned by `projectId` on every row** — not a file per
+   project. The leap requires cross-project mention and search; a file per
+   project would make that a fan-out over every project a person has opened,
+   and would multiply the migration and quota story by N. The rule the leap
+   actually states — partition by stable id, never by path — is satisfied by
+   the key.
+2. **Order is the project event sequence, not a timestamp.** Every entity row
+   carries `updated_seq`, set by the same transaction that raised its event, so
+   "newest first" is exact even for two writes in the same millisecond.
+3. **Backup before *any* migration of a database that already holds tables**,
+   including one with `user_version = 0` written by a pre-release. Canonical
+   revisions are not reproducible, so the copy is taken before the first
+   statement of the first step.
+4. **Repository identity is the root commit when git has one, the resolved
+   common directory when it does not.** A worktree resolves to its owner's
+   common dir before it reaches the store, so it shares the owner's id; a
+   relocated checkout keeps its id through the root commit.
+5. **Evidence and decisions are links.** The leap's method inventory is closed
+   and has no `project/work/evidence`; both records are joined to an exact
+   revision, which is what a link is, so they travel through
+   `project/work/link` and are removed by `project/work/unlink`.
+6. **Archived is reversible and keeps state.** Artifact kinds record
+   `state: "archived"` plus `state_before_archive`; a Task keeps its task state
+   and carries `archived_at`. Restoring puts the old state back.
+7. **A stale upstream does not change a Task's state.** It joins the "needs
+   you" queue and `taskFacts` refuses a start or a completion while it lasts —
+   a Task has no `stale` state to move to.
+
+### Bounds and budgets
+
+| Limit | Default | Behaviour at the cap |
+| --- | --- | --- |
+| project bytes | 512 MiB | the durable write is refused with an export/delete recovery; nothing canonical is evicted |
+| global bytes | 4 GiB | same, naming another project as the place to free space |
+| entities per project | 20 000 | refused with "archive or delete some project work" |
+| events retained per project | 5 000 | older events fall off; a client asking from before them gets `reset: true` and a full page |
+| blob chunking | above 1 MiB | 256 KiB chunks, each with its own digest |

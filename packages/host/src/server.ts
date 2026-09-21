@@ -47,6 +47,7 @@ import { FeatureService } from "./features.js";
 import { PrefsStore } from "./prefs.js";
 import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
+import { ProjectWorkStore } from "./project-work/store.js";
 import { CaptureAccumulator, type CaptureActor } from "./provider-capture.js";
 import { collectTransportQueues, type TransportQueueSource, type TransportQueues } from "./transport-snapshot.js";
 import { observeCapture } from "./capture-ingress.js";
@@ -138,6 +139,8 @@ export interface HostServerOptions {
   hydratedViews?: number;
   /** M4 log store file. Defaults to `<stateDir>/logs.db`; `false` disables logging. */
   logFile?: string | false;
+  /** M21 project work database. Defaults to `<stateDir>/project-work.db`. */
+  projectWorkFile?: string;
   /** Retention for the log store, and how much of a provider round-trip it keeps. */
   logRetention?: {
     maxRows?: number;
@@ -292,6 +295,14 @@ export class HostServer {
   /** M4 log store, or undefined when it could not be opened (see `logsUnavailable`). */
   readonly logs: LogStore | undefined;
   readonly logsUnavailable: string | undefined;
+  /**
+   * The canonical project lifecycle store (M21, D-331), or undefined when it
+   * could not be opened. Like the log store it is opened once, here, and
+   * closed with the host; unlike it, it holds work a person cannot recreate,
+   * so a failure to open is reported rather than swallowed.
+   */
+  readonly projectWork: ProjectWorkStore | undefined;
+  readonly projectWorkUnavailable: string | undefined;
   /** Background commands the agent left running, per session (docs/ux-fleet.md). */
   readonly tasks: TaskRegister;
   /** Runs, plans and missions read off disk — including sessions with no worker (M3). */
@@ -463,6 +474,19 @@ export class HostServer {
         this.logsUnavailable = error instanceof Error ? error.message : String(error);
         this.log(`log store unavailable: ${this.logsUnavailable}`);
       }
+    }
+    // The project lifecycle store (M21-T2). Under the state root, partitioned
+    // by stable project id, and never by a session or filesystem path.
+    try {
+      this.projectWork = new ProjectWorkStore({
+        file: options.projectWorkFile ?? join(stateDir, "project-work.db"),
+        log: (message) => this.log(message),
+      });
+      this.projectWorkUnavailable = undefined;
+    } catch (error) {
+      this.projectWork = undefined;
+      this.projectWorkUnavailable = error instanceof Error ? error.message : String(error);
+      this.log(`project work store unavailable: ${this.projectWorkUnavailable}`);
     }
     this.catalog = new SessionCatalog(options.sessionDir ?? defaultSessionDir(options.agentDir));
     this.views = new ViewCache(options.hydratedViews ?? 8);
@@ -1003,6 +1027,7 @@ export class HostServer {
     this.pendingLogRows = [];
     this.audit.close();
     this.logs?.close();
+    this.projectWork?.close();
     this.projects.close();
     this.attention.close();
     this.prefs.close();
