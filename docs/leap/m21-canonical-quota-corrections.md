@@ -46,3 +46,38 @@ net-transaction admission, persisted deletion credits and raw-row recompute.
 Run focused host project-work/protocol tests, build/types/identity; parent owns
 full gates and the first independent storage review. No unrelated framework,
 raised limits, weakened assertions, skips or live user-store experiments.
+
+## Parent triage of independent review472b1347 — one final correction batch
+
+- **H-1 accepted:** capture preparation also precedes accept-delivery,
+  verified-state evidence and attachCapture. All these doors need truthful
+  project/global byte/count refusal context. Prefer a small typed preparation
+  context over scattered unrelated copy; distinguish approval/completion from
+  evidence/link writes where wording matters. Prove retained preparation and
+  complete rollback of the refused write at each door.
+- **M-1 accepted:** use plain INSERT for immutable idempotency receipts and
+  remove the replacement pre-read. A duplicate must fail atomically, not reset
+  its persisted charge. Preserve ordinary replay and charge invariants.
+- **M-2 elevated for correction:** a page that can materialize roughly500 MB of
+  revision bodies is not an acceptable metadata-migration memory strategy.
+  Do not merely relabel the row bound. Compute charge from stored byte lengths
+  without returning source/body/payload strings in migration scan result rows,
+  or use an equivalently strict bounded-byte approach. Preserve exact UTF-8
+  including NUL/non-ASCII, BLOB handling, released payload and numeric/null
+  semantics; account explicitly for SQLite encoding. Keep raw-value recompute
+  independent of persisted charged_bytes and validate SQL/JS parity. Use owned
+  multi-page large-text fixtures and structural projection/bound assertions,
+  not a timing or RSS assertion. Existing logical limits stay unchanged.
+- **M-3 accepted:** simplify count-refusal serialization to a named, clear
+  branch or typed object rather than a nested conditional spread.
+- **M-4 deferred explicitly:** the existing large store's deletion cluster is
+  a cohesive future extraction candidate. Do not refactor its whole authority
+  during this bounded final correction; retain the report as structural debt.
+
+The full T19 reviewer is reading immutable candidate7115a976. Apply this batch
+in a NEW isolated branch based on that entire candidate plus this review and
+triage; never modify either frozen review target. Only one source fixer is
+active. Any later T19 correction follows this batch, in dependency order.
+The parent verifies the final storage delta and focused tests; there is no
+second independent storage review (the reviewer's request to re-review is not
+adopted). Preserve full source/review ancestry and record evidence precisely.
