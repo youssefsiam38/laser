@@ -22,7 +22,13 @@ import {
   FOREGROUND_COMMAND_SECONDS_MAX,
   FOREGROUND_COMMAND_SECONDS_MIN,
 } from "./agents.js";
-import { MAX_FALLBACK_CHAIN_MODELS } from "./fallback.js";
+import {
+  MAX_MODEL_PROFILES,
+  MAX_PROFILE_MODELS,
+  MODEL_PROFILE_ID_PATTERN,
+  PROFILE_DESCRIPTION_MAX,
+  PROFILE_NAME_MAX,
+} from "./fallback.js";
 import { PROVIDER_FAILURE_CLASSES } from "./provider-failure.js";
 import { WORKER_MODES } from "./runtime-recovery.js";
 import { runtimeActivationParamsSchemas } from "./runtime-activation.js";
@@ -182,6 +188,36 @@ export const modelRefSchema = z
   .strict();
 
 export const thinkingLevelSchema = z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+// ---------- model profiles (docs/model-profiles.md) ----------
+
+/** `mp_<ulid>`: opaque, stable, and the only thing an assignment ever holds. */
+export const modelProfileIdSchema = z.string().regex(MODEL_PROFILE_ID_PATTERN, "a profile id this app generated");
+
+/** One ordered entry of a profile. `thinking` absent means the model's own default. */
+export const profileModelRefSchema = z
+  .object({
+    provider: z.string().min(1).max(100),
+    id: z.string().min(1).max(200),
+    thinking: thinkingLevelSchema.optional(),
+  })
+  .strict();
+
+export const modelProfileSchema = z
+  .object({
+    id: modelProfileIdSchema,
+    name: z.string().min(1).max(PROFILE_NAME_MAX),
+    description: z.string().max(PROFILE_DESCRIPTION_MAX).optional(),
+    models: z.array(profileModelRefSchema).min(1).max(MAX_PROFILE_MODELS),
+    origin: z.enum(["seeded", "person"]),
+    updatedAt: z.string().min(1).max(64),
+  })
+  .strict();
+
+/** A save carries the whole profile; the writer stamps `updatedAt`. */
+export const modelProfileInputSchema = modelProfileSchema.extend({ updatedAt: z.string().min(1).max(64).optional() }).strict();
+
+export const modelProfilesSchema = z.array(modelProfileSchema).max(MAX_MODEL_PROFILES);
 
 export const uiDialogResponseSchema = z.union([
   z.object({ id: z.string().min(1), value: z.string() }).strict(),
@@ -491,7 +527,7 @@ export const keybindingChangeSchema = z.union([
 export const agentNameSchema = z.string().regex(AGENT_NAME_PATTERN, {
   message: "lower case, starts with a letter, letters, digits and hyphens only, at most 40 characters",
 });
-export const agentModelChoiceSchema = z.object({ provider: z.string().min(1).max(100), id: z.string().min(1).max(200) }).strict();
+
 export const agentMessageModeSchema = z.enum(AGENT_MESSAGE_MODES).default("interrupt");
 const agentProjectCwdSchema = z.string().min(1).max(4096);
 export const agentLocationSchema = z.discriminatedUnion("scope", [
@@ -511,7 +547,7 @@ export const agentDefinitionInputSchema = z
     instructions: z.string().max(AGENT_INSTRUCTIONS_MAX),
     engineInstructions: z.boolean(),
     excludeCoreInstructions: z.boolean(),
-    model: agentModelChoiceSchema.nullable(),
+    profileId: modelProfileIdSchema.nullable(),
     thinkingLevel: thinkingLevelSchema.nullable(),
     supportsSubagents: z.boolean(),
     allowedAgents: z.array(agentNameSchema).max(100),
@@ -541,12 +577,16 @@ export const worktreeSetupSchema = z.discriminatedUnion("status", [
 ]);
 
 /**
- * The fallback record a session file carries (M15-T3).
+ * The record a session file carries while it moves through its profile.
  *
  * It is read back from a file that a previous generation of this app wrote, so
  * it is validated rather than trusted: a malformed entry must leave a session
- * with no chain, never with half a traversal. Strict, so a new field cannot
+ * with no profile, never with half a traversal. Strict, so a new field cannot
  * appear without this schema and the round-trip sample saying what it means.
+ *
+ * `activation` is a union on purpose: entries written before M22 key their
+ * activation by `chainKey` and are still read, as history. Nothing re-activates
+ * them (`docs/model-profiles.md`, "Migration").
  */
 const isoInstant = z.string().min(1).max(64);
 const fallbackModelRefSchema = z
@@ -562,14 +602,27 @@ export const sessionFallbackEntrySchema = z
     to: fallbackModelRefSchema.optional(),
     failure: z.object({ class: providerFailureClassSchema, at: isoInstant }).strict().optional(),
     activation: z
-      .object({
-        id: z.string().min(1).max(100),
-        chainKey: z.string().min(1).max(320),
-        models: z.array(fallbackModelRefSchema).min(1).max(MAX_FALLBACK_CHAIN_MODELS),
-        position: z.number().int().nonnegative().max(MAX_FALLBACK_CHAIN_MODELS),
-        startedAt: isoInstant,
-      })
-      .strict()
+      .union([
+        z
+          .object({
+            id: z.string().min(1).max(100),
+            profileId: modelProfileIdSchema,
+            models: z.array(profileModelRefSchema).min(1).max(MAX_PROFILE_MODELS),
+            position: z.number().int().nonnegative().max(MAX_PROFILE_MODELS),
+            startedAt: isoInstant,
+          })
+          .strict(),
+        // Pre-M22, kept readable so a conversation's history still renders.
+        z
+          .object({
+            id: z.string().min(1).max(100),
+            chainKey: z.string().min(1).max(320),
+            models: z.array(fallbackModelRefSchema).min(1).max(MAX_PROFILE_MODELS),
+            position: z.number().int().nonnegative().max(MAX_PROFILE_MODELS),
+            startedAt: isoInstant,
+          })
+          .strict(),
+      ])
       .nullable(),
     failover: z
       .object({
@@ -587,7 +640,7 @@ export const sessionFallbackEntrySchema = z
               })
               .strict(),
           )
-          .max(4 * MAX_FALLBACK_CHAIN_MODELS),
+          .max(4 * MAX_PROFILE_MODELS),
         endedAt: isoInstant.optional(),
         ended: z.enum(["switched", "returned", "exhausted", "aborted"]).optional(),
       })
@@ -1181,9 +1234,18 @@ export const clientParamsSchemas = {
   "agents/runs/stop": z.object({ runId, reason: z.string().max(2000).optional() }).strict(),
   "agents/worktree/status": z.object({ path: sessionPath }).strict(),
   "agents/worktree/remove": z.object({ path: sessionPath, force: z.boolean().optional() }).strict(),
-  "agents/builtin/set-model": z.object({ name: builtinAgentNameSchema, model: agentModelChoiceSchema.nullable() }).strict(),
+  "agents/builtin/set-profile": z.object({ name: builtinAgentNameSchema, profileId: modelProfileIdSchema.nullable() }).strict(),
   "agents/builtin/set-instructions": z.object({ name: builtinAgentNameSchema, instructions: z.string().max(AGENT_INSTRUCTIONS_MAX).nullable() }).strict(),
-  "agents/namer/qualify": z.object({ cwd }).strict(),
+
+  // --- M22 model profiles (docs/model-profiles.md) ---
+  "models/profiles/list": z.object({ cwd: cwd.optional() }).strict(),
+  "models/profiles/save": z.object({ cwd: cwd.optional(), profile: modelProfileInputSchema }).strict(),
+  "models/profiles/delete": z
+    .object({ cwd: cwd.optional(), id: modelProfileIdSchema, replacementId: modelProfileIdSchema.optional() })
+    .strict(),
+  "session/profile/set": z.object({ path: sessionPath, profileId: modelProfileIdSchema }).strict(),
+  // The pin path, under its own name. `pi/model/set` means the same thing.
+  "session/model/pin": z.object({ path: sessionPath, model: modelRefSchema }).strict(),
   "agents/sync": z.object({ snapshot: agentsSnapshotSchema }).strict(),
   "pi/worker/recover-agent-failures": z.object({ runs: z.array(recoveryAgentRunSchema).min(1).max(AGENT_FAILURE_RECOVERY_BATCH_MAX) }).strict(),
 

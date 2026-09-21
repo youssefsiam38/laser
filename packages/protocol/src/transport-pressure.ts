@@ -125,7 +125,8 @@ export const NOTIFICATION_PRESSURE = {
   "agents/updated": "state",
   "agents/run": "state",
   "agents/event": "state",
-  "agents/beam/choose-model": "state",
+  // Seeded profiles a person is asked to review. State: nothing re-reads it.
+  "models/profiles/seeded": "state",
   "mcp/changed": "state",
   "tasks/update": "state",
 } satisfies Record<keyof HostNotifications, NotificationPressureClass>;

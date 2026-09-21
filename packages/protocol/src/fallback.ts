@@ -1,155 +1,305 @@
 /**
- * Model fallback chains — Laser's own vocabulary (`docs/model-fallback-chains.md`).
+ * Model profiles — Laser's one model-routing concept (`docs/model-profiles.md`,
+ * D-346).
  *
- * A chain is an ordered list of models a person writes down once: the first
- * model *starts* the chain, the rest take over when it cannot answer. It is not
- * routing and not a cost policy; it exists for the moment a provider stops
- * being usable and the work in flight must not die with it.
+ * A profile is a person-named, ordered list of connected models. The first
+ * model is the one the profile prefers; the rest are what it moves to, in
+ * order, when the model in use stops being reachable. Every surface that used
+ * to choose a model chooses a profile; a session may pin one model instead,
+ * and a pinned session has no second model to move to.
  *
- * Everything here is pure: the vocabulary, the rules a person's edit must obey,
- * and the shape of the durable record a session keeps. No engine, no clock, no
- * filesystem.
+ * This file also keeps the durable runtime record a session writes while it
+ * moves through its profile — the M15-T3 state machine, with the profile as
+ * its unit of activation (`docs/model-fallback-chains.md` §3–§6 is the runtime
+ * record that describes it).
+ *
+ * Everything here is pure: the vocabulary, the rules a person's edit must
+ * obey, and the shape of the record. No engine, no clock, no filesystem, and
+ * no engine vocabulary.
  */
 
 import { WIRE_NAMESPACE } from "./identity.js";
 import type { ProviderFailureClass } from "./provider-failure.js";
+import type { ModelRef, SessionState, ThinkingLevel } from "./messages.js";
 
-// ---------------------------------------------------------------- the chains
+// --------------------------------------------------------------- the domain
 
-/** A model in a chain. Only the identity is stored; names come from the catalogue. */
-export interface FallbackModelRef {
+/** A model's identity. Only this is stored; names come from the catalogue. */
+export interface ModelIdentity {
   provider: string;
   id: string;
 }
 
-/** One chain. `models[0]` starts it; the rest are its fallbacks, in order. */
-export interface FallbackChain {
-  models: FallbackModelRef[];
+/** One entry of a profile: a model, and how hard it should think in this profile. */
+export interface ProfileModelRef extends ModelIdentity {
+  /** Absent means the model's own default level. */
+  thinking?: ThinkingLevel;
 }
 
-/** The settings path chains are written to, in the global settings file. */
-export const FALLBACK_CHAINS_SETTING = "fallbackChains";
+/** Where a profile came from. Seeded profiles are ordinary, editable profiles. */
+export type ModelProfileOrigin = "seeded" | "person";
 
+/**
+ * One profile.
+ *
+ * `id` is opaque and survives every rename, so an assignment never breaks when
+ * a person renames what they chose.
+ */
+export interface ModelProfile {
+  id: string;
+  name: string;
+  description?: string;
+  models: ProfileModelRef[];
+  origin: ModelProfileOrigin;
+  /** ISO time of the last edit. History, not identity. */
+  updatedAt: string;
+}
+
+/** What a save request carries: everything but the timestamp the writer stamps. */
+export type ModelProfileInput = Omit<ModelProfile, "updatedAt"> & { updatedAt?: string };
+
+/** The settings path profiles are written to, in the global settings file. */
+export const MODEL_PROFILES_SETTING = "modelProfiles";
+
+/** Storage and interface sanity, not a product tier. */
+export const MAX_MODEL_PROFILES = 200;
 /** A list, not a program. */
-export const MAX_FALLBACK_CHAIN_MODELS = 12;
-export const MAX_FALLBACK_CHAINS = 50;
+export const MAX_PROFILE_MODELS = 12;
+export const PROFILE_NAME_MAX = 40;
+export const PROFILE_DESCRIPTION_MAX = 200;
+
+/** Profile ids are `mp_<ulid>`; the bound is generous so a different id source still reads. */
+export const MODEL_PROFILE_ID_PREFIX = "mp_";
+export const MODEL_PROFILE_ID_PATTERN = /^mp_[0-9A-Za-z]{8,48}$/;
+
+export function isModelProfileId(value: unknown): value is string {
+  return typeof value === "string" && MODEL_PROFILE_ID_PATTERN.test(value);
+}
+
+/** The three profiles Laser seeds, in the order a person sees them. */
+export const SEEDED_PROFILE_NAMES = ["Smart", "Balanced", "Fast"] as const;
+export type SeededProfileName = (typeof SEEDED_PROFILE_NAMES)[number];
+
+/**
+ * The settings keys that hold an assignment. Every surface that selects a model
+ * holds one of these, never a raw model (`docs/model-profiles.md`
+ * "Assignments").
+ */
+export const DEFAULT_PROFILE_SETTING = "defaultProfileId";
+export const NAMING_PROFILE_SETTING = "namingProfileId";
+export const ORACLE_PROFILE_SETTING = "oracleProfileId";
+export const DESIGN_INDEX_PROFILE_SETTING = "designIndexProfileId";
+
+export const PROFILE_ASSIGNMENT_SETTINGS = [
+  DEFAULT_PROFILE_SETTING,
+  NAMING_PROFILE_SETTING,
+  ORACLE_PROFILE_SETTING,
+  DESIGN_INDEX_PROFILE_SETTING,
+] as const;
+export type ProfileAssignmentSetting = (typeof PROFILE_ASSIGNMENT_SETTINGS)[number];
+
+/** Which profile each assignable surface uses. `null` means nothing is assigned yet. */
+export interface ProfileAssignments {
+  defaultProfileId: string | null;
+  namingProfileId: string | null;
+  oracleProfileId: string | null;
+  designIndexProfileId: string | null;
+}
+
+export const EMPTY_PROFILE_ASSIGNMENTS: ProfileAssignments = {
+  defaultProfileId: null,
+  namingProfileId: null,
+  oracleProfileId: null,
+  designIndexProfileId: null,
+};
 
 /** `provider/id`, lower-cased: the identity every table in this feature is keyed by. */
-export function modelKey(model: FallbackModelRef): string {
+export function modelKey(model: ModelIdentity): string {
   return `${model.provider}/${model.id}`.toLowerCase();
 }
 
-export function sameModel(a: FallbackModelRef | null | undefined, b: FallbackModelRef | null | undefined): boolean {
+export function sameModel(a: ModelIdentity | null | undefined, b: ModelIdentity | null | undefined): boolean {
   return !!a && !!b && modelKey(a) === modelKey(b);
 }
 
-/**
- * The chain `model` starts, or undefined.
- *
- * Only the **first** model of a chain matches. A model that appears later in a
- * chain does not activate it — that rule is the whole reason chains never merge
- * and never nest.
- */
-export function chainFor(
-  chains: readonly FallbackChain[],
-  model: FallbackModelRef | null | undefined,
-): FallbackChain | undefined {
-  if (!model) return undefined;
-  const key = modelKey(model);
-  return chains.find((chain) => chain.models[0] !== undefined && modelKey(chain.models[0]) === key);
+/** The profile with this id, or undefined. Ids are opaque and compared exactly. */
+export function profileById(
+  profiles: readonly ModelProfile[],
+  id: string | null | undefined,
+): ModelProfile | undefined {
+  if (!id) return undefined;
+  return profiles.find((profile) => profile.id === id);
 }
 
-/** Read a settings value of unknown provenance as chains, dropping nothing valid. */
-export function readFallbackChainsValue(value: unknown): FallbackChain[] {
+/** The first profile whose preferred model is `model`. Used by the migration only. */
+export function profileStartingWith(
+  profiles: readonly ModelProfile[],
+  model: ModelIdentity | null | undefined,
+): ModelProfile | undefined {
+  if (!model) return undefined;
+  const key = modelKey(model);
+  return profiles.find((profile) => profile.models[0] !== undefined && modelKey(profile.models[0]) === key);
+}
+
+/** A profile with this name, ignoring case. Names are unique, so at most one. */
+export function profileByName(profiles: readonly ModelProfile[], name: string): ModelProfile | undefined {
+  const wanted = name.trim().toLowerCase();
+  return profiles.find((profile) => profile.name.trim().toLowerCase() === wanted);
+}
+
+const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+function readThinking(value: unknown): ThinkingLevel | undefined {
+  return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value)
+    ? (value as ThinkingLevel)
+    : undefined;
+}
+
+/**
+ * Read a settings value of unknown provenance as profiles, dropping nothing
+ * usable. A file edited by hand is read for what it does say.
+ */
+export function readModelProfilesValue(value: unknown): ModelProfile[] {
   if (!Array.isArray(value)) return [];
-  const chains: FallbackChain[] = [];
+  const profiles: ModelProfile[] = [];
   for (const entry of value) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const models = (entry as { models?: unknown }).models;
-    if (!Array.isArray(models)) continue;
-    const refs: FallbackModelRef[] = [];
-    for (const model of models) {
-      if (!model || typeof model !== "object") continue;
-      const { provider, id } = model as { provider?: unknown; id?: unknown };
+    const raw = entry as Record<string, unknown>;
+    if (typeof raw.id !== "string" || raw.id.trim() === "") continue;
+    if (typeof raw.name !== "string" || raw.name.trim() === "") continue;
+    if (!Array.isArray(raw.models)) continue;
+    const models: ProfileModelRef[] = [];
+    const seen = new Set<string>();
+    for (const model of raw.models) {
+      if (!model || typeof model !== "object" || Array.isArray(model)) continue;
+      const { provider, id, thinking } = model as { provider?: unknown; id?: unknown; thinking?: unknown };
       if (typeof provider !== "string" || typeof id !== "string") continue;
       if (provider.trim() === "" || id.trim() === "") continue;
-      refs.push({ provider: provider.trim(), id: id.trim() });
+      const ref: ProfileModelRef = { provider: provider.trim(), id: id.trim() };
+      const level = readThinking(thinking);
+      if (level) ref.thinking = level;
+      const key = modelKey(ref);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      models.push(ref);
     }
-    chains.push({ models: refs });
+    if (models.length === 0) continue;
+    const description = typeof raw.description === "string" ? raw.description : undefined;
+    profiles.push({
+      id: raw.id.trim(),
+      name: raw.name.trim(),
+      ...(description !== undefined && description !== "" ? { description } : {}),
+      models,
+      origin: raw.origin === "seeded" ? "seeded" : "person",
+      updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
+    });
   }
-  return chains;
+  return profiles;
 }
 
 // ------------------------------------------------------------- the edit rules
 
-/** One thing wrong with a person's chains, written for that person. */
-export interface FallbackChainIssue {
-  /** Index into the chains array. */
-  chain: number;
-  /** Index into that chain's models, when the problem is one model. */
+/** One thing wrong with a person's profiles, written for that person. */
+export interface ModelProfileIssue {
+  /** Index into the profiles list; `-1` for a problem with the list itself. */
+  profile: number;
+  /** Index into that profile's models, when the problem is one model. */
   model?: number;
+  /** The form field to attach the message to. */
+  field?: "id" | "name" | "description" | "models" | "origin";
   message: string;
 }
 
 /**
- * Every rule a saved set of chains must obey. The worker runs this before it
+ * Every rule a saved set of profiles must obey. The worker runs this before it
  * writes (authoritative) and the Settings screen runs the same function to draw
  * its messages, so the two cannot disagree.
  *
  * A model that no longer exists or whose provider is signed out is **not** an
- * issue: the chain is a person's intent, and deleting it because a credential
- * expired would be worse than carrying it. The runtime skips such a model with
- * a recorded reason instead.
+ * issue: the profile is a person's intent, and dropping an entry because a
+ * credential expired would be worse than carrying it. The runtime skips such a
+ * model with a recorded reason instead.
  */
-export function validateFallbackChains(value: unknown): FallbackChainIssue[] {
+export function validateModelProfiles(value: unknown): ModelProfileIssue[] {
   if (value === undefined || value === null) return [];
-  if (!Array.isArray(value)) return [{ chain: -1, message: "Fallback chains must be a list." }];
-  const issues: FallbackChainIssue[] = [];
-  if (value.length > MAX_FALLBACK_CHAINS) {
-    issues.push({ chain: -1, message: `Keep it to ${MAX_FALLBACK_CHAINS} chains or fewer.` });
+  if (!Array.isArray(value)) return [{ profile: -1, message: "Model profiles must be a list." }];
+  const issues: ModelProfileIssue[] = [];
+  if (value.length > MAX_MODEL_PROFILES) {
+    issues.push({ profile: -1, message: `Keep it to ${MAX_MODEL_PROFILES} profiles or fewer.` });
   }
-  const starters = new Map<string, number>();
-  value.forEach((raw, chainIndex) => {
+  const ids = new Map<string, number>();
+  const names = new Map<string, number>();
+  value.forEach((raw, index) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      issues.push({ chain: chainIndex, message: "A chain must be an object with a list of models." });
+      issues.push({ profile: index, message: "A profile must be an object." });
       return;
     }
-    const models = (raw as { models?: unknown }).models;
+    const entry = raw as Record<string, unknown>;
+    if (!isModelProfileId(entry.id)) {
+      issues.push({ profile: index, field: "id", message: "A profile needs an id this app generated." });
+    } else if (ids.has(entry.id)) {
+      issues.push({ profile: index, field: "id", message: "Two profiles cannot share an id." });
+    } else {
+      ids.set(entry.id, index);
+    }
+
+    const name = typeof entry.name === "string" ? entry.name.trim() : "";
+    if (name === "") {
+      issues.push({ profile: index, field: "name", message: "Give this profile a name." });
+    } else if (name.length > PROFILE_NAME_MAX) {
+      issues.push({ profile: index, field: "name", message: `Keep the name to ${PROFILE_NAME_MAX} characters or fewer.` });
+    } else if (names.has(name.toLowerCase())) {
+      issues.push({ profile: index, field: "name", message: `Another profile is already called “${name}”.` });
+    } else {
+      names.set(name.toLowerCase(), index);
+    }
+
+    if (entry.description !== undefined && typeof entry.description !== "string") {
+      issues.push({ profile: index, field: "description", message: "Make the description text." });
+    } else if (typeof entry.description === "string" && entry.description.length > PROFILE_DESCRIPTION_MAX) {
+      issues.push({
+        profile: index,
+        field: "description",
+        message: `Keep the description to ${PROFILE_DESCRIPTION_MAX} characters or fewer.`,
+      });
+    }
+
+    if (entry.origin !== undefined && entry.origin !== "seeded" && entry.origin !== "person") {
+      issues.push({ profile: index, field: "origin", message: "A profile is either seeded or made by you." });
+    }
+
+    const models = entry.models;
     if (!Array.isArray(models)) {
-      issues.push({ chain: chainIndex, message: "A chain must name its models." });
+      issues.push({ profile: index, field: "models", message: "A profile must name its models." });
       return;
     }
-    if (models.length < 2) {
-      issues.push({ chain: chainIndex, message: "Add a model to fall back to." });
+    if (models.length === 0) {
+      issues.push({ profile: index, field: "models", message: "Add a model to this profile." });
     }
-    if (models.length > MAX_FALLBACK_CHAIN_MODELS) {
-      issues.push({ chain: chainIndex, message: `Keep a chain to ${MAX_FALLBACK_CHAIN_MODELS} models or fewer.` });
+    if (models.length > MAX_PROFILE_MODELS) {
+      issues.push({ profile: index, field: "models", message: `Keep a profile to ${MAX_PROFILE_MODELS} models or fewer.` });
     }
     const seen = new Map<string, number>();
     models.forEach((model, modelIndex) => {
       if (!model || typeof model !== "object" || Array.isArray(model)) {
-        issues.push({ chain: chainIndex, model: modelIndex, message: "A model needs a provider and a model id." });
+        issues.push({ profile: index, model: modelIndex, message: "A model needs a provider and a model id." });
         return;
       }
-      const { provider, id } = model as { provider?: unknown; id?: unknown };
+      const { provider, id, thinking } = model as { provider?: unknown; id?: unknown; thinking?: unknown };
       if (typeof provider !== "string" || provider.trim() === "" || typeof id !== "string" || id.trim() === "") {
-        issues.push({ chain: chainIndex, model: modelIndex, message: "A model needs a provider and a model id." });
+        issues.push({ profile: index, model: modelIndex, message: "A model needs a provider and a model id." });
+        return;
+      }
+      if (thinking !== undefined && readThinking(thinking) === undefined) {
+        issues.push({ profile: index, model: modelIndex, message: "Choose a thinking level this app offers." });
         return;
       }
       const key = modelKey({ provider, id });
-      const first = seen.get(key);
-      if (first !== undefined) {
-        issues.push({ chain: chainIndex, model: modelIndex, message: `${id} is already in this chain.` });
+      if (seen.has(key)) {
+        issues.push({ profile: index, model: modelIndex, message: `${id} is already in this profile.` });
         return;
       }
       seen.set(key, modelIndex);
-      if (modelIndex !== 0) return;
-      const other = starters.get(key);
-      if (other !== undefined) {
-        issues.push({ chain: chainIndex, model: 0, message: `${id} already starts a chain.` });
-        return;
-      }
-      starters.set(key, chainIndex);
     });
   });
   return issues;
@@ -158,23 +308,24 @@ export function validateFallbackChains(value: unknown): FallbackChainIssue[] {
 // -------------------------------------------------------------- the live state
 
 /**
- * A chain bound to one session.
+ * A profile bound to one session.
  *
- * `models` is the snapshot taken when the chain activated, so a later settings
- * edit cannot re-order a conversation that is already running. `position` is
- * the index of the model that is selected now. `id` fences stale failover work
- * against a person's own model choice.
+ * `models` is the snapshot taken when the profile activated, so a later edit
+ * cannot re-order a conversation that is already running. `position` is the
+ * index of the model that is selected now. `id` fences stale work against a
+ * person's own choice.
  */
 export interface FallbackActivation {
   id: string;
-  /** `provider/id` of the chain's first model. The chain's identity; never changes. */
-  chainKey: string;
-  models: FallbackModelRef[];
+  /** The profile's stable id. The activation's identity; never changes. */
+  profileId: string;
+  /** The profile's models, exactly as they were when it activated. */
+  models: ProfileModelRef[];
   position: number;
   startedAt: string;
 }
 
-/** One candidate tried during one failover event. */
+/** One candidate tried while a session moved through its profile. */
 export interface FallbackAttempt {
   /** `provider/id`, lower-cased. */
   model: string;
@@ -202,7 +353,7 @@ export interface FallbackModelMemory {
   cooldownUntil?: string;
   /** A provider-stated recovery instant. Only ever set from a header a provider sent. */
   knownResetAt?: string;
-  /** Will not fix itself while this activation lasts. Cleared only by a manual model change. */
+  /** Will not fix itself while this activation lasts. Cleared only by a manual choice. */
   nonTransient?: boolean;
 }
 
@@ -222,19 +373,93 @@ export interface SessionFallbackEntry {
   version: 1;
   event: FallbackEntryEvent;
   at: string;
-  from?: FallbackModelRef;
-  to?: FallbackModelRef;
+  from?: ModelIdentity;
+  to?: ModelIdentity;
   failure?: { class: ProviderFailureClass; at: string };
-  /** Null when a manual selection cleared the activation without resolving a new one. */
+  /** Null when a pin or a missing profile cleared the activation. */
   activation: FallbackActivation | null;
-  /** The failover event in flight or just closed; absent between events. */
+  /** The traversal in flight or just closed; absent between events. */
   failover?: FallbackEvent;
   /** Activation memory, keyed by `provider/id`. */
   models: Record<string, FallbackModelMemory>;
 }
 
+/**
+ * A record written before M22, kept readable as history.
+ *
+ * Sessions written by the previous generation keyed their activation by the
+ * first model of a chain. Those entries are read so a conversation's history
+ * still renders, and they are **never** re-activated: the session has no
+ * profile and displays as pinned (`docs/model-profiles.md`, "Migration").
+ */
+export interface LegacyChainActivation {
+  id: string;
+  chainKey: string;
+  models: ModelIdentity[];
+  position: number;
+  startedAt: string;
+}
+
+/** True when a persisted activation is a pre-M22 one, keyed by a chain. */
+export function isLegacyChainActivation(value: unknown): value is LegacyChainActivation {
+  return (
+    !!value
+    && typeof value === "object"
+    && typeof (value as { chainKey?: unknown }).chainKey === "string"
+    && (value as { profileId?: unknown }).profileId === undefined
+  );
+}
+
 /** The custom entry type the worker writes {@link SessionFallbackEntry} under. */
 export const SESSION_FALLBACK_ENTRY_TYPE = `${WIRE_NAMESPACE}/fallback`;
 
-/** Laser's own cooldown for a transient failure, when the provider stated nothing (§2.6). */
+/** Laser's own cooldown for a transient failure, when the provider stated nothing. */
 export const FALLBACK_DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
+
+// ------------------------------------------------------------------ methods
+
+declare module "./messages.js" {
+  interface ClientRequests {
+    /**
+     * Every profile, and which surface uses which. Read-only, so any reach may
+     * ask: a phone draws the same picker the desktop does.
+     */
+    "models/profiles/list": {
+      params: { cwd?: string };
+      result: { profiles: ModelProfile[]; assignments: ProfileAssignments };
+    };
+    /**
+     * Create or replace one profile, by id. The whole profile is sent; the
+     * writer stamps `updatedAt` and validates the whole list before writing.
+     */
+    "models/profiles/save": {
+      params: { cwd?: string; profile: ModelProfileInput };
+      result: { profiles: ModelProfile[]; assignments: ProfileAssignments };
+    };
+    /**
+     * Delete one profile. A profile something still points at may only be
+     * deleted with `replacementId`, which every reference is moved to in the
+     * same write — a delete never leaves a dangling id.
+     */
+    "models/profiles/delete": {
+      params: { cwd?: string; id: string; replacementId?: string };
+      result: { profiles: ModelProfile[]; assignments: ProfileAssignments };
+    };
+    /** Re-anchor one session to a profile: it continues on that profile's first model. */
+    "session/profile/set": { params: { path: string; profileId: string }; result: { state: SessionState } };
+    /**
+     * Pin one session to one model, with nothing to move to. The deliberate
+     * escape hatch of `docs/model-profiles.md` "Per-session override"; it
+     * creates no profile and is never the default path.
+     */
+    "session/model/pin": { params: { path: string; model: ModelRef }; result: { state: SessionState } };
+  }
+
+  interface HostNotifications {
+    /**
+     * A first provider is connected and Laser filled the seeded profiles from
+     * what it offers. The client shows them for review; nothing is pending.
+     */
+    "models/profiles/seeded": { profiles: ModelProfile[] };
+  }
+}

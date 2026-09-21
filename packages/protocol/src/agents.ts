@@ -106,11 +106,6 @@ export const AGENT_FAILURE_RECOVERY_BATCH_MAX = 32;
 
 // ---------- definitions ----------
 
-export interface AgentModelChoice {
-  provider: string;
-  id: string;
-}
-
 export type AgentSkillScope = "global" | "project";
 
 /** A scoped skill: identity plus the file the definition was validated against. */
@@ -163,8 +158,13 @@ export interface AgentDefinition {
    * applies to a built-in.
    */
   excludeCoreInstructions: boolean;
-  /** `null` follows the configured default model. */
-  model: AgentModelChoice | null;
+  /**
+   * The Model Profile this agent runs on (`docs/model-profiles.md`). `null`
+   * inherits `defaultProfileId`, and a profile id nothing answers to is a
+   * warning on the `profile` field, not a refusal: the agent runs on the
+   * default and the substitution is visible.
+   */
+  profileId: string | null;
   thinkingLevel: ThinkingLevel | null;
   supportsSubagents: boolean;
   /** Definitions this agent may start; meaningful only with `supportsSubagents`. */
@@ -215,7 +215,7 @@ export interface AgentIssue {
 }
 
 /** `file` names a Markdown definition file the host could not read or parse. */
-export type AgentWarningField = "skills" | "model" | "allowedAgents" | "file";
+export type AgentWarningField = "skills" | "profile" | "allowedAgents" | "file";
 
 /** Periodic validation found something a person should look at. */
 export interface AgentWarning {
@@ -226,7 +226,7 @@ export interface AgentWarning {
    * (a project agent shadows a global one), so this is the unambiguous key.
    */
   path?: string;
-  /** The specific skill name, model id or agent name concerned. */
+  /** The specific skill name, profile id or agent name concerned. */
   target?: string;
   message: string;
   since: string;
@@ -237,40 +237,16 @@ export interface AgentPolicy {
   foregroundCommandSeconds: number;
 }
 
-export type NamerStatus = "unqualified" | "qualifying" | "ready" | "unavailable";
-
-export interface NamerCandidate {
-  model: AgentModelChoice;
-  latencyMs: number | null;
-  valid: boolean;
-  sample?: string;
-  error?: string;
-  /** Input + output list price per million tokens, when the catalog knows it. */
-  costPerMillion?: number;
-}
-
-export interface NamerState {
-  status: NamerStatus;
-  model: AgentModelChoice | null;
-  qualifiedAt?: string;
-  candidates: NamerCandidate[];
-  reason?: string;
-}
-
-export interface BeamState {
-  model: AgentModelChoice | null;
-  suggested: AgentModelChoice | null;
-  /** True until a person picks or dismisses; the choice dialog opens on it. */
-  needsChoice: boolean;
-}
-
 /**
- * Chat's model. Every built-in's model is the person's to choose; Chat has no
- * suggestion engine and no benchmark behind it, so its state is the choice
- * alone. `null` means it follows the configured default model.
+ * Which profile each built-in runs on, while built-ins exist (M23 removes
+ * them). `null` inherits `defaultProfileId`, exactly as a custom agent does.
+ * There is no benchmark, no candidate list and no qualification step: naming
+ * is a one-shot request on the naming profile (`docs/model-profiles.md`).
  */
-export interface ChatState {
-  model: AgentModelChoice | null;
+export interface BuiltinProfiles {
+  beam: string | null;
+  chat: string | null;
+  namer: string | null;
 }
 
 export interface AgentsSnapshot {
@@ -280,9 +256,8 @@ export interface AgentsSnapshot {
   defaultAgent: string;
   warnings: AgentWarning[];
   policy: AgentPolicy;
-  namer: NamerState;
-  beam: BeamState;
-  chat: ChatState;
+  /** The profile each built-in runs on. */
+  builtinProfiles: BuiltinProfiles;
   /** The person's durable prompt choices; `null` restores that built-in's shipped instructions. */
   builtinInstructions: BuiltinInstructionOverrides;
   /** Historical custom names → the current definition name, so persisted sessions survive a rename. */
@@ -441,7 +416,15 @@ export interface AgentRun extends AgentRunIdentity {
   error?: string;
   endedBy?: { initiator: AgentRunInitiator; reason?: string };
   goal?: { id: string; objective: string };
+  /** The model that actually answered for this run: evidence beside `profileId`. */
   model?: ModelRef | null;
+  /** The profile this run was started on. Intent, and the attribution column. */
+  profileId?: string | null;
+  /**
+   * Set when the profile the definition named was not there and the run fell
+   * back to `defaultProfileId`. The fleet row shows the substitution.
+   */
+  substitutedProfile?: { requested: string; used: string | null };
   activity?: { turns: number; tools: number; currentTool?: string; label?: string; lastAt: string };
   /** Present exactly while `status` is `needs_input`: the question nobody has answered yet. */
   question?: AgentRunQuestion;
@@ -594,16 +577,13 @@ declare module "./messages.js" {
       result: { removed: boolean; worktree: AgentWorktreeStatus | null };
     };
     /**
-     * A person chooses a built-in agent's model. One method for all three:
+     * A person chooses a built-in agent's profile. One method for all three:
      * Beam, Chat and Namer are the same choice made in the same control, and
-     * `null` returns that agent to the configured default (for Namer, to the
-     * next qualification). Beam's pending choice is closed either way.
+     * `null` returns that agent to the configured default profile.
      */
-    "agents/builtin/set-model": { params: { name: BuiltinAgentName; model: AgentModelChoice | null }; result: { snapshot: AgentsSnapshot } };
+    "agents/builtin/set-profile": { params: { name: BuiltinAgentName; profileId: string | null }; result: { snapshot: AgentsSnapshot } };
     /** Replace one built-in's system instructions; `null` restores the shipped prompt. */
     "agents/builtin/set-instructions": { params: { name: BuiltinAgentName; instructions: string | null }; result: { snapshot: AgentsSnapshot } };
-    /** Benchmark connected naming candidates and pick Namer's. Routed to the built-in workspace worker. */
-    "agents/namer/qualify": { params: { cwd: string }; result: NamerState };
     /** Host → worker only: the current definitions. Refused from clients. */
     "agents/sync": { params: { snapshot: AgentsSnapshot }; result: {} };
     /** Host → a recovered worker only: re-deliver harness-owned child failures to loaded parents. */
@@ -614,7 +594,5 @@ declare module "./messages.js" {
     "agents/updated": AgentsSnapshot;
     "agents/run": { run: AgentRun };
     "agents/event": AgentEvent;
-    /** The first provider is connected and Beam has no model yet. */
-    "agents/beam/choose-model": { suggested: AgentModelChoice | null };
   }
 }

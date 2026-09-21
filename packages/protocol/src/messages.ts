@@ -23,6 +23,7 @@ import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js
 import type { PendingMessage } from "./pending.js";
 import type { BodyComponent, BodyRegion, ElidedEntry, EntryRegionsResult, ImagePartReference, PersistedBodyIdentity } from "./body-range.js";
 import type { SessionTelemetry, SessionTelemetryParams } from "./telemetry.js";
+import type { ModelProfile, ProfileAssignments } from "./fallback.js";
 import type {
   CheckpointList,
   CheckpointListParams,
@@ -370,7 +371,23 @@ export interface SessionState {
   id: string;
   cwd: string;
   name?: string;
+  /**
+   * The model that is actually answering right now — the evidence beside
+   * `profile`'s intent. After a move inside a profile this is the model the
+   * profile moved to, never the one it prefers.
+   */
   model: ModelRef | null;
+  /**
+   * The profile this session is running on, or `null` when it has none: a
+   * pinned session, or a conversation from before profiles existed. Both
+   * display as pinned (`docs/model-profiles.md`).
+   */
+  profile: { id: string; name: string } | null;
+  /**
+   * The person pinned this session to one model, so nothing stands in for it.
+   * Absent means the ordinary path.
+   */
+  pinned?: boolean;
   thinkingLevel: ThinkingLevel;
   isStreaming: boolean;
   isCompacting: boolean;
@@ -397,20 +414,24 @@ export interface SessionState {
   contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null };
   /** Which agent runs this session and, for a child, whose child it is. */
   agent?: SessionAgentInfo;
-  /** The fallback chain this session activated, when one applies (M15-T3). */
+  /** Where this session stands inside its profile, when it is running on one. */
   fallback?: SessionFallbackSummary;
 }
 
 /**
- * What a client needs to draw a session's chain: the snapshot it activated, the
- * model inside it that is active now, whether a switch is happening this very
+ * What a client needs to draw a session's profile: the model list it activated,
+ * the model inside it that is active now, whether a move is happening this very
  * moment, and the last one that happened.
  */
 export interface SessionFallbackSummary {
+  /** The profile this activation belongs to. */
+  profileId: string;
+  /** The profile's name when it is still there; absent for a profile since deleted. */
+  profileName?: string;
   /** The activation's snapshot, resolved against the catalogue for display. */
-  chain: ModelRef[];
+  models: ModelRef[];
   position: number;
-  /** A failover event is in flight: the session is working, on no settled model. */
+  /** A move is in flight: the session is working, on no settled model. */
   switching?: boolean;
   lastSwitch?: { from: ModelRef; to: ModelRef; reason: ProviderFailureClass; at: string };
 }
@@ -504,9 +525,9 @@ export type SessionUpdate =
   | { kind: "auto_retry_start"; attempt: number; maxAttempts: number }
   | { kind: "auto_retry_end"; ok: boolean }
   /**
-   * A fallback chain moved this session to another model, or could not
-   * (M15-T3, `docs/model-fallback-chains.md`). `detail` is a sentence for a
-   * person; a provider's own payload never travels here.
+   * The session's profile moved it to another model, or could not
+   * (`docs/model-profiles.md` "Runtime"). `detail` is a sentence for a person;
+   * a provider's own payload never travels here.
    */
   | {
       kind: "model_fallback";
@@ -515,7 +536,9 @@ export type SessionUpdate =
       to?: ModelRef;
       reason: ProviderFailureClass;
       detail?: string;
-      /** Index in the activation's chain snapshot after this update. */
+      /** The profile this move happened inside. */
+      profileId?: string;
+      /** Index in the activation's model snapshot after this update. */
       position: number;
     }
   /** Only for custom entries appended by extensions (pi.appendEntry); regular messages do not produce this. */
@@ -1538,6 +1561,15 @@ export interface ClientRequests {
   "pi/session/telemetry": { params: SessionTelemetryParams; result: SessionTelemetry };
   "pi/session/compact": { params: { path: string; instructions?: string }; result: {} };
   "pi/model/list": { params: { path: string }; result: { models: ModelRef[] } };
+  /**
+   * **The pin path** (`docs/model-profiles.md` "Per-session override", D-346).
+   *
+   * Choosing one model for a session is pinning it: the session leaves its
+   * profile, runs on exactly this model and has nothing to move to when the
+   * model stops answering. `session/model/pin` is the same act under its own
+   * name; this row stays so a client that has not been updated still pins
+   * rather than silently re-anchoring a profile it does not know about.
+   */
   "pi/model/set": { params: { path: string; model: ModelRef }; result: { state: SessionState } };
   "pi/thinking/set": { params: { path: string; level: ThinkingLevel }; result: { state: SessionState } };
   /** Ask the active account-usage module for a fresh server snapshot. */
@@ -1768,9 +1800,10 @@ export interface ClientRequests {
        * allow-list. Empty when nothing is switched off; absent from older hosts.
        */
       disabledModels?: string[];
-      defaultProvider?: string;
-      defaultModel?: string;
-      defaultThinkingLevel?: ThinkingLevel;
+      /** Every profile, so a picker never has to make a second request. */
+      profiles?: ModelProfile[];
+      /** Which profile each assignable surface uses. */
+      assignments?: ProfileAssignments;
       refreshedAt: string;
       /** Per-provider refresh failures; the catalogue is still returned. */
       errors: string[];

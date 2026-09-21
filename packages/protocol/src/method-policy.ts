@@ -208,6 +208,9 @@ export const METHOD_POLICY = {
   "agents/engine-instructions": { scope: "read", reach: "any" },
   "agents/runs/list": { scope: "read", reach: "any" },
   "agents/worktree/status": { scope: "read", reach: "any" },
+  // Model profiles are a person's own configuration, readable from anywhere:
+  // a phone draws the same picker the desktop does (docs/model-profiles.md).
+  "models/profiles/list": { scope: "read", reach: "any" },
   // Retired wire methods. They only ever answer with the breaking-change
   // sentence, so they cost no authority; they still need a row.
   "pi/packages/list": { scope: "read", reach: "any" },
@@ -240,7 +243,12 @@ export const METHOD_POLICY = {
   "pi/session/move": { scope: "session_write", reach: "any" },
   "pi/session/close": { scope: "session_write", reach: "any" },
   "pi/session/compact": { scope: "session_write", reach: "any", startsWork: true },
+  // Choosing one model for a session is pinning it: the session leaves its
+  // profile and has nothing to move to. `pi/model/set` is the older name for
+  // the same act and keeps its scope (docs/model-profiles.md, D-346).
   "pi/model/set": { scope: "session_write", reach: "any" },
+  "session/model/pin": { scope: "session_write", reach: "any" },
+  "session/profile/set": { scope: "session_write", reach: "any" },
   "pi/thinking/set": { scope: "session_write", reach: "any" },
   "pi/transcribe/begin": { scope: "session_write", reach: "any", startsWork: true },
   // Dictation sends a chunk every few hundred milliseconds. Counted, not
@@ -302,9 +310,12 @@ export const METHOD_POLICY = {
   "agents/delete": { scope: "settings", reach: "any" },
   "agents/set-default": { scope: "settings", reach: "any" },
   "agents/set-policy": { scope: "settings", reach: "any" },
-  "agents/builtin/set-model": { scope: "settings", reach: "any" },
+  "agents/builtin/set-profile": { scope: "settings", reach: "any" },
   "agents/builtin/set-instructions": { scope: "settings", reach: "any" },
-  "agents/namer/qualify": { scope: "settings", reach: "any" },
+  // Writing the person's profiles is configuration that outlives a turn, and
+  // it goes to the global settings file through `SettingsManager`.
+  "models/profiles/save": { scope: "settings", reach: "any" },
+  "models/profiles/delete": { scope: "settings", reach: "any" },
   // The private variable overlay a shell or terminal hands down. A page,
   // local or not, must never be able to repoint a worker's environment.
   "pi/host/environment": { scope: "settings", reach: "native", refusal: NATIVE_ENVIRONMENT_REFUSAL },
@@ -401,7 +412,7 @@ export const NOTIFICATION_SCOPE = {
   "agents/updated": "read",
   "agents/run": "read",
   "agents/event": "read",
-  "agents/beam/choose-model": "read",
+  "models/profiles/seeded": "read",
   "mcp/changed": "read",
   "resource/refresh_request": "diagnostics",
   // The pressure summary a window reads is the same one `resource/snapshot`

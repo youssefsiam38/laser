@@ -88,6 +88,13 @@ export interface TelemetrySpend {
 export interface TelemetryModel {
   provider?: string;
   id?: string;
+  /**
+   * The Model Profile this session or run was started on: the intent behind
+   * the model beside it (`docs/model-profiles.md`). Per-model usage lines are
+   * unchanged — spend is always attributed to the model that was billed.
+   * Absent for a pinned session and for a conversation older than profiles.
+   */
+  profileId?: string;
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   contextWindow?: number;
   /** Per-assistant-turn total tokens, file order, for a sparkline. */
@@ -167,7 +174,13 @@ export interface TelemetryRunRef {
 export interface TelemetryLiveOverlay {
   context?: TelemetryContext;
   account?: AccountUsageState;
-  model?: { provider?: string; id?: string; thinkingLevel?: TelemetryModel["thinkingLevel"]; contextWindow?: number };
+  model?: {
+    provider?: string;
+    id?: string;
+    profileId?: string;
+    thinkingLevel?: TelemetryModel["thinkingLevel"];
+    contextWindow?: number;
+  };
 }
 
 export interface TelemetryFoldState {
@@ -652,6 +665,7 @@ export function sessionTelemetryOf(
     const model: TelemetryModel = { tokenSeries: downsampleSeries(state.tokenSeries) };
     if (provider !== undefined) model.provider = provider;
     if (id !== undefined) model.id = id;
+    if (live?.profileId !== undefined) model.profileId = live.profileId;
     if (thinking !== undefined) model.thinkingLevel = thinking;
     if (contextWindow !== undefined) model.contextWindow = contextWindow;
     result.model = model;

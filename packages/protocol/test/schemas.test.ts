@@ -38,7 +38,7 @@ const agentSample = {
   instructions: "You are an independent reviewer. Verify claims and report evidence.",
   engineInstructions: false,
   excludeCoreInstructions: false,
-  model: { provider: "anthropic", id: "claude-sonnet-5" },
+  profileId: "mp_01jbalanced0000000000000",
   thinkingLevel: "medium",
   supportsSubagents: false,
   allowedAgents: [],
@@ -291,9 +291,21 @@ const samples: Record<ClientMethod, unknown> = {
   "agents/runs/stop": { runId: "run_7", reason: "Wrong direction" },
   "agents/worktree/status": { path: "/s.jsonl" },
   "agents/worktree/remove": { path: "/s.jsonl", force: true },
-  "agents/builtin/set-model": { name: "chat", model: { provider: "openai", id: "gpt-5.6-luna" } },
+  "agents/builtin/set-profile": { name: "chat", profileId: "mp_01jbalanced0000000000000" },
+  "models/profiles/list": { cwd: "/p" },
+  "models/profiles/save": {
+    profile: {
+      id: "mp_01jbalanced0000000000000",
+      name: "Balanced",
+      models: [{ provider: "anthropic", id: "claude-sonnet-4-5", thinking: "medium" }],
+      origin: "seeded",
+      updatedAt: "2026-09-21T10:00:00.000Z",
+    },
+  },
+  "models/profiles/delete": { id: "mp_01jbalanced0000000000000", replacementId: "mp_01jfast00000000000000000" },
+  "session/profile/set": { path: "/s.jsonl", profileId: "mp_01jfast00000000000000000" },
+  "session/model/pin": { path: "/s.jsonl", model: { provider: "stub", id: "stub-1" } },
   "agents/builtin/set-instructions": { name: "chat", instructions: "Answer like an exacting editor." },
-  "agents/namer/qualify": { cwd: "/p" },
   "agents/sync": { snapshot: { revision: 3, agents: [], defaultAgent: "default" } },
   "pi/worker/recover-agent-failures": { runs: [{
     agentName: "reviewer", subagentName: "review-auth", sessionId: "child-1", runId: "run_7",
@@ -402,17 +414,19 @@ describe("client request schemas", () => {
     expect(clientParamsSchemas["web-search/configure"].safeParse({ cwd: "/p", change: { action: "test", provider: "duckduckgo" } }).success).toBe(false);
   });
 
-  it("a built-in's model is set by name, for each of the three, and nulls back to the default", () => {
-    const schema = clientParamsSchemas["agents/builtin/set-model"];
+  it("a built-in's profile is set by name, for each of the three, and nulls back to the default", () => {
+    const schema = clientParamsSchemas["agents/builtin/set-profile"];
     for (const name of ["beam", "chat", "namer"]) {
-      expect(schema.safeParse({ name, model: null }).success).toBe(true);
-      expect(schema.safeParse({ name, model: { provider: "openai", id: "gpt-5-mini" } }).success).toBe(true);
+      expect(schema.safeParse({ name, profileId: null }).success).toBe(true);
+      expect(schema.safeParse({ name, profileId: "mp_01jfast00000000000000000" }).success).toBe(true);
     }
-    // Only the built-ins: a custom agent's model is part of its definition.
-    expect(schema.safeParse({ name: "reviewer", model: null }).success).toBe(false);
-    expect(schema.safeParse({ model: null }).success).toBe(false);
+    // Only the built-ins: a custom agent's profile is part of its definition.
+    expect(schema.safeParse({ name: "reviewer", profileId: null }).success).toBe(false);
+    expect(schema.safeParse({ profileId: null }).success).toBe(false);
     expect(schema.safeParse({ name: "chat" }).success).toBe(false);
-    expect(schema.safeParse({ name: "chat", model: { provider: "openai", id: "x" }, extra: 1 }).success).toBe(false);
+    // A profile is chosen by id, never by a raw model.
+    expect(schema.safeParse({ name: "chat", profileId: { provider: "openai", id: "x" } }).success).toBe(false);
+    expect(schema.safeParse({ name: "chat", profileId: "mp_01jfast00000000000000000", extra: 1 }).success).toBe(false);
   });
 
   it("a built-in's instructions are set by name, or restored with null", () => {
@@ -641,6 +655,7 @@ describe("client request schemas", () => {
         id: "s",
         cwd: "/p",
         model: null,
+        profile: null,
         thinkingLevel: "medium",
         isStreaming: false,
         isCompacting: false,
