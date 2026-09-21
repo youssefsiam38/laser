@@ -49,3 +49,29 @@ write failures, held-versus-cancelled distinction, source ancestry and current
 passing tests. No longer claim timer-based completion is actual drain. One
 first full independent T19 review follows this batch plus the settled proof
 consumer and quota repair; no second runtime planning round is required.
+
+## Parent follow-up to13514908
+
+The actual-close, restart-unique-id, service observer-guard and Stop-button
+corrections are now implemented; whole runtime/proof ancestry is preserved in
+8dbbad75 → ae93fd82 →13514908. Two remaining holes need a bounded follow-up
+before the full review (continuation to the stopped owner was refused):
+
+- A same-path reload after unexpected closure makes the private run invisible
+  again: WorkerLifetime.safety skips extra owed work when the path is already
+  listed, while the new Live's safetySnapshot sees only its empty TaskIndex.
+  Include canonical unsettled verification in safety even for loaded/reloaded
+  paths, correctly deduplicating actual task identities/counts. Prove crash →
+  reload same path → held drain/report → unload and retirement refused → actual
+  settlement → allowed, without publishing a task under a dead path.
+- commands.ts still invokes its diagnostic logger unguarded in cannotEnd and
+  the lingering-output timer; a throwing sink can escape an abort or async
+  taskkill callback. Guard these diagnostics too. The promised live failure
+  explanation must reach VerificationRun's visible problem, not just stderr:
+  a bounded, safe callback may report that the command could not be stopped
+  and is still waiting to close. It must not settle/unpin, leak output or let
+  a throwing observer control the runner. Test sync/async termination failures,
+  throwing sinks and retained safety.
+
+No host/accounting/proof-consumer changes are needed. This finishes the same
+approved D-364 correction batch; do not start another design or framework.
