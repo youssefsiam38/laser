@@ -20,6 +20,15 @@ import type { DesignIndexAccess } from "../../src/components/design/DesignIndexP
 import { onWorkQuote, type WorkQuoteDetail } from "../../src/components/project-work/quote.js";
 import type { WorkBodyContext } from "../../src/components/project-work/bodies/context.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
+import { createStateStore, LaserStoreProvider } from "../../src/runtime/LaserProvider.js";
+import { initialState } from "../../src/store.js";
+
+/**
+ * The window's state, with no conversation selected: these tests are about the
+ * detail itself, and a design surface mounted with nothing selected simply has
+ * no conversation that could own an index build.
+ */
+const designStore = createStateStore(initialState);
 import { SKETCH_GATE_REFUSAL } from "../../src/design/sketch.js";
 import { ProjectWorkStore, type ProjectWorkMethod } from "../../src/project-work/store.js";
 
@@ -129,9 +138,9 @@ describe("starting a foundation", () => {
     const body = emptyDesign();
     await act(async () =>
       root.render(
-        <TooltipProvider>
+        <LaserStoreProvider store={designStore}><TooltipProvider>
           <DesignDetail body={body} context={contextFor(body, over)} indexAccess={accessWith(state)} />
-        </TooltipProvider>,
+        </TooltipProvider></LaserStoreProvider>,
       ),
     );
     await settle();
@@ -218,7 +227,7 @@ describe("starting a foundation", () => {
 describe("DesignDetail", () => {
   it("plays the prototype: a click inside the shadow root navigates, an overlay opens, Back closes it, and it is all said aloud", async () => {
     const body = designFixture();
-    await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={contextFor(body)} index={indexFixture()} /></TooltipProvider>));
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={contextFor(body)} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
     await settle();
     await click(button("Prototype"));
     const stage = container.querySelector('[data-slot="design-prototype"]');
@@ -249,7 +258,7 @@ describe("DesignDetail", () => {
 
   it("opens full screen as a dialog, and Esc closes it", async () => {
     const body = designFixture();
-    await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={contextFor(body)} /></TooltipProvider>));
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={contextFor(body)} /></TooltipProvider></LaserStoreProvider>));
     await settle();
     await click(button("Full screen"));
     const dialog = container.querySelector<HTMLElement>('[data-slot="design-full-screen"]');
@@ -264,7 +273,7 @@ describe("DesignDetail", () => {
 
   it("says a sketch-only design cannot be approved or handed off, and reads the sketch into its sandboxed frame", async () => {
     const body = sketchOnlyFixture();
-    await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={contextFor(body)} /></TooltipProvider>));
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={contextFor(body)} /></TooltipProvider></LaserStoreProvider>));
     await settle();
     expect(container.querySelector('[data-slot="sketch-only-notice"]')?.textContent).toBe(SKETCH_GATE_REFUSAL);
     expect(container.querySelector('[data-slot="sketch-gate-refusal"]')?.textContent).toBe(SKETCH_GATE_REFUSAL);
@@ -282,7 +291,7 @@ describe("DesignDetail", () => {
 
   it("says why the index could not be read, and offers the hand-off rather than a dead button", async () => {
     const body = designFixture();
-    await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={contextFor(body)} /></TooltipProvider>));
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={contextFor(body)} /></TooltipProvider></LaserStoreProvider>));
     await settle();
     // This window's fixture client answers nothing but blob reads, so the
     // index read fails — and the panel says so in the host's own words rather
@@ -309,7 +318,7 @@ describe("DesignDetail", () => {
     const onChanged = vi.fn();
     await act(async () =>
       root.render(
-        <TooltipProvider>
+        <LaserStoreProvider store={designStore}><TooltipProvider>
           <DesignDetail
             body={body}
             context={contextFor(body, { onChanged })}
@@ -317,7 +326,7 @@ describe("DesignDetail", () => {
             indexAccess={{ state: { kind: "ready", index: indexFixture() }, review, reindex }}
             groundSketch={groundSketch}
           />
-        </TooltipProvider>,
+        </TooltipProvider></LaserStoreProvider>,
       ),
     );
     await settle();
@@ -351,7 +360,7 @@ describe("DesignDetail", () => {
     // The entry `n_help` points at was merged away by a review.
     const merged = { ...index, entries: index.entries.filter((entry) => entry.id !== "e_help") };
     const context = contextFor(body);
-    await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={context} index={merged} /></TooltipProvider>));
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={context} index={merged} /></TooltipProvider></LaserStoreProvider>));
     await settle();
 
     const alert = [...container.querySelectorAll('[role="alert"]')].find((node) => node.textContent?.includes("cannot be saved"));
@@ -371,7 +380,7 @@ describe("DesignDetail", () => {
   it("checks the same design against the index that still has the entry, and saves it", async () => {
     const body = designFixture();
     const context = contextFor(body);
-    await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={context} index={indexFixture()} /></TooltipProvider>));
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={context} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
     await settle();
     expect([...container.querySelectorAll('[role="alert"]')].some((node) => node.textContent?.includes("cannot be saved"))).toBe(false);
     await click(shadowOf("scr_list").querySelector('[data-node-id="n_pay"]'));
@@ -384,7 +393,7 @@ describe("DesignDetail", () => {
 
   it("is read-only on the phone with tap-to-inspect, and plays the prototype full screen", async () => {
     const body = designFixture();
-    await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={contextFor(body, { compact: true })} index={indexFixture()} /></TooltipProvider>));
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={contextFor(body, { compact: true })} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
     await settle();
     expect(container.textContent).toContain("Editing a design needs a wider window");
     expect(button("Save revision")).toBeUndefined();
@@ -400,7 +409,7 @@ describe("DesignDetail", () => {
   it("writes an edit through revise fenced by the revision read, and shows a conflict as a banner", async () => {
     const body = designFixture();
     const context = contextFor(body);
-    await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={context} index={indexFixture()} /></TooltipProvider>));
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={context} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
     await settle();
     expect(button("Save revision")?.disabled).toBe(true);
     await click(shadowOf("scr_list").querySelector('[data-node-id="n_pay"]'));
