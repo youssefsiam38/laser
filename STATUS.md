@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** resumed leap integration · code checkpoint: d408e8ea
+**Last updated:** resumed leap integration · code checkpoint: f846a90f
 **Current focus:** M21 integration and acceptance gaps. T10/T13 and T14 integrated/done; T18/T19 evidence/lifetime remain, and T2 canonical metadata quota coverage is reopened. T21 reviewed corrections integrated/done. M26 v0.14.0 is published and verified; M21 remains the next release gate.
 
 | Milestone | State |
@@ -37,12 +37,13 @@
 
 **Active owners:**
 - T10/T13: done; reviewed source merged `b4ed1003` + correction `d408e8ea`. Parent450 focused tests and merged full verify/identity pass.
-- T18/T19: backend/protocol checkpoint `36e163ed` settled; proof consumer `59468295` parent-validated (52 UI tests), ready for review. Runtime `00f6b934` parent-validated (worker203/UI57/host40 + build/identity); combined candidate `7115a976` passes build/host347/protocol71/identity. First full T19 review active (`run_b77f0884`); source remains unmerged into integration.
-- T2: canonical quota review `472b1347` found one blocker; final preparation-copy/receipt/migration-memory fixes active (`run_1488e8c8`). Storage review is complete; parent will verify corrections.
+- T18/T19: reviewed source integrated `f846a90f` (full review `f09544ef` approve, no blocker). Final batch S1/S3/D-367 active (`run_b9185bf3`).
+- T2: quota accounting reviewed (`472b1347`) and final batch `ad09bb38` integrated; host 374 tests.
+- T20: continuity owner active (`run_653dbf50`): marker-based reconnect, unavailable links, restart/worktree proofs.
 - Forensics fixes integrated from `fix/session-forensics` (v0.14.0 + 4): M16-T100 scroll-up after compaction, M13-T129 message reopens a released child, M18-T20 catalog paging + worker compile cache; parent reproduced focused worker169/host69 green, 7 red without the fixes. Ship in the next release.
 - Integrated: T9/T17 mentions, T14 Foundation, T21 interop, image fixture and transcript continuity repairs. Exact ancestry/owners in `STATUS_DETAILED.md`.
 
-**Gate:** integrated Command/mention/transcript **`pnpm verify && pnpm identity:check` pass** (`t-37896cd3`, 141.7s, source `d408e8ea`; clean graphical environment). Current integration branch, **not final main**; excludes pending capture/verification work. Person-owned browser acceptance remains unclaimed (D-342).
+**Gate:** integrated verification/quota/forensics source `f846a90f`: **`pnpm verify && pnpm identity:check` pass** (`t-daeb8c05`, verify 171.6s, clean graphical environment, `/tmp/laser-integrated-verify-1.log`). Integration branch, **not final main**; excludes the in-flight T19 review batch and T20. Person-owned browser acceptance remains unclaimed (D-342).
 **Published:** v0.14.0 Latest (M26), v0.13.0 (M23), v0.12.0 (M22). Candidate `ac098597`; source CI `35616431166` and release `35616858358` attempt4 pass. Twelve assets/digests/source provenance verified; `docs/leap/m26-release-evidence.json`.
-**Next:** close canonical quota gap, finish capture/verification corrections and reviews → T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
+**Next:** land T19 final batch and T20 → close T2/T18/T19 rows → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
 **Other retained blocker:** M19-T7 waits for M19-T6 shared storage ownership. Person-owned M20/visual acceptance must not be inferred from unit tests.
