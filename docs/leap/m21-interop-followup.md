@@ -450,7 +450,7 @@ Rough size: ~40 lines protocol, ~120 host, ~60 UI, five tests. Nothing here
 fabricates an id, relaxes a proof, or switches the default away from the current
 commit.
 
-## What is not covered
+## Earlier checkpoint boundaries (before F3)
 
 - The three interop previews and their typed confirmations are unchanged, and
   so are the preview digests, the idempotency keys, the supersession chain, the
@@ -466,3 +466,14 @@ commit.
   touched (M21-T19 is active in them); no protocol change was needed —
   `checkpointId` is already an opaque bounded string on the wire and its
   meaning is enforced in the host.
+
+
+## Parent integration: exact UTF-8 boundary
+
+Merged at `23a3fa45`. Integrated recursive build/typecheck, host project-work
+plus design-router224, UI foundation/import-export34 and identity passed
+(`/tmp/laser-interop-merged-check.log`). The final byte-proof audit found that
+`readTextFile` still substituted malformed UTF-8. Its decoder now refuses
+invalid input and preserves valid BOM/U+FFFD bytes. Low-level mocked-reader
+regression reproduced red before the correction; interop61, host typecheck
+and identity pass after it (`/tmp/laser-interop-text-green.log`).

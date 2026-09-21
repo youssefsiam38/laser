@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
 **Last updated:** 2026-09-21T19:27:46+03:00 · leap integration · HEAD: 0642e977
-**Current focus:** M21 integration and acceptance gaps. T14 integrated/done; T10/T13 Fleet ownership correction and T19 evidence correction remain. T21 final correction ready for merge. M26 v0.14.0 is published and verified; M21 remains the next release gate.
+**Current focus:** M21 integration and acceptance gaps. T14 integrated/done; T10/T13 Fleet ownership correction and T19 evidence correction remain. T21 reviewed corrections integrated/done. M26 v0.14.0 is published and verified; M21 remains the next release gate.
 
 | Milestone | State |
 | --- | --- |
@@ -35,7 +35,7 @@
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
-**Active owners:** T14 merged/done (UI125/host31); T10/T13 index Command session binding owner planning; T18/T19 final Native UI and capture-completeness corrections (`209eac6c` preserved; new owner); T9/T17 explicit ephemeral SDK identity seam approved (D-362), patch and consumer implementation. T21 exact document-deletion proof + selected-checkpoint preview (`fa8f3549`, parent host57/protocol727/UI10 pass). M26 publication completed; three feature owners and the isolated M16-T82 fixture reviewer are active. Exact paths/sessions in `STATUS_DETAILED.md`.
+**Active owners:** T14 merged/done (UI125/host31); T10/T13 explicit index Command owner plan approved; T18/T19 final Native UI and capture-completeness corrections (`209eac6c` preserved; new owner); T9/T17 SDK seam+consumer returned (`e7ec426d`); parent found rendering/reservation bounds requiring correction before review. T21 done (`23a3fa45`, merged build/typecheck/host224/UI34; strict UTF-8 interop61). M26 publication completed; three feature owners and the isolated M16-T82 fixture reviewer are active. Exact paths/sessions in `STATUS_DETAILED.md`.
 **Gate:** merged build/typecheck and non-UI suites pass (host1216/worker1643/protocol728). Full UI hit one image-accessibility asynchronous URL assertion; fixture fix `4e37a51a` passed full UI and is in independent review; merged full gate still pending. Focused design/UI125 and host31 pass. First clean-env attempt omitted DISPLAY; desktop display is now preserved. Browser acceptance remains the person’s (D-342).
 **Published:** v0.14.0 Latest (M26), v0.13.0 (M23), v0.12.0 (M22). Candidate `ac098597`; exact-source CI `35616431166` and release `35616858358` attempt4 pass. Twelve assets, manifest digests and source-bound provenance verified by release controller; evidence `docs/leap/m26-release-evidence.json`. Parent merged release metadata (`64c701cc`), identity check passes. Final integrated main-branch gates remain required.
 **Next dependency-ready work:** finish active corrections/review, close T9/T17 worker mention-context delivery gap (tasks reopened), then T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.

@@ -342,7 +342,9 @@ export function readTextFile(path: string, maxBytes: number): string | undefined
       read += got;
       if (read > maxBytes) return undefined;
     }
-    return buffer.subarray(0, read).toString("utf8");
+    // Ownership and publication compare exact bytes: never replace malformed
+    // text, and retain a valid BOM instead of silently stripping it.
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer.subarray(0, read));
   } catch {
     return undefined;
   } finally {

@@ -267,6 +267,24 @@ describe("the file operations themselves", () => {
     expect(open.size).toBe(0);
   });
 
+  it("refuses malformed UTF-8 rather than substituting document bytes", () => {
+    const path = `${PROJECT}/docs/text.md`;
+    files.set(path, "x");
+    fs.readSync.mockImplementationOnce((_descriptor, buffer, offset) => {
+      buffer[offset] = 0xff;
+      return 1;
+    }).mockImplementationOnce(() => 0);
+    expect(readTextFile(path, 1024)).toBeUndefined();
+    expect(open.size).toBe(0);
+  });
+
+  it.each(["\uFFFD", "\uFEFFdocument", "café 🌲"])("preserves valid UTF-8 exactly: %s", (text) => {
+    const path = `${PROJECT}/docs/text.md`;
+    files.set(path, text);
+    expect(readTextFile(path, 1024)).toBe(text);
+    expect(open.size).toBe(0);
+  });
+
   it("keeps the ceiling on the read, not on the size it was told, and never holds more than it promised", () => {
     const path = `${PROJECT}/docs/growing.md`;
     files.set(path, "x".repeat(10));
