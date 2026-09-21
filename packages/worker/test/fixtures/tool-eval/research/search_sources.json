@@ -1,0 +1,54 @@
+{
+  "tool": "search_sources",
+  "task": "Find the Node libraries that extract text from a PDF, and note which registries publish them.",
+  "expectedTool": "search_sources",
+  "allowedTools": ["search_sources", "read_source", "record_finding", "resolve_question"],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 6,
+    "inputTokens": 40000,
+    "outputTokens": 400
+  },
+  "measures": ["retry"],
+  "world": {
+    "role": "root",
+    "research": { "project": "project" }
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "search_sources",
+        "args": {
+          "adapter": "web",
+          "query": "extract text from pdf node library",
+          "limit": 5,
+          "activity_label": "Searching the web"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "search_sources",
+        "args": {
+          "adapter": "web",
+          "query": "Extract text from PDF   node library",
+          "limit": 5
+        }
+      },
+      "fails": true
+    },
+    {
+      "toolCall": {
+        "name": "search_sources",
+        "args": {
+          "adapter": "package",
+          "query": "npm:pdf text extraction",
+          "limit": 5
+        }
+      }
+    },
+    {
+      "text": "Two candidates so far: pdf-text (npm, 3.2.0) and pdf-reader (npm, 1.4.1), plus a guide on docs.example.org. Next I will read the guide and the registry entry before recording anything."
+    }
+  ]
+}

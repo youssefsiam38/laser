@@ -80,6 +80,23 @@ export interface ToolEvalDesignWorld {
   built?: boolean;
 }
 
+/**
+ * The research run a Research fixture is evaluated against (M21-T26).
+ *
+ * Like the design world it is mostly real — real adapters, real cache, real
+ * budget, real operation applier — with the three things a test may not do
+ * replayed from recordings under `test/fixtures/research/`: the network, the
+ * person's search provider and git.
+ */
+export interface ToolEvalResearchWorld {
+  /** The project directory under `test/fixtures/research/`. */
+  project?: string;
+  /** Adapters switched off for this run, to exercise the capability gate. */
+  disabledAdapters?: string[];
+  /** False when no search provider is connected. */
+  searchConnected?: boolean;
+}
+
 /** The state the scripted harness bridge answers from. No real agent is started. */
 export interface ToolEvalWorld {
   /** root: the parent tools are registered. child: only `complete_agent_run` is. */
@@ -96,6 +113,8 @@ export interface ToolEvalWorld {
   search?: "unconnected" | "off";
   /** Present for the Design Index tools; absent for every other fixture. */
   designIndex?: ToolEvalDesignWorld;
+  /** Present for the Research tools; absent for every other fixture. */
+  research?: ToolEvalResearchWorld;
 }
 
 export interface ToolEvalFixture {
@@ -183,8 +202,27 @@ function parseWorld(value: unknown, source: string): ToolEvalWorld {
     if (built !== undefined && typeof built !== "boolean") fail(source, "world.designIndex.built must be true or false.");
     design = { project: requireString(designIndex["project"], source, "world.designIndex.project"), ...(built !== undefined ? { built } : {}) };
   }
+  const researchValue = value["research"];
+  let research: ToolEvalResearchWorld | undefined;
+  if (researchValue !== undefined) {
+    if (!isRecord(researchValue)) fail(source, "world.research must be an object.");
+    const project = researchValue["project"];
+    if (project !== undefined && typeof project !== "string") fail(source, "world.research.project must be a directory name.");
+    const disabled = researchValue["disabledAdapters"];
+    if (disabled !== undefined && (!Array.isArray(disabled) || disabled.some((entry) => typeof entry !== "string"))) {
+      fail(source, "world.research.disabledAdapters must be a list of adapter names.");
+    }
+    const connected = researchValue["searchConnected"];
+    if (connected !== undefined && typeof connected !== "boolean") fail(source, "world.research.searchConnected must be true or false.");
+    research = {
+      ...(typeof project === "string" ? { project } : {}),
+      ...(Array.isArray(disabled) ? { disabledAdapters: disabled as string[] } : {}),
+      ...(typeof connected === "boolean" ? { searchConnected: connected } : {}),
+    };
+  }
   return {
     ...(design !== undefined ? { designIndex: design } : {}),
+    ...(research !== undefined ? { research } : {}),
     ...(role !== undefined ? { role } : {}),
     ...(search !== undefined ? { search } : {}),
     ...(catalog !== undefined

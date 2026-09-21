@@ -174,6 +174,15 @@ export interface ResearchFinding {
   /** Which Spec or Design decisions this finding backs. Optional, always. */
   supports: string[];
   contradicts: string[];
+  /**
+   * The findings an `inferred` claim was derived from (D-351.b).
+   *
+   * The rule says an inference is "derived from ≥ 2 findings, citing them",
+   * and neither `supports` (Spec/Design decisions) nor `contradicts` (the
+   * opposite relation) is where those citations belong. Optional, so every
+   * body written before this field still validates.
+   */
+  derivedFrom?: string[];
 }
 
 export interface ResearchQuestionNode {
@@ -217,8 +226,13 @@ export const researchFindingSchema = z
       .optional(),
     supports: z.array(z.string().min(1).max(200)).max(32),
     contradicts: z.array(opaqueId).max(32),
+    derivedFrom: z.array(opaqueId).max(32).optional(),
   })
   .strict()
+  .refine((finding) => finding.confidence !== "inferred" || (finding.derivedFrom?.length ?? 0) >= 2, {
+    message: "an inferred finding is derived from at least two findings, and cites them",
+    path: ["derivedFrom"],
+  })
   .refine((finding) => finding.confidence !== "proposed" || finding.source.kind === "person" || finding.source.kind === "session" || finding.excerpt === undefined, {
     message: "a proposed finding has no source excerpt to quote",
     path: ["excerpt"],

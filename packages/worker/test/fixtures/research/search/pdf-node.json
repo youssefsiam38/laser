@@ -1,0 +1,27 @@
+{
+  "query": "extract text from pdf node library",
+  "answer": {
+    "provider": "recorded",
+    "answer": "Several Node libraries extract text from PDFs.",
+    "results": [
+      {
+        "title": "Reading PDF text in Node — Example Docs",
+        "url": "https://docs.example.org/guides/pdf-text?utm_source=newsletter",
+        "snippet": "The pdf-text module extracts a text layer from a tagged PDF.",
+        "date": "2026-02-11"
+      },
+      {
+        "title": "My take on PDF libraries",
+        "url": "https://medium.com/@someone/pdf-libraries",
+        "snippet": "I think pdf-text is the fastest of the three.",
+        "date": "2026-01-05"
+      },
+      {
+        "title": "Internal wiki",
+        "url": "https://internal.example.com/pdf",
+        "snippet": "Company notes.",
+        "date": "2026-01-05"
+      }
+    ]
+  }
+}

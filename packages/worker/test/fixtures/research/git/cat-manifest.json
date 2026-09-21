@@ -1,0 +1,4 @@
+{
+  "args": "cat-file -p 9f2b1c4e5a6d7f8091a2b3c4d5e6f708192a3b4c:package.json",
+  "stdout": "{\n  \"name\": \"pdf-text\",\n  \"version\": \"3.2.0\",\n  \"license\": \"MIT\"\n}\n"
+}

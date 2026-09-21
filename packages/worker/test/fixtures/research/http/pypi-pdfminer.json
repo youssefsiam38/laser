@@ -1,0 +1,6 @@
+{
+  "url": "https://pypi.org/pypi/pdfminer.six/json",
+  "status": 200,
+  "contentType": "application/json",
+  "body": "{\"info\":{\"version\":\"20250416\",\"summary\":\"PDF parser and analyser.\",\"license\":\"MIT\",\"requires_python\":\">=3.9\",\"requires_dist\":[\"charset-normalizer>=2.0.0\",\"cryptography>=36.0.0\"],\"project_urls\":{\"Homepage\":\"https://example.org/pdfminer\",\"Source\":\"https://github.com/example-org/pdfminer.six\"}},\"urls\":[{\"upload_time_iso_8601\":\"2025-04-16T08:00:00.000000Z\"}]}"
+}

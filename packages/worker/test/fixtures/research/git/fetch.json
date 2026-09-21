@@ -1,0 +1,4 @@
+{
+  "args": "fetch --quiet --depth 1 --filter=blob:none https://github.com/example-org/pdf-text.git 9f2b1c4e5a6d7f8091a2b3c4d5e6f708192a3b4c",
+  "stdout": ""
+}

@@ -1,0 +1,6 @@
+{
+  "url": "https://search.maven.org/solrsearch/select?q=g:%22org.example%22+AND+a:%22pdfbox%22&core=gav&rows=20&wt=json",
+  "status": 200,
+  "contentType": "application/json",
+  "body": "{\"response\":{\"docs\":[{\"g\":\"org.example\",\"a\":\"pdfbox\",\"v\":\"3.0.3\",\"p\":\"jar\",\"timestamp\":1767225600000}]}}"
+}
