@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { PRODUCT_NAME } from "@lasercode/protocol";
 
-import { fileAt, workspaceRepositories, type HostRepository } from "../../src/source-control/read.js";
+import { fileAt, treeListing, treeManifest, workspaceRepositories, type HostRepository } from "../../src/source-control/read.js";
 
 const haveGit = (() => {
   try {
@@ -50,7 +50,7 @@ function git(cwd: string, args: string[]): string {
 }
 
 /** A repository whose files are written as exact bytes, not as strings. */
-async function repoWith(files: Record<string, Buffer>): Promise<{ repo: HostRepository; commit: string }> {
+async function repoWith(files: Record<string, Buffer>): Promise<{ repo: HostRepository; commit: string; dir: string }> {
   const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-read-`));
   dirs.push(dir);
   mkdirSync(dir, { recursive: true });
@@ -58,15 +58,103 @@ async function repoWith(files: Record<string, Buffer>): Promise<{ repo: HostRepo
   git(dir, ["config", "user.email", "t@x"]);
   git(dir, ["config", "user.name", "t"]);
   git(dir, ["config", "commit.gpgsign", "false"]);
-  for (const [name, bytes] of Object.entries(files)) writeFileSync(join(dir, name), bytes);
+  for (const [name, bytes] of Object.entries(files)) {
+    mkdirSync(join(dir, name, ".."), { recursive: true });
+    writeFileSync(join(dir, name), bytes);
+  }
   git(dir, ["add", "-A"]);
   git(dir, ["commit", "-q", "-m", "init"]);
   const [repo] = await workspaceRepositories(dir, { rescan: true });
   if (!repo) throw new Error("no repository");
-  return { repo, commit: git(dir, ["rev-parse", "HEAD"]).trim() };
+  return { repo, commit: git(dir, ["rev-parse", "HEAD"]).trim(), dir };
+}
+
+function text(value: string): Buffer {
+  return Buffer.from(value, "utf8");
 }
 
 const LIMIT = 128 * 1024;
+
+describe.skipIf(!haveGit)("one bounded listing of a tree", () => {
+  it("lists a scope by asking git for it, not by filtering a whole-tree listing", async () => {
+    const files: Record<string, Buffer> = {};
+    // Everything under `pad/` sorts before `src/`, and there is more of it
+    // than the bound: a listing taken whole and filtered afterwards would find
+    // nothing in the scope at all (review F1).
+    for (let i = 0; i < 20; i++) files[`pad/${String(i).padStart(3, "0")}.ts`] = text(`pad ${String(i)}\n`);
+    files["src/a.ts"] = text("a\n");
+    files["src/deep/b.ts"] = text("b\n");
+    const { repo, commit } = await repoWith(files);
+
+    const whole = await treeListing(repo, commit, 10);
+    expect(whole?.rows.length, "bounded, and it says so").toBe(10);
+    expect(whole?.truncated).toBe(true);
+    expect(whole?.rows.every((row) => row.path.startsWith("pad/"))).toBe(true);
+
+    const scoped = await treeListing(repo, commit, 10, "src");
+    expect(scoped?.truncated, "the scope itself fits").toBe(false);
+    expect(scoped?.rows.map((row) => row.path)).toEqual(["src/a.ts", "src/deep/b.ts"]);
+    expect(scoped?.rows[0]?.blobObjectId).toMatch(/^[0-9a-f]{7,64}$/);
+    expect(scoped?.rows[0]?.bytes).toBe(2);
+
+    const oneFile = await treeListing(repo, commit, 10, "src/a.ts");
+    expect(oneFile?.rows.map((row) => row.path)).toEqual(["src/a.ts"]);
+
+    const absent = await treeListing(repo, commit, 10, "docs");
+    expect(absent?.rows, "an empty answer, and not a failure").toEqual([]);
+    expect(absent?.unreadable).toEqual([]);
+
+    // `treeManifest` is the same listing with no scope, in the shape its
+    // callers read.
+    expect((await treeManifest(repo, commit, 10))?.length).toBe(10);
+  });
+
+  it("takes a scope literally, so a path with glob characters is a path", async () => {
+    const { repo, commit } = await repoWith({
+      "we[i]rd/one.ts": text("one\n"),
+      "weird/two.ts": text("two\n"),
+    });
+
+    const scoped = await treeListing(repo, commit, 10, "we[i]rd");
+
+    expect(scoped?.rows.map((row) => row.path), "the directory that is really called that").toEqual(["we[i]rd/one.ts"]);
+  });
+
+  it("names a gitlink instead of dropping it out of a listing that claims to be complete", async () => {
+    const { repo, commit, dir } = await repoWith({ "src/a.ts": text("a\n") });
+    // An ordinary nested repository, recorded as a gitlink: its contents are
+    // not in this tree, and a listing that silently skipped it would describe
+    // a scope it never read.
+    const nested = join(dir, "vendor/widget");
+    mkdirSync(nested, { recursive: true });
+    git(nested, ["init", "-q", "-b", "main"]);
+    git(nested, ["config", "user.email", "t@x"]);
+    git(nested, ["config", "user.name", "t"]);
+    git(nested, ["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(nested, "index.ts"), text("someone else's code\n"));
+    git(nested, ["add", "-A"]);
+    git(nested, ["commit", "-q", "-m", "nested"]);
+    git(dir, ["config", "advice.addEmbeddedRepo", "false"]);
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-q", "-m", "vendor it"]);
+    const withLink = git(dir, ["rev-parse", "HEAD"]).trim();
+    expect(withLink).not.toBe(commit);
+
+    const scoped = await treeListing(repo, withLink, 10, "vendor");
+
+    expect(scoped?.rows, "there is nothing readable in that scope").toEqual([]);
+    expect(scoped?.unreadable).toEqual([{ path: "vendor/widget", kind: "gitlink" }]);
+    expect((await treeListing(repo, withLink, 10))?.unreadable, "and the whole-tree listing says so too").toEqual([
+      { path: "vendor/widget", kind: "gitlink" },
+    ]);
+  });
+
+  it("answers nothing at all when git cannot list, which is not an empty tree", async () => {
+    const { repo } = await repoWith({ "src/a.ts": text("a\n") });
+    expect(await treeListing(repo, "f".repeat(40), 10), "a commit this repository does not have").toBeUndefined();
+    expect(await treeListing(repo, "not-an-object-id", 10)).toBeUndefined();
+  });
+});
 
 describe.skipIf(!haveGit)("one file's bytes at one commit", () => {
   it("keeps valid text, including a file that really contains the replacement character", async () => {

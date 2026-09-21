@@ -41,8 +41,12 @@ import {
   taskActionTransition,
   taskTransition,
   TASK_ACTION_TARGET,
+  REPOSITORY_CAPTURE_HISTORY_MAX,
   type AttemptRepositoryRecord,
   type PlanGraphReport,
+  type ProjectWorkActor,
+  type RepositoryCaptureAttachReason,
+  type RepositoryLinkCaptureRevision,
   type ProjectTaskBody,
   type RepositoryChangeRef,
   type RepositoryLinkAcceptance,
@@ -95,6 +99,7 @@ import {
   bodyDigest,
   canonicalJson,
   mintApprovalId,
+  mintCaptureRevisionId,
   mintCommentId,
   mintDecisionId,
   mintEntityId,
@@ -432,6 +437,7 @@ export class ProjectWorkStore {
         "approvals",
         "comments",
         "execution_links",
+        "repository_link_captures",
         "repository_links",
         "edges",
         "revisions",
@@ -1625,7 +1631,7 @@ export class ProjectWorkStore {
           ...(payload.captureBlobId ? { captureBlobId: payload.captureBlobId } : {}),
           ...(payload.display ? { display: payload.display } : {}),
         };
-        this.insertRepositoryLink(linkId, entity.entity_id, payload.subjectRevisionId, repositoryLink, now);
+        this.insertRepositoryLink(linkId, entity.entity_id, payload.subjectRevisionId, repositoryLink, now, "link");
         record = { type: "repository", repository: repositoryLink };
       } else if (payload.type === "evidence") {
         const revision = this.revisionRow(input.projectId, payload.revisionId);
@@ -1678,7 +1684,7 @@ export class ProjectWorkStore {
             ...(attemptId ? { executionLinkId: attemptId } : {}),
             ...(input.verified?.acceptance ? { acceptance: input.verified.acceptance } : {}),
           };
-          this.insertRepositoryLink(verifiedLinkId, entity.entity_id, payload.revisionId, verified, now);
+          this.insertRepositoryLink(verifiedLinkId, entity.entity_id, payload.revisionId, verified, now, "record_verified_at");
           repositoryLinkId = verifiedLinkId;
         }
         const evidenceId = mintEvidenceId();
@@ -1825,7 +1831,7 @@ export class ProjectWorkStore {
         ...(payload.executionLinkId ? { executionLinkId: payload.executionLinkId } : {}),
         ...(payload.display ? { display: payload.display } : {}),
       };
-      this.insertRepositoryLink(linkId, row.entity_id, subject.revisionId, link, now);
+      this.insertRepositoryLink(linkId, row.entity_id, subject.revisionId, link, now, "accept_delivery");
       this.statement("UPDATE entities SET updated_at = ? WHERE entity_id = ?").run(now, row.entity_id);
       links.push(link);
     }
@@ -1843,8 +1849,19 @@ export class ProjectWorkStore {
     return { link: { type: "delivery", links, ...(input.capture ? { capture: input.capture } : {}) }, seq };
   }
 
-  /** One repository link row. The same columns whichever door wrote it. */
-  private insertRepositoryLink(linkId: string, entityId: string, revisionId: string, link: RepositoryLink, now: string): void {
+  /**
+   * One repository link row. The same columns whichever door wrote it — and,
+   * when it arrives with a capture, the first immutable association between
+   * the two, written in this same transaction (D-363).
+   */
+  private insertRepositoryLink(
+    linkId: string,
+    entityId: string,
+    revisionId: string,
+    link: RepositoryLink,
+    now: string,
+    gate?: string,
+  ): void {
     this.statement(
       "INSERT INTO repository_links (link_id, project_id, entity_id, revision_id, relation, repository_id, subject_json, target_json, published_path, created_by_json, created_at, supersedes_link_id, capture_blob_id, display_json, execution_link_id, acceptance_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     ).run(
@@ -1865,6 +1882,124 @@ export class ProjectWorkStore {
       link.executionLinkId ?? null,
       link.acceptance ? JSON.stringify(link.acceptance) : null,
     );
+    if (link.captureBlobId) {
+      this.appendCaptureAssociation({
+        projectId: link.projectId,
+        linkId,
+        blobId: link.captureBlobId,
+        at: now,
+        reason: "first_capture",
+        actor: link.createdBy,
+        ...(gate ? { gate } : {}),
+      });
+    }
+  }
+
+  /**
+   * Append one immutable link-to-capture association (D-363).
+   *
+   * Only ever called inside the transaction that made the association true —
+   * the link's own insert, or a compare-and-set that really moved the pointer.
+   * `seq` is this link's own next number rather than a clock: two associations
+   * written in the same millisecond stay ordered, and nothing infers which
+   * came first from a timestamp.
+   */
+  private appendCaptureAssociation(input: {
+    projectId: string;
+    linkId: string;
+    blobId: string;
+    at: string;
+    reason: RepositoryCaptureAttachReason;
+    actor: ProjectWorkActor;
+    gate?: string;
+    supersedesBlobId?: string;
+  }): RepositoryLinkCaptureRevision {
+    const previous = this.statement(
+      "SELECT revision_id, seq FROM repository_link_captures WHERE project_id = ? AND link_id = ? ORDER BY seq DESC LIMIT 1",
+    ).get(input.projectId, input.linkId) as { revision_id: string; seq: number } | undefined;
+    const revisionId = mintCaptureRevisionId();
+    const seq = Number(previous?.seq ?? 0) + 1;
+    this.statement(
+      "INSERT INTO repository_link_captures (revision_id, project_id, link_id, blob_id, supersedes_blob_id, supersedes_revision_id, attached_at, seq, reason, gate, actor_json) " +
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      revisionId,
+      input.projectId,
+      input.linkId,
+      input.blobId,
+      input.supersedesBlobId ?? null,
+      input.supersedesBlobId !== undefined ? (previous?.revision_id ?? null) : null,
+      input.at,
+      seq,
+      input.reason,
+      input.gate ?? null,
+      JSON.stringify(input.actor),
+    );
+    return {
+      revisionId,
+      linkId: input.linkId,
+      blobId: input.blobId,
+      ...(input.supersedesBlobId !== undefined ? { supersedesBlobId: input.supersedesBlobId } : {}),
+      ...(input.supersedesBlobId !== undefined && previous ? { supersedesRevisionId: previous.revision_id } : {}),
+      attachedAt: input.at,
+      seq,
+      reason: input.reason,
+      ...(input.gate ? { gate: input.gate } : {}),
+      actor: input.actor,
+    };
+  }
+
+  /**
+   * The capture associations of one link, newest first and bounded (D-363).
+   *
+   * The history a person and a gate read: which proof of this exact link was
+   * current, when, at whose hand, and whether it was written with the link or
+   * corrected while a gate was being prepared.
+   */
+  captureHistory(projectId: string, linkId: string, limit = REPOSITORY_CAPTURE_HISTORY_MAX): RepositoryLinkCaptureRevision[] {
+    const rows = this.statement(
+      "SELECT * FROM repository_link_captures WHERE project_id = ? AND link_id = ? ORDER BY seq DESC LIMIT ?",
+    ).all(projectId, linkId, Math.max(1, Math.min(limit, REPOSITORY_CAPTURE_HISTORY_MAX))) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      revisionId: row["revision_id"] as string,
+      linkId: row["link_id"] as string,
+      blobId: row["blob_id"] as string,
+      ...(row["supersedes_blob_id"] ? { supersedesBlobId: row["supersedes_blob_id"] as string } : {}),
+      ...(row["supersedes_revision_id"] ? { supersedesRevisionId: row["supersedes_revision_id"] as string } : {}),
+      attachedAt: row["attached_at"] as string,
+      seq: Number(row["seq"]),
+      reason: row["reason"] as RepositoryCaptureAttachReason,
+      ...(row["gate"] ? { gate: row["gate"] as string } : {}),
+      actor: JSON.parse(row["actor_json"] as string) as ProjectWorkActor,
+    }));
+  }
+
+  /**
+   * The **first** capture this link was ever associated with, as this database
+   * can attest it (D-363).
+   *
+   * What a decision that did not name its own proof can honestly be read
+   * against: the association the link was written with, or the baseline a
+   * migration recorded for a link older than this history. Never the newest
+   * one — a later correction is exactly what must not retroactively become
+   * what somebody looked at.
+   */
+  firstCaptureAssociation(projectId: string, linkId: string): RepositoryLinkCaptureRevision | undefined {
+    const row = this.statement(
+      "SELECT * FROM repository_link_captures WHERE project_id = ? AND link_id = ? ORDER BY seq ASC LIMIT 1",
+    ).get(projectId, linkId) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    return {
+      revisionId: row["revision_id"] as string,
+      linkId: row["link_id"] as string,
+      blobId: row["blob_id"] as string,
+      ...(row["supersedes_blob_id"] ? { supersedesBlobId: row["supersedes_blob_id"] as string } : {}),
+      attachedAt: row["attached_at"] as string,
+      seq: Number(row["seq"]),
+      reason: row["reason"] as RepositoryCaptureAttachReason,
+      ...(row["gate"] ? { gate: row["gate"] as string } : {}),
+      actor: JSON.parse(row["actor_json"] as string) as ProjectWorkActor,
+    };
   }
 
   /**
@@ -1880,20 +2015,52 @@ export class ProjectWorkStore {
    * freeze a partial proof in place, and two callers cannot race one link into
    * pointing at a capture neither of them checked. Nothing is deleted — the
    * capture it replaces keeps its own content address in the store.
+   *
+   * The compare-and-set is honest about losing (D-363): the association is
+   * appended **only** when the pointer really moved, and a caller that lost
+   * the race is told `false` rather than left to assume it won. An attach that
+   * finds the pointer already on this exact blob is the same write repeated,
+   * and appends nothing.
+   *
+   * `gate` is context, not a verdict: a correction taken while a gate was
+   * being prepared is recorded as a preparation, because the decision it was
+   * for may still be refused after this returns.
    */
-  attachCapture(projectId: string, linkId: string, blobId: string, replacing?: string | undefined): void {
-    this.write(() => {
-      if (replacing !== undefined) {
-        this.statement(
-          "UPDATE repository_links SET capture_blob_id = ? WHERE project_id = ? AND link_id = ? AND capture_blob_id = ?",
-        ).run(blobId, projectId, linkId, replacing);
-        return;
-      }
-      this.statement("UPDATE repository_links SET capture_blob_id = ? WHERE project_id = ? AND link_id = ? AND capture_blob_id IS NULL").run(
-        blobId,
+  attachCapture(
+    projectId: string,
+    linkId: string,
+    blobId: string,
+    replacing?: string | undefined,
+    context?: { gate?: string | undefined; actor?: ProjectWorkActor | undefined } | undefined,
+  ): boolean {
+    return this.write(() => {
+      const changes = Number(
+        replacing !== undefined
+          ? this.statement(
+              "UPDATE repository_links SET capture_blob_id = ? WHERE project_id = ? AND link_id = ? AND capture_blob_id = ?",
+            ).run(blobId, projectId, linkId, replacing).changes
+          : this.statement(
+              "UPDATE repository_links SET capture_blob_id = ? WHERE project_id = ? AND link_id = ? AND capture_blob_id IS NULL",
+            ).run(blobId, projectId, linkId).changes,
+      );
+      if (changes !== 1) return false;
+      // The row exists: the compare-and-set just moved it. Its creator stands
+      // in when the caller named no actor of its own.
+      const link = this.statement("SELECT created_by_json FROM repository_links WHERE project_id = ? AND link_id = ?").get(
         projectId,
         linkId,
-      );
+      ) as { created_by_json: string };
+      this.appendCaptureAssociation({
+        projectId,
+        linkId,
+        blobId,
+        at: this.now(),
+        reason: "gate_preparation",
+        actor: context?.actor ?? (JSON.parse(link.created_by_json) as ProjectWorkActor),
+        ...(context?.gate ? { gate: context.gate } : {}),
+        ...(replacing !== undefined ? { supersedesBlobId: replacing } : {}),
+      });
+      return true;
     });
   }
 

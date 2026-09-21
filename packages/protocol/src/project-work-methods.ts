@@ -89,6 +89,7 @@ import {
   type RepositoryChangeRef,
   type RepositoryLink,
   type RepositoryLinkAvailability,
+  type RepositoryLinkCaptureRevision,
   type RepositoryLinkContext,
   type RepositoryLinkRelation,
   type RepositoryStateRef,
@@ -299,6 +300,13 @@ export interface ProjectWorkGetParams {
      * itself still says exactly what it always said.
      */
     repositoryStatus?: boolean;
+    /**
+     * The immutable capture associations behind each repository link on this
+     * read (D-363). Off by default, bounded per link, and never a substitute
+     * for the link's own current pointer: it says which proof was current
+     * when, so a decision can be read against the capture it rested on.
+     */
+    captureHistory?: boolean;
   };
 }
 
@@ -337,6 +345,12 @@ export interface ProjectWorkGetResult {
    * says what is gone and whether the canonical capture still answers.
    */
   repositoryStatus?: RepositoryLinkAvailability[];
+  /**
+   * The capture associations of the links on this read, newest first per link
+   * and bounded by {@link REPOSITORY_CAPTURE_HISTORY_MAX}, when
+   * `include.captureHistory` asked (D-363).
+   */
+  captureHistory?: RepositoryLinkCaptureRevision[];
   /**
    * The three hard gates of the Spec this entity belongs to, and where each
    * one stands (M21-T8).
@@ -999,6 +1013,7 @@ export const projectWorkParamsSchemas = {
           links: z.boolean().optional(),
           history: z.boolean().optional(),
           repositoryStatus: z.boolean().optional(),
+          captureHistory: z.boolean().optional(),
         })
         .strict()
         .optional(),

@@ -36,16 +36,18 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { failed, ok, projectWorkHarness, type ProjectWorkHarness } from "./harness.js";
 import { checkpoint, commit, git, haveGit, head, initRepo, prune, write } from "./git-fixtures.js";
-import { buildCapture, buildStateCapture, storeCapture } from "../../src/project-work/captures.js";
+import { buildCapture, buildStateCapture, requiredComplete, storeCapture } from "../../src/project-work/captures.js";
+import { expectedRequiredFacts } from "../../src/project-work/required-facts.js";
 import { diffBetween } from "../../src/source-control/read.js";
 
-// Real repositories, real `git`, and a suite that shares a machine with the
-// host's end-to-end tests: a few hundred files through `add`, `write-tree` and
-// `diff` is not slow, but it is not five seconds' worth of certain either.
-vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+// No suite-wide timeout. Measured under the whole `test/project-work` load,
+// the slowest test here is the 520-file padding fixture at just under a
+// second, and everything else is a few hundred milliseconds: nothing in this
+// file is within reach of vitest's default, and a blanket sixty seconds would
+// only hide the day one of them becomes genuinely slow (review F4).
 
 let h: ProjectWorkHarness;
 const dirs: string[] = [];
@@ -193,6 +195,8 @@ async function accept(input: {
   repositoryId: string;
   commitObjectId: string;
   checkpointId?: string;
+  /** The bounded scope the state names, when the request names one. */
+  path?: string;
   attempt?: { taskEntityId: string; executionLinkId: string };
   acceptance?: boolean;
 }) {
@@ -215,6 +219,7 @@ async function accept(input: {
           objectFormat: "sha1" as const,
           commitObjectId: input.commitObjectId,
           ...(input.checkpointId ? { checkpointId: input.checkpointId } : {}),
+          ...(input.path ? { path: input.path } : {}),
         },
         ...(input.acceptance === false ? {} : { acceptance: { kind: "checkpoint_preview" as const } }),
         ...(input.attempt ? { attempt: input.attempt } : {}),
@@ -708,6 +713,123 @@ describe.runIf(haveGit)("a review of code that did not need changing", () => {
     expect(sourceOf(after, "docs/readme.md")).toBe("about it\n");
   });
 
+  /**
+   * A repository with more unrelated files than a decision may rest on, plus
+   * a small scope somewhere in it. `pad/` sorts before `src/`, so anything
+   * that lists the whole tree first and filters to the scope afterwards has
+   * already run out of rows before it reaches the part that matters.
+   */
+  function paddedWorkspace(pads: number, scoped: string[]): string {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < pads; i++) files[`pad/${String(i).padStart(4, "0")}.ts`] = `pad ${String(i)}\n`;
+    for (const path of scoped) files[path] = `scoped ${path}\n`;
+    return workspace({ app: files }).app!;
+  }
+
+  /** An attempt that changed nothing, and the checkpoint it ends at. */
+  async function unchangedAttempt(app: string, title: string) {
+    const task = await create("task", title, taskBody());
+    await startAttempt(task);
+    const made = checkpoint(app, SESSION, 1);
+    const run = await endAttempt(task);
+    return { task, run, commitObjectId: made, checkpointId: checkpointRef(checkpointSessionKey(SESSION), 1) };
+  }
+
+  it("keeps every file of a scope that sorts past more unrelated files than the cap", async () => {
+    // Ninety-nine unrelated files and five that matter: a listing bounded at
+    // a hundred and one reaches only the first two of the five, and filtering
+    // it to the scope afterwards would store a prefix of the scope while
+    // calling it complete (review F1).
+    const app = paddedWorkspace(99, ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"]);
+    const world = await unchangedAttempt(app, "A scope straddling the cap");
+
+    const written = ok<ProjectWorkLinkResult>(
+      await accept({
+        subject: world.task,
+        repositoryId: world.run.repositoryId("app"),
+        commitObjectId: world.commitObjectId,
+        checkpointId: world.checkpointId,
+        path: "src",
+        attempt: world.run.attempt,
+      }),
+    );
+    const capture = await captureOf(world.task.entity.entityId, linkIdOf(written));
+    expect(capture.required?.basis).toBe("complete_bounded_state");
+    expect(capture.required?.from.scopePath, "the path the request named reaches the selection").toBe("src");
+    expect(requiredPaths(capture), "every file of the scope, not the part that fitted in a whole-tree listing").toEqual([
+      "src/a.ts",
+      "src/b.ts",
+      "src/c.ts",
+      "src/d.ts",
+      "src/e.ts",
+    ]);
+    expect(sourceOf(capture, "src/e.ts")).toBe("scoped src/e.ts\n");
+    expect(requiredPaths(capture).some((path) => path.startsWith("pad/")), "and nothing outside it").toBe(false);
+  });
+
+  it("keeps a small scope that sorts entirely past the cap, instead of calling it absent", async () => {
+    const app = paddedWorkspace(120, ["src/only.ts"]);
+    const world = await unchangedAttempt(app, "A scope after the cap");
+
+    const written = ok<ProjectWorkLinkResult>(
+      await accept({
+        subject: world.task,
+        repositoryId: world.run.repositoryId("app"),
+        commitObjectId: world.commitObjectId,
+        checkpointId: world.checkpointId,
+        path: "src/only.ts",
+        attempt: world.run.attempt,
+      }),
+    );
+    const capture = await captureOf(world.task.entity.entityId, linkIdOf(written));
+    expect(requiredPaths(capture)).toEqual(["src/only.ts"]);
+    expect(sourceOf(capture, "src/only.ts")).toBe("scoped src/only.ts\n");
+  });
+
+  it("refuses a scope with more files than a decision may rest on, without inventing how many", async () => {
+    const app = paddedWorkspace(REQUIRED_PATHS_MAX + 20, []);
+    const world = await unchangedAttempt(app, "A scope over the cap");
+    const before = blobCount();
+
+    const error = failed(
+      await accept({
+        subject: world.task,
+        repositoryId: world.run.repositoryId("app"),
+        commitObjectId: world.commitObjectId,
+        checkpointId: world.checkpointId,
+        path: "pad",
+        attempt: world.run.attempt,
+      }),
+    );
+    expect(error.message).toMatch(new RegExp(`more than the ${String(REQUIRED_PATHS_MAX)} files`));
+    expect(error.message, "the listing stopped at the bound, so it never counted them").not.toMatch(/\b120 files\b/);
+    expect(blobCount()).toBe(before);
+  });
+
+  it("refuses a scope holding another repository, rather than dropping it from a set that claims to be complete", async () => {
+    const { app } = workspace({ app: { "src/a.ts": "unchanged\n" } });
+    // An ordinary nested repository, committed before the attempt starts: git
+    // records it as a gitlink, whose contents are not in this tree at all.
+    initRepo(join(app, "vendor/widget"), { "index.ts": "someone else's code\n" });
+    git(app, ["config", "advice.addEmbeddedRepo", "false"]);
+    commit(app, "vendor the widget");
+    const world = await unchangedAttempt(app, "A scope with a gitlink");
+    const before = blobCount();
+
+    const error = failed(
+      await accept({
+        subject: world.task,
+        repositoryId: world.run.repositoryId("app"),
+        commitObjectId: world.commitObjectId,
+        checkpointId: world.checkpointId,
+        path: "vendor",
+        attempt: world.run.attempt,
+      }),
+    );
+    expect(error.message).toMatch(/vendor\/widget is another repository recorded inside this one/);
+    expect(blobCount(), "nothing was stored").toBe(before);
+  });
+
   it("refuses a scope too large to keep whole, and one it cannot read", async () => {
     const many: Record<string, string> = {};
     for (let i = 0; i <= REQUIRED_PATHS_MAX; i++) many[`src/f-${String(i)}.ts`] = `file ${String(i)}\n`;
@@ -984,6 +1106,45 @@ describe.runIf(haveGit)("evidence that outlives what it came from", () => {
     expect(sourceOf(capture, "src/a.ts"), "including what the person was looking at").toBe("what a person looked at\n");
   });
 
+  /**
+   * An acceptance as a database written before D-363 holds one: the proof it
+   * rested on is only the link's pointer, because nothing bound the capture
+   * into the acceptance itself. Written straight into the store's own file,
+   * because that is the one thing the product can no longer produce.
+   */
+  function asWrittenBeforeCaptureBinding(linkId: string, blobId: string): void {
+    const db = new DatabaseSync(join(h.dir, "project-work.db"));
+    try {
+      const row = db.prepare("SELECT acceptance_json FROM repository_links WHERE link_id = ?").get(linkId) as {
+        acceptance_json: string | null;
+      };
+      const acceptance = row.acceptance_json ? (JSON.parse(row.acceptance_json) as Record<string, unknown>) : undefined;
+      if (acceptance) delete acceptance["captureBlobId"];
+      db.prepare("UPDATE repository_links SET capture_blob_id = ?, acceptance_json = ? WHERE link_id = ?").run(
+        blobId,
+        acceptance ? JSON.stringify(acceptance) : null,
+        linkId,
+      );
+      // …and the one association such a database can attest: the baseline a
+      // migration would have recorded for the capture it was holding.
+      db.prepare("DELETE FROM repository_link_captures WHERE link_id = ?").run(linkId);
+      db.prepare(
+        "INSERT INTO repository_link_captures (revision_id, project_id, link_id, blob_id, attached_at, seq, reason, actor_json) VALUES (?,?,?,?,?,?,?,?)",
+      ).run(
+        `rlc_legacy_${linkId}`,
+        h.projectId,
+        linkId,
+        blobId,
+        new Date().toISOString(),
+        1,
+        "legacy_baseline",
+        JSON.stringify({ kind: "person", label: "Someone" }),
+      );
+    } finally {
+      db.close();
+    }
+  }
+
   it("does not call a review native when its capture kept less than it rests on", async () => {
     const { app } = workspace();
     const task = await create("task", "Visual work", taskBody({ visual: true, commands: ["pnpm test"] }));
@@ -1019,8 +1180,7 @@ describe.runIf(haveGit)("evidence that outlives what it came from", () => {
       now: new Date().toISOString(),
     });
     const stored = storeCapture(h.store, { projectId: h.projectId, entityId: task.entity.entityId, capture: partial!, gate: "A test" });
-    const link = (await detail(task.entity.entityId)).repositoryLinks.find((row) => row.linkId === linkId)!;
-    h.store.attachCapture(h.projectId, linkId, stored.blobId, link.captureBlobId);
+    asWrittenBeforeCaptureBinding(linkId, stored.blobId);
 
     const current = ok<ProjectWorkGetResult>(
       await h.call("project/work/get", { projectId: h.projectId, entityId: task.entity.entityId, body: { mode: "none" } }),
@@ -1033,5 +1193,258 @@ describe.runIf(haveGit)("evidence that outlives what it came from", () => {
       (await detail(task.entity.entityId)).repositoryLinks.find((row) => row.linkId === linkId)?.acceptance,
       "the record of what the person did is untouched",
     ).toBeDefined();
+
+    // And correcting what the link points at does not retroactively make that
+    // acceptance native: a person looked at a preview backed by the capture
+    // above, and a capture attached afterwards is not what they looked at
+    // (D-363).
+    const whole = await buildStateCapture({
+      repository,
+      repositoryId: run.repositoryId("app"),
+      state: { vcs: "git", objectFormat: "sha1", commitObjectId: made, checkpointId: ref },
+      now: new Date().toISOString(),
+      required: { basis: "attempt_base_to_state", base: run.base("app"), executionLinkId: run.attempt.executionLinkId, taskEntityId: task.entity.entityId },
+    });
+    const corrected = storeCapture(h.store, { projectId: h.projectId, entityId: task.entity.entityId, capture: whole!, gate: "A test" });
+    expect(h.store.attachCapture(h.projectId, linkId, corrected.blobId, stored.blobId, { gate: "A later correction" })).toBe(true);
+
+    const afterwards = await verify(task.entity.entityId, current.revision.revisionId, "ver_0004");
+    const later = afterwards.findings.find((row) => row.criterionId === afterwards.criteria.find((c) => c.kind === "visual")!.id)!;
+    expect(later.outcome, "the pointer moved; what the person accepted did not").toBe("needs_person");
+    const history = ok<ProjectWorkGetResult>(
+      await h.call("project/work/get", {
+        projectId: h.projectId,
+        entityId: task.entity.entityId,
+        body: { mode: "none" },
+        include: { links: true, captureHistory: true },
+      }),
+    ).captureHistory!.filter((row) => row.linkId === linkId);
+    expect(history.map((row) => row.blobId), "and both associations are readable, newest first").toEqual([
+      corrected.blobId,
+      stored.blobId,
+    ]);
+    expect(history[0]?.supersedesBlobId).toBe(stored.blobId);
+  });
+});
+
+// ------------------------------------------- the capture proves *this* link
+
+/**
+ * Review F2: a capture that is internally consistent is not therefore a
+ * capture of the link it hangs off. Everything here builds **real** captures
+ * out of **real** repositories and checks them against what the persisted
+ * record says they must be — the same authority the evaluator, the gates and
+ * the delivery door ask.
+ */
+describe.runIf(haveGit)("what a capture has to say about the link it proves", () => {
+  async function attemptOn(app: string, title: string, targetId = "run_1", session = SESSION) {
+    const task = await create("task", title, taskBody());
+    await startAttempt(task, targetId);
+    write(app, { "src/a.ts": `built by ${targetId}\n` });
+    const made = checkpoint(app, session, 1);
+    const run = await endAttempt(task, targetId);
+    return { task, run, commitObjectId: made, checkpointId: checkpointRef(checkpointSessionKey(session), 1) };
+  }
+
+  function repositoryAt(path: string): { path: string; gitDir: string; name: string } {
+    return { path, gitDir: join(path, ".git"), name: "app" };
+  }
+
+  /** The `verified_at` link one acceptance wrote, straight out of the record. */
+  async function acceptedLink(entityId: string, written: ProjectWorkLinkResult) {
+    const linkId = linkIdOf(written);
+    const link = (await detail(entityId)).repositoryLinks.find((row) => row.linkId === linkId)!;
+    return link;
+  }
+
+  it("refuses a capture of another repository, another state or another scope", async () => {
+    const { app, lib } = workspace({ app: { "src/a.ts": "one\n" }, lib: { "src/a.ts": "one\n" } }) as { app: string; lib: string };
+    const task = await create("task", "Two repositories", taskBody());
+    await startAttempt(task);
+    write(app, { "src/a.ts": "app changed\n" });
+    write(lib, { "src/a.ts": "lib changed\n" });
+    const appCommit = checkpoint(app, SESSION, 1);
+    const libCommit = checkpoint(lib, SESSION, 1);
+    const run = await endAttempt(task);
+    const ref = checkpointRef(checkpointSessionKey(SESSION), 1);
+
+    const written = ok<ProjectWorkLinkResult>(
+      await accept({ subject: task, repositoryId: run.repositoryId("app"), commitObjectId: appCommit, checkpointId: ref, attempt: run.attempt }),
+    );
+    const link = await acceptedLink(task.entity.entityId, written);
+    const expected = expectedRequiredFacts(h.store, h.projectId, link);
+    const mine = await captureOf(task.entity.entityId, link.linkId);
+    expect(requiredComplete(mine, expected), "its own capture proves it").toBe(true);
+
+    // The other repository's capture: complete, honest, and about something
+    // else entirely.
+    const foreign = await buildStateCapture({
+      repository: repositoryAt(lib),
+      repositoryId: run.repositoryId("lib"),
+      state: { vcs: "git", objectFormat: "sha1", commitObjectId: libCommit, checkpointId: ref },
+      now: new Date().toISOString(),
+      required: { basis: "attempt_base_to_state", base: run.base("lib"), executionLinkId: run.attempt.executionLinkId, taskEntityId: task.entity.entityId },
+    });
+    expect(requiredComplete(foreign!, expected), "another repository's proof is not this link's").toBe(false);
+
+    // The same repository, a checkpoint ref this link does not name.
+    write(app, { "src/a.ts": "later\n" });
+    const laterCommit = checkpoint(app, SESSION, 2);
+    const laterRef = checkpointRef(checkpointSessionKey(SESSION), 2);
+    const elsewhere = await buildStateCapture({
+      repository: repositoryAt(app),
+      repositoryId: run.repositoryId("app"),
+      state: { vcs: "git", objectFormat: "sha1", commitObjectId: laterCommit, checkpointId: laterRef },
+      now: new Date().toISOString(),
+      required: { basis: "attempt_base_to_state", base: run.base("app"), executionLinkId: run.attempt.executionLinkId, taskEntityId: task.entity.entityId },
+    });
+    expect(requiredComplete(elsewhere!, expected), "another state's proof is not this state's").toBe(false);
+
+    // A capture of a path this link never named.
+    const scoped = await buildStateCapture({
+      repository: repositoryAt(app),
+      repositoryId: run.repositoryId("app"),
+      state: { vcs: "git", objectFormat: "sha1", commitObjectId: appCommit, checkpointId: ref, path: "src" },
+      now: new Date().toISOString(),
+      required: { basis: "attempt_base_to_state", base: run.base("app"), executionLinkId: run.attempt.executionLinkId, taskEntityId: task.entity.entityId },
+    });
+    expect(requiredComplete(scoped!, expected), "a capture of a scope this link does not name").toBe(false);
+  });
+
+  it("tells two attempts that share one commit apart by where the work started", async () => {
+    const { app } = workspace();
+    // Two attempts that started from different commits, and one state both of
+    // their records can name: what separates them is `from`, and nothing else.
+    const first = await attemptOn(app, "First attempt");
+    commit(app, "the first attempt's work, committed");
+    const second = await create("task", "Second attempt", taskBody());
+    await startAttempt(second, "run_2");
+    write(app, { "src/b.ts": "the second attempt's work\n" });
+    checkpoint(app, SESSION, 2);
+    const secondRun = await endAttempt(second, "run_2");
+
+    const written = ok<ProjectWorkLinkResult>(
+      await accept({
+        subject: first.task,
+        repositoryId: first.run.repositoryId("app"),
+        commitObjectId: first.commitObjectId,
+        checkpointId: first.checkpointId,
+        attempt: first.run.attempt,
+      }),
+    );
+    const link = await acceptedLink(first.task.entity.entityId, written);
+    const expected = expectedRequiredFacts(h.store, h.projectId, link);
+    expect(requiredComplete(await captureOf(first.task.entity.entityId, link.linkId), expected)).toBe(true);
+    expect(secondRun.base("app"), "the second attempt started where the first one ended").not.toBe(first.run.base("app"));
+
+    // The same state, captured as if it came out of the *other* attempt: same
+    // commit, same ref, same bodies, different `from`.
+    const otherAttempt = await buildStateCapture({
+      repository: repositoryAt(app),
+      repositoryId: first.run.repositoryId("app"),
+      state: { vcs: "git", objectFormat: "sha1", commitObjectId: first.commitObjectId, checkpointId: first.checkpointId },
+      now: new Date().toISOString(),
+      required: {
+        basis: "attempt_base_to_state",
+        base: secondRun.base("app"),
+        executionLinkId: secondRun.attempt.executionLinkId,
+        taskEntityId: second.entity.entityId,
+      },
+    });
+    expect(otherAttempt?.state?.commitObjectId, "the same commit, to the letter").toBe(first.commitObjectId);
+    expect(requiredComplete(otherAttempt!, expected), "and still not this link's proof").toBe(false);
+  });
+
+  it("refuses a basis the link's shape does not allow", async () => {
+    const { app } = workspace();
+    const world = await attemptOn(app, "A state, not a change");
+    const written = ok<ProjectWorkLinkResult>(
+      await accept({
+        subject: world.task,
+        repositoryId: world.run.repositoryId("app"),
+        commitObjectId: world.commitObjectId,
+        checkpointId: world.checkpointId,
+        attempt: world.run.attempt,
+      }),
+    );
+    const link = await acceptedLink(world.task.entity.entityId, written);
+    const stateCapture = await captureOf(world.task.entity.entityId, link.linkId);
+
+    // The same project, a link of the other shape: a change is proved by
+    // `accepted_change`, and a state capture is not a proof of it however
+    // complete it is.
+    const change = {
+      base: { vcs: "git" as const, objectFormat: "sha1" as const, commitObjectId: world.run.base("app") },
+      head: { vcs: "git" as const, objectFormat: "sha1" as const, commitObjectId: world.commitObjectId },
+      diffDigest: "a".repeat(64),
+    };
+    const asChange = expectedRequiredFacts(h.store, h.projectId, {
+      repositoryId: world.run.repositoryId("app"),
+      target: { change },
+    });
+    expect(requiredComplete(stateCapture, asChange)).toBe(false);
+  });
+
+  it("refuses a delivery whose attempt this project cannot read it against", async () => {
+    const { app } = workspace();
+    const task = await create("task", "Delivered", taskBody());
+    await startAttempt(task);
+    const base = head(app);
+    write(app, { "src/a.ts": "delivered\n" });
+    const made = commit(app, "the delivery");
+    const run = await endAttempt(task);
+    const diff = await diffBetween(repositoryAt(app), base, made);
+    const before = blobCount();
+
+    const error = failed(
+      await h.call("project/work/link", {
+        projectId: h.projectId,
+        expectedRevisionId: task.revision.revisionId,
+        link: {
+          type: "delivery",
+          entityId: task.entity.entityId,
+          revisionId: task.revision.revisionId,
+          repositoryId: run.repositoryId("app"),
+          change: {
+            base: { vcs: "git", objectFormat: "sha1", commitObjectId: base },
+            head: { vcs: "git", objectFormat: "sha1", commitObjectId: made },
+            diffDigest: diff!.digest,
+          },
+          executionLinkId: "lnk_not_in_this_project",
+          confirm: true,
+        },
+        idempotencyKey: idem("foreign-attempt"),
+      }),
+    );
+    expect(error.message).toMatch(/not one this project has/);
+    expect(blobCount(), "and nothing was stored for it").toBe(before);
+
+    // The same delivery, naming its own attempt, is accepted and proved.
+    const accepted = ok<ProjectWorkLinkResult>(
+      await h.call("project/work/link", {
+        projectId: h.projectId,
+        expectedRevisionId: task.revision.revisionId,
+        link: {
+          type: "delivery",
+          entityId: task.entity.entityId,
+          revisionId: task.revision.revisionId,
+          repositoryId: run.repositoryId("app"),
+          change: {
+            base: { vcs: "git", objectFormat: "sha1", commitObjectId: base },
+            head: { vcs: "git", objectFormat: "sha1", commitObjectId: made },
+            diffDigest: diff!.digest,
+          },
+          executionLinkId: run.attempt.executionLinkId,
+          confirm: true,
+        },
+        idempotencyKey: idem("own-attempt"),
+      }),
+    );
+    if (accepted.link.type !== "delivery") throw new Error("unreachable");
+    const linkId = accepted.link.links[0]!.linkId;
+    const link = (await detail(task.entity.entityId)).repositoryLinks.find((row) => row.linkId === linkId)!;
+    const capture = await captureOf(task.entity.entityId, linkId);
+    expect(requiredComplete(capture, expectedRequiredFacts(h.store, h.projectId, link))).toBe(true);
+    expect(capture.required?.from.taskEntityId, "joined to the task the attempt belongs to").toBe(task.entity.entityId);
   });
 });

@@ -261,6 +261,16 @@ describe("notifications", () => {
     expect(schema.parse(base).include?.repositoryStatus).toBeUndefined();
   });
 
+  it("lets a read ask which capture proved each link, and defaults to not asking", () => {
+    const schema = projectWorkParamsSchemas["project/work/get"];
+    const base = { projectId: SAMPLE_PROJECT_ID, entityId: SAMPLE_ENTITY_ID };
+    // The history is a separate question from the link's current pointer, and
+    // costs a store read per link, so it is opt-in (D-363).
+    expect(schema.parse({ ...base, include: { links: true, captureHistory: true } }).include?.captureHistory).toBe(true);
+    expect(schema.parse(base).include?.captureHistory).toBeUndefined();
+    expect(schema.safeParse({ ...base, include: { captureHistory: "yes" } }).success).toBe(false);
+  });
+
   it("keeps the attention count exact even when the item list is cut", () => {
     const attention = projectWorkAttentionSchema.parse({
       projectId: SAMPLE_PROJECT_ID,

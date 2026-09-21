@@ -87,11 +87,12 @@ import {
   buildCapture,
   captureReadable,
   evidenceUnreviewable,
-  readCapture,
+  readCaptureBlob,
   requiredComplete,
   storeCapture,
   type StoredCapture,
 } from "./captures.js";
+import { expectedRequiredFacts } from "./required-facts.js";
 import { convergeTask, evaluate, gatherAuthorities, planFrom, readerOf, storeReport } from "./verification/index.js";
 import {
   ProjectWorkConflictError,
@@ -1005,15 +1006,26 @@ export class ProjectWorkMethods {
       // the contract protects this evidence against the day retention prunes
       // the checkpoint it came from (D-361).
       captureReadable: (link) => captureReadable(this.store, projectId, link),
-      // And, for native evidence, whether that capture holds every source the
-      // acceptance rests on — read out of the stored blob, never out of git
-      // (M21-T19). Answered once per link: several visual criteria commonly
-      // rest on the same acceptance, and a capture is up to four megabytes.
+      // And, for native evidence, whether the capture the acceptance was
+      // taken against holds every source it rests on — read out of the stored
+      // blob, never out of git (M21-T19), and checked against what the record
+      // says that capture must be rather than against itself (review F2).
+      //
+      // The capture read here is the one the **decision bound**, not the
+      // link's current pointer (D-363): a partial acceptance never becomes
+      // native evidence because somebody later corrected what the link points
+      // at. An acceptance written before that binding existed is read against
+      // the link's first recorded association, which is the only proof this
+      // store can honestly attribute to it — never the newest one.
+      //
+      // Answered once per link: several visual criteria commonly rest on the
+      // same acceptance, and a capture is up to four megabytes.
       captureComplete: (link) => {
         const known = completeness.get(link.linkId);
         if (known !== undefined) return known;
-        const capture = readCapture(this.store, projectId, link);
-        const answer = capture !== undefined && requiredComplete(capture, "state" in link.target ? link.target.state : undefined);
+        const bound = link.acceptance?.captureBlobId ?? this.store.firstCaptureAssociation(projectId, link.linkId)?.blobId;
+        const capture = bound === undefined ? undefined : readCaptureBlob(this.store, projectId, bound);
+        const answer = capture !== undefined && requiredComplete(capture, expectedRequiredFacts(this.store, projectId, link));
         completeness.set(link.linkId, answer);
         return answer;
       },

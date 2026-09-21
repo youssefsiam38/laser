@@ -865,7 +865,68 @@ export interface RepositoryLinkAcceptance {
   subjectDigest: string;
   /** The person the host recorded it for. */
   acceptedBy: ProjectWorkActor;
+  /**
+   * The exact capture this acceptance was taken against (D-363).
+   *
+   * A decision binds the immutable proof it consumed, by content address. The
+   * link's `captureBlobId` is a **current pointer** and may later be corrected
+   * to a capture nobody looked at when they accepted; this field does not
+   * move, so an acceptance that rested on a partial capture never becomes
+   * native evidence merely because that pointer was corrected afterwards.
+   *
+   * Absent on acceptances written before this rule existed. Their proof is the
+   * link's first recorded capture association, which is what the capture
+   * history says — never the latest one.
+   */
+  captureBlobId?: string;
 }
+
+/**
+ * Why one capture became the proof of one repository link (D-363).
+ *
+ * `first_capture` is the association written with the link itself;
+ * `gate_preparation` is a correction taken while a gate was being prepared —
+ * which is not itself a decision, and is never read as one; `legacy_baseline`
+ * is what a migration recorded for a link whose association predates this
+ * history, and it says exactly that rather than inventing a past.
+ */
+export const REPOSITORY_CAPTURE_ATTACH_REASONS = ["first_capture", "gate_preparation", "legacy_baseline"] as const;
+export type RepositoryCaptureAttachReason = (typeof REPOSITORY_CAPTURE_ATTACH_REASONS)[number];
+
+/**
+ * One immutable association between a repository link and the capture that
+ * proved it (D-363).
+ *
+ * The link's identity, subject, relation and target never change here: a
+ * correction to any of those still appends a superseding {@link RepositoryLink},
+ * as the root contract requires. What this records is which bounded canonical
+ * proof of that same exact link was current, when, at whose hand and why — so
+ * that "which capture did this decision rest on" is answered by a record
+ * rather than by inferring from a timestamp or from whatever the pointer says
+ * today. Rows are appended, never updated and never deleted.
+ */
+export interface RepositoryLinkCaptureRevision {
+  /** Stable identity of this association. Ordering within a link is `seq`. */
+  revisionId: string;
+  linkId: string;
+  /** The capture blob this association made current. */
+  blobId: string;
+  /** The capture it replaced, when it replaced one. */
+  supersedesBlobId?: string;
+  /** The association it replaced, when that association is itself recorded. */
+  supersedesRevisionId?: string;
+  attachedAt: string;
+  /** Monotonic within one link: two associations one millisecond apart stay ordered. */
+  seq: number;
+  reason: RepositoryCaptureAttachReason;
+  /** Which door wrote it — a gate being prepared is not a gate that succeeded. */
+  gate?: string;
+  /** Host-written: the actor the write was made for. Never caller text. */
+  actor: ProjectWorkActor;
+}
+
+/** The most capture associations one read returns for one link. */
+export const REPOSITORY_CAPTURE_HISTORY_MAX = 50;
 
 export interface RepositoryLinkContext {
   branch?: string;

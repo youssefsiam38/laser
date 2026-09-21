@@ -890,3 +890,110 @@ weakened assertions.
 SDK/driver/worker session/server factories, design index/workspace, interop,
 transcript/Legend, `PLAN.md`/`STATUS.md`. Native acceptance model/dialog only
 if the identity contract forces it. Evidence lands in this file.
+
+## Correction plan · what was implemented (M21-T18/T19)
+
+The four findings are corrected in place; nothing of the accepted `34c1790c`
+implementation was reverted, cherry-picked or rewritten. The plan branch
+(`agents/correct-durable-proof-boundaries-a0d9d6af` at `78c078d3`, which
+already carries `b203a44a`) was merged whole into the parent base `e7e248de`;
+the merge's single conflict was the `packages/worker/src/server.ts` import
+block, where both sides' additions (`VerificationService`, the queued
+`SessionMentionContext`) are kept.
+
+### F1 · the scope now goes into git
+
+- `source-control/read.ts`: `treeListing(repo, commit, limit, scopePath?)` runs
+  `ls-tree -r -z --long <commit> -- :(literal)<scope>` and answers
+  `{ rows, truncated, unreadable }`, or `undefined` when git could not list.
+  `:(literal)` keeps a path with `*`, `?` or `[` a path. `treeManifest` keeps
+  its signature and is the same listing with no scope — one parser.
+- `captures.ts`: the zero-change branch calls it with the scope and refuses in
+  this order — nothing there, more rows than `REQUIRED_PATHS_MAX` ("more than
+  the 100 files", never an invented exact count), then any unreadable row named
+  with what it is. A gitlink is named, never dropped from a set that claims to
+  be complete. Cap unchanged at 100; every budget unchanged.
+- `gate.ts attemptOrigin` carries `state.path` through as `scopePath`, so the
+  path a request names reaches the selection and is recorded in
+  `required.from.scopePath`.
+
+### F2 · the capture is checked against the record
+
+- New `project-work/required-facts.ts`: `expectedRequiredFacts(store,
+  projectId, link)` derives repository, exact target, the bases that link shape
+  allows, the base commit the record knows (the attempt record's for a state,
+  the change's own for a delivery), the scope, `executionLinkId` and the
+  attempt's `taskEntityId` — from the **persisted** link and attempt only, never
+  from git and never from a request. An attempt the project does not hold, or
+  one that recorded nothing about this repository, comes back `unresolved`.
+- `requiredComplete(capture, expected?)` now checks repository, exact state or
+  change (including `objectFormat`, `checkpointId`, `path`, blob and content
+  fences), allowed basis, `from.baseCommitObjectId`, `from.scopePath`,
+  `from.executionLinkId` and `from.taskEntityId` — then today's body proof
+  unchanged. `commit_parent_to_commit` is the one basis whose base value is not
+  checked, because its base is the commit's parent, a fact about git.
+- All three readers use it: the Native evaluator hook in `methods.ts`,
+  `keepEvidenceReviewable`, and the delivery door, which refuses an unresolved
+  attempt before reading a byte and refuses a capture that does not prove the
+  change before anything is stored.
+
+### F3 · immutable capture-association history (D-363, option (i))
+
+- Schema 4: `repository_link_captures(revision_id, project_id, link_id,
+  blob_id, supersedes_blob_id, supersedes_revision_id, attached_at, seq,
+  reason, gate, actor_json)`, appended only, with `UNIQUE(project_id, link_id,
+  seq)`. `repository_links.capture_blob_id` stays the current pointer, so every
+  existing reader is unchanged.
+- The first association is written inside the link's own insert; a correction
+  is appended inside the compare-and-set transaction and **only when the
+  pointer really moved** (`changes === 1`). `attachCapture` returns whether it
+  moved; `keepEvidenceReviewable` turns a lost race into a refusal naming it
+  rather than deciding on a capture it never read.
+- `reason` distinguishes `first_capture`, `gate_preparation` (a correction
+  taken while a gate was being prepared — never read as a gate that succeeded)
+  and `legacy_baseline`. `gate` and `actor` are host-written; `seq` is the
+  link's own counter, so two associations in one millisecond stay ordered.
+- A decision binds the proof it consumed: `RepositoryLinkAcceptance` carries
+  `captureBlobId`, and convergence reads that blob, falling back to the link's
+  **first** association for an acceptance written before the binding existed —
+  never the newest one. An old partial Native acceptance therefore never
+  becomes native because the link's pointer was corrected afterwards.
+- Migration records only the association the database currently holds, as
+  `legacy_baseline`, and invents no earlier history. The old blob and its
+  association stay readable after a correction.
+- Inspectable through the existing detail read: `include.captureHistory` on
+  `project/work/get`, bounded by `REPOSITORY_CAPTURE_HISTORY_MAX` (50) per
+  link. No unbounded history array, no new decision engine.
+
+### F4 · the blanket timeout is gone, with the new measurement
+
+`vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 })` is removed from
+`capture-completeness.test.ts`; no skips, no retries, no per-test budget was
+needed. Measured here, file alone with `--reporter=verbose`: 29 passed, 8.29 s
+total, 6.99 s in tests, slowest 833 ms, then 767/766/739/520 ms. Under the full
+`test/project-work` load: 302 passed in 7.59 s. Nothing is within 5× of the 5 s
+default.
+
+### Validation
+
+Frozen install, `pnpm -r build`, then:
+
+| Command | Result |
+| --- | --- |
+| `env -i PATH HOME pnpm -F @lasercode/host exec vitest run test/project-work` | 302 passed (18 files) |
+| `pnpm -F @lasercode/protocol test` | 751 passed, no type errors |
+| `env -i … pnpm -F @lasercode/ui exec vitest run test/project-work/native-acceptance.test.tsx test/project-work/verification.test.tsx` | 31 passed |
+| `pnpm -r typecheck` | clean |
+| `pnpm identity:check` | passes |
+
+The three new F1 tests were run against the previous enumeration (the
+whole-tree listing restored temporarily, then reverted) and fail exactly as the
+finding predicts: the straddling scope keeps 2 of its 5 files while claiming to
+be complete, the scope past the cap is refused as "not in the repository at
+that state", and the gitlink scope reads as absent instead of being named.
+
+**Not proven here, and the person's:** how the new refusals read in the app,
+and a real project's round trip. The `attachCapture` conflict refusal is
+exercised through a real gate with the compare-and-set forced to report a lost
+race (a proxy over the real store), because two writers on one store cannot be
+timed from a test; everything else in that path is real.

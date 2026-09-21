@@ -57,6 +57,7 @@ import {
   type StoredCapture,
 } from "./captures.js";
 import { ProjectWorkRefusedError } from "./errors.js";
+import { expectedRequiredFacts } from "./required-facts.js";
 import { gatherAuthorities, readerOf } from "./verification/authorities.js";
 import type { ProjectWorkStore } from "./store.js";
 
@@ -105,7 +106,17 @@ export class ProjectWorkGate {
       ...(params.body ? { body: params.body } : {}),
       ...(params.include ? { include: params.include } : {}),
     });
-    if (params.include?.repositoryStatus !== true || detail.repositoryLinks.length === 0) return detail;
+    if (detail.repositoryLinks.length === 0) return detail;
+    // The capture history is a store read per link and no git at all, so it is
+    // answered on its own: asking which proof was current when must not cost a
+    // git spawn per repository (D-363).
+    const history =
+      params.include?.captureHistory === true
+        ? detail.repositoryLinks.flatMap((link) => this.store.captureHistory(params.projectId, link.linkId))
+        : undefined;
+    if (params.include?.repositoryStatus !== true) {
+      return history ? { ...detail, captureHistory: history } : detail;
+    }
     const repositories = await this.repositories(params.projectId);
     const status: RepositoryLinkAvailability[] = [];
     // Serialized on purpose for now: bounded concurrency over a forty-repo
@@ -116,7 +127,7 @@ export class ProjectWorkGate {
         await linkAvailability(link, repositoryFor(repositories, link.repositoryId)?.repository, captureReadable(this.store, params.projectId, link)),
       );
     }
-    return { ...detail, repositoryStatus: status };
+    return { ...detail, repositoryStatus: status, ...(history ? { captureHistory: history } : {}) };
   }
 
   /**
@@ -275,6 +286,22 @@ export class ProjectWorkGate {
         "That change is not what it was when you looked at it. Look at the difference again, then accept it.",
       );
     }
+    // What the capture will have to say, derived from the record before it is
+    // taken: the same authority the evaluator and the decision gates use
+    // (review F2). An attempt id the store does not hold is refused here,
+    // before a single byte is read, rather than written into a provenance
+    // nobody can check afterwards.
+    const expected = expectedRequiredFacts(this.store, params.projectId, {
+      repositoryId: payload.repositoryId,
+      target: { change: payload.change },
+      ...(payload.executionLinkId ? { executionLinkId: payload.executionLinkId } : {}),
+    });
+    if (expected.unresolved !== undefined) {
+      throw new ProjectWorkRefusedError(
+        `That delivery names an attempt this project cannot read it against — ${expected.unresolved}. ` +
+          "Accept the change from the task's own attempt, which knows the work behind it.",
+      );
+    }
     // Accepting delivery is a decision, so it rests on every source it
     // touched, kept whole. An honestly partial capture is good provenance and
     // is never good enough for this (M21-T19).
@@ -284,6 +311,7 @@ export class ProjectWorkGate {
         basis: "accepted_change",
         base: payload.change.base.commitObjectId,
         ...(payload.executionLinkId ? { executionLinkId: payload.executionLinkId } : {}),
+        ...(expected.taskEntityId ? { taskEntityId: expected.taskEntityId } : {}),
         ...(payload.change.head.path !== undefined ? { scopePath: payload.change.head.path } : {}),
       },
       at: payload.change.head.commitObjectId,
@@ -298,6 +326,15 @@ export class ProjectWorkGate {
     if (!built) {
       throw new ProjectWorkRefusedError(
         "That change could not be read out of the repository, so there would be nothing to review later. Try again, or pick a change that is still there.",
+      );
+    }
+    // And the capture that was taken is checked against that same expectation
+    // before it is stored: a capture that does not prove this exact link is
+    // not evidence of this delivery, whatever it is a faithful record of.
+    if (!requiredComplete(built, expected)) {
+      throw new ProjectWorkRefusedError(
+        "What was read out of the repository does not prove this exact change, so accepting it would record evidence of something else. " +
+          "Look at the difference again, then accept it.",
       );
     }
     const capture: StoredCapture = storeCapture(this.store, {
@@ -444,6 +481,11 @@ export class ProjectWorkGate {
         commitObjectId: input.state.commitObjectId,
         subjectDigest: subject.digest,
         acceptedBy: this.caller.origin.actor,
+        // The proof this acceptance was taken against, bound by content
+        // address (D-363). The link's pointer may be corrected later; what a
+        // person looked at cannot be, so convergence reads this and never the
+        // pointer of the day.
+        captureBlobId: stored.blobId,
       },
     };
   }
@@ -539,6 +581,11 @@ export class ProjectWorkGate {
       base: record.base.commitObjectId,
       executionLinkId: link.linkId,
       taskEntityId: link.entityId,
+      // The scope the request actually named, carried into the selection
+      // rather than dropped here and rediscovered downstream (review F1): when
+      // nothing changed, this is the bounded scope that is kept whole, and it
+      // is what the record is later checked against.
+      ...(input.state.path !== undefined ? { scopePath: input.state.path } : {}),
     };
   }
 
@@ -572,7 +619,10 @@ export class ProjectWorkGate {
       // and is corrected here from git while git can still answer (D-361,
       // M21-T19).
       const needsWhole = link.relation === "implemented_by";
-      if (existing && (!needsWhole || requiredComplete(existing))) continue;
+      // Whole means whole *of this link*: the capture is checked against what
+      // the record says it must be, never against itself (review F2).
+      const expected = expectedRequiredFacts(this.store, projectId, link);
+      if (existing && (!needsWhole || requiredComplete(existing, expected))) continue;
       if (!needsWhole && captureReadable(this.store, projectId, link)) continue;
       const repository = repositoryFor(repositories, link.repositoryId)?.repository;
       const availability = await linkAvailability(link, repository, false);
@@ -594,6 +644,7 @@ export class ProjectWorkGate {
                         basis: "accepted_change",
                         base: link.target.change.base.commitObjectId,
                         ...(link.executionLinkId ? { executionLinkId: link.executionLinkId } : {}),
+                        ...(expected.taskEntityId ? { taskEntityId: expected.taskEntityId } : {}),
                         ...(link.target.change.head.path !== undefined ? { scopePath: link.target.change.head.path } : {}),
                       },
                       at: link.target.change.head.commitObjectId,
@@ -605,11 +656,25 @@ export class ProjectWorkGate {
       if (!built) throw evidenceUnreviewable(link, availability.missing, gate);
       const stored = storeCapture(this.store, { projectId, entityId: link.subject.entityId, capture: built, gate });
       // A correction, never an overwrite: the capture it replaces stays in the
-      // store under its own content address, and the pointer only moves off
-      // the exact blob this read — so a partial proof can never be frozen in
-      // place by an idempotent attach, and two callers cannot race one link
-      // into disagreeing with itself.
-      this.store.attachCapture(projectId, link.linkId, stored.blobId, link.captureBlobId);
+      // store under its own content address, the association that made it
+      // current is appended rather than rewritten (D-363), and the pointer
+      // only moves off the exact blob this read — so a partial proof can never
+      // be frozen in place by an idempotent attach, and two callers cannot
+      // race one link into disagreeing with itself.
+      //
+      // Losing that race is reported, not assumed away: somebody else moved
+      // this link's proof while this gate was being prepared, and the honest
+      // answer is to look again rather than to decide on a capture this call
+      // never read.
+      const moved = this.store.attachCapture(projectId, link.linkId, stored.blobId, link.captureBlobId, {
+        gate,
+        actor: this.caller.origin.actor,
+      });
+      if (!moved) {
+        throw new ProjectWorkRefusedError(
+          `${gate} was being prepared when this record's evidence changed somewhere else, so it was not decided on what you were looking at. Try again.`,
+        );
+      }
     }
   }
 

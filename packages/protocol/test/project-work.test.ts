@@ -19,6 +19,8 @@ import {
   projectWorkRefSchema,
   projectWorkRefText,
   projectWorkRevisionSchema,
+  REPOSITORY_CAPTURE_ATTACH_REASONS,
+  REPOSITORY_CAPTURE_HISTORY_MAX,
   REQUIRED_PATHS_MAX,
   repositoryCaptureSchema,
   repositoryLinkSchema,
@@ -26,6 +28,8 @@ import {
   statesForKind,
   type ProjectWorkEntity,
   type ProjectWorkRef,
+  type RepositoryLinkAcceptance,
+  type RepositoryLinkCaptureRevision,
 } from "../src/project-work.js";
 import {
   DESIGN_FIDELITIES,
@@ -459,6 +463,43 @@ describe("a capture says what a decision rests on, and can be read back", () => 
       contentDigest: "b".repeat(64),
     }));
     expect(repositoryCaptureSchema.safeParse({ ...capture, required: { ...capture.required, entries } }).success).toBe(false);
+  });
+
+  it("names the reasons one capture became a link's proof, and keeps the history bounded", () => {
+    // The vocabulary is closed and each word means one thing: what a link was
+    // written with, a correction taken while a gate was being prepared — which
+    // is never read as a gate that succeeded — and the one association a
+    // migration can honestly attest for a link older than this history
+    // (D-363).
+    expect([...REPOSITORY_CAPTURE_ATTACH_REASONS]).toEqual(["first_capture", "gate_preparation", "legacy_baseline"]);
+    expect(REPOSITORY_CAPTURE_HISTORY_MAX).toBeGreaterThan(0);
+
+    const revision: RepositoryLinkCaptureRevision = {
+      revisionId: "rlc_1",
+      linkId: "lnk_1",
+      blobId: "blb_2",
+      supersedesBlobId: "blb_1",
+      supersedesRevisionId: "rlc_0",
+      attachedAt: "2026-03-01T09:00:00.000Z",
+      seq: 2,
+      reason: "gate_preparation",
+      gate: "Marking this task done",
+      actor: { kind: "person", label: "You" },
+    };
+    expect(revision.supersedesBlobId, "a correction names what it replaced").toBe("blb_1");
+
+    // An acceptance binds the capture it was taken against, so a later
+    // correction of the link's pointer cannot become what a person looked at.
+    const acceptance: RepositoryLinkAcceptance = {
+      kind: "checkpoint_preview",
+      confirmedAt: "2026-03-01T09:00:00.000Z",
+      checkpointRef: "refs/x/checkpoints/s/1",
+      commitObjectId: "a".repeat(40),
+      subjectDigest: "b".repeat(64),
+      acceptedBy: { kind: "person", label: "You" },
+      captureBlobId: "blb_1",
+    };
+    expect(acceptance.captureBlobId).not.toBe(revision.blobId);
   });
 });
 

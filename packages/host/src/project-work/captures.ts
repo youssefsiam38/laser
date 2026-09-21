@@ -43,7 +43,8 @@ import {
   type RepositoryLink,
   type RepositoryStateRef,
 } from "@lasercode/protocol";
-import { commitExists, fileAt, fileSizeAt, parentsOf, treeManifest, type HostRepository } from "../source-control/read.js";
+import { sameChange, sameState, type ExpectedRequiredFacts } from "./required-facts.js";
+import { commitExists, fileAt, fileSizeAt, parentsOf, treeListing, treeManifest, type HostRepository } from "../source-control/read.js";
 import { diffBetween } from "../source-control/read.js";
 import { ProjectWorkQuotaError, ProjectWorkRefusedError } from "./errors.js";
 import { canonicalJson, sha256 } from "./ids.js";
@@ -190,33 +191,49 @@ export async function selectRequired(input: {
     return { basis: origin.basis, from, rows };
   }
 
-  // Nothing changed. What is kept whole is the named scope itself.
+  // Nothing changed. What is kept whole is the named scope itself — and the
+  // scope is what git is asked about, not what a whole-tree listing is filtered
+  // down to afterwards. Enumerating everything and filtering second gives two
+  // false answers: a scope that sorts past the bound reads as "not in the
+  // repository", and a scope preceded by more unrelated files than the bound
+  // reads as complete while holding a prefix of itself (review F1).
   const scope = origin.scopePath;
-  const entries = await treeManifest(repository, input.at, REQUIRED_PATHS_MAX + 1);
-  if (!entries) {
+  const listing = await treeListing(repository, input.at, REQUIRED_PATHS_MAX, scope);
+  if (!listing) {
     throw new ProjectWorkRefusedError(
       "Nothing changed between where this work started and the state you named, and the files at that state could not be listed, so there is nothing complete to keep. " +
         "Record this against a state that is still readable.",
     );
   }
-  const inScope = scope === undefined ? entries : entries.filter((entry) => entry.path === scope || entry.path.startsWith(`${scope}/`));
-  if (inScope.length === 0) {
+  if (listing.rows.length === 0 && listing.unreadable.length === 0) {
     throw new ProjectWorkRefusedError(
       scope === undefined
         ? "Nothing changed here and there are no files at that state, so there is nothing for anyone to have reviewed. Record this against a state that has the code in it."
         : `Nothing changed here and ${scope} is not in the repository at that state, so there is nothing for anyone to have reviewed. Name a path that is there, or record this at a state that has it.`,
     );
   }
-  if (inScope.length > REQUIRED_PATHS_MAX) {
+  if (listing.truncated) {
+    // "More than" and never an exact count: the listing stopped at the bound,
+    // so how many there really are is something this read does not know.
     throw new ProjectWorkRefusedError(
-      `Nothing changed here, so what would be kept is ${scope ?? "everything tracked at that state"} in full — ${String(inScope.length)} files, more than the ${String(REQUIRED_PATHS_MAX)} a decision may rest on. ` +
+      `Nothing changed here, so what would be kept is ${scope ?? "everything tracked at that state"} in full — more than the ${String(REQUIRED_PATHS_MAX)} files a decision may rest on. ` +
         "Name the part of the repository this decision is about, and record it against that.",
+    );
+  }
+  const unreadable = listing.unreadable[0];
+  if (unreadable) {
+    throw new ProjectWorkRefusedError(
+      unreadable.kind === "gitlink"
+        ? `Nothing changed here, and ${unreadable.path} is another repository recorded inside this one, so its code is not in this state and could not be kept where a person can still read it. ` +
+          "Name a part of the repository whose files are all here, and record this against that."
+        : `Nothing changed here, and ${unreadable.path} could not be read out of the repository as a file, so what would be kept would not be the whole of what you named. ` +
+          "Name a part of the repository whose files can all be read, and record this against that.",
     );
   }
   return {
     basis: "complete_bounded_state",
     from: { ...from, ...(scope !== undefined ? { scopePath: scope } : {}) },
-    rows: inScope.map((entry) => ({ path: entry.path, status: "present" as const, side: "after" as const, at: input.at })),
+    rows: listing.rows.map((entry) => ({ path: entry.path, status: "present" as const, side: "after" as const, at: input.at })),
   };
 }
 
@@ -313,19 +330,27 @@ function requiredTooLarge(row: RequiredRow, bytes: number): ProjectWorkRefusedEr
 
 /**
  * Does this capture prove every source its decision rests on, from what is
- * stored alone?
+ * stored alone — and is it a capture of **this** link?
  *
- * Not "does it carry a flag": the entries are checked against the bodies
- * beside them — same path, same side, same digest, and the digest re-taken
- * over the text that is actually there. A capture whose block and bodies
- * disagree proves nothing, whoever wrote it.
+ * Two halves, and the second one is the one review F2 found missing:
+ *
+ * - the entries are checked against the bodies beside them — same path, same
+ *   side, same digest, and the digest re-taken over the text that is actually
+ *   there. A capture whose block and bodies disagree proves nothing, whoever
+ *   wrote it;
+ * - and, when the caller says which link this is supposed to prove, the
+ *   capture's own repository, target, basis, base, scope and attempt are
+ *   checked against what the **record** says they must be
+ *   ({@link expectedRequiredFacts}). Internal consistency is not identity: a
+ *   flawless capture of another repository, another ref, another path or
+ *   another attempt's base is a capture of something else.
+ *
+ * The expectation is omitted only where there is nothing to check it against.
  */
-export function requiredComplete(capture: RepositoryCapture, state?: RepositoryStateRef): boolean {
+export function requiredComplete(capture: RepositoryCapture, expected?: ExpectedRequiredFacts): boolean {
   const required = capture.required;
   if (!required || required.complete !== true || required.entries.length === 0) return false;
-  if (state !== undefined) {
-    if (!capture.state || capture.state.commitObjectId !== state.commitObjectId) return false;
-  }
+  if (expected !== undefined && !provesLink(capture, required, expected)) return false;
   return required.entries.every((entry) => {
     const source = capture.sources.find((row) => row.path === entry.path && (row.side ?? "after") === entry.side);
     if (!source || source.truncated === true) return false;
@@ -334,10 +359,45 @@ export function requiredComplete(capture: RepositoryCapture, state?: RepositoryS
   });
 }
 
+/** Is this a capture of the link the record describes, taken the way that link allows? */
+function provesLink(capture: RepositoryCapture, required: RepositoryCaptureRequired, expected: ExpectedRequiredFacts): boolean {
+  // A record the store could not resolve proves nothing in either direction,
+  // and the honest answer to "is this complete" is then no.
+  if (expected.unresolved !== undefined) return false;
+  if (capture.repositoryId !== expected.repositoryId) return false;
+  if ("state" in expected.target) {
+    if (!capture.state || !sameState(capture.state, expected.target.state)) return false;
+  } else if (!capture.change || !sameChange(capture.change, expected.target.change)) {
+    return false;
+  }
+  if (!expected.bases.includes(required.basis)) return false;
+  // The base is checked wherever the record knows it. `commit_parent_to_commit`
+  // is the exception on purpose: its base is the commit's own parent, which is
+  // a fact about git rather than one the record holds.
+  if (required.basis !== "commit_parent_to_commit" && expected.baseCommitObjectId !== undefined) {
+    if (required.from.baseCommitObjectId !== expected.baseCommitObjectId) return false;
+  }
+  if (required.basis === "complete_bounded_state" && required.from.scopePath !== expected.scopePath) return false;
+  if (required.from.executionLinkId !== expected.executionLinkId) return false;
+  return required.from.taskEntityId === expected.taskEntityId;
+}
+
 /** One link's stored capture, parsed — never cast, never re-read from git. */
 export function readCapture(store: CaptureStore, projectId: string, link: RepositoryLink): RepositoryCapture | undefined {
   if (!link.captureBlobId) return undefined;
-  const range = store.readBlob({ projectId, blobId: link.captureBlobId, offset: 0, limit: REPOSITORY_CAPTURE_BYTES_MAX + 1024 * 1024 });
+  return readCaptureBlob(store, projectId, link.captureBlobId);
+}
+
+/**
+ * One **exact** stored capture, by content address.
+ *
+ * What a decision bound when it was made is a blob id, not a link's current
+ * pointer (D-363), so reading the proof a decision rested on is a different
+ * question from reading the proof a link points at today — and it has its own
+ * door.
+ */
+export function readCaptureBlob(store: CaptureStore, projectId: string, blobId: string): RepositoryCapture | undefined {
+  const range = store.readBlob({ projectId, blobId, offset: 0, limit: REPOSITORY_CAPTURE_BYTES_MAX + 1024 * 1024 });
   if (!range || range.released !== undefined || range.corrupt === true || !range.data) return undefined;
   if (range.nextOffset !== undefined) return undefined;
   try {

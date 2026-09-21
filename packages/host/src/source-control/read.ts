@@ -281,6 +281,88 @@ export interface TreeEntryRow {
   bytes: number;
 }
 
+/** A row a listing found and cannot hand back as reviewable bytes. */
+export interface TreeUnreadableRow {
+  path: string;
+  /** Another repository recorded inside this one; its contents are not here. */
+  kind: "gitlink" | "other";
+}
+
+/** One bounded listing of a commit's tree, said honestly. */
+export interface TreeListing {
+  /** The blob rows, in git's order, at most `limit` of them. */
+  rows: TreeEntryRow[];
+  /** True when the tree holds more rows than `limit`; the count is not invented. */
+  truncated: boolean;
+  /**
+   * Rows that are in the tree and are not readable bytes — a gitlink, or
+   * anything else that is not a blob. Named rather than dropped: a set that
+   * silently loses them claims to be complete and is not (M21-T19, review F1).
+   */
+  unreadable: TreeUnreadableRow[];
+}
+
+/**
+ * List one commit's tree, bounded, **inside** an optional scope.
+ *
+ * The scope goes into git as a literal pathspec rather than being filtered out
+ * of a whole-tree listing afterwards, which is the difference between two very
+ * different answers: a scope that sorts entirely past the bound would
+ * otherwise look absent, and a scope preceded by more unrelated files than the
+ * bound would look like a prefix of itself and pass as complete (review F1).
+ *
+ * `:(literal)` is what keeps a path with `*`, `?` or `[` in it a path: the
+ * scope is a repository-relative path a person named, never a glob.
+ *
+ * `undefined` when git could not list at all, which is a different answer from
+ * an empty tree and is never read as one.
+ */
+export async function treeListing(
+  repo: HostRepository,
+  commit: string,
+  limit: number,
+  scopePath?: string,
+): Promise<TreeListing | undefined> {
+  if (!isObjectId(commit) || limit <= 0) return undefined;
+  if (scopePath !== undefined && !isRepoPath(scopePath)) return undefined;
+  const listed = await read(repo, [
+    "ls-tree",
+    "-r",
+    "-z",
+    "--long",
+    commit,
+    "--",
+    ...(scopePath !== undefined ? [`:(literal)${scopePath}`] : []),
+  ]);
+  if (listed === undefined) return undefined;
+  const rows: TreeEntryRow[] = [];
+  const unreadable: TreeUnreadableRow[] = [];
+  let truncated = false;
+  for (const chunk of listed.split("\0")) {
+    if (!chunk) continue;
+    // `<mode> <type> <object> <size>\t<path>`
+    const tab = chunk.indexOf("\t");
+    if (tab < 0) continue;
+    const [mode, type, object, size] = chunk.slice(0, tab).trim().split(/\s+/);
+    const path = chunk.slice(tab + 1);
+    if (!mode || !object || !path) continue;
+    if (type !== "blob") {
+      // `-r` already walked the trees, so what is left here is a gitlink or
+      // something this reader does not understand. Either way it is a row of
+      // the scope whose bytes are not in this commit.
+      if (unreadable.length < limit) unreadable.push({ path, kind: type === "commit" ? "gitlink" : "other" });
+      continue;
+    }
+    if (!isObjectId(object)) continue;
+    if (rows.length >= limit) {
+      truncated = true;
+      break;
+    }
+    rows.push({ path, mode, blobObjectId: object, bytes: Number(size ?? "") || 0 });
+  }
+  return { rows, truncated, unreadable };
+}
+
 /**
  * The whole tree of one commit, bounded.
  *
@@ -289,24 +371,14 @@ export interface TreeEntryRow {
  * their modes and their blob object ids — identity that stays true after gc
  * has reclaimed the objects themselves, exactly as a change capture's recorded
  * ids do.
+ *
+ * The same listing as {@link treeListing} with no scope, keeping the shape its
+ * callers read: a bounded array of blob rows, or nothing when git could not
+ * answer. One parser, two questions.
  */
 export async function treeManifest(repo: HostRepository, commit: string, limit: number): Promise<TreeEntryRow[] | undefined> {
-  if (!isObjectId(commit)) return undefined;
-  const listed = await read(repo, ["ls-tree", "-r", "-z", "--long", commit]);
-  if (listed === undefined) return undefined;
-  const rows: TreeEntryRow[] = [];
-  for (const chunk of listed.split("\0")) {
-    if (!chunk) continue;
-    // `<mode> <type> <object> <size>\t<path>`
-    const tab = chunk.indexOf("\t");
-    if (tab < 0) continue;
-    const [mode, type, object, size] = chunk.slice(0, tab).trim().split(/\s+/);
-    const path = chunk.slice(tab + 1);
-    if (type !== "blob" || !mode || !object || !isObjectId(object) || !path) continue;
-    rows.push({ path, mode, blobObjectId: object, bytes: Number(size ?? "") || 0 });
-    if (rows.length >= limit) break;
-  }
-  return rows;
+  const listing = await treeListing(repo, commit, limit);
+  return listing?.rows;
 }
 
 /**
