@@ -8,7 +8,7 @@
  * involved. The worker is the only writer of the settings file, so what it
  * answers is what the host has to believe.
  */
-import { GLOBAL_AGENTS_DIR_NAME, PRODUCT_NAME, type AgentsSnapshot } from "@lasercode/protocol";
+import { GLOBAL_AGENTS_DIR_NAME, PRODUCT_NAME } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,18 +41,21 @@ const MIGRATION_REPORT = {
  * `packages/worker/test/profiles/migrate.test.ts`; what matters here is that
  * the host offers its choices and applies the answer.
  */
-function fakeWorker(options: { log: string; configured: boolean; loginAfter?: string; choicesLog?: string; ranMarker?: string }): string {
+function fakeWorker(options: { log: string; configured: boolean; loginAfter?: string; choicesLog?: string; ranMarker?: string; settingsLog?: string; naming?: boolean }): string {
   return `
 import { Socket } from "node:net";
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 const LOG = ${JSON.stringify(options.log)};
 const CHOICES_LOG = ${JSON.stringify(options.choicesLog ?? null)};
+const SETTINGS_LOG = ${JSON.stringify(options.settingsLog ?? null)};
 const RAN_MARKER = ${JSON.stringify(options.ranMarker ?? null)};
 const REPORT = ${JSON.stringify(MIGRATION_REPORT)};
+const NAMING = ${options.naming === false ? "false" : "true"};
 
 /** The planner's find-or-create rule, in the small: same key, same answer. */
 function migrate(params) {
   const report = JSON.parse(JSON.stringify(REPORT));
+  if (!NAMING) report.assignments.namingProfileId = null;
   const choices = (params && params.legacyChoices) || [];
   if (CHOICES_LOG) writeFileSync(CHOICES_LOG, JSON.stringify(choices));
   const resolved = {};
@@ -96,6 +99,10 @@ socket.on("data", (chunk) => {
     let result = { ok: true };
     if (req.method === "pi/providers/list") result = { providers: [{ id: "stub", name: "Stub", configured, methods: [] }] };
     else if (req.method === "models/profiles/migrate") result = { report: migrate(req.params) };
+    else if (req.method === "pi/settings/set") {
+      if (SETTINGS_LOG) appendFileSync(SETTINGS_LOG, JSON.stringify(req.params.changes) + "\\n");
+      result = { snapshot: {} };
+    }
     else if (req.method === "agents/skills") result = { skills: [], roots: [] };
     send({ jsonrpc: "2.0", id: req.id, result });
     if (LOGIN_AFTER && req.method === LOGIN_AFTER) {
@@ -168,7 +175,16 @@ async function startHost(): Promise<Client> {
   return client;
 }
 
-const builtinProfilesOf = async (c: Client) => (await c.request<AgentsSnapshot>("agents/list", {})).builtinProfiles;
+/** The preview the migration writes; the only durable evidence it ran. */
+type MigrationRecord = {
+  version: number;
+  settings: { ran: boolean; notes: string[] };
+  builtins?: Array<{ name: string; from: string | null; to: string | null }>;
+  agentFiles?: Array<{ path: string; from: string | null; to: string | null }>;
+};
+const recordPathOf = () => join(base, "state", "model-profiles-migration.json");
+const readRecord = (): MigrationRecord => JSON.parse(readFileSync(recordPathOf(), "utf8")) as MigrationRecord;
+const migrated = () => methodsSeen().filter((m) => m === "models/profiles/migrate").length;
 
 beforeEach(() => {
   base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-profiles-migration-`));
@@ -187,31 +203,26 @@ afterEach(async () => {
 });
 
 describe("the model-profile migration at host start", () => {
-  it("runs once behind the first worker and gives every built-in a profile", async () => {
-    writeFileSync(workerMain, fakeWorker({ log, configured: true }));
+  it("runs once behind the first worker and writes the preview", async () => {
+    const settingsLog = join(base, "settings.log");
+    writeFileSync(workerMain, fakeWorker({ log, configured: true, settingsLog }));
     const c = await startHost();
-    expect(await builtinProfilesOf(c)).toEqual({ beam: null, chat: null, namer: null });
     // Anything that needs this project's worker is enough; nothing waits on
     // the migration, so the request itself answers first.
     await c.request("agents/skills", { cwd: project });
-    await vi.waitFor(async () => expect((await builtinProfilesOf(c)).beam).toBe(BALANCED), { timeout: 10_000, interval: 25 });
-    // Naming takes the naming assignment; the conversational built-ins take
-    // the profile new conversations use.
-    expect(await builtinProfilesOf(c)).toEqual({ beam: BALANCED, chat: BALANCED, namer: FAST });
-    expect(methodsSeen().filter((m) => m === "models/profiles/migrate")).toHaveLength(1);
+    await vi.waitFor(() => expect(existsSync(recordPathOf())).toBe(true), { timeout: 10_000, interval: 25 });
+    expect(migrated()).toBe(1);
+    // There are no built-in agents to give a profile to (D-347), and the
+    // settings file already assigns one to naming, so nothing is written to it.
+    expect(existsSync(settingsLog)).toBe(false);
 
     // The preview a person reads is written under the state directory, once.
-    const record = JSON.parse(readFileSync(join(base, "state", "model-profiles-migration.json"), "utf8")) as {
-      version: number;
-      settings: { ran: boolean; notes: string[] };
-      builtins?: Array<{ name: string; to: string | null }>;
-    };
+    const record = readRecord();
     expect(record.version).toBe(1);
     expect(record.settings.ran).toBe(true);
     expect(record.settings.notes.join(" ")).toContain("Balanced");
     // Nothing on this machine chose a model before profiles existed, so the
-    // record claims no conversion: it says what happened, never what a
-    // built-in ended up on (B1).
+    // record claims no conversion: it says what happened (B1).
     expect(record.builtins).toBeUndefined();
   });
 
@@ -219,13 +230,13 @@ describe("the model-profile migration at host start", () => {
     writeFileSync(workerMain, fakeWorker({ log, configured: false, loginAfter: "pi/keybindings/get" }));
     const c = await startHost();
     await c.request("pi/keybindings/get", { cwd: project });
-    await vi.waitFor(async () => expect((await builtinProfilesOf(c)).beam).toBe(BALANCED), { timeout: 10_000, interval: 25 });
+    await vi.waitFor(() => expect(c.notifications("models/profiles/seeded").length).toBe(1), { timeout: 10_000, interval: 25 });
     // The seeded set is offered, never applied silently.
     expect(c.notifications("models/profiles/seeded")).toHaveLength(1);
     expect(c.notifications("models/profiles/seeded")[0]).toMatchObject({ profiles: [{ name: "Balanced" }, { name: "Fast" }] });
   });
 
-  it("turns the built-ins' models and an agent file's model into profiles, once", async () => {
+  it("turns the retired built-ins' models and an agent file's model into profiles, once", async () => {
     // What a machine upgrading from the previous generation actually holds:
     // built-in model choices in `agents.json` and a definition file that still
     // says `model:` (`docs/model-profiles.md`, "Migration"; B1/B2).
@@ -253,15 +264,7 @@ describe("the model-profile migration at host start", () => {
 
     const c = await startHost();
     await c.request("agents/skills", { cwd: project });
-    await vi.waitFor(async () => expect((await builtinProfilesOf(c)).beam).toBe(BALANCED), { timeout: 10_000, interval: 25 });
-
-    // Beam was on a model a profile already prefers; Namer's model was not, so
-    // one profile was created for it. Chat never chose, so it takes the
-    // assignment like any built-in with nothing of its own.
-    const profiles = await builtinProfilesOf(c);
-    expect(profiles.beam).toBe(BALANCED);
-    expect(profiles.chat).toBe(BALANCED);
-    expect(profiles.namer).toMatch(/^mp_stubstubold/);
+    await vi.waitFor(() => expect(existsSync(recordPathOf())).toBe(true), { timeout: 10_000, interval: 25 });
 
     // The file was rewritten exactly once, and only the field changed.
     await vi.waitFor(() => expect(readFileSync(reviewer, "utf8")).toContain(`profile: ${BALANCED}`), { timeout: 10_000, interval: 25 });
@@ -278,15 +281,15 @@ describe("the model-profile migration at host start", () => {
     ]));
 
     // The preview record is evidence: real `from` values, and only the things
-    // that were actually converted.
-    const recordPath = join(base, "state", "model-profiles-migration.json");
-    const record = JSON.parse(readFileSync(recordPath, "utf8")) as {
-      builtins?: Array<{ name: string; from: string | null; to: string | null }>;
-      agentFiles?: Array<{ path: string; from: string | null; to: string | null }>;
-    };
+    // that were actually converted. The model the removed Beam built-in was on
+    // already began a profile; the naming one's did not, so a profile was
+    // created for it.
+    const recordPath = recordPathOf();
+    await vi.waitFor(() => expect(readRecord().builtins?.length).toBe(2), { timeout: 10_000, interval: 25 });
+    const record = readRecord();
     expect(record.builtins).toEqual([
       { name: "beam", from: "stub/stub-1", to: BALANCED },
-      expect.objectContaining({ name: "namer", from: "stub/stub-old" }),
+      expect.objectContaining({ name: "namer", from: "stub/stub-old", to: expect.stringMatching(/^mp_stubstubold/) }),
     ]);
     expect(record.agentFiles).toEqual([{ path: reviewer, from: "stub/stub-1", to: BALANCED }]);
 
@@ -305,12 +308,33 @@ describe("the model-profile migration at host start", () => {
     expect(JSON.parse(readFileSync(choicesLog, "utf8"))).toEqual([]);
   });
 
-  it("never overrules a built-in profile a person already chose", async () => {
-    writeFileSync(join(base, "state", "agents.json"), JSON.stringify({ builtinProfiles: { beam: null, chat: null, namer: "mp_testpicked00000000000" } }));
-    writeFileSync(workerMain, fakeWorker({ log, configured: true }));
+  it("carries the naming profile the removed built-in held, when Settings assigns none", async () => {
+    // The person chose which models may title a conversation on the Namer
+    // built-in. It is gone; the choice is not (`docs/plain-chat.md`).
+    writeFileSync(join(base, "state", "agents.json"), JSON.stringify({
+      version: 2, revision: 1, defaultAgent: "default",
+      builtinProfiles: { beam: null, chat: null, namer: FAST },
+    }));
+    const settingsLog = join(base, "settings.log");
+    writeFileSync(workerMain, fakeWorker({ log, configured: true, settingsLog, naming: false }));
     const c = await startHost();
     await c.request("agents/skills", { cwd: project });
-    await vi.waitFor(async () => expect((await builtinProfilesOf(c)).beam).toBe(BALANCED), { timeout: 10_000, interval: 25 });
-    expect((await builtinProfilesOf(c)).namer).toBe("mp_testpicked00000000000");
+    await vi.waitFor(() => expect(existsSync(settingsLog)).toBe(true), { timeout: 10_000, interval: 25 });
+    const written = readFileSync(settingsLog, "utf8").trim().split("\n").map((line) => JSON.parse(line) as unknown[]);
+    expect(written).toEqual([[{ path: "namingProfileId", op: "set", value: FAST }]]);
+  });
+
+  it("never overrules a naming profile Settings already assigns", async () => {
+    writeFileSync(join(base, "state", "agents.json"), JSON.stringify({
+      version: 2, revision: 1, defaultAgent: "default",
+      builtinProfiles: { beam: null, chat: null, namer: "mp_testpicked00000000000" },
+    }));
+    const settingsLog = join(base, "settings.log");
+    writeFileSync(workerMain, fakeWorker({ log, configured: true, settingsLog }));
+    const c = await startHost();
+    await c.request("agents/skills", { cwd: project });
+    await vi.waitFor(() => expect(existsSync(recordPathOf())).toBe(true), { timeout: 10_000, interval: 25 });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(existsSync(settingsLog)).toBe(false);
   });
 });

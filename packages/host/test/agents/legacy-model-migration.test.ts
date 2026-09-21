@@ -27,7 +27,7 @@ let stateDir: string;
 let projectCwd: string;
 let stores: AgentStore[];
 
-const workspaces = { beam: "/workspaces/beam", chat: "/workspaces/chat" };
+const workspaces = { chat: "/workspaces/chat" };
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-legacy-models-`));
@@ -146,8 +146,6 @@ describe("definition files written before Model Profiles", () => {
       { path: globalPath("reviewer"), from: "anthropic/claude-opus-4", to: REVIEWER_PROFILE },
       { path: projectPath("writer"), from: "openai/gpt-5-mini", to: WRITER_PROFILE },
     ]);
-    expect(store.builtinProfileIds).toEqual({ beam: BEAM_PROFILE, chat: null, namer: null });
-
     // The files themselves: the field changed, the instructions did not.
     const rewritten = readFileSync(globalPath("reviewer"), "utf8");
     expect(rewritten).toContain(`profile: ${REVIEWER_PROFILE}`);
@@ -173,28 +171,37 @@ describe("definition files written before Model Profiles", () => {
     expect(readFileSync(globalPath("reviewer"), "utf8")).toBe(rewritten);
   });
 
-  it("never overrules a built-in profile a person already chose", () => {
+  it("never overrules a profile the previous generation already resolved", () => {
     writeLegacyMetadata();
+    writeFileSync(
+      join(stateDir, "agents.json"),
+      JSON.stringify({ ...metadata(), builtinProfiles: { beam: REVIEWER_PROFILE, chat: null, namer: null } }, null, 2),
+    );
     const store = createStore();
-    store.setBuiltinProfile("beam", REVIEWER_PROFILE);
 
     expect(store.legacyModelChoices().some((choice) => choice.key === "builtin:beam")).toBe(false);
     expect(store.applyLegacyModelMigration({ "builtin:beam": BEAM_PROFILE }).builtins).toEqual([]);
-    expect(store.builtinProfileIds.beam).toBe(REVIEWER_PROFILE);
   });
 
   it("keeps the old keys in place for one release, through every metadata write", () => {
     writeLegacyMetadata();
+    writeFileSync(
+      join(stateDir, "agents.json"),
+      JSON.stringify({ ...metadata(), builtinProfiles: { beam: null, chat: BEAM_PROFILE, namer: REVIEWER_PROFILE } }, null, 2),
+    );
     const store = createStore();
-    store.setBuiltinProfile("chat", BEAM_PROFILE);
+    // The naming choice the removed built-in held is the one value still read.
+    expect(store.retiredNamingProfileId).toBe(REVIEWER_PROFILE);
+    store.setPolicy({ maxDepth: 2 });
     store.close();
 
     // Rolling the app back must find its own state exactly as it left it
-    // (D-346): the metadata this version writes carries the old blobs through.
+    // (D-346, D-347): the metadata this version writes carries the old blobs
+    // and the old choices through untouched.
     const stored = metadata();
     expect(stored.beam).toEqual({ model: { provider: "anthropic", id: "claude-sonnet-4-5" }, suggested: null, needsChoice: false });
     expect(stored.namer).toMatchObject({ model: { provider: "openai", id: "gpt-5-nano" } });
-    expect(stored.builtinProfiles).toEqual({ beam: null, chat: BEAM_PROFILE, namer: null });
+    expect(stored.builtinProfiles).toEqual({ beam: null, chat: BEAM_PROFILE, namer: REVIEWER_PROFILE });
   });
 
   it("leaves a file it could not rewrite exactly as the person wrote it", () => {

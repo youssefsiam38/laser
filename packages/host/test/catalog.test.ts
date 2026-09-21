@@ -1,6 +1,6 @@
 import { PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionCatalog } from "../src/catalog.js";
@@ -56,18 +56,26 @@ describe("SessionCatalog", () => {
     utimesSync(child, new Date("2026-01-04"), new Date("2026-01-04"));
     const entry = catalog.get(child)!;
     // The run id and status are the registry's, added by the router; the file gives identity only.
-    expect(entry.agent).toEqual({ agentName: "reviewer", kind: "child", subagentName: "review-auth", parentPath: "/sessions/root.jsonl", rootPath: "/sessions/root.jsonl" });
+    expect(entry.agent).toEqual({ agentName: "reviewer", kind: "child", sessionKind: "project", subagentName: "review-auth", parentPath: "/sessions/root.jsonl", rootPath: "/sessions/root.jsonl" });
     expect(entry).toMatchObject({ cwd: "/project", firstMessage: "Review the auth changes", messageCount: 1 });
     expect(catalog.list("/project").map((s) => s.id)).toEqual(["child"]);
     expect(catalog.cwdCounts().get("/project")).toBe(1);
 
+    // A record written before M23 names the built-in it ran as. It reads as
+    // the plain chat it now is, keeps its file untouched, and carries no agent
+    // name at all (`docs/plain-chat.md`, "Migration").
     const beam = session("--beam--", "beam.jsonl", { id: "beam", cwd: "/data/beam" }, new Date("2026-01-05"));
-    appendFileSync(beam, JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "beam", kind: "beam" } }) + "\n");
+    const beamRecord = JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "beam", kind: "beam" } }) + "\n";
+    appendFileSync(beam, beamRecord);
     utimesSync(beam, new Date("2026-01-06"), new Date("2026-01-06"));
-    expect(catalog.get(beam)?.agent).toEqual({ agentName: "beam", kind: "beam" });
-    appendFileSync(beam, JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { agentName: "other", kind: "chat" } }) + "\n");
-    utimesSync(beam, new Date("2026-01-07"), new Date("2026-01-07"));
-    expect(catalog.get(beam)?.agent?.agentName).toBe("beam"); // the first record wins
+    expect(catalog.get(beam)?.agent).toEqual({ kind: "chat", sessionKind: "chat" });
+    expect(readFileSync(beam, "utf8")).toContain(beamRecord);
+    // A chat this release wrote carries no name either, and the first record
+    // still wins over anything appended later.
+    const chat = session("--chat--", "chat.jsonl", { id: "chat", cwd: "/data/chat" }, new Date("2026-01-05"));
+    appendFileSync(chat, JSON.stringify({ type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, data: { kind: "chat" } }) + "\n");
+    utimesSync(chat, new Date("2026-01-06"), new Date("2026-01-06"));
+    expect(catalog.get(chat)?.agent).toEqual({ kind: "chat", sessionKind: "chat" });
   });
 
   it("uses the objective for a goal-started session without exposing its internal prompt", () => {

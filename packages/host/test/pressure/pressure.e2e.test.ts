@@ -154,7 +154,7 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("the host pressure pass, end t
     await client.waitFor((message) => "method" in message && message.method === "session/update"
       && (message as { params: SessionUpdateParams }).params.sessionPath === state.path
       && (message as { params: SessionUpdateParams }).params.update.kind === "agent_settled");
-    // The Namer runs independently of the turn. Settle its legitimate durable
+    // Naming runs independently of the turn. Settle its legitimate durable
     // append before proving that the refused admission itself changes no bytes.
     await named(state.path);
 
@@ -231,11 +231,11 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("the host pressure pass, end t
     expect(readFileSync(state.path)).toEqual(stableBytes);
     expect(host.pool.reservedWorkerCount()).toBe(stableWorkers);
 
-    const beamRoot = host.agents.workspaces.beam;
-    const beamBefore = readdirSync(beamRoot).sort();
-    const beamSession = await client.response("session/new", { cwd: beamRoot, agentName: "beam" });
-    expect(beamSession.error).toMatchObject({ code: ErrorCodes.SessionBusy });
-    expect(readdirSync(beamRoot).sort()).toEqual(beamBefore);
+    const chatRoot = host.agents.workspaces.chat;
+    const chatBefore = readdirSync(chatRoot).sort();
+    const chatSession = await client.response("session/new", { cwd: chatRoot, sessionKind: "chat" });
+    expect(chatSession.error).toMatchObject({ code: ErrorCodes.SessionBusy });
+    expect(readdirSync(chatRoot).sort()).toEqual(chatBefore);
     expect(host.pool.reservedWorkerCount()).toBe(stableWorkers);
   }, 60_000);
 });

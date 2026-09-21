@@ -162,20 +162,36 @@ export class AgentFilesWatch {
       path,
     };
     this.options.replaceDefinition(location, definition);
-    // A file that still names a model loads and runs on the profile new
-    // conversations use; the warning says so on the field a person can act on
-    // (`docs/model-profiles.md`, "Assignments"). The one-way migration clears
-    // it by rewriting the file.
-    if (parsed.legacyModel) {
-      this.options.setLegacyModel(path, parsed.legacyModel);
-      const previous = this.options.warning(path);
+    if (parsed.legacyModel) this.options.setLegacyModel(path, parsed.legacyModel);
+    // One warning slot per file, and the retired name comes first: the model
+    // one is cleared automatically by the one-way migration at this same
+    // start, while only a person can take a name out of `allowedAgents`.
+    const previous = this.options.warning(path);
+    const since = previous?.since ?? this.options.now().toISOString();
+    const retired = parsed.retiredAllowedAgents ?? [];
+    if (retired.length > 0) {
+      // The definition already runs without them (`agent-file.ts` drops them).
+      const listed = retired.map((agent) => `"${agent}"`).join(", ");
+      this.options.setWarning(path, {
+        agentName: name,
+        field: "allowedAgents",
+        path,
+        target: retired[0]!,
+        message: `${listed} ${retired.length > 1 ? "are no longer agents" : "is no longer an agent"}, so this agent runs without ${retired.length > 1 ? "them" : "it"}. Remove the name from its allowed agents.`,
+        since,
+      });
+    } else if (parsed.legacyModel) {
+      // A file that still names a model loads and runs on the profile new
+      // conversations use; the warning says so on the field a person can act
+      // on (`docs/model-profiles.md`, "Assignments"). The one-way migration
+      // clears it by rewriting the file.
       this.options.setWarning(path, {
         agentName: name,
         field: "profile",
         path,
         target: `${parsed.legacyModel.provider}/${parsed.legacyModel.id}`,
         message: `This agent names the model ${parsed.legacyModel.provider}/${parsed.legacyModel.id} instead of a model profile, so it runs on the profile new conversations use. Choose a profile for it.`,
-        since: previous?.since ?? this.options.now().toISOString(),
+        since,
       });
     } else {
       this.options.setWarning(path, undefined);

@@ -298,10 +298,10 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("releasing a session's runtime
   it("releases a conversation nothing can name, on the first ask, with its record intact", async () => {
     // Deterministically nameless, and not by what a model answers: this
     // fixture connects no provider credential at all, so every model of the
-    // naming profile fails and no title arrives. A first prompt's words are
-    // then parked in case naming ever becomes possible — a retained record,
-    // which the diagnostics count, and not a hold on the runtime (RP-4,
-    // M18-T17; `docs/model-profiles.md` for the one-shot walk).
+    // naming profile fails and no title arrives. Nothing is parked for it
+    // either — a request that cannot finish simply does not hold the runtime
+    // (RP-4; `docs/plain-chat.md`, and `docs/model-profiles.md` for the
+    // one-shot walk).
     writeFileSync(
       join(base, "agent", "models.json"),
       JSON.stringify({ providers: { stub: { baseUrl: stub.url, api: "openai-completions", models: [{ id: "stub-1", contextWindow: 8000, maxTokens: 500 }] } } }),
@@ -320,15 +320,13 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("releasing a session's runtime
       const entriesBefore = await client.request<{ entries: unknown[]; leafId: string | null }>("pi/session/entries", { path: state.path });
       const bytesBefore = readFileSync(state.path, "utf8");
 
-      // The parked prompt exists, said as a count by the surface that is
-      // already allowed to say it: no session path, no words, no new seam.
+      // Nothing is retained for the conversation that could not be named: no
+      // parked words, no tray message, no tool label.
       const { snapshot } = await client.request<{
         snapshot: { stores?: { entries: Record<string, { count?: number }>; coverage: { complete: boolean } } };
       }>("resource/snapshot", { refresh: true });
       expect(snapshot.stores?.coverage.complete).toBe(true);
-      // Exactly one: this worker holds no tray message and no tool label, so
-      // the one retained record is the prompt waiting for a model.
-      expect(snapshot.stores?.entries.workerCaches?.count).toBe(1);
+      expect(snapshot.stores?.entries.workerCaches?.count).toBe(0);
 
       // The person leaves, and the first ask releases the runtime.
       await client.request("pi/session/detach", { path: state.path });

@@ -46,7 +46,7 @@ import type { LogStore } from "./logstore.js";
 import { browseDirectories, type PackageService, type SetupService } from "./packages.js";
 import { browseExplorer } from "./directory-explorer.js";
 import type { TaskRegister } from "./tasks/register.js";
-import { createPrivateSessionWorkspace, ensureWorkspace, isWithinDirectory, projectRootOf, workspaceAgentFor } from "./paths.js";
+import { createPrivateSessionWorkspace, ensureWorkspace, isChatWorkspace, isWithinDirectory, projectRootOf } from "./paths.js";
 import type { PrefsStore } from "./prefs.js";
 import type { FeatureService } from "./features.js";
 import type { ProjectRegistry } from "./projects.js";
@@ -209,8 +209,8 @@ const CWD_ROUTED = new Set([
   "pi/project/pr/checkout",
   "pi/project/pr/merge",
   "pi/project/pr/viewed",
-  // The worker discovers user skills and supplies Laser's default instructions;
-  // the Namer benchmark needs a provider. All three name the answering cwd.
+  // The worker discovers user skills and supplies Laser's default
+  // instructions; both name the answering cwd.
   "agents/skills",
   "agents/engine-instructions",
 ]);
@@ -480,8 +480,7 @@ export class Router {
             if (!next) break;
             root = next;
           }
-          const kind = this.workspaceAgentOf(root.cwd);
-          return kind ? this.deps.agents!.workspaces[kind] : projectRootOf(root.cwd);
+          return this.isWorkspace(root.cwd) ? this.deps.agents!.workspaces.chat : projectRootOf(root.cwd);
         });
       }
 
@@ -699,22 +698,22 @@ export class Router {
             "Memory is constrained, so another project cannot start right now. Continue in an open project, or close an idle project and try again.",
           );
         }
-        // Beam and Chat workspaces are containers, not shared checkouts.
-        // Starting at a root allocates one persistent, opaque directory for
-        // this conversation; reopening it routes to that same directory from
-        // the stored session header.
+        // The Chat workspace is a container, not a shared checkout. Starting
+        // at its root allocates one persistent, opaque directory for this
+        // conversation; reopening it routes to that same directory from the
+        // stored session header.
         let cwd = requestedCwd;
-        const requestedWorkspace = this.workspaceAgentOf(requestedCwd);
-        const root = requestedWorkspace ? this.agents().workspaces[requestedWorkspace] : undefined;
-        // Forward containment is already known. Reverse containment means
-        // this is the root itself, including a filesystem alias of that root.
-        if (requestedWorkspace && root && isWithinDirectory(root, requestedCwd)) {
+        const root = this.isWorkspace(requestedCwd) ? this.agents().workspaces.chat : undefined;
+        // Reverse containment means this is the root itself, including a
+        // filesystem alias of it; a request naming the retired folder is not
+        // inside the current root at all, and starts a chat in the current one.
+        if (root && (isWithinDirectory(root, requestedCwd) || !isWithinDirectory(requestedCwd, root))) {
           try {
             cwd = createPrivateSessionWorkspace(root);
           } catch (error) {
             throw new ProtocolError(
               ErrorCodes.Internal,
-              `${labelOf(requestedWorkspace)} could not create a private workspace: ${error instanceof Error ? error.message : String(error)}. Give ${PRODUCT_DISPLAY_NAME} a writable state directory, then try again.`,
+              `This chat's folder could not be created: ${error instanceof Error ? error.message : String(error)}. Give ${PRODUCT_DISPLAY_NAME} a writable state directory, then try again.`,
             );
           }
         }
@@ -722,22 +721,21 @@ export class Router {
         // records the directory in the session header and refuses to open a
         // session whose directory is gone, so a missing folder is refused
         // here, with its reason, rather than becoming a session nobody can open.
-        const workspaceAgent = this.workspaceAgentOf(cwd);
-        if (workspaceAgent) {
+        if (this.isWorkspace(cwd)) {
           const problem = ensureWorkspace(cwd);
           if (problem) {
             throw new ProtocolError(
               ErrorCodes.Internal,
-              `${labelOf(workspaceAgent)}'s workspace folder could not be created at ${cwd}: ${problem}. Give ${PRODUCT_DISPLAY_NAME} a writable state directory, then try again.`,
+              `This chat's folder could not be created at ${cwd}: ${problem}. Give ${PRODUCT_DISPLAY_NAME} a writable state directory, then try again.`,
             );
           }
         }
         const worker = await this.pool.get(cwd);
-        const params = { ...req.params, cwd, ...(agentName ? { agentName } : {}) };
+        const params = { ...req.params, cwd, ...(agentName ? { agentName } : { sessionKind: "chat" as const }) };
         const result = await worker.request<{ state: SessionState }>(req.method, params);
         await this.bindOpenedSession(result.state.path, cwd);
-        // A workspace is not a project: Beam and Chat sessions never put one
-        // in the project list.
+        // A workspace is not a project: a chat never puts one in the project
+        // list.
         if (!this.isWorkspace(cwd)) this.deps.projects.touch(cwd);
         this.noteUnwritten(result.state);
         return result;
@@ -1089,16 +1087,6 @@ export class Router {
         return this.onProfiles(req.method, req.params);
       case "models/profiles/delete":
         return this.deleteProfile(req.params);
-      case "agents/builtin/set-profile": {
-        const store = this.agents();
-        store.setBuiltinProfile(req.params.name, req.params.profileId);
-        return { snapshot: store.snapshot() };
-      }
-      case "agents/builtin/set-instructions": {
-        const store = this.agents();
-        store.setBuiltinInstructions(req.params.name, req.params.instructions);
-        return { snapshot: store.snapshot() };
-      }
       case "agents/runs/list":
         return { runs: this.runs().list(req.params.path) };
       case "agents/runs/stop": {
@@ -1170,7 +1158,7 @@ export class Router {
       throw new ProtocolError(ErrorCodes.InvalidParams, "An agent started this session under another one, so it moves with that session's tree, not on its own.");
     }
     if (this.isWorkspace(target)) {
-      throw new ProtocolError(ErrorCodes.InvalidParams, `${labelOf(this.workspaceAgentOf(target)!)}'s workspace is not a project. Choose a project folder.`);
+      throw new ProtocolError(ErrorCodes.InvalidParams, "That folder is where chats are kept, not a project. Choose a project folder.");
     }
     this.deps.projects.assertProject(target);
     if (projectRootOf(target) !== target) {
@@ -1252,10 +1240,12 @@ export class Router {
   }
 
   /**
-   * Which agent a new session starts with, and whether it may start here. A
-   * workspace only runs its own agent; a project never runs a built-in; Namer
-   * never runs a session at all. With no agent store the request is passed on
-   * untouched, so a host without the feature behaves as before.
+   * Which agent a new session starts with, and whether it may start here.
+   *
+   * `undefined` means no agent at all: the Chat workspace runs the plain
+   * conversation of `docs/plain-chat.md`, which has no definition. With no
+   * agent store the request is passed on untouched, so a host without the
+   * feature behaves as before.
    */
   private resolveStartAgent(cwd: string, requested: string | undefined): string | undefined {
     const store = this.deps.agents;
@@ -1263,22 +1253,17 @@ export class Router {
       if (requested !== undefined) throw new ProtocolError(ErrorCodes.Unsupported, "This host has no agent definitions.");
       return undefined;
     }
-    const workspaceAgent = this.workspaceAgentOf(cwd);
-    const name = requested ?? workspaceAgent ?? store.defaultAgentName;
-    const agent = store.get(name);
-    if (!agent) {
+    if (this.isWorkspace(cwd)) {
+      if (requested === undefined) return undefined;
+      throw new ProtocolError(ErrorCodes.InvalidParams, "A chat runs no agent. Open a session in a project to start one.", {
+        issues: [{ field: "agentName", message: "A chat runs no agent." }],
+      });
+    }
+    const name = requested ?? store.defaultAgentName;
+    if (!store.get(name)) {
       throw new ProtocolError(ErrorCodes.InvalidParams, `There is no agent named "${name}". Choose one from the Agents page.`, {
         issues: [{ field: "agentName", message: `There is no agent named "${name}".` }],
       });
-    }
-    if (name === "namer") {
-      throw new ProtocolError(ErrorCodes.InvalidParams, "Namer names sessions and actions in the background; it does not run a session.");
-    }
-    if (workspaceAgent !== undefined && name !== workspaceAgent) {
-      throw new ProtocolError(ErrorCodes.InvalidParams, `Only ${labelOf(workspaceAgent)} sessions start in the ${labelOf(workspaceAgent)} workspace.`);
-    }
-    if (agent.kind === "builtin" && workspaceAgent !== name) {
-      throw new ProtocolError(ErrorCodes.InvalidParams, `${labelOf(name)} sessions start in ${PRODUCT_DISPLAY_NAME}'s own ${labelOf(name)} workspace, not in a project.`);
     }
     return name;
   }
@@ -1336,15 +1321,10 @@ export class Router {
     return answer.result;
   }
 
-  /** `beam` or `chat` when `cwd` is that built-in's workspace. */
-  private workspaceAgentOf(cwd: string): "beam" | "chat" | undefined {
-    const store = this.deps.agents;
-    if (!store) return undefined;
-    return workspaceAgentFor(cwd, store.workspaces);
-  }
-
+  /** True when `cwd` is inside the container plain Chat conversations run in. */
   private isWorkspace(cwd: string): boolean {
-    return this.workspaceAgentOf(cwd) !== undefined;
+    const store = this.deps.agents;
+    return store ? isChatWorkspace(cwd, store.workspaces) : false;
   }
 
   /** Presentation-only memo, owned by one synchronous list/search operation.
@@ -1361,19 +1341,19 @@ export class Router {
     };
   }
 
-  /** Only real projects and explicitly designated built-in workspaces are session directories. */
+  /** Only real projects and the Chat workspace are session directories. */
   private isSessionDirectory(cwd: string): boolean {
     return !this.deps.projects.isExcluded(cwd) || this.isWorkspace(cwd);
   }
 
   /**
-   * A Beam or Chat session by its own record, whatever directory its header
-   * names: a session created while the workspaces lived elsewhere must not
-   * turn that old directory into a project when it is opened.
+   * A Chat by its own record, whatever directory its header names: a
+   * conversation created while the workspaces lived elsewhere — including one
+   * written before M23 — must not turn that old directory into a project when
+   * it is opened.
    */
   private isWorkspaceSession(path: string): boolean {
-    const kind = this.catalog.getListed(path)?.agent?.kind;
-    return kind === "beam" || kind === "chat";
+    return this.catalog.getListed(path)?.agent?.sessionKind === "chat";
   }
 
   /**
@@ -1542,12 +1522,9 @@ export class Router {
   private async deleteProfile(params: { cwd?: string; id: string; replacementId?: string }): Promise<unknown> {
     const store = this.agents();
     const snapshot = store.snapshot();
-    const definitions = snapshot.agents.filter((agent) => agent.kind === "custom" && agent.profileId === params.id);
-    const builtins = (Object.entries(store.builtinProfileIds) as Array<[string, string | null]>)
-      .filter(([, id]) => id === params.id)
-      .map(([name]) => name);
-    if ((definitions.length > 0 || builtins.length > 0) && !params.replacementId) {
-      const used = [...definitions.map((agent) => agent.name), ...builtins.map(labelOf)];
+    const definitions = snapshot.agents.filter((agent) => agent.profileId === params.id);
+    if (definitions.length > 0 && !params.replacementId) {
+      const used = definitions.map((agent) => agent.name);
       throw new ProtocolError(
         ErrorCodes.InvalidParams,
         `This profile is still used by ${used.join(", ")}. Choose the profile that should take its place, then delete it.`,
@@ -1571,7 +1548,6 @@ export class Router {
     // first, so a refusal leaves every definition exactly as it was.
     const result = await worker.request("models/profiles/delete", { ...params, cwd });
     if (params.replacementId) {
-      store.replaceBuiltinProfile(params.id, params.replacementId);
       for (const agent of definitions) {
         try {
           store.save({ ...agent, profileId: params.replacementId }, agent.name);
@@ -1773,10 +1749,6 @@ function retryableLifetimeRefusal(error: unknown): boolean {
     return data?.retry === LIFETIME_RETRY;
   }
   return false;
-}
-
-function labelOf(name: string): string {
-  return name === "beam" ? "Beam" : name === "chat" ? "Chat" : name === "namer" ? "Namer" : name;
 }
 
 function toRpcError(error: unknown): JsonRpcError {

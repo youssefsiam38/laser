@@ -77,9 +77,9 @@ function harness(options: { open?: string[]; closeRefuses?: string; closeGate?: 
     }),
   } as unknown as WorkerPool;
   const stateDir = join(base, "state");
-  const workspaces = { beam: join(stateDir, "workspaces", "beam"), chat };
+  const workspaces = { chat };
   const attention = new AttentionTracker({});
-  const projects = new ProjectRegistry({ catalog, agentDir: join(base, "projects"), exclude: [stateDir, join(base, "agent"), workspaces.beam, workspaces.chat] });
+  const projects = new ProjectRegistry({ catalog, agentDir: join(base, "projects"), exclude: [stateDir, join(base, "agent"), workspaces.chat] });
   const agents = new AgentStore({ agentDir: join(base, "agent"), workspaces });
   const runs = new AgentRunRegistry({ now: () => new Date("2026-09-02T00:00:00.000Z") });
   const router = new Router(pool, catalog, { attention, projects, views: new ViewCache(2), agents, runs, access: testAccess() });
@@ -207,7 +207,7 @@ describe("Router · pi/session/move", () => {
       const file = join(base, "notes.txt");
       writeFileSync(file, "x");
       expect(await refused({ path: plain, cwd: file })).toMatchObject({ code: -32602, message: expect.stringMatching(/is a file, not a folder/) });
-      expect(await refused({ path: plain, cwd: chat })).toMatchObject({ code: -32602, message: expect.stringMatching(/Chat's workspace is not a project/) });
+      expect(await refused({ path: plain, cwd: chat })).toMatchObject({ code: -32602, message: expect.stringMatching(/where chats are kept, not a project/) });
       const before = readFileSync(plain, "utf8");
       for (const cwd of [join(base, "state"), join(base, "agent")]) {
         expect(await refused({ path: plain, cwd })).toMatchObject({ code: -32602, message: expect.stringMatching(/internal app storage/) });

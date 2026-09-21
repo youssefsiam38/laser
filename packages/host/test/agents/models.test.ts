@@ -4,7 +4,7 @@
  */
 import type { ModelCatalogEntry } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
-import { suggestBeamModel } from "../../src/agents/models.js";
+import { suggestEverydayModel } from "../../src/agents/models.js";
 
 function model(provider: string, id: string, input: number, output: number, enabled = true): ModelCatalogEntry {
   return { provider, id, thinkingLevels: ["off"], enabled, cost: { input, output } };
@@ -21,28 +21,28 @@ const CATALOG = [
   model("google", "gemini-2.5-flash", 0.3, 2.5),
 ];
 
-describe("suggestBeamModel", () => {
+describe("suggestEverydayModel", () => {
   it("picks the priciest fast-tier model inside the band", () => {
     // gpt-5-mini (2.25) and gemini flash (2.8) are in the band; sonnet (18) and gpt-5 (11.25) are not; nano is too cheap.
-    expect(suggestBeamModel(CATALOG)).toEqual({ provider: "google", id: "gemini-2.5-flash" });
+    expect(suggestEverydayModel(CATALOG)).toEqual({ provider: "google", id: "gemini-2.5-flash" });
   });
 
   it("only considers providers with a credential, and only enabled models", () => {
-    expect(suggestBeamModel(CATALOG, { configuredProviders: new Set(["openai"]) })).toEqual({ provider: "openai", id: "gpt-5-mini" });
+    expect(suggestEverydayModel(CATALOG, { configuredProviders: new Set(["openai"]) })).toEqual({ provider: "openai", id: "gpt-5-mini" });
     const disabled = CATALOG.map((entry) => (entry.id === "gemini-2.5-flash" ? { ...entry, enabled: false } : entry));
-    expect(suggestBeamModel(disabled)).toEqual({ provider: "openai", id: "gpt-5-mini" });
+    expect(suggestEverydayModel(disabled)).toEqual({ provider: "openai", id: "gpt-5-mini" });
   });
 
   it("falls back to the median-priced usable model when no fast-tier model is in the band", () => {
     const heavy = [model("x", "alpha", 10, 30), model("x", "beta", 20, 40), model("x", "gamma", 30, 50)];
-    expect(suggestBeamModel(heavy)).toEqual({ provider: "x", id: "beta" });
+    expect(suggestEverydayModel(heavy)).toEqual({ provider: "x", id: "beta" });
     const unpriced = [{ provider: "x", id: "mystery", thinkingLevels: [], enabled: true } as ModelCatalogEntry];
-    expect(suggestBeamModel(unpriced)).toEqual({ provider: "x", id: "mystery" });
+    expect(suggestEverydayModel(unpriced)).toEqual({ provider: "x", id: "mystery" });
   });
 
   it("returns null when nothing is usable", () => {
-    expect(suggestBeamModel([])).toBeNull();
-    expect(suggestBeamModel(CATALOG, { configuredProviders: new Set() })).toBeNull();
-    expect(suggestBeamModel(CATALOG.map((entry) => ({ ...entry, enabled: false })))).toBeNull();
+    expect(suggestEverydayModel([])).toBeNull();
+    expect(suggestEverydayModel(CATALOG, { configuredProviders: new Set() })).toBeNull();
+    expect(suggestEverydayModel(CATALOG.map((entry) => ({ ...entry, enabled: false })))).toBeNull();
   });
 });

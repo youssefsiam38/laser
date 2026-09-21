@@ -176,3 +176,54 @@ The host is red until T3, as expected between commits.
    `namingProfileId` carry (D-r).
 7. Evidence: `env -i … pnpm -F @lasercode/host test`, `pnpm -r build`,
    `pnpm -r typecheck`, `pnpm identity:check`.
+
+### M23-T3 checkpoint — done
+
+Changed: `host/src/agents/builtins.ts` **deleted**, `host/src/agents/seed.ts`
+added, `host/src/agents/{index,store,validate,models,agent-file,agent-files-watch}.ts`,
+`host/src/{paths,catalog,router,server,index,transcript-delivery,worker-client}.ts`,
+plus the tests below and the new `host/test/agents/retired-builtins.test.ts`.
+
+- **Nothing is synthesised.** `builtinAgents()` is gone; `AgentStore.snapshot()`
+  is the person's own definitions and the seeded `default`. `store.get("beam")`
+  is `undefined`, and the three names stay reserved as *definition names* so a
+  person cannot create an agent the retired-name rules would then drop.
+- **The stored choices are legacy state, kept verbatim.** `builtinProfiles` and
+  `builtinInstructions` are private to the store, read once (for the M22 legacy
+  choices and the naming carry) and written back byte-for-byte on every
+  persist, including an instruction override naming fields this version
+  removed. `setBuiltinProfile` / `setBuiltinInstructions` /
+  `replaceBuiltinProfile` / `builtinProfileIds` are gone; the one reader left
+  is `retiredNamingProfileId`.
+- **The naming choice survives (D-r).** After `models/profiles/migrate`, if the
+  settings file assigns nothing to naming and the retired Namer held a profile
+  that still exists, the host writes `namingProfileId` through the ordinary
+  `pi/settings/set` request. Once, never over a choice made in Settings.
+- **`allowedAgents` naming a removed built-in warns and drops.** The parser
+  filters the names and reports them (`retiredAllowedAgents`); the watch raises
+  an `allowedAgents` warning naming them, and it takes priority over the
+  `profile` warning because only a person can clear it. `normalizeInput` drops
+  them on save too, so nothing can put one back. The file is never rewritten.
+- **Beam sessions are re-homed and still work.** `rehomeRetiredWorkspaces`
+  moves each `<workspaces>/beam/*` folder into `<workspaces>/chat` at host
+  start — independently, skipping a name already taken, removing the old
+  directory only when it is empty, idempotent. Because a stored session header
+  still names the old path, `isChatWorkspace` accepts the retired directory as
+  well, so those conversations keep listing and opening as chats.
+- **The chat kind travels.** `catalog.ts` maps a stored `beam`/`chat` record to
+  `{ kind: "chat", sessionKind: "chat" }` with no agent name and no rewrite;
+  `server.ts`'s run-derived info carries `sessionKind: "project"`.
+  `session-projection.ts` needed no change (it carries no agent attribution at
+  all), and `transcript-delivery.ts` only lost a Beam word from its header.
+- **Routing.** `agents/builtin/*` are unrouted (the method does not exist);
+  `resolveStartAgent` returns no agent for the chat workspace and refuses a
+  request that names one; `session/new` sends `sessionKind: "chat"`. The M22
+  `models/profiles/seeded` review is untouched.
+
+Green: `env -i PATH="$PATH" HOME="$HOME" pnpm -F @lasercode/host test` 97 files
+/ 1027 tests passed; `pnpm -F @lasercode/{protocol,worker,host,cli,desktop,pi-extension} typecheck`
+clean; `pnpm -F @lasercode/cli test` 96 passed; `pnpm identity:check`.
+`pnpm -r build` builds everything except `packages/ui`, whose 50 errors are all
+caused by the protocol removal and are listed for its owner in
+[`m23-ui-red-spots.md`](m23-ui-red-spots.md). `packages/desktop` needed no
+change: its three "beam" mentions are the startup-screen drawing.
