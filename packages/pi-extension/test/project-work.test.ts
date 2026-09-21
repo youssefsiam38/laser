@@ -11,7 +11,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { LaserToolSpec } from "@lasercode/protocol";
 import { projectWorkModule, registerBinding, toolLabel } from "../src/modules/project-work.js";
 import { laserToolRegistry } from "../src/register-tool.js";
-import type { ProjectWorkBridge, ProjectWorkToolBinding } from "../src/project-work-bridge.js";
+import type { ProjectMentionContext, ProjectWorkBridge, ProjectWorkToolBinding } from "../src/project-work-bridge.js";
 import type { ModuleContext } from "../src/modules/index.js";
 
 interface Registered {
@@ -20,8 +20,9 @@ interface Registered {
 }
 
 type BeforeAgentStart = (event: { prompt: string; systemPrompt: string }) => Promise<{ systemPrompt?: string } | undefined>;
+type ContextHook = (event: { messages: unknown[] }) => { messages: unknown[] } | undefined;
 
-function fakeContext(bridge: ProjectWorkBridge | undefined) {
+function fakeContext(bridge: ProjectWorkBridge | undefined, mentionContext?: ProjectMentionContext) {
   const tools = new Map<string, Registered>();
   const handlers = new Map<string, BeforeAgentStart>();
   const logs: Array<{ level: string; message: string }> = [];
@@ -33,6 +34,7 @@ function fakeContext(bridge: ProjectWorkBridge | undefined) {
     pi,
     send: (message: { level?: string; message?: string }) => logs.push({ level: message.level ?? "", message: message.message ?? "" }),
     ...(bridge ? { projectWork: bridge } : {}),
+    ...(mentionContext ? { mentionContext } : {}),
   } as unknown as ModuleContext;
   return { ctx, tools, handlers, logs };
 }
@@ -145,6 +147,85 @@ describe("the project-work module", () => {
     const result = await handlers.get("before_agent_start")!({ prompt: "go", systemPrompt: "BASE" });
     expect(result).toBeUndefined();
     expect(logs[0]?.message).toContain("could not be reached");
+  });
+});
+
+describe("what a message mentioned", () => {
+  const message = (text: string, correlationId?: string): Record<string, unknown> => ({
+    role: "user",
+    content: [{ type: "text", text }],
+    ...(correlationId ? { correlationId } : {}),
+  });
+
+  it("puts each block after the message it belongs to and leaves the rest untouched", async () => {
+    const carrier: ProjectMentionContext = {
+      blocks: (messages) => [
+        { afterIndex: 0, text: "## first" },
+        { afterIndex: messages.length - 1, text: "## last" },
+      ],
+    };
+    const { ctx, handlers } = fakeContext(undefined, carrier);
+    expect(await projectWorkModule.detect(ctx), "a session with mentions and no project work still loads").toBe(true);
+    await projectWorkModule.activate(ctx);
+
+    const original = [message("one", "lmc-1"), { role: "assistant", content: [] }, message("two", "lmc-2")];
+    const result = (handlers.get("context") as unknown as ContextHook)({ messages: [...original] });
+
+    const roles = result!.messages.map((entry) => (entry as { role: string; customType?: string }).customType ?? (entry as { role: string }).role);
+    expect(roles).toEqual(["user", "lasercode/project-work-mentions", "assistant", "user", "lasercode/project-work-mentions"]);
+    expect(result!.messages[0]).toBe(original[0]);
+    expect(result!.messages[2]).toBe(original[1]);
+    expect(result!.messages[3]).toBe(original[2]);
+    expect(JSON.stringify(result!.messages[1])).toContain("## first");
+    expect(JSON.stringify(result!.messages[4])).toContain("## last");
+  });
+
+  it("hands the carrier the identity of each message and nothing else", async () => {
+    const seen: unknown[] = [];
+    const { ctx, handlers } = fakeContext(undefined, {
+      blocks: (messages) => {
+        seen.push(messages);
+        return [];
+      },
+    });
+    await projectWorkModule.activate(ctx);
+    (handlers.get("context") as unknown as ContextHook)({ messages: [message("words", "lmc-1"), message("more")] });
+
+    expect(seen[0]).toEqual([{ role: "user", correlationId: "lmc-1" }, { role: "user" }]);
+  });
+
+  it("writes nothing to the conversation, whatever it shows the model", async () => {
+    const { ctx, handlers } = fakeContext(undefined, { blocks: () => [{ afterIndex: 0, text: "## context" }] });
+    const sendMessage = vi.fn();
+    const appendEntry = vi.fn();
+    Object.assign(ctx.pi as unknown as Record<string, unknown>, { sendMessage, appendEntry });
+    await projectWorkModule.activate(ctx);
+
+    const messages = [message("words", "lmc-1")];
+    (handlers.get("context") as unknown as ContextHook)({ messages });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(appendEntry).not.toHaveBeenCalled();
+    expect(messages, "the engine's own list is not rewritten").toHaveLength(1);
+  });
+
+  it("costs the turn nothing when the carrier fails", async () => {
+    const { ctx, handlers, logs } = fakeContext(undefined, {
+      blocks: () => {
+        throw new Error("the app could not be reached");
+      },
+    });
+    await projectWorkModule.activate(ctx);
+
+    expect((handlers.get("context") as unknown as ContextHook)({ messages: [message("words", "lmc-1")] })).toBeUndefined();
+    expect(logs[0]?.message).toContain("could not be reached");
+  });
+
+  it("is not mounted for a session that has neither", async () => {
+    const { ctx, handlers } = fakeContext(undefined);
+    expect(await projectWorkModule.detect(ctx)).toBe(false);
+    await projectWorkModule.activate(ctx);
+    expect(handlers.get("context")).toBeUndefined();
   });
 });
 

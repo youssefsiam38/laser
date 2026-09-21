@@ -8,7 +8,7 @@
  * here — see `src/pending.ts`.
  */
 import { describe, expect, it } from "vitest";
-import { ErrorCodes, ProtocolError, type ContentBlock, type JsonRpcMessage, type PendingMessage, type SessionState } from "@lasercode/protocol";
+import { ErrorCodes, ProtocolError, type ContentBlock, type JsonRpcMessage, type PendingMessage, type ProjectWorkMentionProjection, type SessionState } from "@lasercode/protocol";
 import type { DriverEvent, DriverListener, PromptOptions, SessionDriver } from "../src/driver.js";
 import { PendingTray } from "../src/pending.js";
 import { WorkerServer } from "../src/server.js";
@@ -24,15 +24,18 @@ function harness(options: { streaming?: boolean } = {}) {
   let steerResult: Error | undefined;
   let ids = 0;
 
+  const mentioned: Array<{ route: "prompt" | "steer"; text: string; keys: string[] }> = [];
   const tray = new PendingTray({
-    prompt: async (content, onAccepted) => {
+    prompt: async (content, onAccepted, extras) => {
       prompted.push(textOf(content));
+      mentioned.push({ route: "prompt", text: textOf(content), keys: (extras?.projectWork ?? []).map((item) => item.key) });
       if (promptResult instanceof Error) throw promptResult;
       if (promptResult.accepted) onAccepted();
       return promptResult;
     },
-    steer: async (content) => {
+    steer: async (content, extras) => {
       steered.push(textOf(content));
+      mentioned.push({ route: "steer", text: textOf(content), keys: (extras?.projectWork ?? []).map((item) => item.key) });
       if (steerResult) throw steerResult;
     },
     streaming: () => streaming,
@@ -45,6 +48,7 @@ function harness(options: { streaming?: boolean } = {}) {
     tray,
     prompted,
     steered,
+    mentioned,
     published,
     settle: () => {
       streaming = false;
@@ -267,6 +271,85 @@ describe("PendingTray · the three acts on one message", () => {
     const h = harness();
     for (let i = 0; i < 50; i++) h.tray.add(text(`m${i}`));
     expect(() => h.tray.add(text("one too many"))).toThrow(/Send or drop some/);
+  });
+});
+
+describe("PendingTray · what a waiting message mentioned", () => {
+  const projection = (key: string): ProjectWorkMentionProjection => ({
+    ref: {
+      projectId: "p_a1",
+      entityId: `e_${key.replace("-", "_")}`,
+      revisionId: "r_3",
+      kind: key.startsWith("SPEC") ? "spec" : "task",
+      key,
+      label: `${key} title`,
+      digest: "8f1c".padEnd(64, "0"),
+    },
+    key,
+    kind: key.startsWith("SPEC") ? "spec" : "task",
+    title: `${key} title`,
+    state: "in_progress",
+    provenance: `[from Acme ${key}@3]`,
+    fields: [],
+  });
+
+  it("hands the row's own projection to the engine when the row is delivered", async () => {
+    const h = harness();
+    h.tray.add(text("look at this"), [projection("TASK-44")]);
+    h.tray.add(text("and this"));
+
+    await h.settle();
+
+    expect(h.mentioned).toEqual([
+      { route: "prompt", text: "look at this", keys: ["TASK-44"] },
+      { route: "prompt", text: "and this", keys: [] },
+    ]);
+  });
+
+  it("keeps it out of the row a client sees", () => {
+    const h = harness();
+    const row = h.tray.add(text("look at this"), [projection("TASK-44")]);
+    expect(JSON.stringify(row)).not.toContain("TASK-44");
+    expect(JSON.stringify(h.tray.list())).not.toContain("TASK-44");
+    expect(JSON.stringify(h.published)).not.toContain("TASK-44");
+  });
+
+  it("carries it through an explicit steer", async () => {
+    const h = harness();
+    const row = h.tray.add(text("look at this"), [projection("TASK-44")]);
+    await h.tray.steer(row.id);
+    expect(h.mentioned).toEqual([{ route: "steer", text: "look at this", keys: ["TASK-44"] }]);
+  });
+
+  it("replaces it when the words are rewritten, and forgets it when they mention nothing", async () => {
+    const h = harness();
+    const row = h.tray.add(text("look at this"), [projection("TASK-44")]);
+    h.tray.edit(row.id, text("look at that"), [projection("SPEC-7")]);
+    const second = h.tray.add(text("and this"), [projection("TASK-44")]);
+    h.tray.edit(second.id, text("and that"));
+
+    await h.settle();
+
+    expect(h.mentioned).toEqual([
+      { route: "prompt", text: "look at that", keys: ["SPEC-7"] },
+      { route: "prompt", text: "and that", keys: [] },
+    ]);
+  });
+
+  it("lets it go with the row it belonged to", async () => {
+    const h = harness();
+    const dropped = h.tray.add(text("never mind"), [projection("TASK-44")]);
+    const cleared = h.tray.add(text("nor this"), [projection("SPEC-7")]);
+    h.tray.remove(dropped.id);
+    h.tray.clear();
+    void cleared;
+
+    // Re-adding the same words is a new message: it carries only what the
+    // host read for *it*.
+    h.tray.add(text("never mind"));
+    await h.settle();
+
+    expect(h.mentioned).toEqual([{ route: "prompt", text: "never mind", keys: [] }]);
   });
 });
 

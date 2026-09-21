@@ -1,8 +1,136 @@
+diff --git a/dist/core/agent-session.d.ts b/dist/core/agent-session.d.ts
+index 89f96e8769496a952cbf29efded4dd52b7eaad97..d1407c93eb85bcd085590658bcbc2529805a3129 100644
+--- a/dist/core/agent-session.d.ts
++++ b/dist/core/agent-session.d.ts
+@@ -157,6 +157,19 @@ export interface PromptOptions {
+     source?: InputSource;
+     /** Internal hook used by RPC mode to observe prompt preflight acceptance or rejection. */
+     preflightResult?: (success: boolean) => void;
++    /**
++     * Opaque identity the embedder attaches to the user message this call
++     * creates. Carried on the message through the queues, the agent loop and
++     * the context transform, so an embedder can correlate a message it
++     * admitted with the model call that reads it. Never sent to a provider and
++     * never written to the session file.
++     */
++    correlationId?: string;
++}
++/** Options for AgentSession.steer() and AgentSession.followUp(). */
++export interface QueuedMessageOptions {
++    /** See {@link PromptOptions.correlationId}. */
++    correlationId?: string;
+ }
+ /** Options for model/thinking mutations. */
+ export interface ModelMutationOptions {
+@@ -372,7 +385,7 @@ export declare class AgentSession {
+      * @param images Optional image attachments to include with the message
+      * @throws Error if text is an extension command
+      */
+-    steer(text: string, images?: ImageContent[]): Promise<void>;
++    steer(text: string, images?: ImageContent[], options?: QueuedMessageOptions): Promise<void>;
+     /**
+      * Queue a follow-up message to be processed after the agent finishes.
+      * Delivered only when agent has no more tool calls or steering messages.
+@@ -380,7 +393,7 @@ export declare class AgentSession {
+      * @param images Optional image attachments to include with the message
+      * @throws Error if text is an extension command
+      */
+-    followUp(text: string, images?: ImageContent[]): Promise<void>;
++    followUp(text: string, images?: ImageContent[], options?: QueuedMessageOptions): Promise<void>;
+     private _queueSteer;
+     private _queueFollowUp;
+     /**
 diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
-index 66e874efd252470d00d3cdaad2e2b4b6121de15b..87b31646c93a3eb1119de12a655eca3fb96466f5 100644
+index 66e874efd252470d00d3cdaad2e2b4b6121de15b..2eb4f90ddc86038cdf61df60b73006d9a6ca5c83 100644
 --- a/dist/core/agent-session.js
 +++ b/dist/core/agent-session.js
-@@ -2009,22 +2009,36 @@ export class AgentSession {
+@@ -862,10 +862,10 @@ export class AgentSession {
+                     throw new Error("Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.");
+                 }
+                 if (options.streamingBehavior === "followUp") {
+-                    await this._queueFollowUp(expandedText, currentImages);
++                    await this._queueFollowUp(expandedText, currentImages, options.correlationId);
+                 }
+                 else {
+-                    await this._queueSteer(expandedText, currentImages);
++                    await this._queueSteer(expandedText, currentImages, options.correlationId);
+                 }
+                 preflightResult?.(true);
+                 return;
+@@ -905,6 +905,7 @@ export class AgentSession {
+                 role: "user",
+                 content: userContent,
+                 timestamp: Date.now(),
++                ...(options?.correlationId !== undefined ? { correlationId: options.correlationId } : {}),
+             });
+             // Inject any pending "nextTurn" messages as context alongside the user message
+             for (const msg of this._pendingNextTurnMessages) {
+@@ -1013,7 +1014,7 @@ export class AgentSession {
+      * @param images Optional image attachments to include with the message
+      * @throws Error if text is an extension command
+      */
+-    async steer(text, images) {
++    async steer(text, images, options) {
+         // Check for extension commands (cannot be queued)
+         if (text.startsWith("/")) {
+             this._throwIfExtensionCommand(text);
+@@ -1021,7 +1022,7 @@ export class AgentSession {
+         // Expand skill commands and prompt templates
+         let expandedText = this._expandSkillCommand(text);
+         expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+-        await this._queueSteer(expandedText, images);
++        await this._queueSteer(expandedText, images, options?.correlationId);
+     }
+     /**
+      * Queue a follow-up message to be processed after the agent finishes.
+@@ -1030,7 +1031,7 @@ export class AgentSession {
+      * @param images Optional image attachments to include with the message
+      * @throws Error if text is an extension command
+      */
+-    async followUp(text, images) {
++    async followUp(text, images, options) {
+         // Check for extension commands (cannot be queued)
+         if (text.startsWith("/")) {
+             this._throwIfExtensionCommand(text);
+@@ -1038,12 +1039,12 @@ export class AgentSession {
+         // Expand skill commands and prompt templates
+         let expandedText = this._expandSkillCommand(text);
+         expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+-        await this._queueFollowUp(expandedText, images);
++        await this._queueFollowUp(expandedText, images, options?.correlationId);
+     }
+     /**
+      * Internal: Queue a steering message (already expanded, no extension command check).
+      */
+-    async _queueSteer(text, images) {
++    async _queueSteer(text, images, correlationId) {
+         this._steeringMessages.push(text);
+         this._emitQueueUpdate();
+         const content = [{ type: "text", text }];
+@@ -1054,12 +1055,13 @@ export class AgentSession {
+             role: "user",
+             content,
+             timestamp: Date.now(),
++            ...(correlationId !== undefined ? { correlationId } : {}),
+         });
+     }
+     /**
+      * Internal: Queue a follow-up message (already expanded, no extension command check).
+      */
+-    async _queueFollowUp(text, images) {
++    async _queueFollowUp(text, images, correlationId) {
+         this._followUpMessages.push(text);
+         this._emitQueueUpdate();
+         const content = [{ type: "text", text }];
+@@ -1070,6 +1072,7 @@ export class AgentSession {
+             role: "user",
+             content,
+             timestamp: Date.now(),
++            ...(correlationId !== undefined ? { correlationId } : {}),
+         });
+     }
+     /**
+@@ -2009,22 +2012,36 @@ export class AgentSession {
          };
          runner.bindCore({
              sendMessage: (message, options) => {
@@ -145,7 +273,7 @@ index a8d14157e590b439bbe83bacb24d4449d9ea54cb..f2cf836bd2547172a81dff92438df19f
      private _appendEntry;
      /** Append a message as child of current leaf, then advance leaf. Returns entry id.
 diff --git a/dist/core/session-manager.js b/dist/core/session-manager.js
-index fbb784f771553c21e993cf82200a80a854261437..ed6ec44dd1faaa78830aed35eec89c4c3589d08d 100644
+index fbb784f771553c21e993cf82200a80a854261437..e2d16fc0c8f43faefdf5902efd7dafe1ad45d0f1 100644
 --- a/dist/core/session-manager.js
 +++ b/dist/core/session-manager.js
 @@ -1,6 +1,6 @@
@@ -362,7 +490,30 @@ index fbb784f771553c21e993cf82200a80a854261437..ed6ec44dd1faaa78830aed35eec89c4c
          const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
          if (!hasAssistant) {
              if (this.flushed) {
-@@ -1047,6 +1213,7 @@ export class SessionManager {
+@@ -779,12 +945,21 @@ export class SessionManager {
+      * These need to be appended via appendCompaction() and appendBranchSummary() methods.
+      */
+     appendMessage(message) {
++        // An embedder-supplied `correlationId` is in-memory routing metadata, not
++        // conversation content: it is removed from a *copy* so the stored entry
++        // never carries it, while the live message the agent is still holding
++        // keeps its identity for the rest of the turn.
++        let stored = message;
++        if (message !== null && typeof message === "object" && "correlationId" in message) {
++            const { correlationId: _correlationId, ...rest } = message;
++            stored = rest;
++        }
+         const entry = {
+             type: "message",
+             id: generateId(this.byId),
+             parentId: this.leafId,
+             timestamp: new Date().toISOString(),
+-            message,
++            message: stored,
+         };
+         this._appendEntry(entry);
+         return entry.id;
+@@ -1047,6 +1222,7 @@ export class SessionManager {
       * are not modified or deleted.
       */
      branch(branchFromId) {
@@ -370,7 +521,7 @@ index fbb784f771553c21e993cf82200a80a854261437..ed6ec44dd1faaa78830aed35eec89c4c
          if (!this.byId.has(branchFromId)) {
              throw new Error(`Entry ${branchFromId} not found`);
          }
-@@ -1058,6 +1225,7 @@ export class SessionManager {
+@@ -1058,6 +1234,7 @@ export class SessionManager {
       * Use this when navigating to re-edit the first user message.
       */
      resetLeaf() {
@@ -378,7 +529,7 @@ index fbb784f771553c21e993cf82200a80a854261437..ed6ec44dd1faaa78830aed35eec89c4c
          this.leafId = null;
      }
      /**
-@@ -1066,6 +1234,7 @@ export class SessionManager {
+@@ -1066,6 +1243,7 @@ export class SessionManager {
       * context from the abandoned conversation path.
       */
      branchWithSummary(branchFromId, summary, details, fromHook, usage) {
@@ -386,7 +537,7 @@ index fbb784f771553c21e993cf82200a80a854261437..ed6ec44dd1faaa78830aed35eec89c4c
          if (branchFromId !== null && !this.byId.has(branchFromId)) {
              throw new Error(`Entry ${branchFromId} not found`);
          }
-@@ -1091,6 +1260,7 @@ export class SessionManager {
+@@ -1091,6 +1269,7 @@ export class SessionManager {
       * Returns the new session file path, or undefined if not persisting.
       */
      createBranchedSession(leafId) {

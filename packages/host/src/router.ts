@@ -1218,7 +1218,15 @@ export class Router {
       // something the host owns (M21-T9): the mentions in it are validated
       // here, projected here, and only then does the worker see them.
       case "session/prompt":
-        return this.promptWithMentions(req, actor);
+      // The other four doors a person's words go through (M21-T9). A mention
+      // means the same thing whichever one the person used: Cmd+Enter while
+      // the agent works, Enter into the waiting tray, or an edit of a message
+      // still waiting there. Same validation, same projection, same sentences.
+      case "pi/session/steer":
+      case "pi/session/follow_up":
+      case "session/pending/add":
+      case "session/pending/edit":
+        return this.sendWithMentions(req, actor);
       // The design workspace (M21-T13). The opposite rule to the lifecycle
       // methods below, and for one reason: these read and write **files in
       // the project**, which is the worker's authority, not the store's. The
@@ -1519,8 +1527,8 @@ export class Router {
    * keeps its identity in the transcript and comes back as an outcome the
    * sender can show; the words the person wrote go out either way.
    */
-  private async promptWithMentions(
-    req: Extract<TypedClientRequest, { method: "session/prompt" }>,
+  private async sendWithMentions(
+    req: Extract<TypedClientRequest, { method: "session/prompt" | "pi/session/steer" | "pi/session/follow_up" | "session/pending/add" | "session/pending/edit" }>,
     actor: ActorIdentity,
   ): Promise<unknown> {
     // Whatever a client put here is dropped: a projection is the host's word,
