@@ -5995,7 +5995,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T15 | Plan DAG and Project Task engine | done | claude-2026-09-21-leap | `2d2b5778` (merged `aa33ffbf`); host 1121 passed (`project-work/task-engine.test.ts` 17 over the wire), protocol 631 (`project-work-plan-graph.test.ts` 12) | see notes |
 | M21-T16 | Plans and Tasks workspace | done | claude-2026-09-21-leap | `faf53146` (merged with T7 conflicts resolved by the orchestrator in `store.ts`/`WorkDetail.tsx`/`Inspector.tsx`); `pnpm -F @lasercode/ui test` (`plan-graph`, `plan-detail`, `task-detail`, `board-transitions` 42) | see notes |
 | M21-T17 | Model tools and execution linking | done | claude-2026-09-21-leap | `133d55cd` (six commits, merged); protocol 631, pi-extension 237, worker 1498, host 1140; `pnpm tool-eval` 42/42 (21 fixtures × 2 profiles); `pnpm verify` passed | see notes |
-| M21-T18 | Checkpoints, changes and delivery evidence | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T18 | Checkpoints, changes and delivery evidence | done | claude-2026-09-21-leap | `85ee5ea4` (+ `sessionPath` closure by the orchestrator); protocol 668, host 1172 (`project-work/delivery.test.ts` 14 over real git repos), worker 1499; `pnpm verify` passed in the worker's tree | see notes |
 | M21-T19 | Verification and convergence | todo | — | — | `PLAN.md` M21 |
 | M21-T20 | Cross-session continuity and recovery | todo | — | — | `PLAN.md` M21 |
 | M21-T21 | Import, export and repository publication | in-progress | claude-2026-09-21-leap | — | see notes |
@@ -6043,6 +6043,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap: host gate rules (`project-work/gates.ts` + the store's comment/review/approve paths) and the UI comments/gate card/Approval Card; write set disjoint from T16 (plan/task/board files) and T17 (bridge/methods wiring).
 
 #### M21-T18 notes
+- 2026-09-21 done (`85ee5ea4`): per-repository attempt records (base state, checkpoints resolved to commit ids by session key + turn, change first→last, changed paths from git feeding T15's observed scope, commits), `based_on` on bridge-made revisions, `implemented_by` only through person-confirmed "accept as delivery" verifying the diff digest, `verified_at` from verification evidence in one transaction, git-action `linkRef` (commit id identity; branch/PR display), links never retarget, missing objects report `unavailable` never HEAD, canonical captures stored before acceptance with quota refusal (-32011), superseding links append; host reads git itself (`source-control/read.ts`); schema v2. D-357.a–j in `docs/leap/m21-tools-plan.md`. The `executionShape().sessionPath` line closed by the orchestrator.
 - 2026-09-21 claimed by claude-2026-09-21-leap: host/worker linking of attempts to M20 base/checkpoints/diffs/commits/PRs, `based_on`/`implemented_by`/`verified_at` repository links, canonical captures for gate/done evidence surviving checkpoint pruning, changed files from git, distinct repositories.
 
 #### M21-T17 notes
