@@ -447,12 +447,36 @@ export function machineDecidable(criterion: VerificationCriterion): boolean {
 }
 
 /**
+ * Whether this criterion has to be **proven** before anything converges.
+ *
+ * Deliberately wider than {@link machineDecidable}: a criterion the authority
+ * declared machine-verifiable must be satisfied whether or not a command was
+ * ever bound to it. A missing binding is a gap in the work, not an exemption
+ * from it — treating "nobody wired a command to this" as "this does not have
+ * to hold" is exactly how a Task converges on criteria nothing checked.
+ *
+ * `visual` and `browser_matrix` criteria declare `machineVerifiable: false`,
+ * so they are not caught by this: they are a person's, and `needs_review` is
+ * the state that hands them over.
+ */
+export function mustBeProven(criterion: VerificationCriterion): boolean {
+  if (!criterion.required) return false;
+  return criterion.machineVerifiable || criterion.kind === "review";
+}
+
+/**
  * The convergence rule, in one place (leap, "Execution and convergence").
  *
- * A Task may be moved to `needs_review` when **every required criterion this
- * run could decide came out satisfied**, nothing came out `failed`, and no
- * blocker remains. Items only a person can settle do not stand in the way:
- * `needs_review` is precisely the state that hands them to a person.
+ * A Task may be moved to `needs_review` when **every required criterion that
+ * has to be proven came out satisfied**, nothing came out `failed`, and no
+ * blocker remains. "Has to be proven" is {@link mustBeProven}: everything an
+ * authority declared machine-verifiable, whether or not this run had a way to
+ * decide it. A criterion that declares itself checkable and binds no command
+ * is reported as unproven and blocks; it is never converged by omission.
+ *
+ * Items an authority declared a person's — a visual check, a browser matrix —
+ * do not stand in the way: `needs_review` is precisely the state that hands
+ * them to a person.
  */
 export function convergenceOf(input: {
   criteria: readonly VerificationCriterion[];
@@ -470,14 +494,18 @@ export function convergenceOf(input: {
       failed = true;
       if (criterion.required) reasons.push(`${criterion.source.key}: ${criterion.text}`);
     }
-    if (criterion.required && machineDecidable(criterion) && finding.outcome !== "satisfied" && finding.outcome !== "failed") {
-      reasons.push(`${criterion.source.key}: ${criterion.text} was not decided by this run.`);
+    if (mustBeProven(criterion) && finding.outcome !== "satisfied" && finding.outcome !== "failed") {
+      reasons.push(
+        criterion.command === undefined && criterion.kind !== "review"
+          ? `${criterion.source.key}: ${criterion.text} says it can be checked by a command, and none is bound to it, so nothing proved it.`
+          : `${criterion.source.key}: ${criterion.text} was not decided by this run.`,
+      );
     }
   }
   // A required criterion with no finding at all is not a pass: the run simply
   // did not reach it, which is exactly what stopping a run does.
   for (const criterion of input.criteria) {
-    if (!criterion.required || !machineDecidable(criterion)) continue;
+    if (!mustBeProven(criterion)) continue;
     if (!input.findings.some((finding) => finding.criterionId === criterion.id)) {
       reasons.push(`${criterion.source.key}: ${criterion.text} was never checked.`);
     }
@@ -543,6 +571,18 @@ export interface VerificationRunState {
   /** The Task, by key, so a row reads without another request. */
   taskKey: string;
   entityId: string;
+  /**
+   * The conversation this run belongs to (M21-T19).
+   *
+   * Every run has one: a model's is the session its tool call ran in, and a
+   * person's is the session they chose to run it in. There is no such thing
+   * as an unowned verification — a Command nobody can see in the fleet is a
+   * Command nobody can stop, so starting one without a session is refused
+   * rather than hidden.
+   */
+  sessionPath: string;
+  /** The id this run takes in the fleet, so a row and a Stop find each other. */
+  fleetTaskId: string;
   phase: VerificationPhase;
   startedAt: string;
   endedAt?: string;
@@ -570,6 +610,8 @@ export const verificationRunStateSchema = z
     runId: z.string().min(1).max(64),
     taskKey: z.string().max(40),
     entityId: opaqueId,
+    sessionPath: z.string().min(1).max(4096),
+    fleetTaskId: z.string().min(1).max(200),
     phase: z.enum(VERIFICATION_PHASES),
     startedAt: isoInstant,
     endedAt: isoInstant.optional(),
@@ -585,6 +627,39 @@ export const verificationRunStateSchema = z
     problem: z.string().max(PROJECT_WORK_TEXT_MAX).optional(),
   })
   .strict();
+
+/**
+ * The id a verification run takes in the fleet.
+ *
+ * Namespaced so it can never collide with a shell command's id or an index
+ * build's, and readable in a log — the same rule the Design Index build's row
+ * follows (M21-T13). A Project Task is still a Project Task: what appears in
+ * the fleet is a Command row, exactly as a background command's is.
+ */
+export function verificationFleetTaskId(runId: string): string {
+  return `verify-${runId}`;
+}
+
+/** True for a fleet task id a verification run minted, so Stop finds it. */
+export function isVerificationFleetTaskId(id: string): boolean {
+  return id.startsWith("verify-");
+}
+
+/** The run id inside a verification fleet task id. */
+export function verificationRunIdOf(fleetTaskId: string): string {
+  return fleetTaskId.slice("verify-".length);
+}
+
+/**
+ * What a person is told when they ask to verify a Task from nowhere in
+ * particular.
+ *
+ * A verification run is a Command: it has to be visible in the fleet and
+ * stoppable from it, which means it has to belong to a conversation. Rather
+ * than invent one or run invisibly, the app says which act gets one.
+ */
+export const VERIFICATION_NEEDS_SESSION =
+  "A verification run happens in the conversation this task is being worked on, so it can be watched and stopped there. Use Start… to join this task to a conversation in this project, then verify from it.";
 
 /** The line a run's fleet row and live region show. */
 export function verificationRunLine(state: Omit<VerificationRunState, "line">): string {
@@ -669,6 +744,15 @@ export interface VerificationStartParams {
   entityId?: string;
   /** The Task, by key, for a caller that has one. */
   key?: string;
+  /**
+   * The conversation the run belongs to, and appears in the fleet under.
+   *
+   * Required in practice: a run with no session is refused with the sentence
+   * that says how to get one, rather than started invisibly. It is left
+   * optional on the wire so that refusal is a sentence a person can act on
+   * instead of "invalid params".
+   */
+  sessionPath?: string;
 }
 
 export interface VerificationStartResult {

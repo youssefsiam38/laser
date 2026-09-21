@@ -30,10 +30,14 @@ import { VerificationPanel } from "../../src/components/project-work/Verificatio
 import { ProjectWorkStore, type ProjectWorkMethod } from "../../src/project-work/store.js";
 import { resetWorkspaceUi } from "../../src/project-work/workspace-state.js";
 
-import { detail, evidence, taskBody, type Detail } from "./plan-task-fixture.js";
+import { detail, evidence, executionLink, taskBody, type Detail } from "./plan-task-fixture.js";
 
 let hostCalls: Array<{ method: string; params: Record<string, unknown> }>;
 let hostAnswers: Record<string, unknown>;
+
+/** The conversation this Task is being worked on in, as this window has it. */
+const SESSION = { id: "s1", path: "/work/app/one.jsonl" };
+let sessions: Array<{ id: string; path: string }>;
 
 vi.mock("../../src/runtime", async (original) => {
   const actual = await original<typeof import("../../src/runtime/index.js")>();
@@ -49,7 +53,7 @@ vi.mock("../../src/runtime", async (original) => {
       },
     }),
     useCapability: () => ({ state: "available" }),
-    useLaserState: (selector: (state: unknown) => unknown) => selector({ sessions: [], agents: { snapshot: { agents: [] } } } as never),
+    useLaserState: (selector: (state: unknown) => unknown) => selector({ sessions, agents: { snapshot: { agents: [] } } } as never),
   };
 });
 
@@ -133,6 +137,9 @@ function report(over: Partial<VerificationReport> = {}): VerificationReport {
   };
 }
 
+/** A Task with an attempt this window still has the conversation for. */
+const owned = () => [executionLink({ linkId: "x1", targetId: SESSION.id, attempt: 1 })];
+
 const withReport = (value: VerificationReport): Detail =>
   detail({
     entityId: "e-task-44",
@@ -140,6 +147,7 @@ const withReport = (value: VerificationReport): Detail =>
     number: 44,
     state: "in_progress",
     body: taskBody({ verificationCommands: ["pnpm -F exports test"] }) as unknown as ProjectWorkBody,
+    executionLinks: owned(),
     evidence: [
       evidence({
         evidenceId: "evd_1",
@@ -209,6 +217,7 @@ beforeEach(() => {
   storeCalls = [];
   hostCalls = [];
   hostAnswers = {};
+  sessions = [SESSION];
   blob = undefined;
   resetWorkspaceUi();
   container = document.createElement("div");
@@ -281,15 +290,47 @@ describe("running one", () => {
       number: 44,
       state: "in_progress",
       body: taskBody() as unknown as ProjectWorkBody,
+      executionLinks: owned(),
     });
     await mount(empty, makeStore());
     await click(button("Verify…"));
     const start = hostCalls.find((call) => call.method === "pi/project/verify/start");
     expect(start?.params["cwd"]).toBe("/work/app");
     expect(start?.params["entityId"]).toBe("e-task-44");
+    expect(start?.params["sessionPath"], "the run belongs to the conversation this task is worked on in").toBe(SESSION.path);
     const live = document.querySelector("[data-slot='verification-progress']");
     expect(live?.getAttribute("aria-live")).toBe("polite");
     expect(live?.textContent).toContain("command 1 of 1");
+  });
+
+  it("starts nothing when no conversation owns the task, and hands the person to Start…", async () => {
+    const unowned = detail({
+      entityId: "e-task-44",
+      kind: "task",
+      number: 44,
+      state: "in_progress",
+      body: taskBody() as unknown as ProjectWorkBody,
+    });
+    await mount(unowned, makeStore());
+    expect(button("Verify…")?.disabled, "a run nobody can watch is not offered").toBe(true);
+    const explanation = document.querySelector("[data-slot='verification-needs-session']");
+    expect(explanation?.textContent).toContain("Start…");
+    await click(button("Verify…"));
+    expect(hostCalls.some((call) => call.method === "pi/project/verify/start"), "nothing invisible was started").toBe(false);
+  });
+
+  it("does not offer a run for a conversation this window no longer has", async () => {
+    sessions = [];
+    const gone = detail({
+      entityId: "e-task-44",
+      kind: "task",
+      number: 44,
+      state: "in_progress",
+      body: taskBody() as unknown as ProjectWorkBody,
+      executionLinks: owned(),
+    });
+    await mount(gone, makeStore());
+    expect(button("Verify…")?.disabled).toBe(true);
   });
 
   it("stops the run that is going, naming it", async () => {
@@ -313,6 +354,7 @@ describe("running one", () => {
       number: 44,
       state: "in_progress",
       body: taskBody() as unknown as ProjectWorkBody,
+      executionLinks: owned(),
     });
     await mount(empty, makeStore());
     await click(button("Verify…"));

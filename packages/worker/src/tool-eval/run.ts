@@ -295,6 +295,11 @@ function projectWorkSession(
     ...(lifecycle
       ? {
           cwd: EVAL_CHECKOUT,
+          // A verification run belongs to the conversation that asked for it,
+          // and the evaluation's session is a real one as far as the tool is
+          // concerned: the refusal for a session that has no identity is
+          // exercised by the unit tests, not by the matrix.
+          sessionPath: () => EVAL_SESSION,
           verification: new VerificationService({
             bridgeFor: () => lifecycle,
             runner: scriptedVerificationRunner(fixture.world.projectWork?.failingCommands ?? []),
@@ -310,6 +315,8 @@ function projectWorkSession(
 
 /** The directory a lifecycle fixture's session claims to be working in. */
 const EVAL_CHECKOUT = "<checkout>";
+/** The conversation a lifecycle fixture's Commands hang under in the fleet. */
+const EVAL_SESSION = "<session>";
 
 /**
  * A verification command runner with no process behind it.

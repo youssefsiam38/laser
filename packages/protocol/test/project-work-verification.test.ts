@@ -8,10 +8,15 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  VERIFICATION_NEEDS_SESSION,
   VERIFICATION_REPORT_MEDIA_TYPE,
   browserMatrixSteps,
   convergenceOf,
+  isVerificationFleetTaskId,
   machineDecidable,
+  mustBeProven,
+  verificationFleetTaskId,
+  verificationRunIdOf,
   verificationReportSchema,
   verificationRunLine,
   verificationSummary,
@@ -61,6 +66,19 @@ describe("what a machine may decide", () => {
   it("does not count a criterion that says it is checkable and binds no command", () => {
     expect(machineDecidable(criterion({ id: "c5", kind: "acceptance", machineVerifiable: true }))).toBe(false);
   });
+
+  it("still requires that criterion to be proven: a missing binding is a gap, not an exemption", () => {
+    const unbound = criterion({ id: "c5", kind: "acceptance", machineVerifiable: true });
+    expect(machineDecidable(unbound), "this run cannot decide it").toBe(false);
+    expect(mustBeProven(unbound), "and it still has to be satisfied before anything converges").toBe(true);
+  });
+
+  it("does not require what an authority declared a person's", () => {
+    expect(mustBeProven(criterion({ id: "c6", kind: "browser_matrix", machineVerifiable: false }))).toBe(false);
+    expect(mustBeProven(criterion({ id: "c7", kind: "visual", machineVerifiable: false }))).toBe(false);
+    expect(mustBeProven(criterion({ id: "c8", kind: "design_state", machineVerifiable: false }))).toBe(false);
+    expect(mustBeProven(criterion({ id: "c9", required: false, command: "pnpm test" })), "a should is reported, not required").toBe(false);
+  });
 });
 
 describe("convergence", () => {
@@ -92,6 +110,28 @@ describe("convergence", () => {
     });
     expect(outcome.converged).toBe(false);
     expect(outcome.outcome).toBe("blocked");
+  });
+
+  it("does not converge on a required checkable criterion nothing was bound to", () => {
+    const criteria = [
+      criterion({ id: "c1", command: "pnpm test" }),
+      criterion({ id: "c2", kind: "acceptance", machineVerifiable: true, text: "a failed row shows the reason" }),
+    ];
+    const outcome = convergenceOf({
+      criteria,
+      findings: [finding("c1", "satisfied"), finding("c2", "needs_person")],
+      blockers: [],
+    });
+    expect(outcome.converged, "a missing binding is not an exemption").toBe(false);
+    expect(outcome.outcome).toBe("blocked");
+    expect(outcome.reasons.join(" ")).toContain("none is bound to it");
+  });
+
+  it("does not converge on a required checkable criterion with no finding at all", () => {
+    const criteria = [criterion({ id: "c1", kind: "acceptance", machineVerifiable: true, text: "the reason is shown" })];
+    const outcome = convergenceOf({ criteria, findings: [], blockers: [] });
+    expect(outcome.converged, "omission never converges").toBe(false);
+    expect(outcome.reasons.join(" ")).toContain("never checked");
   });
 
   it("does not converge on a criterion nothing checked, and says it was never checked", () => {
@@ -150,6 +190,19 @@ describe("what a person reads", () => {
       criteriaTotal: 9,
     });
     expect(line).toBe("pnpm -F exports test — command 2 of 3");
+  });
+
+  it("namespaces a run's fleet id so a row and a Stop find each other, and nothing else does", () => {
+    const id = verificationFleetTaskId("ver_0001");
+    expect(isVerificationFleetTaskId(id)).toBe(true);
+    expect(verificationRunIdOf(id)).toBe("ver_0001");
+    expect(isVerificationFleetTaskId("design-index-7"), "another Command's row is not this one's").toBe(false);
+    expect(isVerificationFleetTaskId("task_12")).toBe(false);
+  });
+
+  it("says which act gets a conversation when a run has none, rather than running invisibly", () => {
+    expect(VERIFICATION_NEEDS_SESSION).toContain("Start…");
+    expect(VERIFICATION_NEEDS_SESSION).toContain("stopped");
   });
 
   it("hands a browser-matrix cell the exact walk, because an agent never walks one", () => {

@@ -93,6 +93,12 @@ export interface ProjectWorkSessionOptions {
   task?: { entityId: string; key: string } | undefined;
   /** The project's own instructions, for the context packet. */
   projectInstructions?: () => string | undefined;
+  /**
+   * This session's own file, for a verification run started from it
+   * (M21-T19). A run belongs to the conversation that asked for it and
+   * appears in the fleet under it; the path is the worker's, never a model's.
+   */
+  sessionPath?: () => string | undefined;
   /** Who a design review decision is recorded as. */
   reviewActor?: ReviewActor;
   /**
@@ -178,7 +184,12 @@ export class ProjectWorkSession implements ExtensionProjectWorkBridge {
               recovery: VERIFY_TOOL_RECOVERY,
               run: (input: Record<string, unknown>) =>
                 verifyProjectTask(
-                  { bridge, service: this.verification()!, cwd: this.options.cwd! },
+                  {
+                    bridge,
+                    service: this.verification()!,
+                    cwd: this.options.cwd!,
+                    sessionPath: () => this.options.sessionPath?.(),
+                  },
                   input as unknown as VerifyProjectTaskInput,
                 ),
             },

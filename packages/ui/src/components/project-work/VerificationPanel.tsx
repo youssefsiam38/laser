@@ -13,6 +13,11 @@
  * - **Nothing here approves anything.** A run that satisfies everything it
  *   could decide moves the Task to needs review, and that is the furthest any
  *   of this goes: `done` is yours.
+ * - **Every run belongs to a conversation**, because a Command is watched and
+ *   stopped in the fleet and a row needs a session to hang under. The run
+ *   takes the conversation this Task is already being worked on in; when
+ *   there is none, this hands the person to Start… rather than starting
+ *   something invisible.
  * - **Progress is counts, in a live region.** Which command is running and how
  *   many there are — never a percentage and never an estimate.
  * - **A stored report is the one that is shown.** The panel reads the exact
@@ -20,17 +25,24 @@
  *   screen.
  */
 import { Play, RefreshCw, Square } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { ClientRequests, ProjectWorkBody, VerificationDeviation, VerificationReport, VerificationRunState } from "@lasercode/protocol";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  VERIFICATION_NEEDS_SESSION,
+  type ClientRequests,
+  type ProjectWorkBody,
+  type VerificationDeviation,
+  type VerificationReport,
+  type VerificationRunState,
+} from "@lasercode/protocol";
 
 import { Button } from "@/components/ui/button";
-import { useLaserStable } from "@/runtime";
+import { useLaserStable, useLaserState } from "@/runtime";
 import type { ProjectWorkStore } from "@/project-work";
 
 import { Section } from "./bodies/fields.js";
 import { WorkRefusal } from "./states.js";
 import { VerificationReportView } from "./VerificationReport.js";
-import { latestVerification, reportFrom } from "./verification-model.js";
+import { latestVerification, reportFrom, verificationSessionFor } from "./verification-model.js";
 
 type Detail = ClientRequests["project/work/get"]["result"];
 
@@ -52,6 +64,7 @@ export function VerificationPanel({
   pollMs?: number;
 }) {
   const { client } = useLaserStable();
+  const sessions = useLaserState((state) => state.sessions);
   const [run, setRun] = useState<VerificationRunState | undefined>(undefined);
   const [report, setReport] = useState<VerificationReport | undefined>(undefined);
   const [problem, setProblem] = useState<string | undefined>(undefined);
@@ -91,7 +104,10 @@ export function VerificationPanel({
   // A window with no live connection (a replayed transcript, a narrow test)
   // has no way to run anything: the button says so rather than throwing.
   const request = typeof client?.request === "function" ? client.request.bind(client) : undefined;
-  const canRun = cwd !== undefined && request !== undefined;
+  // The conversation this run would belong to. No session, no run: the panel
+  // says which act gets one instead of starting something nobody can see.
+  const owner = useMemo(() => verificationSessionFor(detail, sessions), [detail, sessions]);
+  const canRun = cwd !== undefined && request !== undefined && owner !== undefined;
 
   const poll = useCallback(
     async (runId: string): Promise<void> => {
@@ -121,11 +137,15 @@ export function VerificationPanel({
   );
 
   const start = async (): Promise<void> => {
-    if (!cwd || !request) return;
+    if (!cwd || !request || !owner) return;
     setProblem(undefined);
     setBusy(true);
     try {
-      const answer = await request("pi/project/verify/start", { cwd, entityId: detail.entity.entityId });
+      const answer = await request("pi/project/verify/start", {
+        cwd,
+        entityId: detail.entity.entityId,
+        sessionPath: owner.path,
+      });
       setRun(answer.run);
       void poll(answer.run.runId);
     } catch (error) {
@@ -191,8 +211,10 @@ export function VerificationPanel({
           </Button>
         ) : null}
         {canRun ? null : (
-          <span className="text-xs leading-xs text-ink-3">
-            This project is not open at a folder in this window, so its commands cannot be run from here.
+          <span data-slot="verification-needs-session" className="max-w-(--measure-prose) text-xs leading-xs text-ink-3">
+            {cwd === undefined || request === undefined
+              ? "This project is not open at a folder in this window, so its commands cannot be run from here."
+              : VERIFICATION_NEEDS_SESSION}
           </span>
         )}
       </div>

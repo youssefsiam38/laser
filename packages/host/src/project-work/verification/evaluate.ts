@@ -54,12 +54,26 @@ export interface Evaluation {
 }
 
 /**
- * An accepted M20 checkpoint preview, linked `verified_at` (D-353).
+ * What this run currently accepts as an M20 checkpoint preview, linked
+ * `verified_at` (D-353).
  *
- * Three things have to be true at once, and each one is the reason for one of
- * the others: the relation is `verified_at` (it is a state, not a delivery),
- * the state names a **checkpoint** (a preview, not an arbitrary commit), and a
- * **person** made it (an agent's link would be a claim about its own work).
+ * Three things have to be true at once: the relation is `verified_at` (a
+ * state, not a delivery), the state names a checkpoint, and a **person** made
+ * it — an agent's link would be a claim about its own work, and the actor kind
+ * is the host's, never a request body's.
+ *
+ * **This is not yet the authoritative test, and does not pretend to be.** The
+ * approved contract (N2) is a host-validated acceptance written at the moment
+ * a person confirms: the link's subject revision **and digest** must equal the
+ * criterion's, the checkpoint ref must be one git really holds and must
+ * resolve to the recorded commit, a joined `person_acceptance` record must
+ * carry the confirmation, and the accepted proof must survive the checkpoint
+ * being pruned through a durable canonical capture. The capture and
+ * transaction half of that contract is being settled with the M21-T18 owner so
+ * that one owner writes it; until it lands, a `verified_at` link that no
+ * person confirmed, or one whose checkpoint git no longer has, is **not**
+ * distinguished here. `docs/leap/m21-verification-followup.md` records the gap
+ * rather than leaving it implied.
  */
 export function acceptedPreview(links: readonly RepositoryLink[], subjectEntityId?: string): RepositoryLink | undefined {
   return links.find((link) => {

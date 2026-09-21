@@ -88,6 +88,14 @@ export interface VerifyProjectTaskDeps {
   bridge: ProjectWorkBridge;
   service: VerificationService;
   cwd: string;
+  /**
+   * The session this tool call is running in (M21-T19).
+   *
+   * A model's run belongs to the conversation that asked for it, and appears
+   * in the fleet under it: the identity is the worker's, never the model's,
+   * so a tool cannot claim to be running somewhere else.
+   */
+  sessionPath: () => string | undefined;
 }
 
 export async function verifyProjectTask(
@@ -117,10 +125,19 @@ export async function verifyProjectTask(
   }
 
   const deviations = await deviationsOf(deps, input);
+  const sessionPath = deps.sessionPath();
+  if (sessionPath === undefined) {
+    refuseProjectWork(
+      "no_session_identity",
+      "This conversation has no identity yet, so a verification run started here could not be watched or stopped.",
+      "carry on with the work and verify again on your next turn",
+    );
+  }
   let state: VerificationRunState;
   try {
     state = await deps.service.run({
       cwd: deps.cwd,
+      sessionPath,
       ...(input.entity_id !== undefined ? { entityId: input.entity_id } : {}),
       ...(input.key !== undefined ? { key: input.key } : {}),
       ...(deviations.length > 0 ? { deviations } : {}),

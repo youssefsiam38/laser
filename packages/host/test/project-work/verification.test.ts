@@ -371,6 +371,63 @@ describe("a run that does not converge", () => {
     expect(record.outcome).toBe("failed");
   });
 
+  it("refuses to converge on a spec criterion that says it is checkable and has no command bound to it", async () => {
+    const w = await world();
+    // The Spec gains an acceptance item nothing on the Task binds a command
+    // to. Every command still passes; the run must still not converge.
+    const widened = specBody();
+    (widened as { spec: { acceptance: Array<{ id: string; text: string; machineVerifiable: boolean }> } }).spec.acceptance.push({
+      id: "a3",
+      text: "The reason is written for a person, and a command proves it.",
+      machineVerifiable: true,
+    });
+    ok(
+      await h.call("project/work/revise", {
+        projectId: h.projectId,
+        entityId: w.spec.entity.entityId,
+        expectedRevisionId: w.spec.revision.revisionId,
+        body: widened,
+        idempotencyKey: "widen-spec",
+      }),
+    );
+    const task = await current(w.task.entity.entityId);
+    // The Task's edge still names the *old* Spec revision, so the new item is
+    // reached by re-linking the edge to the revision that carries it.
+    const revised = ok<ProjectWorkGetResult>(
+      await h.call("project/work/get", { projectId: h.projectId, entityId: w.spec.entity.entityId, body: { mode: "none" } }),
+    );
+    const edge = task.edges.find((row) => row.object.entityId === w.spec.entity.entityId)!;
+    ok(
+      await h.call("project/work/unlink", {
+        projectId: h.projectId,
+        entityId: w.task.entity.entityId,
+        expectedRevisionId: task.revision.revisionId,
+        linkId: edge.linkId,
+        idempotencyKey: "unlink-spec-edge",
+      }),
+    );
+    ok(
+      await h.call("project/work/link", {
+        projectId: h.projectId,
+        expectedRevisionId: task.revision.revisionId,
+        link: {
+          type: "edge",
+          relation: "implements",
+          subject: { entityId: task.entity.entityId, revisionId: task.revision.revisionId },
+          object: { entityId: revised.entity.entityId, revisionId: revised.revision.revisionId },
+        },
+        idempotencyKey: "relink-spec-edge",
+      }),
+    );
+    const answer = await report(w.task.entity.entityId, task.revision.revisionId, [commandRun("pnpm -F exports test", true)]);
+    const verify = answer.verifyResult!;
+    expect(verify.report!.converged, "a missing binding is not an exemption").toBe(false);
+    expect(verify.taskState).toBe("in_progress");
+    const finding = verify.report!.findings.find((row) => row.criterionId === "spec:a3")!;
+    expect(finding.outcome).toBe("needs_person");
+    expect(finding.detail).toContain("no command is bound to it");
+  });
+
   it("refuses to converge while a blocking comment is open, and names it", async () => {
     const w = await world();
     const task = await current(w.task.entity.entityId);

@@ -22,8 +22,10 @@ import type {
   VerificationReport,
 } from "@lasercode/protocol";
 import { convergenceOf, verificationSummary } from "@lasercode/protocol";
+import { isVerificationFleetTaskId, type BackgroundTask } from "@lasercode/protocol";
 import type { ProjectWorkBridge, ProjectWorkExecutionShape, ProjectWorkSessionIdentity } from "../../src/project-work/bridge.js";
 import { ProjectWorkToolFailure } from "../../src/project-work/bridge.js";
+import { VerificationRefused } from "../../src/project-work/verification/service.js";
 import { runVerificationCommand } from "../../src/project-work/verification/commands.js";
 import { VerificationService } from "../../src/project-work/verification/service.js";
 import { verifyProjectTask } from "../../src/project-work/verification/tools.js";
@@ -43,6 +45,12 @@ function repository(): string {
   writeFileSync(join(dir, "README.md"), "# a project\n");
   return dir;
 }
+
+/** The conversation every run in this file belongs to. */
+const SESSION = "/work/app/one.jsonl";
+
+/** The approved artifact a deviation in this file is proposed against. */
+const UPSTREAM = { entityId: "ent_spec", key: "SPEC-1", revisionId: "rev_spec_2", digest: "9".repeat(64) };
 
 const SOURCE = {
   authority: "task" as const,
@@ -74,8 +82,13 @@ class ScriptedHost implements ProjectWorkBridge {
   task(): { entityId: string; key: string } | undefined {
     return undefined;
   }
-  async call(): Promise<never> {
-    throw new Error("this test's bridge answers verification only");
+  /** Only the one read a deviation needs: the upstream it is proposed about. */
+  async call(_method: string, params: { key?: string }): Promise<unknown> {
+    if (params.key !== UPSTREAM.key) throw new Error("this test's bridge answers verification and one upstream read");
+    return {
+      entity: { entityId: UPSTREAM.entityId, kind: "spec", key: UPSTREAM.key },
+      revision: { revisionId: UPSTREAM.revisionId, digest: UPSTREAM.digest },
+    };
   }
   lastResearchResult(): undefined {
     return undefined;
@@ -214,7 +227,7 @@ describe("a run, end to end over the bridge", () => {
   it("runs every declared command and comes back with what the host decided", async () => {
     const host = new ScriptedHost(["pnpm test", "pnpm lint"]);
     const service = new VerificationService({ bridgeFor: () => host, runner: fake([]) });
-    const state = await service.run({ cwd: repository(), key: "TASK-1" });
+    const state = await service.run({ cwd: repository(), key: "TASK-1", sessionPath: SESSION });
     expect(state.phase).toBe("done");
     expect(state.report!.converged).toBe(true);
     expect(state.taskState, "the host's move, reported back, never invented here").toBe("needs_review");
@@ -224,7 +237,7 @@ describe("a run, end to end over the bridge", () => {
   it("reports a failing command without converging, and never moves the task itself", async () => {
     const host = new ScriptedHost(["pnpm test", "pnpm lint"]);
     const service = new VerificationService({ bridgeFor: () => host, runner: fake(["pnpm lint"]) });
-    const state = await service.run({ cwd: repository(), key: "TASK-1" });
+    const state = await service.run({ cwd: repository(), key: "TASK-1", sessionPath: SESSION });
     expect(state.report!.converged).toBe(false);
     expect(state.report!.outcome).toBe("failed");
     expect(state.taskState).toBe("in_progress");
@@ -250,7 +263,7 @@ describe("a run, end to end over the bridge", () => {
         };
       },
     });
-    const started1 = service.start({ cwd: repository(), key: "TASK-1" });
+    const started1 = service.start({ cwd: repository(), key: "TASK-1", sessionPath: SESSION });
     expect(service.state({ cwd: "ignored", runId: started1.runId })[0]!.runId).toBe(started1.runId);
     const stopped = service.stop({ runId: started1.runId, reason: "you stopped it" });
     expect(stopped.stopped).toBe(true);
@@ -262,9 +275,97 @@ describe("a run, end to end over the bridge", () => {
   });
 });
 
+describe("the fleet row a run takes", () => {
+  const publishing = (host: ScriptedHost, rows: Array<{ sessionPath: string; task: BackgroundTask }>) =>
+    new VerificationService({
+      bridgeFor: () => host,
+      holdsSession: (path) => path === SESSION,
+      publishTask: (sessionPath, task) => rows.push({ sessionPath, task }),
+      runner: async ({ command }) => ({
+        command,
+        status: "passed" as const,
+        exitCode: 0,
+        startedAt: "2026-03-01T09:00:00.000Z",
+        endedAt: "2026-03-01T09:00:01.000Z",
+        outputBytes: 0,
+        outputDigest: "f".repeat(64),
+        tail: "",
+      }),
+    });
+
+  it("publishes a running row under the owning conversation the moment it starts, and a terminal one when it ends", async () => {
+    const host = new ScriptedHost(["pnpm test"]);
+    const rows: Array<{ sessionPath: string; task: BackgroundTask }> = [];
+    const service = publishing(host, rows);
+    const state = service.start({ cwd: repository(), key: "TASK-1", sessionPath: SESSION });
+    expect(rows[0]!.sessionPath, "the row hangs under the conversation that owns the run").toBe(SESSION);
+    expect(rows[0]!.task.status).toBe("running");
+    expect(isVerificationFleetTaskId(rows[0]!.task.id), "a namespaced id, so Stop from the row finds it").toBe(true);
+    expect(rows[0]!.task.id).toBe(state.fleetTaskId);
+    await service.state({ cwd: "ignored", runId: state.runId })[0] && (await new Promise((resolve) => setTimeout(resolve, 30)));
+    const last = rows.at(-1)!.task;
+    expect(last.status).toBe("completed");
+    expect(last.endedAt, "a finished Command says when it finished").toBeDefined();
+    expect(last.terminalReason).toBeDefined();
+    expect(last.outputBytes, "the row carries no output: the commands' bytes live in the report").toBe(0);
+  });
+
+  it("is stopped from the fleet row by its own id, and publishes a stopped row", async () => {
+    const host = new ScriptedHost(["one", "two"]);
+    const rows: Array<{ sessionPath: string; task: BackgroundTask }> = [];
+    const service = new VerificationService({
+      bridgeFor: () => host,
+      holdsSession: () => true,
+      publishTask: (sessionPath, task) => rows.push({ sessionPath, task }),
+      runner: async ({ command, signal }) => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return {
+          command,
+          status: signal?.aborted === true ? ("stopped" as const) : ("passed" as const),
+          ...(signal?.aborted === true ? {} : { exitCode: 0 }),
+          startedAt: "2026-03-01T09:00:00.000Z",
+          endedAt: "2026-03-01T09:00:01.000Z",
+          outputBytes: 0,
+          outputDigest: "f".repeat(64),
+          tail: "",
+        };
+      },
+    });
+    const state = service.start({ cwd: repository(), key: "TASK-1", sessionPath: SESSION });
+    expect(service.stopByTaskId(state.fleetTaskId)).toBe(true);
+    expect(service.stopByTaskId("design-index-7"), "another kind of Command is not this one's to stop").toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(rows.at(-1)!.task.status).toBe("stopped");
+    expect(rows.at(-1)!.task.terminalReason).toBe("you stopped it");
+  });
+
+  it("refuses to start a run no conversation owns, and says which act gets one", () => {
+    const host = new ScriptedHost(["pnpm test"]);
+    const rows: Array<{ sessionPath: string; task: BackgroundTask }> = [];
+    const service = publishing(host, rows);
+    expect(() => service.start({ cwd: repository(), key: "TASK-1" })).toThrow(VerificationRefused);
+    try {
+      service.start({ cwd: repository(), key: "TASK-1" });
+    } catch (error) {
+      expect((error as Error).message).toContain("Start…");
+    }
+    expect(rows, "nothing invisible was started").toHaveLength(0);
+  });
+
+  it("refuses a conversation this worker is not holding, rather than inventing a row under it", () => {
+    const host = new ScriptedHost(["pnpm test"]);
+    const rows: Array<{ sessionPath: string; task: BackgroundTask }> = [];
+    const service = publishing(host, rows);
+    expect(() => service.start({ cwd: repository(), key: "TASK-1", sessionPath: "/somebody/else.jsonl" })).toThrow(VerificationRefused);
+    expect(rows).toHaveLength(0);
+  });
+});
+
 describe("verify_project_task", () => {
-  const deps = (host: ScriptedHost, cwd: string) => ({
+  /** `session: null` is a conversation that has no identity yet. */
+  const deps = (host: ScriptedHost, cwd: string, session: string | null = SESSION) => ({
     bridge: host,
+    sessionPath: () => session ?? undefined,
     service: new VerificationService({
       bridgeFor: () => host,
       runner: async ({ command }: { command: string }) => ({
@@ -293,6 +394,30 @@ describe("verify_project_task", () => {
   it("refuses a call that names no task, and says how to find one", async () => {
     const host = new ScriptedHost(["pnpm test"]);
     await expect(verifyProjectTask(deps(host, repository()), {})).rejects.toBeInstanceOf(ProjectWorkToolFailure);
+  });
+
+  it("belongs to the conversation the tool call ran in, and refuses when that has no identity yet", async () => {
+    const host = new ScriptedHost(["pnpm test"]);
+    const answer = await verifyProjectTask(deps(host, repository()), { key: "TASK-1" });
+    expect(answer["run_id"]).toBeDefined();
+    const failure = await verifyProjectTask(deps(host, repository(), null), { key: "TASK-1" }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ProjectWorkToolFailure);
+    expect((failure as ProjectWorkToolFailure).toolError.code).toBe("no_session_identity");
+  });
+
+  it("persists a deviation it proposes, against the upstream's exact revision and digest", async () => {
+    const host = new ScriptedHost(["pnpm test"]);
+    await verifyProjectTask(deps(host, repository()), {
+      key: "TASK-1",
+      deviation_reason: "the lint rule this spec assumes does not exist",
+      deviation_upstream_key: "SPEC-1",
+      deviation_proposal: "name the rules the package really has",
+    });
+    const deviation = host.reports.at(-1)!.deviations[0]!;
+    expect(deviation.state, "only a person accepts one").toBe("proposed");
+    expect(deviation.reason).toContain("lint rule");
+    expect(deviation.upstream.revisionId).toBe(UPSTREAM.revisionId);
+    expect(deviation.upstream.digest, "the exact bytes the proposal was written against").toBe(UPSTREAM.digest);
   });
 
   it("refuses a deviation that does not say which upstream it is about", async () => {

@@ -108,3 +108,26 @@ export function progressSentence(run: { line: string; phase: string } | undefine
   if (!run) return "";
   return run.line;
 }
+
+/**
+ * The conversation a person's verification run would belong to (M21-T19).
+ *
+ * A verification run is a Command: it appears in the fleet under a session and
+ * is stopped from there, so it has to have one. The honest answer is the
+ * conversation this Task is already being worked on in — its newest attempt
+ * that this window still has a session for, preferring one that is still
+ * running. When there is none the panel hands the person to Start…, which is
+ * the existing act that joins a Task to a conversation; nothing here invents
+ * a session, and no run starts without a row.
+ */
+export function verificationSessionFor(
+  detail: Detail,
+  sessions: ReadonlyArray<{ id: string; path: string }>,
+): { sessionId: string; path: string } | undefined {
+  const byId = new Map(sessions.map((session) => [session.id, session.path]));
+  const candidates = detail.executionLinks
+    .filter((link) => link.targetUnavailable !== true && byId.has(link.targetId))
+    .sort((a, b) => (a.endedAt === undefined ? -1 : 0) - (b.endedAt === undefined ? -1 : 0) || b.attempt - a.attempt);
+  const chosen = candidates[0];
+  return chosen ? { sessionId: chosen.targetId, path: byId.get(chosen.targetId)! } : undefined;
+}

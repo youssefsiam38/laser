@@ -11,7 +11,13 @@ export {
   type VerificationCommandRunner,
 } from "./commands.js";
 export { VerificationRun, type VerificationRunOptions } from "./run.js";
-export { VerificationService, VERIFICATION_RUNS_KEPT, type VerificationServiceOptions } from "./service.js";
+export {
+  VerificationRefused,
+  VerificationService,
+  VERIFICATION_ROW_INTERVAL_MS,
+  VERIFICATION_RUNS_KEPT,
+  type VerificationServiceOptions,
+} from "./service.js";
 export {
   VERIFY_PROJECT_TASK_SPEC,
   VERIFY_TOOL_RECOVERY,

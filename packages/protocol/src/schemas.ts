@@ -1019,6 +1019,7 @@ export const clientParamsSchemas = {
     cwd: z.string().min(1),
     entityId: z.string().min(1).max(64).optional(),
     key: z.string().min(1).max(40).optional(),
+    sessionPath: z.string().min(1).max(4096).optional(),
   }).strict(),
   "pi/project/verify/state": z.object({
     cwd: z.string().min(1),
