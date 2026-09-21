@@ -6250,8 +6250,8 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | M23-T2 | Worker: chat prompt and one-shot naming | done | claude-2026-09-21-leap | `0051d591`; `pnpm -F @lasercode/worker test` (1223 passed; `test/agents/chat-prompt.test.ts` byte-for-byte) | see notes |
 | M23-T3 | Host: no built-ins, Beam re-home | done | claude-2026-09-21-leap | `79404b7c`; `env -i PATH=$PATH HOME=$HOME pnpm -F @lasercode/host test` (1027 passed; `test/agents/retired-builtins.test.ts`) | see notes |
 | M23-T4 | UI: remove Beam, plain Chat entry points | done | claude-2026-09-21-leap | `72f0a3a1` (merged `9143a014`); `pnpm verify` passed; `pnpm -F @lasercode/ui test` (2989 passed); `test/shell/new-chat-entry-points.test.tsx` | see notes |
-| M23-T5 | Docs, identity guard, gates | in-progress | claude-2026-09-21-leap | — | see notes |
-| M23-T6 | Release | todo | — | — | `PLAN.md` M23 |
+| M23-T5 | Docs, identity guard, gates | done | claude-2026-09-21-leap | `0cd83795`, `70d8f4ad` (guard), `c91eec1b` (docs); `pnpm identity:check`; `pnpm verify` green after `3a27fe38` | see notes |
+| M23-T6 | Release | in-progress | claude-2026-09-21-leap | — | see notes |
 
 #### M23-T1–T3 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap while 0.12.0 builds: one backend worker (protocol → worker → host) on a branch based on `13c1ce3b`, one commit per task, plan in `docs/leap/m23-backend-plan.md`. M22 real-migration observation carried in: `builtinProfiles.namer` must become `namingProfileId` when the Namer built-in goes.
@@ -6263,6 +6263,10 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 #### M23-T5 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: identity guard check 3 now flags `Beam`/`Namer` in person-facing string literals (probe proved; whole tree clean after T4); `clean-machine.mjs` had no Beam skill expectation left to remove (verified by grep); Beam browser-check fixtures were deleted in T4. Docs rewrite delegated to a worker.
+- 2026-09-21 done: docs (`c91eec1b`) — `agents.md` §7 rewritten as Chat + naming, `product-boundary.md`, `architecture.md`, `mobile.md`, `ux-fleet.md`, `ux-elements.md`, `ux-theme.md`, `environment-policy.md`, `project-mentions.md`, `transcript-reading.md`; `plain-chat.md` inventory ticked with `≠` notes. D-357: a Chat offers no harness tools. Independent review (`docs/leap/m23-review.md`): B1 the physical Beam-workspace move orphaned files — deleted, "re-homed" is the kind mapping with the retired directory accepted (`3a27fe38`, real-worker e2e `retired-workspace-open.e2e.test.ts`); S1 one chat-workspace rule in the protocol (`isChatWorkspaceCwd`); S2 naming carry once-ever (`naming-carry.json`); S4 guard case-insensitive with named stored-identity exemptions (`70d8f4ad`); S3 `LaserThreadScope` removal deferred with a file list in `docs/leap/m23-ui-plan.md` (over the bound, on the reducer path).
+
+#### M23-T6 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap. Real state directory acceptance on an exact copy (D-356): `docs/leap/m23-real-state-acceptance.json` — the person's real Beam session and Chat session list and open as Chat in their original directories with no agent name; a fresh Chat opens on the default profile; folders and transcripts byte-identical; naming assigned to the person's Namer profile (fix `40eabcee`: the M22 planner prefers the `builtin:namer` choice for `namingProfileId` when the file has none — found because the first copy run assigned naming to Default). Release notes for 0.13.0 written.
 
 #### M23-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/plain-chat.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M23 tasks added; D-347 recorded. Implementation not started.
