@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T19:56:49+03:00 · leap integration · HEAD: 9bcdd23a
+**Last updated:** 2026-09-21T20:02:35+03:00 · leap integration · HEAD: c5c48b35
 **Current focus:** M21 integration and acceptance gaps. T14 integrated/done; T10/T13 Fleet ownership correction and T19 evidence correction remain. T21 reviewed corrections integrated/done. M26 v0.14.0 is published and verified; M21 remains the next release gate.
 
 | Milestone | State |
@@ -35,7 +35,7 @@
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
-**Active owners:** T14 merged/done (UI125/host31); T10/T13 explicit index Command owner plan approved; T18/T19 final Native UI and capture-completeness corrections (`209eac6c` preserved; new owner); T9/T17 SDK seam+consumer returned (`e7ec426d`); bounds corrections transferred to replacement owner after runtime refused prior-session resumption; full independent review still required. T21 done (`23a3fa45`, merged build/typecheck/host224/UI34; strict UTF-8 interop61). M26 publication completed; three feature owners plus bounded M16-T62 focus investigation are active; M16-T82 fixture independently reviewed and integrated. Exact paths/sessions in `STATUS_DETAILED.md`.
+**Active owners:** T14 merged/done (UI125/host31); T10/T13 explicit index Command owner plan approved; T18/T19 Native UI/raw decoder checkpoint `d534a3b4` preserved; required-source plan rejected, replacement owner revising authority/completeness proof; T9/T17 SDK seam+consumer returned (`e7ec426d`); bounds corrections transferred to replacement owner after runtime refused prior-session resumption; full independent review still required. T21 done (`23a3fa45`, merged build/typecheck/host224/UI34; strict UTF-8 interop61). M26 publication completed; three feature owners plus bounded M16-T62 focus investigation are active; M16-T82 fixture independently reviewed and integrated. Exact paths/sessions in `STATUS_DETAILED.md`.
 **Gate:** full merged build/typecheck and all non-UI suites pass (host1258/worker1643/protocol728). UI3299 pass/1 fail/1 skip: trim-interaction loses exact focused action after cache transaction (`t-d5c98a98`). New transcript owner investigates before changing production. Image lifecycle fix and review merged; focused32 pass. Identity last passed after interop correction; latest full chain stopped before identity. Browser acceptance remains the person’s (D-342).
 **Published:** v0.14.0 Latest (M26), v0.13.0 (M23), v0.12.0 (M22). Candidate `ac098597`; exact-source CI `35616431166` and release `35616858358` attempt4 pass. Twelve assets, manifest digests and source-bound provenance verified by release controller; evidence `docs/leap/m26-release-evidence.json`. Parent merged release metadata (`64c701cc`), identity check passes. Final integrated main-branch gates remain required.
 **Next dependency-ready work:** finish active corrections/review, close T9/T17 worker mention-context delivery gap (tasks reopened), then T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
