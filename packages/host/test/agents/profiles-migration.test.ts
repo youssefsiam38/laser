@@ -324,6 +324,38 @@ describe("the model-profile migration at host start", () => {
     expect(written).toEqual([[{ path: "namingProfileId", op: "set", value: FAST }]]);
   });
 
+  it("carries it once ever: a naming choice the person clears afterwards stays cleared", async () => {
+    // The carry is a migration, not a policy. The migration pass runs again on
+    // every provider connect and the legacy key stays in `agents.json` for a
+    // release, so without a stamp a person who deliberately clears **Naming
+    // conversations** in Settings would find it written back (M23 review, S2).
+    writeFileSync(join(base, "state", "agents.json"), JSON.stringify({
+      version: 2, revision: 1, defaultAgent: "default",
+      builtinProfiles: { beam: null, chat: null, namer: FAST },
+    }));
+    const settingsLog = join(base, "settings.log");
+    // `naming: false` is the report saying nothing is assigned to naming:
+    // true before the carry, and true again after the person clears it.
+    writeFileSync(workerMain, fakeWorker({ log, configured: true, settingsLog, naming: false }));
+    const first = await startHost();
+    await first.request("agents/skills", { cwd: project });
+    await vi.waitFor(() => expect(existsSync(settingsLog)).toBe(true), { timeout: 10_000, interval: 25 });
+    const carried = readFileSync(settingsLog, "utf8");
+    expect(JSON.parse(carried.trim())).toEqual([{ path: "namingProfileId", op: "set", value: FAST }]);
+    // Stamped where the migration record lives, so it survives the restart.
+    expect(existsSync(join(base, "state", "naming-carry.json"))).toBe(true);
+
+    client?.close();
+    await host?.close();
+    host = undefined;
+    const next = await startHost();
+    await next.request("agents/skills", { cwd: project });
+    await vi.waitFor(() => expect(migrated()).toBe(2), { timeout: 10_000, interval: 25 });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // The second pass ran and wrote nothing: the cleared choice is a choice.
+    expect(readFileSync(settingsLog, "utf8")).toBe(carried);
+  });
+
   it("never overrules a naming profile Settings already assigns", async () => {
     writeFileSync(join(base, "state", "agents.json"), JSON.stringify({
       version: 2, revision: 1, defaultAgent: "default",
@@ -336,5 +368,8 @@ describe("the model-profile migration at host start", () => {
     await vi.waitFor(() => expect(existsSync(recordPathOf())).toBe(true), { timeout: 10_000, interval: 25 });
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(existsSync(settingsLog)).toBe(false);
+    // A choice in force settles the carry for good: clearing it later is the
+    // person's choice too, and no later pass reaches for the legacy key.
+    await vi.waitFor(() => expect(existsSync(join(base, "state", "naming-carry.json"))).toBe(true), { timeout: 10_000, interval: 25 });
   });
 });

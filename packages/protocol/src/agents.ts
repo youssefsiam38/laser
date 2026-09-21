@@ -506,6 +506,85 @@ export function sessionKindOf(kind: string): SessionKind {
   return kind === "chat" || kind === "beam" ? "chat" : "project";
 }
 
+// ---------------------------------------------------------------------------
+// The Chat workspace, as a directory rule
+//
+// {@link sessionKindOf} answers the question from a stored record. A session
+// with no record — one written before records existed, or one the catalog has
+// not attributed yet — is placed by its directory instead, and that rule used
+// to exist three times (host containment, a UI prefix test, a UI equality
+// test) with three different answers. It lives here once, beside the record
+// rule, because the host, the UI and the CLI all read the same
+// `AgentsSnapshot.workspaces` roots and must agree about them.
+// ---------------------------------------------------------------------------
+
+/**
+ * The directory name the removed Beam built-in's conversations were kept under
+ * before M23, a sibling of the Chat workspace. Nothing new is written there;
+ * it is a stored identity that old session headers still name, so every reader
+ * of the rule below keeps accepting it (`docs/plain-chat.md`, "Migration").
+ */
+export const RETIRED_CHAT_WORKSPACE_DIRNAME = "beam";
+
+/** The workspace roots the host sends on {@link AgentsSnapshot}, as a reader sees them. */
+export interface ChatWorkspaceRoots {
+  /** Absent until the agents snapshot has arrived. */
+  readonly chat?: string | undefined;
+}
+
+/** Trailing separators and Windows backslashes say nothing about containment. */
+const normalizedPath = (path: string): string => path.replace(/\\/g, "/").replace(/\/+$/, "");
+
+/**
+ * Directory containment as plain path logic: `cwd` is `root` itself or below
+ * it. Not a string prefix — `…/workspaces/chatty` merely starts with the same
+ * characters as `…/workspaces/chat` and is a different directory.
+ *
+ * A caller that can touch the filesystem (the host) passes its own
+ * alias-resolving containment to {@link isChatWorkspaceCwd} instead; the rule
+ * about *which roots* count is the same either way.
+ */
+export function isWithinWorkspaceRoot(cwd: string, root: string): boolean {
+  const base = normalizedPath(root);
+  const path = normalizedPath(cwd);
+  if (base === "") return false;
+  return path === base || path.startsWith(`${base}/`);
+}
+
+/**
+ * Every directory a plain Chat conversation's working directory may be in:
+ * the workspace root the host allocates under today, and the retired sibling
+ * a pre-M23 conversation still names in its session header. Empty until the
+ * agents snapshot has arrived, so a reader that asks early says "not a chat"
+ * rather than guessing a path.
+ */
+export function chatWorkspaceRoots(workspaces: ChatWorkspaceRoots | null | undefined): readonly string[] {
+  const chat = workspaces?.chat;
+  if (typeof chat !== "string" || chat.trim() === "") return [];
+  const base = normalizedPath(chat);
+  const cut = base.lastIndexOf("/");
+  if (cut <= 0) return [chat];
+  return [chat, `${base.slice(0, cut)}/${RETIRED_CHAT_WORKSPACE_DIRNAME}`];
+}
+
+/**
+ * The one rule for "is this directory the container plain Chat conversations
+ * run in" (`docs/plain-chat.md`). Host, UI and CLI all answer through this, so
+ * a conversation cannot be a Chat in one surface and a project in another.
+ *
+ * `within` is the containment test: the default is pure path logic, and the
+ * host passes one that resolves filesystem aliases first, because it is about
+ * to create directories and answer trust with the answer.
+ */
+export function isChatWorkspaceCwd(
+  cwd: string | undefined,
+  workspaces: ChatWorkspaceRoots | null | undefined,
+  within: (cwd: string, root: string) => boolean = isWithinWorkspaceRoot,
+): boolean {
+  if (typeof cwd !== "string" || cwd === "") return false;
+  return chatWorkspaceRoots(workspaces).some((root) => within(cwd, root));
+}
+
 /** How a session relates to the agents feature, on `SessionSummary` and `SessionState`. */
 export interface SessionAgentInfo {
   /** The definition running this session. A Chat session runs none, and has no name here. */

@@ -1,7 +1,7 @@
-import type { SessionKind, SessionSummary } from "@lasercode/protocol";
+import { isChatWorkspaceCwd, type SessionKind, type SessionSummary } from "@lasercode/protocol";
 import type { AppState, SessionView } from "../store.js";
 import { mergeSessions } from "./threadList.js";
-import { isWorkspaceCwd, sessionKindFor } from "../agents/model.js";
+import { sessionKindFor } from "../agents/model.js";
 
 /** Draft text and model choices are deliberately not work: reuse keeps them. */
 export function isUnstartedSession(view: SessionView): boolean {
@@ -92,9 +92,11 @@ export function createSessionLauncher(deps: SessionLauncherDeps): SessionLaunche
     const work = (async () => {
       await deps.refresh();
       const state = deps.state();
-      const workspace = isWorkspaceCwd(cwd, state.agents.snapshot);
+      // Inside the Chat workspace an empty conversation is reusable wherever
+      // its own folder is, not only at the exact directory asked for.
+      const workspace = isChatWorkspaceCwd(cwd, state.agents.snapshot?.workspaces) ? ("chat" as const) : undefined;
       const candidates = mergeSessions(state.sessions, state.open)
-        .filter((session) => (session.cwd === cwd || (workspace !== null && sessionKindFor(session, state.agents.snapshot) === workspace))
+        .filter((session) => (session.cwd === cwd || (workspace !== undefined && sessionKindFor(session, state.agents.snapshot) === workspace))
           && !session.parentPath && session.agent?.kind !== "child"
           && !deps.archived(session.path)
           && (chat
