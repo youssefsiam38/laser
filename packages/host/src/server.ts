@@ -935,6 +935,12 @@ export class HostServer {
       routeLeases: this.routeLeases,
       projectWork: this.projectWorkMethods,
       projectWorkUnavailable: this.projectWorkUnavailable,
+      // M21-T13: the design workspace's methods are answered by the project's
+      // own worker, so the router needs one fact the store owns — which
+      // directory an opaque `projectId` names. The current path first: a
+      // project that moved is relinked there, and a stale one never reaches a
+      // worker.
+      projectRootOfId: this.projectWork ? (projectId) => this.projectWork?.projectPaths(projectId)[0] : undefined,
     });
 
     this.http = createServer((req, res) => this.serveHttp(req, res));

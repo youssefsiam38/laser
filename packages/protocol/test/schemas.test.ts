@@ -30,6 +30,7 @@ import {
   type ClientRequests,
 } from "../src/index.js";
 import { sampleMethodParams as projectWorkSamples } from "./project-work-samples.js";
+import { sampleDesignWorkspaceParams } from "./design-workspace-samples.js";
 
 /** One valid params sample per method. The compiler-checked `satisfies` in schemas.ts
  *  guarantees the map is complete; this table guarantees each schema accepts a real shape. */
@@ -342,6 +343,7 @@ const samples: Record<ClientMethod, unknown> = {
   // in `project-work-methods.test.ts`; these are the envelope samples this
   // table requires of every method.
   ...projectWorkSamples,
+  ...sampleDesignWorkspaceParams,
 };
 
 describe("project work methods", () => {

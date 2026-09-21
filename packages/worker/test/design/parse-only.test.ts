@@ -26,6 +26,10 @@ afterEach(() => {
 
 const DESIGN_DIR = resolve(import.meta.dirname, "..", "..", "src", "design", "index");
 const HOST_DIR = resolve(import.meta.dirname, "..", "..", "src", "design", "host");
+// M21-T13: sketch grounding is the one door out of the sandboxed frame, so it
+// is held to the same rule as everything else under `design/` — a sketch is
+// untrusted text, and nothing here may run a byte of it.
+const SKETCH_DIR = resolve(import.meta.dirname, "..", "..", "src", "design", "sketch");
 
 /** Comments out, so a sentence about `require(` is not read as a call. */
 function code(text: string): string {
@@ -60,7 +64,7 @@ function moduleGraph(directory: string): Map<string, string> {
 }
 
 describe("the design index and host module graph", () => {
-  const graph = new Map([...moduleGraph(DESIGN_DIR), ...moduleGraph(HOST_DIR)]);
+  const graph = new Map([...moduleGraph(DESIGN_DIR), ...moduleGraph(HOST_DIR), ...moduleGraph(SKETCH_DIR)]);
 
   it("covers every module of the index and of host grounding, and the ones they pull in", () => {
     expect(graph.size).toBeGreaterThanOrEqual(21);
@@ -68,6 +72,7 @@ describe("the design index and host module graph", () => {
     for (const name of ["resolve-route.ts", "outline.ts", "reference-image.ts", "insertion-region.ts", "strategy.ts", "ground.ts"]) {
       expect([...graph.keys()].some((path) => path.endsWith(join("host", name))), name).toBe(true);
     }
+    expect([...graph.keys()].some((path) => path.endsWith(join("sketch", "ground.ts")))).toBe(true);
   });
 
   it("never decodes a reference image: a screenshot is bytes, not text", () => {

@@ -53,6 +53,11 @@ export class ProjectDesignIndex implements DesignIndexBridge {
     const appRoot = input.appRoot ?? ".";
     if (input.rebuild) clearParseCache(this.options.stateDir, this.options.projectKey);
     const cache: ParseCache = fileParseCache(this.options.stateDir, this.options.projectKey);
+    // The id is read from a holder rather than captured: the build reports its
+    // first progress *synchronously*, inside `startDesignIndexBuild`, so a
+    // closure over a `const` declared after this call would be in its temporal
+    // dead zone exactly once — on the report that says the build started.
+    const started: { id?: string } = {};
     const command = startDesignIndexBuild({
       projectCwd: this.options.projectCwd,
       appRoot,
@@ -61,10 +66,11 @@ export class ProjectDesignIndex implements DesignIndexBridge {
       ...(this.options.synthesis !== undefined ? { synthesis: this.options.synthesis } : {}),
       ...(this.options.now !== undefined ? { now: this.options.now } : {}),
       onProgress: (progress) => {
-        this.options.onProgress?.(commandId, progress);
+        if (started.id !== undefined) this.options.onProgress?.(started.id, progress);
       },
     });
     const commandId = command.id;
+    started.id = commandId;
     this.builds.set(commandId, command);
     this.options.onCommand?.(command);
     // A failed build must not become an unhandled rejection: the command's

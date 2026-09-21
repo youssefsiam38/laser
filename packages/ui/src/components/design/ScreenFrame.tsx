@@ -8,7 +8,7 @@
  * an index entry nobody has reviewed. The Sketch/Tree chip is here too,
  * because "which one am I looking at" belongs on the thing itself.
  */
-import { FlaskConical, Layers } from "lucide-react";
+import { FlaskConical, Layers, Link2Off, MessageSquare } from "lucide-react";
 import type { DesignBody, DesignScreen } from "@lasercode/protocol";
 
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,8 @@ import { cn } from "@/lib/utils";
 import { CANVAS_VIEWPORTS, frameSize } from "@/design/canvas";
 import { counterpartScreen, sketchOfScreen, unreviewedNodes } from "@/design/tree-model";
 import { screenFidelity } from "@lasercode/protocol";
+
+import type { DesignPin } from "@/design/review";
 
 import { SketchFrame } from "./SketchFrame.js";
 import { TreeFrame } from "./TreeFrame.js";
@@ -47,6 +49,8 @@ export function ScreenFrame({
   selected,
   onSelectScreen,
   onFlip,
+  pins,
+  onSelectPin,
   theme,
   className,
 }: {
@@ -59,6 +63,9 @@ export function ScreenFrame({
   onSelectScreen?: ((screenId: string) => void) | undefined;
   /** Flip to the sketch this tree was grounded from, or back. */
   onFlip?: ((screenId: string) => void) | undefined;
+  /** Comments pinned to this screen or to a node inside it (M21-T13). */
+  pins?: readonly DesignPin[] | undefined;
+  onSelectPin?: ((pin: DesignPin) => void) | undefined;
   theme?: string | undefined;
   className?: string;
 }) {
@@ -108,6 +115,48 @@ export function ScreenFrame({
           </Button>
         ) : null}
       </div>
+
+      {/* The pins of this screen. A comment anchors to a node id, never to a
+          coordinate (leap, "Design contract"), so the rail carries the number
+          a person reads on the thread and selecting one takes them to the node
+          itself — which the frame already outlines. A pin whose node this
+          revision no longer has is kept, counted and labelled. */}
+      {pins && pins.length > 0 ? (
+        <ul role="list" aria-label={`Comments on ${screen.name}`} data-slot="screen-pins" className="flex flex-wrap items-center gap-1 px-2 pb-1.5">
+          {pins.map((pin) => (
+            <li key={pin.commentId}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    data-slot="screen-pin"
+                    data-orphaned={pin.orphaned ? "true" : undefined}
+                    aria-label={`Comment ${String(pin.number)}${pin.orphaned ? ", anchor gone" : ""}`}
+                    onClick={() => onSelectPin?.(pin)}
+                    className={cn(
+                      "flex h-5 items-center gap-1 rounded-full border px-1.5 text-xs leading-none outline-none transition-colors duration-(--motion-instant) focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live",
+                      pin.orphaned
+                        ? "border-attention text-attention"
+                        : pin.blocking
+                          ? "border-danger text-danger"
+                          : pin.resolved
+                            ? "border-line text-ink-3"
+                            : "border-live text-live",
+                    )}
+                  >
+                    {pin.orphaned ? <Link2Off aria-hidden="true" className="size-3" /> : <MessageSquare aria-hidden="true" className="size-3" />}
+                    {pin.number}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {pin.orphaned ? "The node this was pinned to is not in this revision. The comment is kept as it was written. " : ""}
+                  {pin.text.slice(0, 200)}
+                </TooltipContent>
+              </Tooltip>
+            </li>
+          ))}
+        </ul>
+      ) : null}
 
       <div className="min-h-0 overflow-hidden rounded-b-lg border-t border-line">
         {sketch ? (

@@ -53,6 +53,20 @@ import type {
   ProjectWorkUpdatedNotification,
   ProjectWorkWriteResult,
 } from "./project-work-methods.js";
+import type {
+  DesignHostGroundParams,
+  DesignHostGroundResult,
+  DesignIndexBuildParams,
+  DesignIndexBuildResult,
+  DesignIndexGetParams,
+  DesignIndexGetResult,
+  DesignIndexReviewParams,
+  DesignIndexReviewResult,
+  DesignIndexStopParams,
+  DesignIndexStopResult,
+  DesignSketchGroundParams,
+  DesignSketchGroundResult,
+} from "./design-workspace.js";
 // Type-only, and erased: `pending.ts` augments the interfaces below, so the
 // cycle exists in the type graph and never in the emitted modules.
 import type { PendingMessage } from "./pending.js";
@@ -2041,6 +2055,25 @@ export interface ClientRequests {
   "project/task/action": { params: ProjectTaskActionParams; result: ProjectTaskActionResult };
   /** Join a Task to a session, run, checkpoint, branch or command. */
   "project/task/link-execution": { params: ProjectTaskLinkExecutionParams; result: ProjectTaskLinkExecutionResult };
+
+  // ------------------------------------------- M21 · the design workspace --
+  // Answered by the project's own worker, not by the host: the index, the
+  // review document and the templates behind them are files in the project
+  // directory, and one worker owns one project directory. The host resolves
+  // the project and forwards (M21-T13, `docs/design-phase.md`).
+
+  /** The reviewed Design Index of one project, and the builds in flight. */
+  "design/index/get": { params: DesignIndexGetParams; result: DesignIndexGetResult };
+  /** Start (or re-run) indexing as a bounded, stoppable Command. */
+  "design/index/build": { params: DesignIndexBuildParams; result: DesignIndexBuildResult };
+  /** Ask a build to stop. It writes what it has parsed so far. */
+  "design/index/stop": { params: DesignIndexStopParams; result: DesignIndexStopResult };
+  /** Accept, rename, merge or reject one entry; persisted in `review.json`. */
+  "design/index/review": { params: DesignIndexReviewParams; result: DesignIndexReviewResult };
+  /** Resolve a route to a frozen `HostPage` outline, with a strategy proposal. */
+  "design/host/ground": { params: DesignHostGroundParams; result: DesignHostGroundResult };
+  /** Rebuild one sketch document as a Tree from the index. */
+  "design/sketch/ground": { params: DesignSketchGroundParams; result: DesignSketchGroundResult };
 }
 
 /** Answer to `pi/transcribe/status`. */

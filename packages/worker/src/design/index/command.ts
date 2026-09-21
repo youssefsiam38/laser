@@ -48,6 +48,9 @@ export interface DesignBuildBudget extends Partial<ScanBudget> {
 
 export const DEFAULT_BUILD_MS = 5 * 60_000;
 
+/** Files parsed between two turns of the event loop. */
+export const YIELD_EVERY_FILES = 8;
+
 export interface DesignBuildOptions {
   projectCwd: string;
   /** The app root inside the project, for a monorepo. Defaults to the project. */
@@ -130,8 +133,20 @@ export async function buildDesignIndex(options: DesignBuildOptions): Promise<Des
   const reparsed: string[] = [];
   let stopped = options.signal?.aborted === true || scan.truncated;
   let fromCache = 0;
+  let sinceYield = 0;
 
   for (const file of files) {
+    // Give the loop back between batches of files (M21-T13). Parsing is all
+    // synchronous, so without this the whole build would run in one tick: the
+    // fleet row would jump straight from "started" to "read 4 000 files", Stop
+    // could not be delivered while it ran, and the worker would answer nothing
+    // else meanwhile. Progress by files is only true if a file is a moment.
+    if ((sinceYield += 1) >= YIELD_EVERY_FILES) {
+      sinceYield = 0;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    }
     if (options.signal?.aborted === true || now() - startedAt > maxMs) {
       stopped = true;
       gaps.push({

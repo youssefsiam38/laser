@@ -41,6 +41,7 @@ import { prefersReducedMotion } from "@/motion";
 
 import { ScreenFrame, type SketchBytes } from "./ScreenFrame.js";
 import type { KitRenderContext } from "./kit/KitNode.js";
+import type { DesignPin } from "@/design/review";
 
 export interface DesignCanvasProps {
   body: DesignBody;
@@ -52,6 +53,9 @@ export interface DesignCanvasProps {
   onSelectScreen?: ((screenId: string) => void) | undefined;
   onFlipScreen?: ((screenId: string) => void) | undefined;
   onOpenFullScreen?: (() => void) | undefined;
+  /** The comments pinned on one screen (M21-T13). */
+  pinsFor?: ((screenId: string) => DesignPin[]) | undefined;
+  onSelectPin?: ((pin: DesignPin) => void) | undefined;
   theme?: string | undefined;
   /** Read-only on a phone and on an older revision; no drag, no edit. */
   interactive?: boolean;
@@ -67,6 +71,8 @@ export function DesignCanvas({
   onSelectScreen,
   onFlipScreen,
   onOpenFullScreen,
+  pinsFor,
+  onSelectPin,
   theme,
   interactive = true,
   className,
@@ -253,6 +259,8 @@ export function DesignCanvas({
                   selected={selectedScreenId === screen.id}
                   onSelectScreen={onSelectScreen}
                   onFlip={onFlipScreen}
+                  pins={pinsFor?.(screen.id)}
+                  onSelectPin={onSelectPin}
                   theme={theme}
                 />
               </div>
