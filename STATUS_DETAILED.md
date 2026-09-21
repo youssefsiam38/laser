@@ -1,5 +1,26 @@
 # STATUS_DETAILED.md — task ledger
 
+## Active leap ownership
+
+Release audit: `gh release list --limit 8` shows v0.13.0 (M23) as Latest and v0.12.0 (M22); no M26 release exists. Prior STATUS wording that M26 was released was incorrect. M26 implementation/review evidence remains valid, but its publication is outstanding. M21 work had already proceeded beyond the permitted parallel spine before this audit; do not represent release ordering as satisfied. Publish the reviewed M26 checkpoint before any further milestone starts; M24/M25 implementation must wait for M21 publication. Final main-branch gates are also outstanding (current branch `work/fallback-update`).
+
+| Area | Owner session | Current milestone / permitted writes | Base | Prerequisites / status | Next handoff |
+| --- | --- | --- | --- | --- | --- |
+| Integration and planning | orchestrator | planning files; integration validation; release audit | `408366ae` | T13/T21/T14 checkpoints merged; follow-up owners isolated | verify fixes, review, then integrate |
+| Tool contract publication | orchestrator | release-only source assembly, notes and routine release command; no feature edits | `f0267525` + reviewed `13b310f7` patch | M26-T5 claimed; existing review applies only to identical patch | exact-source gates then public evidence |
+| Delivery evidence review | `01a0c474-c6f9-714e-8adf-14e59f64e7a3` | T18 code read-only; `docs/leap/m21-delivery-review.md` only | `408366ae` | independent review active, including parent async/sessionPath edits | triage one findings batch |
+| Interoperability follow-up | `01a0c474-7049-714e-8adf-14df7057c077` | T21 import/export/publish modules + defensive tests; no shared host mutation pipeline | `408366ae` | original owner completed clean; resume refused by runtime; all commits retained | plan approval, boundary/provenance fixes, independent review |
+| Verification and convergence | `01a0c431-9193-714e-8adf-148226f884dc` | T19 verification host/worker/protocol/UI + tests and tools-plan | `52f84928` | isolated worker running | inspect patch before integration |
+| Foundation follow-up | `01a0c472-c154-714e-8adf-14d86250aa21` | T14 design worker/UI, server design constructors, shared Settings token editor, tests; no verification edits | `408366ae` | old owner completed with clean worktree, all commits integrated; runtime refuses rebrief to historical session | approve plan then implement remaining original acceptance |
+
+Integration checkpoint: checkout inspection found T13 already merged as `5a6a807a`, T21 as `217500df`, and four unresolved T14 merge files. Prior sync-router edits were already present. Preserve all branch changes; resolve only the actual remaining conflicts. Worker reports and prior `done` labels are not final acceptance; merged validation, independent review, outstanding wiring and milestone releases remain required.
+
+Foundation ownership transfer: attempted rebrief to session `01a0c40e-5da0-714e-8adf-147bd709783d` was refused because runtime no longer associates it with this session. `inspect_agent` confirms completed, last activity at completion, zero unmerged commits and zero uncommitted files; its final handoff names model wiring/editor reuse gaps. New owner will continue preserved work at `408366ae`, not replace it. T19 remains active and untouched.
+
+Interop checkpoint: parent inspection of `export/paths.ts` found lexical-only `insideProject` despite promised symlink confinement; `publish/index.ts` accepts missing blob content when any checkpoint id is supplied. These are original contract gaps, not accepted deviations. Old owner `01a0c40d-ddd3-714e-8adf-14744574c1a7` cannot be resumed by runtime; inspect confirms completed with clean worktree and zero unmerged commits. Transfer preserved T21 code for correction before review.
+
+Merged validation at `408366ae`: protocol build and UI typecheck pass. Full `pnpm verify` built/typechecked successfully but failed CLI daemon-policy test at its 5-second timeout; exact focused test rerun passed 2/2. Full gate remains unproven. Evidence: `/tmp/laser-leap-integration-verify.log`, `/tmp/laser-daemon-policy-check.log`.
+
 Evidence is a commit hash, a passing test command, or a file path. Dates in
 notes are history, not plans. Never delete rows, notes, handoffs or decisions.
 
@@ -6018,12 +6039,15 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI mention adapter (`@spec:` … `@task:` and `@KEY`), typed pinned refs in the stored message, transcript chip, sidebar TASK chip, global search; host-side send-time validation rides on the spine's `get` fences.
 
 #### M21-T14 notes
+- Integration checkpoint: `9ba83ea9` merged at `408366ae`; not complete. Configured proposal/L1 profile wiring, real token-editor reuse, and coexistence with the T13 design sections are assigned to the foundation follow-up owner in the active ownership table. Protocol build/UI typecheck pass at merged checkpoint; no visual acceptance claimed.
 - 2026-09-21 claimed by claude-2026-09-21-leap: Foundation mode (worker `design/foundation/**` proposals on `designIndexProfileId`, UI `Foundation*` files in the T13 slot); repository unchanged before Build.
 
 #### M21-T21 notes
+- Integration checkpoint: `e102fa34` merged at `217500df`; not complete. Parent inspection found path-confinement and unverified-checkpoint publication gaps; correction owner is recorded in the active ownership table. T18 async request changes retained; focused host project-work tests passed 173 before T13/T14 integration. Independent review follows correction.
 - 2026-09-21 claimed by claude-2026-09-21-leap: host import/export adapters (Spec Kit, OpenSpec, Markdown, `PLAN.md`), deterministic Markdown + manifest export, previewed publication with `published_as`.
 
 #### M21-T13 notes
+- Integration checkpoint: `4d10cffd` merged at `5a6a807a`; additive method/export conflicts resolved. Foundation integration is not complete and design independent review remains open. No browser/visual acceptance claimed.
 - 2026-09-21 claimed by claude-2026-09-21-leap: client methods for the index/grounding/sketch grounding (host → worker), the Design tab sections, in-context canvas with host outline and strategy chip, node-anchored comments, Re-index Command, both themes/widths; wires T11's honest pending states.
 
 #### M21-T12 notes
@@ -6374,6 +6398,16 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | M26-T2 | Retrofit harness and background tools | done | claude-2026-09-21-leap | `b54e2f06`; `pnpm verify` passed in the worker's tree; merged `a94271f2` | see notes |
 | M26-T3 | Evaluation harness | done | claude-2026-09-21-leap | `5efd53e1` (merged `49439557`); `pnpm -F @lasercode/worker test` (1274 passed; `test/tool-eval/*` 46); `pnpm tool-eval` → 20/20 runs (10 tools × 2 profiles) | see notes |
 | M26-T4 | UI error and preview rendering | done | claude-2026-09-21-leap | `bb8180ca`; `pnpm -F @lasercode/ui test` (3005 passed; `test/thread/tool-contract-rows.test.tsx` 16) | see notes |
+| M26-T5 | Publish tool contract milestone | in-progress | leap integration | — | see notes |
+
+#### M26-T5 notes
+- Reviewed source assembly: `08ebe228b6d3e396b56494f17cf9d78a4ee8b9b5` on `release/m26-reviewed` is `f0267525` plus the exact reviewed `13b310f7` patch; both stable patch ids are `899a51d719cf30a196d2c8405f007ad06431881f`. Read-only release preview confirmed remote main `842bd911`, absent v0.14.0 tag/release, no exact-SHA CI yet, and 14-line notes `docs/leap/m26-release-notes.md`. Routine publish transaction started as task `t-4bf75353`, log `/tmp/laser-m26-release.log`; publication is not yet proven. Orchestrator will run isolated staged full gates before any tag.
+- Claimed: publish the missing M26 milestone required by `docs/goal-project-lifecycle-leap.md`. Prepare a source containing only the already-reviewed M26 implementation and review fixes, not unfinished M21. Base `f0267525` (M26 before lifecycle store merge), apply exact `13b310f7` M26-only review-fix patch; verify patch identity and run full gate. Routine release orchestrator owns isolated versioning, exact-source CI, tag and publication. Preserve parent/active worker state.
+
+### D-360 · 2026-09-21 · Explicit M26 publication gate
+
+Decision: add M26-T5 for the existing goal requirement to publish M26, which had no task row. Release reviewed M26-only code before downstream milestone releases; no M24/M25 implementation before M21 publication. Why: GitHub audit finds only v0.12.0/v0.13.0 for the leap, contradicting earlier STATUS prose. Consequences: M26 is not milestone-done until publication evidence exists; preserve historical implementation notes, record the already-violated development ordering honestly, and never release unfinished M21 merely to repair the missing M26 release. The review-fix patch may be assembled on its pre-M21 base and validated without rewriting any history. Supersedes: only the inaccurate release-complete claim, not product acceptance or goal ordering.
+
 
 #### M26-T1–T2 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap (goal order: M26 alongside M21-T1–T5, after M23): one worker on a branch based on `70d8f4ad`, protocol lint + one registration helper, then the retrofit of the nine harness/background tools; plan in `docs/leap/m26-plan.md`. Runs in parallel with the M23 review-fix worker (disjoint write sets: M26 touches `packages/protocol/src/tool-*`, `packages/pi-extension/src/modules/{subagents,background-work}.ts`, `packages/worker` tool schemas; M23 fixes touch host/ui workspace paths).
