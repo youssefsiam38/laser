@@ -6249,8 +6249,8 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | M23-T1 | Protocol removal and `sessionKind` | done | claude-2026-09-21-leap | `5aebaee4`; `pnpm -F @lasercode/protocol test` (466 passed) | see notes |
 | M23-T2 | Worker: chat prompt and one-shot naming | done | claude-2026-09-21-leap | `0051d591`; `pnpm -F @lasercode/worker test` (1223 passed; `test/agents/chat-prompt.test.ts` byte-for-byte) | see notes |
 | M23-T3 | Host: no built-ins, Beam re-home | done | claude-2026-09-21-leap | `79404b7c`; `env -i PATH=$PATH HOME=$HOME pnpm -F @lasercode/host test` (1027 passed; `test/agents/retired-builtins.test.ts`) | see notes |
-| M23-T4 | UI: remove Beam, plain Chat entry points | in-progress | claude-2026-09-21-leap | — | see notes |
-| M23-T5 | Docs, identity guard, gates | todo | — | — | `PLAN.md` M23 |
+| M23-T4 | UI: remove Beam, plain Chat entry points | done | claude-2026-09-21-leap | `72f0a3a1` (merged `9143a014`); `pnpm verify` passed; `pnpm -F @lasercode/ui test` (2989 passed); `test/shell/new-chat-entry-points.test.tsx` | see notes |
+| M23-T5 | Docs, identity guard, gates | in-progress | claude-2026-09-21-leap | — | see notes |
 | M23-T6 | Release | todo | — | — | `PLAN.md` M23 |
 
 #### M23-T1–T3 notes
@@ -6259,6 +6259,10 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 #### M23-T4 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI/CLI worker based on `92e5480e` (M23-T1/T2 merged; host T3 still in flight), write set packages/ui + packages/cli + scripts/browser-check Beam fixtures; plan in `docs/leap/m23-ui-plan.md`.
+- 2026-09-21 done: `components/beam/*` deleted with every shell/sidebar/composer/destination/store/theme reference; `shell.newChat()` behind the Chat `+`, palette `New chat` and a new `Mod+Shift+N` shortcut, all sending `session/new { sessionKind: "chat" }`; `sessionKindFor()` groups sessions (legacy `beam` records list as Chat); Agents page lists only person agents with the `agent-list-empty` state; CLI `sessionPlace` says "Chat"; Beam soak fixtures dropped from browser-check. Survivors with reasons (startup drawing, `ActivityBeam` light, legacy storage key purge) in the plan file. Open: `LaserThreadScope` has no mount point after the bubble went (kept, tested; removal is a follow-up).
+
+#### M23-T5 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: identity guard check 3 now flags `Beam`/`Namer` in person-facing string literals (probe proved; whole tree clean after T4); `clean-machine.mjs` had no Beam skill expectation left to remove (verified by grep); Beam browser-check fixtures were deleted in T4. Docs rewrite delegated to a worker.
 
 #### M23-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/plain-chat.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M23 tasks added; D-347 recorded. Implementation not started.
