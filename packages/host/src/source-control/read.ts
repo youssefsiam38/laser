@@ -21,6 +21,7 @@
  *   revision that does not look like one is refused before git sees it
  *   (`docs/source-control-leap.md` §G.4).
  */
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import {
@@ -30,7 +31,7 @@ import {
   type FileChangeStatus,
 } from "@lasercode/protocol";
 import { checkpointSessionKey } from "@lasercode/protocol/checkpoint-key";
-import { runGit } from "@lasercode/protocol/git-run";
+import { gitEnv, runGit } from "@lasercode/protocol/git-run";
 import { createWorkspaceResolver } from "../workspace.js";
 
 const resolver = createWorkspaceResolver();
@@ -103,6 +104,37 @@ async function read(repo: HostRepository, args: readonly string[]): Promise<stri
   const result = await runGit({ cwd: repo.path, args, timeoutMs: READ_TIMEOUT_MS, maxBuffer: READ_MAX_BYTES }).catch(() => undefined);
   if (!result || result.timedOut || result.overflow || result.exitCode !== 0) return undefined;
   return result.stdout;
+}
+
+/**
+ * One read's **raw bytes**, bounded, with nothing decoded.
+ *
+ * `runGit` hands back a string, and a string is already a decision about what
+ * the bytes were: Node's lossy UTF-8 decode turns an invalid sequence into
+ * U+FFFD, which re-encodes to three bytes of its own. `f0 90 80` — a
+ * truncated four-byte sequence — therefore comes back as something that
+ * weighs exactly what the file weighed and says something else entirely, so
+ * no comparison made after the decode can tell the two apart (review F9).
+ * Anything that has to know what a file *is* reads it through here.
+ *
+ * Same rules as {@link read}: no shell, a timeout, a bounded buffer, and a
+ * failure is an absent answer rather than a thrown git error.
+ */
+function readBytes(repo: HostRepository, args: readonly string[], maxBuffer: number): Promise<Buffer | undefined> {
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      [...args],
+      { cwd: repo.path, timeout: READ_TIMEOUT_MS, maxBuffer, encoding: "buffer", env: gitEnv() },
+      (error, stdout) => {
+        if (error) {
+          resolve(undefined);
+          return;
+        }
+        resolve(Buffer.isBuffer(stdout) ? stdout : Buffer.from(String(stdout ?? ""), "utf8"));
+      },
+    );
+  });
 }
 
 /** `sha1` or `sha256`, as this repository declares it. */
@@ -228,38 +260,216 @@ export async function commitsBetween(repo: HostRepository, base: string, head: s
 }
 
 /** One file's bytes at one commit, bounded, with the blob id they came from. */
+/**
+ * One commit's parents, oldest first. Empty for a parentless commit — which is
+ * what every M20 checkpoint is (`commit-tree` with no `-p`), and the reason a
+ * state capture cannot always be a difference (D-361).
+ */
+export async function parentsOf(repo: HostRepository, commit: string): Promise<string[]> {
+  if (!isObjectId(commit)) return [];
+  const line = (await read(repo, ["rev-list", "--parents", "-n", "1", commit]))?.trim();
+  if (!line) return [];
+  return line.split(/\s+/).slice(1).filter((value) => isObjectId(value));
+}
+
+/** One entry of a commit's tree: the identity a manifest records. */
+export interface TreeEntryRow {
+  path: string;
+  mode: string;
+  blobObjectId: string;
+  /** The blob's true size in bytes, as git reports it. */
+  bytes: number;
+}
+
+/** A row a listing found and cannot hand back as reviewable bytes. */
+export interface TreeUnreadableRow {
+  path: string;
+  /** Another repository recorded inside this one; its contents are not here. */
+  kind: "gitlink" | "other";
+}
+
+/** One bounded listing of a commit's tree, said honestly. */
+export interface TreeListing {
+  /** The blob rows, in git's order, at most `limit` of them. */
+  rows: TreeEntryRow[];
+  /** True when the tree holds more rows than `limit`; the count is not invented. */
+  truncated: boolean;
+  /**
+   * Rows that are in the tree and are not readable bytes — a gitlink, or
+   * anything else that is not a blob. Named rather than dropped: a set that
+   * silently loses them claims to be complete and is not (M21-T19, review F1).
+   */
+  unreadable: TreeUnreadableRow[];
+}
+
+/**
+ * List one commit's tree, bounded, **inside** an optional scope.
+ *
+ * The scope goes into git as a literal pathspec rather than being filtered out
+ * of a whole-tree listing afterwards, which is the difference between two very
+ * different answers: a scope that sorts entirely past the bound would
+ * otherwise look absent, and a scope preceded by more unrelated files than the
+ * bound would look like a prefix of itself and pass as complete (review F1).
+ *
+ * `:(literal)` is what keeps a path with `*`, `?` or `[` in it a path: the
+ * scope is a repository-relative path a person named, never a glob.
+ *
+ * `undefined` when git could not list at all, which is a different answer from
+ * an empty tree and is never read as one.
+ */
+export async function treeListing(
+  repo: HostRepository,
+  commit: string,
+  limit: number,
+  scopePath?: string,
+): Promise<TreeListing | undefined> {
+  if (!isObjectId(commit) || limit <= 0) return undefined;
+  if (scopePath !== undefined && !isRepoPath(scopePath)) return undefined;
+  const listed = await read(repo, [
+    "ls-tree",
+    "-r",
+    "-z",
+    "--long",
+    commit,
+    "--",
+    ...(scopePath !== undefined ? [`:(literal)${scopePath}`] : []),
+  ]);
+  if (listed === undefined) return undefined;
+  const rows: TreeEntryRow[] = [];
+  const unreadable: TreeUnreadableRow[] = [];
+  let truncated = false;
+  for (const chunk of listed.split("\0")) {
+    if (!chunk) continue;
+    // `<mode> <type> <object> <size>\t<path>`
+    const tab = chunk.indexOf("\t");
+    if (tab < 0) continue;
+    const [mode, type, object, size] = chunk.slice(0, tab).trim().split(/\s+/);
+    const path = chunk.slice(tab + 1);
+    if (!mode || !object || !path) continue;
+    if (type !== "blob") {
+      // `-r` already walked the trees, so what is left here is a gitlink or
+      // something this reader does not understand. Either way it is a row of
+      // the scope whose bytes are not in this commit.
+      if (unreadable.length < limit) unreadable.push({ path, kind: type === "commit" ? "gitlink" : "other" });
+      continue;
+    }
+    if (!isObjectId(object)) continue;
+    if (rows.length >= limit) {
+      truncated = true;
+      break;
+    }
+    rows.push({ path, mode, blobObjectId: object, bytes: Number(size ?? "") || 0 });
+  }
+  return { rows, truncated, unreadable };
+}
+
+/**
+ * The whole tree of one commit, bounded.
+ *
+ * This is what a capture of a **state** records: a parentless checkpoint
+ * commit has no difference to describe, so what survives pruning is the paths,
+ * their modes and their blob object ids — identity that stays true after gc
+ * has reclaimed the objects themselves, exactly as a change capture's recorded
+ * ids do.
+ *
+ * The same listing as {@link treeListing} with no scope, keeping the shape its
+ * callers read: a bounded array of blob rows, or nothing when git could not
+ * answer. One parser, two questions.
+ */
+export async function treeManifest(repo: HostRepository, commit: string, limit: number): Promise<TreeEntryRow[] | undefined> {
+  const listing = await treeListing(repo, commit, limit);
+  return listing?.rows;
+}
+
+/**
+ * One file's bytes at one commit.
+ *
+ * The blob is read as **bytes** and only then decoded, strictly: a sequence
+ * that is not valid UTF-8 is a decode failure here rather than a silent
+ * U+FFFD, and a file that genuinely contains U+FFFD is valid UTF-8 and is
+ * captured as the text it is. A byte-length comparison after a lossy decode
+ * cannot tell those two apart — which is why the decision is made on the
+ * bytes (review F9).
+ *
+ * `bytes` is always the file's **true** size, from git. A file that is not
+ * UTF-8 text, or that carries a NUL, is reported as `binary: true`: its
+ * identity and its size are the record, its bytes are not captured, and
+ * nothing pretends they were text a person could review.
+ */
 export async function fileAt(
   repo: HostRepository,
   commit: string,
   path: string,
   limitBytes: number,
-): Promise<{ text: string; bytes: number; truncated: boolean; blobObjectId?: string } | undefined> {
+): Promise<{ text: string; bytes: number; truncated: boolean; binary: boolean; blobObjectId?: string } | undefined> {
   if (!isObjectId(commit) || !isRepoPath(path)) return undefined;
   const spec = `${commit}:${path}`;
-  const size = Number((await read(repo, ["cat-file", "-s", spec]))?.trim() ?? Number.NaN);
-  if (!Number.isFinite(size)) return undefined;
+  const size = await fileSizeAt(repo, commit, path);
+  if (size === undefined) return undefined;
   const blobObjectId = (await read(repo, ["rev-parse", "--verify", "--quiet", spec]))?.trim();
-  const result = await runGit({
-    cwd: repo.path,
-    args: ["cat-file", "blob", spec],
-    timeoutMs: READ_TIMEOUT_MS,
-    maxBuffer: Math.max(limitBytes * 2, 64 * 1024),
-  }).catch(() => undefined);
-  if (!result || result.timedOut || result.overflow || result.exitCode !== 0) return undefined;
-  const whole = Buffer.from(result.stdout, "utf8");
-  const truncated = whole.byteLength > limitBytes;
-  const kept = truncated ? sliceOnCharacterBoundary(whole, limitBytes) : whole;
+  const whole = await readBytes(repo, ["cat-file", "blob", spec], Math.max(limitBytes * 2, 64 * 1024));
+  if (!whole) return undefined;
+  // Fewer bytes than git said the blob weighs is a read this process cannot
+  // account for — not a fact about the file — so it answers nothing rather
+  // than recording a partial file as if it were whole.
+  if (whole.byteLength !== size) return undefined;
+  const text = looksBinaryBytes(whole) ? undefined : decodeUtf8(whole);
+  const binary = text === undefined;
+  const truncated = !binary && whole.byteLength > limitBytes;
+  // A prefix of valid UTF-8 cut on a character boundary is still valid UTF-8.
+  const kept = truncated ? sliceOnCharacterBoundary(whole, limitBytes).toString("utf8") : (text ?? "");
   return {
-    text: kept.toString("utf8"),
-    bytes: whole.byteLength,
+    text: binary ? "" : kept,
+    bytes: size,
     truncated,
+    binary,
     ...(blobObjectId && isObjectId(blobObjectId) ? { blobObjectId } : {}),
   };
+}
+
+/**
+ * What git says one file weighs at one commit, without reading its bytes.
+ *
+ * `undefined` means the path is not in that commit at all — the one question
+ * that tells "this file was deleted here" apart from "this file is too big to
+ * keep whole", which is the difference between two very different refusals
+ * (M21-T19).
+ */
+export async function fileSizeAt(repo: HostRepository, commit: string, path: string): Promise<number | undefined> {
+  if (!isObjectId(commit) || !isRepoPath(path)) return undefined;
+  const size = Number((await read(repo, ["cat-file", "-s", `${commit}:${path}`]))?.trim() ?? Number.NaN);
+  return Number.isFinite(size) ? size : undefined;
 }
 
 /** Bytes that look like text a person can review. Anything else is not captured. */
 export function looksBinary(text: string): boolean {
   return text.includes("\u0000");
+}
+
+/** The same tell, asked of bytes: git's own heuristic is a NUL in the file. */
+function looksBinaryBytes(bytes: Buffer): boolean {
+  return bytes.includes(0);
+}
+
+/**
+ * Strict UTF-8, or nothing — and exactly the file's own characters.
+ *
+ * `fatal` is the whole point: an invalid or truncated sequence throws instead
+ * of becoming U+FFFD, so "this is text" is something this module establishes
+ * rather than assumes. A file that really contains U+FFFD decodes cleanly and
+ * is text like any other.
+ *
+ * `ignoreBOM` is the other half: by default a decoder *eats* a leading
+ * byte-order mark, so a file that starts with one would be captured without
+ * it, weigh less than git says it does and digest differently from its own
+ * bytes. A BOM is a character of the file here, like any other.
+ */
+function decodeUtf8(bytes: Buffer): string | undefined {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
 }
 
 export function isObjectId(value: string): boolean {

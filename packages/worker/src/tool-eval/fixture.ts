@@ -112,6 +112,14 @@ export interface ToolEvalProjectWorkWorld {
   hasProject?: boolean;
   /** The Task this session is an attempt on, by key. */
   taskKey?: string;
+  /**
+   * Verification commands that exit non-zero in this world (M21-T19).
+   *
+   * A verification fixture must not spawn a real process, and a run whose
+   * commands all pass would never exercise the refusal a failing check
+   * produces. The runner is scripted from this list: everything else exits 0.
+   */
+  failingCommands?: string[];
 }
 
 /** The state the scripted harness bridge answers from. No real agent is started. */
@@ -249,10 +257,15 @@ function parseWorld(value: unknown, source: string): ToolEvalWorld {
     if (hasProject !== undefined && typeof hasProject !== "boolean") fail(source, "world.projectWork.hasProject must be true or false.");
     const taskKey = projectWorkValue["taskKey"];
     if (taskKey !== undefined && typeof taskKey !== "string") fail(source, "world.projectWork.taskKey must be a key like TASK-1.");
+    const failing = projectWorkValue["failingCommands"];
+    if (failing !== undefined && (!Array.isArray(failing) || failing.some((entry) => typeof entry !== "string"))) {
+      fail(source, "world.projectWork.failingCommands must be a list of command lines.");
+    }
     projectWork = {
       ...(Array.isArray(items) ? { items: items.map((entry, index) => parseProjectWorkItem(entry, source, index)) } : {}),
       ...(typeof hasProject === "boolean" ? { hasProject } : {}),
       ...(typeof taskKey === "string" ? { taskKey } : {}),
+      ...(Array.isArray(failing) ? { failingCommands: failing as string[] } : {}),
     };
   }
   return {

@@ -47,6 +47,20 @@ Run focused host project-work/protocol tests, build/types/identity; parent owns
 full gates and the first independent storage review. No unrelated framework,
 raised limits, weakened assertions, skips or live user-store experiments.
 
+## Implemented
+
+All four corrections are implemented on the merged `40c89aa1` branch, in
+`packages/host/src/project-work/{accounting.ts,store.ts}` with focused tests in
+`packages/host/test/project-work/quota.test.ts`. What each one does, what was
+proved and what was deliberately left alone is in §14 of
+[`m21-canonical-quota-plan.md`](m21-canonical-quota-plan.md): bounded keyset
+pages with a payload-free projection for the migration and the recount;
+preparation-truthful recovery copy on both global ceilings; a refused
+transaction instead of a clamped counter; and the three added cross-owner proof
+probes with refusal copy that names the dependent key and offers no recovery
+that does not exist. Host project-work 344 tests, protocol 754, build,
+typecheck and identity clean. The independent storage review is still pending.
+
 ## Parent triage of independent review472b1347 — one final correction batch
 
 - **H-1 accepted:** capture preparation also precedes accept-delivery,

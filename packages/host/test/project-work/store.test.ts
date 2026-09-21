@@ -564,7 +564,7 @@ describe("budgets", () => {
       }
       expect(refusal).toBeInstanceOf(ProjectWorkQuotaError);
       expect(refusal?.scope).toBe("project");
-      expect(refusal?.recovery).toContain("Nothing was saved");
+      expect(refusal?.recovery).toContain("Nothing from this action was saved");
       expect(small.list({ projectId: tiny }).items).toHaveLength(1);
       // The canonical revision that was already there is untouched.
       expect(small.get({ projectId: tiny, key: "SPEC-1" }).body?.body).toEqual(specBody());
