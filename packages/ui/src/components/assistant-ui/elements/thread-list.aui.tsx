@@ -93,6 +93,7 @@ import { latestRunForSession, runStatusLabel, runStatusTone, type AgentStatusTon
 import { describeWorktreeContents, forgetWorktreeDisposition, setWorktreeDisposition, useWorktreeStatus } from "@/agents/worktree";
 import { requestEndAgent } from "@/components/agents/end-agent";
 import { requestMoveSession } from "@/components/shell/move-session";
+import { ProfileNamesProvider, useProfileNamesMap } from "@/components/assistant-ui/elements/model-profiles";
 import { collapsePanel } from "@/components/assistant-ui/elements/surfaces";
 import { foldKey, sessionFolds, useFoldOpen } from "@/components/assistant-ui/elements/session-folds";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -568,7 +569,14 @@ export interface ThreadListProps {
   tab?: SessionsTab | undefined;
 }
 
-export const ThreadList: FC<ThreadListProps> = ({ projects, query = "", onOpen, onNewSession, canCreate = true, tab = "code" }) => {
+export const ThreadList: FC<ThreadListProps> = (props) => (
+  // Profiles are global, so one read names every row of every project.
+  <ProfileNamesProvider cwd={props.projects[0]}>
+    <ThreadListRows {...props} />
+  </ProfileNamesProvider>
+);
+
+const ThreadListRows: FC<ThreadListProps> = ({ projects, query = "", onOpen, onNewSession, canCreate = true, tab = "code" }) => {
   const list = useSessionsList();
   const workspaces = useLaserState((s) => s.agents.snapshot?.workspaces, sameWorkspaces) ?? EMPTY_WORKSPACES;
   const runs = useLaserState((s) => s.agents.runs);
@@ -1144,13 +1152,10 @@ interface RowModel {
   /** The newest run in this session, when the registry knows one. */
   runId: string | undefined;
   runStatus: AgentRunStatus | undefined;
-  /**
-   * What this conversation runs on, for the row's tooltip: the profile it is
-   * on and the model answering, or that it is pinned to one model
-   * (`docs/model-profiles.md`). Known only for a conversation this client has
-   * opened; the catalog row does not carry it.
-   */
-  runningOn: string | undefined;
+  /** The profile this conversation runs on; absent when it is pinned to one model. */
+  profileId: string | undefined;
+  /** The model that answered in it, named as the catalogue names it. */
+  model: string | undefined;
 }
 
 const sameRow = (a: RowModel, b: RowModel): boolean =>
@@ -1167,7 +1172,8 @@ const sameRow = (a: RowModel, b: RowModel): boolean =>
   a.subagentName === b.subagentName &&
   a.runId === b.runId &&
   a.runStatus === b.runStatus &&
-  a.runningOn === b.runningOn;
+  a.profileId === b.profileId &&
+  a.model === b.model;
 
 // `mergeSessions` per row per store change is O(rows × sessions); one merge
 // per (catalog, views) pair is O(sessions), and both only change on a catalog
@@ -1181,15 +1187,36 @@ function mergedByPath(s: AppState): ReadonlyMap<string, SessionSummary> {
   return byPath;
 }
 
-const NO_ROW: RowModel = { cwd: "", status: "idle", untitled: true, sub: { text: "No messages yet", mono: false, tone: "muted" }, modifiedAt: undefined, messageCount: 0, child: false, workspaceKind: undefined, subagentName: undefined, runId: undefined, runStatus: undefined, runningOn: undefined };
+const NO_ROW: RowModel = { cwd: "", status: "idle", untitled: true, sub: { text: "No messages yet", mono: false, tone: "muted" }, modifiedAt: undefined, messageCount: 0, child: false, workspaceKind: undefined, subagentName: undefined, runId: undefined, runStatus: undefined, profileId: undefined, model: undefined };
+
+/**
+ * The profile a conversation runs on and the model that answered in it, as
+ * ids. The open conversation's own state wins; the catalog row answers for
+ * every conversation this client has never opened (`docs/model-profiles.md`,
+ * "Fleet, session list, logs and usage").
+ */
+function runningOnOf(
+  summary: SessionSummary | undefined,
+  view: SessionView | undefined,
+): { profileId: string | undefined; model: string | undefined } {
+  const state = view?.state;
+  const model = state?.model ?? summary?.model;
+  return {
+    profileId: state ? state.profile?.id : summary?.profileId,
+    model: model ? (model.name ?? model.id) : undefined,
+  };
+}
 
 /** "Balanced · Sonnet 4.5", or the pinned form; undefined when nothing is known. */
-function runningOnText(view: SessionView | undefined): string | undefined {
-  const state = view?.state;
-  if (!state) return undefined;
-  const model = state.model ? (state.model.name ?? state.model.id) : undefined;
-  if (state.profile) return model ? `${state.profile.name} · ${model}` : state.profile.name;
-  return model ? `Pinned · ${model}` : undefined;
+export function runningOnText(
+  row: Pick<RowModel, "profileId" | "model">,
+  names: ReadonlyMap<string, string>,
+): string | undefined {
+  if (row.profileId) {
+    const name = names.get(row.profileId) ?? "a profile that is gone";
+    return row.model ? `${name} · ${row.model}` : name;
+  }
+  return row.model ? `Pinned · ${row.model}` : undefined;
 }
 
 /** What the runtime's item state lacks, from the laser store, for one path. */
@@ -1214,7 +1241,7 @@ function useRowModel(path: string | undefined): RowModel {
           subagentName: info?.subagentName === undefined ? undefined : humanizeLabel(info.subagentName),
           runId: run?.runId ?? info?.runId,
           runStatus: run?.status ?? info?.runStatus,
-          runningOn: runningOnText(view),
+          ...runningOnOf(summary, view),
         };
       },
       [path],
@@ -1258,6 +1285,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   // move into a project (M13-T58); the same rule that put it in the Chat tab.
   const movable = workspaceKind === "chat" && !row.child && !archived;
 
+  const runningOn = runningOnText(row, useProfileNamesMap());
   const shownTitle = title ?? (path ? path.split("/").pop()?.slice(0, 8) : "New session") ?? "New session";
   // A child leads with the instance name its parent gave it; the session's
   // own title follows only when it says something more.
@@ -1316,7 +1344,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
           ref={triggerRef}
           data-slot="aui_thread-list-item-trigger"
           aria-current={active ? "page" : undefined}
-          title={[childLabel ? `${childLabel} · ${shownTitle}` : shownTitle, row.cwd, row.runStatus && row.child ? runStatusLabel(row.runStatus) : "", info?.total ? branchSummary(info) : "", row.sub.text, row.runningOn ?? "", row.modifiedAt ? dateTime(row.modifiedAt) : ""].filter(Boolean).join("\n")}
+          title={[childLabel ? `${childLabel} · ${shownTitle}` : shownTitle, row.cwd, row.runStatus && row.child ? runStatusLabel(row.runStatus) : "", info?.total ? branchSummary(info) : "", row.sub.text, runningOn ?? "", row.modifiedAt ? dateTime(row.modifiedAt) : ""].filter(Boolean).join("\n")}
           onClick={(event) => {
             // The main destination owns acceptance. Suppress the primitive's
             // optimistic switch, which would mount this chat before resolving it.

@@ -13,7 +13,7 @@
  * The host is the only writer (`models/profiles/save`/`delete`), so a save here
  * is a request, never a local mutation that hopes to match.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   EMPTY_PROFILE_ASSIGNMENTS,
@@ -215,7 +215,7 @@ export function useModelProfiles(cwd: string | undefined, enabled = true): Model
  */
 const nameCache = new Map<string, Promise<ReadonlyMap<string, string>>>();
 const nameListeners = new Set<() => void>();
-const EMPTY_NAMES: ReadonlyMap<string, string> = new Map();
+export const EMPTY_NAMES: ReadonlyMap<string, string> = new Map();
 
 function forgetProfileNames(): void {
   nameCache.clear();
@@ -259,6 +259,25 @@ export function useProfileNames(cwd: string | undefined): ReadonlyMap<string, st
   }, [client, cwd, generation]);
 
   return names;
+}
+
+const ProfileNames = createContext<ReadonlyMap<string, string>>(EMPTY_NAMES);
+
+/**
+ * Profile names for a whole column of rows, read once.
+ *
+ * A row holds an opaque profile id; the name lives in settings, and asking per
+ * row would be one subscription per row. Profiles are global, so any directory
+ * answers with the same names. Without a provider a surface sees no names and
+ * says so in words rather than printing an id.
+ */
+export function ProfileNamesProvider({ cwd, children }: { cwd: string | undefined; children: ReactNode }) {
+  const names = useProfileNames(cwd);
+  return <ProfileNames.Provider value={names}>{children}</ProfileNames.Provider>;
+}
+
+export function useProfileNamesMap(): ReadonlyMap<string, string> {
+  return useContext(ProfileNames);
 }
 
 /** The sentinel a picker uses for "no profile of its own"; never a profile id. */

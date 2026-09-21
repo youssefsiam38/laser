@@ -11,10 +11,18 @@ implemented it.
 ## Integration with the backend branch
 
 `agents/model-profiles-backend-819b3a73` (through M22-T5) was merged into this
-branch after M22-T9; it merged clean, and every assumption below held. The one
-follow-up the merge needed was the new `models/profiles/migrate` row in the
-UI's policed-method fixture
-(`packages/ui/test/runtime/environment-capabilities.test.ts`).
+branch after M22-T9, then `work/fallback-update` (which carries the same
+backend commits plus the ledger) was merged on top. Both merged clean, and
+every assumption below held. Two follow-ups came out of the merges:
+
+- the new `models/profiles/migrate` row in the UI's policed-method fixture
+  (`packages/ui/test/runtime/environment-capabilities.test.ts`);
+- `SessionSummary` gained `profileId` and `model`, so the session list now
+  names the profile of **every** conversation, not only the ones this client
+  has opened: `runningOnText` reads the catalog row when there is no open
+  state, and `ProfileNamesProvider` (in `elements/model-profiles.tsx`, shared
+  with the fleet) reads the names once for the whole list. Covered by
+  `packages/ui/test/shell/session-running-on.test.ts`.
 
 ## Assumptions about host behaviour (protocol was silent)
 
