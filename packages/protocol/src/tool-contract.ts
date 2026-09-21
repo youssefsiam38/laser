@@ -244,6 +244,7 @@ export const LASER_TOOL_NAMES: readonly string[] = [
   "build_design_index",
   "review_design_index",
   "ground_host_page",
+  "propose_foundation",
   "search_sources",
   "read_source",
   "record_finding",

@@ -545,17 +545,327 @@ export interface InsertionRegion {
   orphaned?: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// The Foundation (docs/design-phase.md "Case A · Foundation mode"; M21-T14)
+// ---------------------------------------------------------------------------
+
+/**
+ * The ten proposals of Foundation mode, **in the order the contract fixes**
+ * (`docs/design-phase.md`, "Case A · Foundation mode", step 2). The order is
+ * the product: a type scale proposed before the primitives it scales, or a
+ * component contract proposed before the tokens it is drawn from, is a
+ * proposal with nothing behind it.
+ */
+export const FOUNDATION_STEP_IDS = [
+  "principles",
+  "primitive_tokens",
+  "semantic_tokens",
+  "type_scale",
+  "space_radius_shadow_z",
+  "motion",
+  "icon_and_asset_sources",
+  "layout_rules",
+  "accessibility_floor",
+  "component_contracts",
+] as const;
+export type FoundationStepId = (typeof FOUNDATION_STEP_IDS)[number];
+
+/** Where one step's content came from. Never dressed up as more than it is. */
+export const FOUNDATION_STEP_SOURCES = ["model", "fallback", "person"] as const;
+export type FoundationStepSource = (typeof FOUNDATION_STEP_SOURCES)[number];
+
+/**
+ * How a licence for an imported source reads (leap, "Design contract": open
+ * source only, exact-pinned, permissive, with provenance). `unknown` is a
+ * first-class answer and blocks a recommendation rather than being guessed.
+ */
+export const FOUNDATION_LICENCE_CLASSES = ["permissive", "copyleft", "proprietary", "unknown"] as const;
+export type FoundationLicenceClass = (typeof FOUNDATION_LICENCE_CLASSES)[number];
+
+export const FOUNDATION_SOURCE_KINDS = ["icons", "illustrations", "fonts", "components"] as const;
+export type FoundationSourceKind = (typeof FOUNDATION_SOURCE_KINDS)[number];
+
+/** One step of the proposal, as it stands. `proposed` until Build implements it. */
+export interface FoundationStepRecord {
+  id: FoundationStepId;
+  /** `proposed` while it waits for the person; `accepted` once they took it. */
+  state: "proposed" | "accepted";
+  /** What this step says, in one or two sentences a person reads first. */
+  summary?: string;
+  /** True when the person changed what was proposed. */
+  edited?: boolean;
+  source: FoundationStepSource;
+  /** The model that proposed it, when one did. */
+  model?: string;
+  /** The honest sentence a deterministic fallback carries. */
+  note?: string;
+  at?: string;
+}
+
+/** One named step of a scale: a spacing stop, a radius, a shadow, a duration. */
+export interface FoundationScaleStep {
+  name: string;
+  value: string;
+  description?: string;
+}
+
+/** One line of the type scale. Sizes are token values, never raw component CSS. */
+export interface FoundationTypeStep {
+  name: string;
+  size: string;
+  lineHeight?: string;
+  weight?: string;
+  tracking?: string;
+  usage?: string;
+}
+
+/**
+ * An icon set, illustration set, font family or component library the
+ * foundation proposes to import, with the licence check that decided whether
+ * it may be recommended at all.
+ */
+export interface FoundationSource {
+  id: string;
+  kind: FoundationSourceKind;
+  name: string;
+  url?: string;
+  /** The exact version the Plan would pin. Never a range. */
+  version?: string;
+  licence: {
+    classification: FoundationLicenceClass;
+    /** SPDX identifier, when the source declares one. */
+    spdx?: string;
+    name?: string;
+    /** Where the classification was read from: a manifest field, a table. */
+    declaredIn?: string;
+    /** The declared text the classification was made from, bounded. */
+    evidence?: string;
+  };
+  /** False whenever the licence is unknown, copyleft or proprietary. */
+  recommended: boolean;
+  /** Why it is recommended, or why it is not. Always present. */
+  reason: string;
+}
+
+/** One core component's contract: what it is, and what it may look like. */
+export interface FoundationComponentContract {
+  name: string;
+  purpose: string;
+  variants: string[];
+  sizes?: string[];
+  slots?: string[];
+  states?: string[];
+  /** The accessibility obligations this component carries. */
+  accessibility?: string;
+}
+
+/** A semantic mode — light, dark, high contrast — as its own token overlay. */
+export interface FoundationMode {
+  name: string;
+  tokens: DesignTokenGroup;
+  description?: string;
+}
+
+/**
+ * The greenfield foundation: everything Case A proposes, in one record.
+ *
+ * It lives in Laser state as a Design revision body. **Nothing here is ever
+ * written into the repository** — Build implements the foundation first, and
+ * the built source is then indexed and replaces this as the authority.
+ */
+export interface DesignFoundation {
+  principles: string[];
+  /** DTCG token document, stored as a blob when large. */
+  tokensBlobId?: string;
+  notes?: string;
+  /** `proposed` until approved; `superseded` once the built source is indexed. */
+  status?: "proposed" | "approved" | "superseded";
+  /** The ordered proposal steps and their state. */
+  steps?: FoundationStepRecord[];
+  /** The primitive and semantic tokens, as one DTCG document. */
+  tokens?: DesignTokenGroup;
+  /** Semantic modes over those tokens: light, dark, anything the person adds. */
+  modes?: FoundationMode[];
+  typeScale?: FoundationTypeStep[];
+  scales?: {
+    spacing?: FoundationScaleStep[];
+    radius?: FoundationScaleStep[];
+    shadow?: FoundationScaleStep[];
+    zIndex?: FoundationScaleStep[];
+  };
+  motion?: {
+    durations: FoundationScaleStep[];
+    easings: FoundationScaleStep[];
+    /** What happens under `prefers-reduced-motion`. Never "nothing". */
+    reducedMotion: string;
+  };
+  /** Icon, illustration, font and component sources, with their licences. */
+  sources?: FoundationSource[];
+  layoutRules?: string[];
+  accessibility?: {
+    contrastMin: number;
+    minFontPx: number;
+    focusVisible: string;
+    targetMinPx?: number;
+    rules: string[];
+  };
+  components?: FoundationComponentContract[];
+  /** The Design Profile digest recorded when the person approved it. */
+  profile?: { version: 1; digest: string; approvedAt?: string; approvedBy?: string };
+  /** Set once the built source is indexed: the index that now owns the truth. */
+  supersededBy?: {
+    indexId: string;
+    revisionId?: string;
+    at?: string;
+    /** Token names the index has that the foundation did not propose. */
+    added: string[];
+    /** Token names the foundation proposed that the index does not have. */
+    removed: string[];
+    kept?: number;
+  };
+}
+
+const foundationScaleStepSchema = z
+  .object({ name: z.string().min(1).max(120), value: z.string().min(1).max(200), description: line.optional() })
+  .strict();
+
+/**
+ * Lazily referenced: the DTCG document schema is built further down this file,
+ * beside the index that also carries one, and a foundation is validated
+ * against exactly that document rather than a second, looser copy.
+ */
+const foundationTokenDocument = z.lazy(() => designTokenDocumentSchema) as unknown as z.ZodType<DesignTokenGroup>;
+
+export const foundationSourceSchema = z
+  .object({
+    id: z.string().min(1).max(120),
+    kind: z.enum(FOUNDATION_SOURCE_KINDS),
+    name: z.string().min(1).max(200),
+    url: z.string().min(1).max(2048).optional(),
+    version: z.string().min(1).max(60).optional(),
+    licence: z
+      .object({
+        classification: z.enum(FOUNDATION_LICENCE_CLASSES),
+        spdx: z.string().min(1).max(120).optional(),
+        name: z.string().min(1).max(200).optional(),
+        declaredIn: z.string().min(1).max(1024).optional(),
+        evidence: z.string().max(2000).optional(),
+      })
+      .strict(),
+    recommended: z.boolean(),
+    reason: line,
+  })
+  .strict();
+
+export const foundationComponentContractSchema = z
+  .object({
+    name: z.string().min(1).max(120),
+    purpose: line,
+    variants: z.array(z.string().min(1).max(60)).max(16),
+    sizes: z.array(z.string().min(1).max(60)).max(16).optional(),
+    slots: z.array(z.string().min(1).max(60)).max(16).optional(),
+    states: z.array(z.string().min(1).max(60)).max(16).optional(),
+    accessibility: line.optional(),
+  })
+  .strict();
+
+export const designFoundationSchema: z.ZodType<DesignFoundation> = z
+  .object({
+    principles: z.array(line).max(32),
+    tokensBlobId: opaqueId.optional(),
+    notes: paragraph.optional(),
+    status: z.enum(["proposed", "approved", "superseded"]).optional(),
+    steps: z
+      .array(
+        z
+          .object({
+            id: z.enum(FOUNDATION_STEP_IDS),
+            state: z.enum(["proposed", "accepted"]),
+            summary: paragraph.optional(),
+            edited: z.boolean().optional(),
+            source: z.enum(FOUNDATION_STEP_SOURCES),
+            model: z.string().min(1).max(200).optional(),
+            note: paragraph.optional(),
+            at: isoInstant.optional(),
+          })
+          .strict(),
+      )
+      .max(FOUNDATION_STEP_IDS.length)
+      .optional(),
+    tokens: foundationTokenDocument.optional(),
+    modes: z
+      .array(z.object({ name: z.string().min(1).max(60), tokens: foundationTokenDocument, description: line.optional() }).strict())
+      .max(8)
+      .optional(),
+    typeScale: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(120),
+            size: z.string().min(1).max(60),
+            lineHeight: z.string().min(1).max(60).optional(),
+            weight: z.string().min(1).max(60).optional(),
+            tracking: z.string().min(1).max(60).optional(),
+            usage: line.optional(),
+          })
+          .strict(),
+      )
+      .max(24)
+      .optional(),
+    scales: z
+      .object({
+        spacing: z.array(foundationScaleStepSchema).max(24).optional(),
+        radius: z.array(foundationScaleStepSchema).max(16).optional(),
+        shadow: z.array(foundationScaleStepSchema).max(16).optional(),
+        zIndex: z.array(foundationScaleStepSchema).max(16).optional(),
+      })
+      .strict()
+      .optional(),
+    motion: z
+      .object({
+        durations: z.array(foundationScaleStepSchema).max(16),
+        easings: z.array(foundationScaleStepSchema).max(16),
+        reducedMotion: line,
+      })
+      .strict()
+      .optional(),
+    sources: z.array(foundationSourceSchema).max(24).optional(),
+    layoutRules: z.array(line).max(24).optional(),
+    accessibility: z
+      .object({
+        contrastMin: z.number().min(1).max(21),
+        minFontPx: z.number().int().min(1).max(64),
+        focusVisible: line,
+        targetMinPx: z.number().int().min(1).max(200).optional(),
+        rules: z.array(line).max(24),
+      })
+      .strict()
+      .optional(),
+    components: z.array(foundationComponentContractSchema).max(32).optional(),
+    profile: z
+      .object({ version: z.literal(1), digest: digest, approvedAt: isoInstant.optional(), approvedBy: z.string().min(1).max(200).optional() })
+      .strict()
+      .optional(),
+    supersededBy: z
+      .object({
+        indexId: z.string().min(1).max(120),
+        revisionId: opaqueId.optional(),
+        at: isoInstant.optional(),
+        added: z.array(z.string().min(1).max(200)).max(500),
+        removed: z.array(z.string().min(1).max(200)).max(500),
+        kept: z.number().int().nonnegative().max(5000).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict() as unknown as z.ZodType<DesignFoundation>;
+
 export interface DesignBody {
   /** Why this design exists, in the person's words. Always present. */
   brief: string;
   /** Which era/index the design composes from, when there is an index. */
   designIndexRef?: { indexId: string; revisionId: string; profileDigest: string; eraId?: string };
-  foundation?: {
-    principles: string[];
-    /** DTCG token document, stored as a blob when large. */
-    tokensBlobId?: string;
-    notes?: string;
-  };
+  foundation?: DesignFoundation;
   screens: DesignScreen[];
   flows: DesignFlowEdge[];
   sketches: DesignSketch[];
@@ -641,10 +951,7 @@ export const designBodySchema = z
       .object({ indexId: opaqueId, revisionId: opaqueId, profileDigest: digest, eraId: opaqueId.optional() })
       .strict()
       .optional(),
-    foundation: z
-      .object({ principles: z.array(line).max(32), tokensBlobId: opaqueId.optional(), notes: paragraph.optional() })
-      .strict()
-      .optional(),
+    foundation: designFoundationSchema.optional(),
     screens: z.array(designScreenSchema).max(DESIGN_SCREENS_MAX),
     flows: z
       .array(

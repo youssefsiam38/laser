@@ -4,6 +4,9 @@
  */
 export { DesignCanvas, type DesignCanvasProps } from "./DesignCanvas.js";
 export { DesignIndexPanel, type DesignIndexAccess, type DesignIndexState, type DesignReindexState, type DesignReviewVerb } from "./DesignIndexPanel.js";
+export { FoundationCanvas, type FoundationCanvasProps } from "./FoundationCanvas.js";
+export { FoundationTokenEditor, type FoundationTokenEditorProps } from "./FoundationTokenEditor.js";
+export { FoundationWizard, FOUNDATION_STEP_PENDING_SENTENCE, FOUNDATION_UNSAVED_SENTENCE, type FoundationWizardProps } from "./FoundationWizard.js";
 export { NodeInspector, TokenField, type NodeInspectorProps } from "./NodeInspector.js";
 export { PrototypeStage } from "./PrototypeStage.js";
 export { ScreenFrame, FIDELITY_LABEL, FIDELITY_TONE, type SketchBytes } from "./ScreenFrame.js";
