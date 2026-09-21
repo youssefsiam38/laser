@@ -377,6 +377,10 @@ export class WorkerServer {
     const host: SessionHost = {
       openChild: (open) => this.openChild(open),
       driver: (path) => this.runtimes.get(path)?.driver,
+      // The same path a person's return takes (RP-4): settle any release in
+      // flight, recover the agent role from the record, open and attach. The
+      // host learns the session is loaded again from the updates this emits.
+      reopen: async (path) => { await this.sessionLoad({ path }); },
       notify: (method, params) => this.notify(method, params),
       modelAvailable: (model) => this.modelAvailable(model),
       resolveProfile: (profileId) => this.resolveAgentProfile(profileId),

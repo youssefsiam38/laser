@@ -434,6 +434,20 @@ started has `origin: "user"`, one the parent started has `origin: "agent"`.
 The child's role block is re-read every turn, so a new task reaches its
 system prompt.
 
+**A released runtime is not a missing agent.** The host releases a loaded
+session nobody follows after a short quiet period, or when a worker holds
+too many (RP-4); a finished child is always the first candidate. Every agent
+verb resolves its target from the durable run record, never from what is
+loaded: `send_agent_message` to a cold child reopens it from its canonical
+record (`SessionHost.reopen`, the same path a person's return takes) and the
+message starts a new run there. The error taxonomy keeps the two cases
+apart: `no_such_agent_session` means no run under this session ever had that
+id; `agent_session_unavailable` means the record exists but the session
+cannot take a message now (file gone, engine refused, host cannot reopen),
+with `inspect_agent` as the next step. Neither ever advises `start_agent`
+for a session that is merely cold — a parent that respawns a finished agent
+loses its worktree, base commit and context for nothing.
+
 ### Removing a child's worktree (M13-T42, D-157)
 
 Merging is never a tool: it is the parent's own `git merge` in its own
