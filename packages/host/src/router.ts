@@ -1193,6 +1193,15 @@ export class Router {
       case "project/work/unlink":
       case "project/task/action":
       case "project/task/link-execution":
+      // Import, export and publication (M21-T21) are the same authority over
+      // the same store, and equally worker-free: an adapter reads the
+      // project's own files, an export writes them, and publication reads git.
+      case "project/work/import/preview":
+      case "project/work/import/apply":
+      case "project/work/export/preview":
+      case "project/work/export/apply":
+      case "project/work/publish/preview":
+      case "project/work/publish/apply":
         // A client connection is always a person: only the worker bridge
         // (M21-T17) presents an agent, and it does not come through here.
         return this.projectWork().handle(req, { actor, source: "client" });

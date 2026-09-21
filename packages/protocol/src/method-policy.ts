@@ -399,6 +399,21 @@ export const METHOD_POLICY = {
   "project/task/action": { scope: "project_write", reach: "any" },
   "project/task/link-execution": { scope: "project_write", reach: "any" },
 
+  // Import, export and publication (M21-T21). Every one of the six is
+  // `project_write`, previews included: a preview reads or writes the
+  // *project's own files* — the tree an adapter parses, the export root, the
+  // repository it would be published into — which is authority over the
+  // project, not the `read` of the product's own state the four rows above
+  // are. Reach stays `any`: nothing here is refused by where it was asked
+  // from, and every write is gated by an explicit `confirm` plus the digest
+  // of the preview it was decided from.
+  "project/work/import/preview": { scope: "project_write", reach: "any" },
+  "project/work/import/apply": { scope: "project_write", reach: "any" },
+  "project/work/export/preview": { scope: "project_write", reach: "any" },
+  "project/work/export/apply": { scope: "project_write", reach: "any" },
+  "project/work/publish/preview": { scope: "project_write", reach: "any" },
+  "project/work/publish/apply": { scope: "project_write", reach: "any" },
+
   // ------------------------------------------------------------- device ---
   "pi/push/config": { scope: "device", reach: "any" },
   "pi/push/subscribe": { scope: "device", reach: "any" },
