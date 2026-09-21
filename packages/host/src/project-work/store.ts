@@ -45,6 +45,7 @@ import {
   type PlanGraphReport,
   type ProjectTaskBody,
   type RepositoryChangeRef,
+  type RepositoryLinkAcceptance,
   type RepositoryLinkContext,
   type RepositoryStateRef,
   type TaskConflict,
@@ -1524,6 +1525,19 @@ export class ProjectWorkStore {
       link: ProjectWorkLinkInput;
       /** The capture the caller stored for a delivery, before it is accepted. */
       capture?: { blobId: string; bytes: number; files: number; sources: number; truncated?: string } | undefined;
+      /**
+       * What the host proved about a `verified_at` state before this write
+       * (M21-T19, D-361): the capture it stored, and the acceptance record it
+       * confirmed. Both are the host's own; a request body reaches neither.
+       */
+      verified?:
+        | {
+            captureBlobId?: string | undefined;
+            acceptance?: RepositoryLinkAcceptance | undefined;
+            /** The attempt the host tied this state to, re-derived by it. */
+            executionLinkId?: string | undefined;
+          }
+        | undefined;
     } & ProjectWorkWriteOrigin,
   ): {
     link: ProjectWorkLinkRecord;
@@ -1636,6 +1650,17 @@ export class ProjectWorkStore {
             payload.verifiedAt.repositoryId,
           );
           if (!known) throw new ProjectWorkRefusedError("That repository is not one this project knows.");
+          // The attempt a state came out of is recorded on the link, and only
+          // after this store has agreed it is one of its own: a client cannot
+          // substitute another project's attempt into the record (M21-T19).
+          const attemptId = input.verified?.executionLinkId;
+          if (attemptId !== undefined) {
+            const attempt = this.statement("SELECT 1 AS present FROM execution_links WHERE project_id = ? AND link_id = ?").get(
+              input.projectId,
+              attemptId,
+            );
+            if (!attempt) throw new ProjectWorkNotFoundError("That attempt is not one this project has.");
+          }
           const verifiedLinkId = mintLinkId();
           const verified: RepositoryLink = {
             projectId: input.projectId,
@@ -1646,6 +1671,12 @@ export class ProjectWorkStore {
             target: { state: payload.verifiedAt.state },
             createdBy: input.origin.actor,
             createdAt: now,
+            // Durability and acceptance are the host's findings, established
+            // before this transaction opened (D-361). The capture exists by
+            // now or the write never got here.
+            ...(input.verified?.captureBlobId ? { captureBlobId: input.verified.captureBlobId } : {}),
+            ...(attemptId ? { executionLinkId: attemptId } : {}),
+            ...(input.verified?.acceptance ? { acceptance: input.verified.acceptance } : {}),
           };
           this.insertRepositoryLink(verifiedLinkId, entity.entity_id, payload.revisionId, verified, now);
           repositoryLinkId = verifiedLinkId;
@@ -1815,7 +1846,7 @@ export class ProjectWorkStore {
   /** One repository link row. The same columns whichever door wrote it. */
   private insertRepositoryLink(linkId: string, entityId: string, revisionId: string, link: RepositoryLink, now: string): void {
     this.statement(
-      "INSERT INTO repository_links (link_id, project_id, entity_id, revision_id, relation, repository_id, subject_json, target_json, published_path, created_by_json, created_at, supersedes_link_id, capture_blob_id, display_json, execution_link_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO repository_links (link_id, project_id, entity_id, revision_id, relation, repository_id, subject_json, target_json, published_path, created_by_json, created_at, supersedes_link_id, capture_blob_id, display_json, execution_link_id, acceptance_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     ).run(
       linkId,
       link.projectId,
@@ -1832,24 +1863,59 @@ export class ProjectWorkStore {
       link.captureBlobId ?? null,
       link.display ? JSON.stringify(link.display) : null,
       link.executionLinkId ?? null,
+      link.acceptance ? JSON.stringify(link.acceptance) : null,
     );
   }
 
   /**
-   * Attach a canonical capture to a link that had none (M21-T18).
+   * Attach a canonical capture to a link that had none, or correct one that
+   * was not enough (M21-T18, M21-T19).
    *
    * Used when a decision — an approval, a completion — reaches a link that was
    * recorded before anyone knew it would be leant on. The link's identity is
    * untouched: only the capture it can be read from is added.
+   *
+   * A correction names the blob it read (`replacing`), so the pointer moves
+   * off exactly that capture and off no other: an idempotent attach can never
+   * freeze a partial proof in place, and two callers cannot race one link into
+   * pointing at a capture neither of them checked. Nothing is deleted — the
+   * capture it replaces keeps its own content address in the store.
    */
-  attachCapture(projectId: string, linkId: string, blobId: string): void {
+  attachCapture(projectId: string, linkId: string, blobId: string, replacing?: string | undefined): void {
     this.write(() => {
+      if (replacing !== undefined) {
+        this.statement(
+          "UPDATE repository_links SET capture_blob_id = ? WHERE project_id = ? AND link_id = ? AND capture_blob_id = ?",
+        ).run(blobId, projectId, linkId, replacing);
+        return;
+      }
       this.statement("UPDATE repository_links SET capture_blob_id = ? WHERE project_id = ? AND link_id = ? AND capture_blob_id IS NULL").run(
         blobId,
         projectId,
         linkId,
       );
     });
+  }
+
+  /**
+   * Does an approval, a completion or a piece of acceptance evidence rest on
+   * this repository link?
+   *
+   * Any of the three makes the link part of a decision's record: the evidence
+   * that names it, an acceptance the host confirmed on it, or an approved or
+   * completed subject it was recorded against.
+   */
+  private decisionRestsOn(projectId: string, entityId: string, linkId: string): boolean {
+    const named = this.statement(
+      "SELECT 1 AS present FROM evidence WHERE project_id = ? AND entity_id = ? AND repository_link_id = ? LIMIT 1",
+    ).get(projectId, entityId, linkId) as { present: number } | undefined;
+    if (named) return true;
+    const accepted = this.statement(
+      "SELECT acceptance_json FROM repository_links WHERE project_id = ? AND link_id = ?",
+    ).get(projectId, linkId) as { acceptance_json: string | null } | undefined;
+    if (accepted?.acceptance_json) return true;
+    const entity = this.statement("SELECT state FROM entities WHERE entity_id = ?").get(entityId) as { state: string } | undefined;
+    return entity?.state === "approved" || entity?.state === "done";
   }
 
   unlink(input: { projectId: string; entityId: string; expectedRevisionId: string; linkId: string } & ProjectWorkWriteOrigin): {
@@ -1861,6 +1927,27 @@ export class ProjectWorkStore {
       const entity = this.entityRow(input.projectId, input.entityId);
       this.requireCurrent(entity, input.expectedRevisionId);
       const now = this.now();
+      // A link a decision rests on is not something an agent takes away, and
+      // not something anybody erases (review F7, D-332). Creating an
+      // `implemented_by` is a person's act; destroying one has to be at least
+      // as deliberate, and a *record* of what was accepted survives either
+      // way — a correction supersedes, it does not delete the provenance the
+      // approval or the completion was read against.
+      const provenance = this.statement(
+        "SELECT relation FROM repository_links WHERE project_id = ? AND link_id = ? AND entity_id = ?",
+      ).get(input.projectId, input.linkId, entity.entity_id) as { relation: string } | undefined;
+      if (provenance && (provenance.relation === "implemented_by" || provenance.relation === "verified_at")) {
+        if (input.origin.actor.kind !== "person") {
+          throw new ProjectWorkRefusedError(
+            "Only a person removes what a decision was made on. Record what is wrong with it as evidence, and propose the change instead.",
+          );
+        }
+        if (this.decisionRestsOn(input.projectId, entity.entity_id, input.linkId)) {
+          throw new ProjectWorkRefusedError(
+            "A decision on this work was made against that record, so it stays. Accept the corrected state as a new delivery or a new acceptance: the old one is superseded, never erased.",
+          );
+        }
+      }
       let removed = 0;
       removed += Number(
         this.statement("DELETE FROM edges WHERE project_id = ? AND link_id = ? AND (subject_entity = ? OR object_entity = ?)").run(
@@ -2372,6 +2459,12 @@ export class ProjectWorkStore {
     repositories?: readonly AttemptRepositoryRecord[] | undefined;
     /** The checkpoint namespace this attempt's refs were read from. */
     checkpointKey?: string | undefined;
+    /**
+     * The attempt this call is closing, when the caller knows which one it is
+     * (review F2). An id that names no open attempt on this Task is refused,
+     * never resolved to whichever one happens to be newest.
+     */
+    executionLinkId?: string | undefined;
   } & ProjectWorkWriteOrigin): {
     link: ExecutionLink;
     entity: ProjectWorkEntity;
@@ -2390,15 +2483,40 @@ export class ProjectWorkStore {
       // (M21-T18): the row that carries its base commit and its checkpoints is
       // the row that has to carry its terminal outcome, or the record of what
       // happened is split in two and neither half is an attempt.
-      const open = ending
-        ? (this.statement(
-            "SELECT link_id, attempt, started_at, base_commit, repositories_json FROM execution_links " +
-              "WHERE project_id = ? AND entity_id = ? AND kind = ? AND target_id = ? AND ended_at IS NULL " +
-              "ORDER BY attempt DESC LIMIT 1",
-          ).get(input.projectId, entity.entity_id, input.execution.kind, input.execution.targetId) as
-            | { link_id: string; attempt: number; started_at: string; base_commit: string | null; repositories_json: string | null }
-            | undefined)
-        : undefined;
+      //
+      // Which open attempt is decided by identity, never by recency. The row
+      // is already narrowed by kind and target, so two different sessions can
+      // never collide; two attempts of the *same* target are told apart by the
+      // checkpoint namespace the caller is reading, or by the link it names.
+      // A caller whose identity matches no open attempt is refused rather than
+      // closing a row that is not its own (review F2).
+      type OpenRow = { link_id: string; attempt: number; started_at: string; base_commit: string | null; repositories_json: string | null; checkpoint_key: string | null };
+      let open: OpenRow | undefined;
+      if (ending) {
+        const rows = this.statement(
+          "SELECT link_id, attempt, started_at, base_commit, repositories_json, checkpoint_key FROM execution_links " +
+            "WHERE project_id = ? AND entity_id = ? AND kind = ? AND target_id = ? AND ended_at IS NULL " +
+            "ORDER BY attempt DESC",
+        ).all(input.projectId, entity.entity_id, input.execution.kind, input.execution.targetId) as OpenRow[];
+        const named = input.executionLinkId;
+        if (named !== undefined) {
+          open = rows.find((row) => row.link_id === named);
+          if (!open) {
+            throw new ProjectWorkRefusedError(
+              "That attempt is not open on this task, so it cannot be closed. Read the task's attempts and close the one this session started.",
+            );
+          }
+        } else if (input.checkpointKey !== undefined && rows.some((row) => row.checkpoint_key !== null)) {
+          open = rows.find((row) => row.checkpoint_key === input.checkpointKey);
+          if (!open) {
+            throw new ProjectWorkRefusedError(
+              "No attempt this conversation started is open on this task, so there is nothing here for it to close.",
+            );
+          }
+        } else {
+          open = rows[0];
+        }
+      }
       const attempt =
         input.execution.attempt ??
         open?.attempt ??
@@ -2433,7 +2551,10 @@ export class ProjectWorkStore {
         this.statement(
           "UPDATE execution_links SET profile_id = COALESCE(?, profile_id), branch = COALESCE(?, branch), " +
             "repository_id = COALESCE(?, repository_id), base_commit = COALESCE(?, base_commit), ended_at = ?, outcome = ?, " +
-            "repositories_json = COALESCE(?, repositories_json), checkpoint_key = COALESCE(?, checkpoint_key) WHERE link_id = ?",
+            // The checkpoint namespace an attempt was recorded under is its
+            // identity, not a field a later call may re-point: a second
+            // session's key must never end up on this session's row (F2).
+            "repositories_json = COALESCE(?, repositories_json), checkpoint_key = COALESCE(checkpoint_key, ?) WHERE link_id = ?",
         ).run(
           link.profileId ?? null,
           link.branch ?? null,
@@ -2966,6 +3087,7 @@ export class ProjectWorkStore {
       ...(row["capture_blob_id"] ? { captureBlobId: row["capture_blob_id"] as string } : {}),
       ...(row["execution_link_id"] ? { executionLinkId: row["execution_link_id"] as string } : {}),
       ...(row["display_json"] ? { display: JSON.parse(row["display_json"] as string) as RepositoryLinkContext } : {}),
+      ...(row["acceptance_json"] ? { acceptance: JSON.parse(row["acceptance_json"] as string) as RepositoryLinkAcceptance } : {}),
     }));
   }
 
@@ -3007,11 +3129,22 @@ export class ProjectWorkStore {
    * An attempt that has not ended is the one a closing call is closing, and
    * the one whose `startedAt` bounds the window its checkpoints are read from.
    */
-  openAttemptFor(projectId: string, entityId: string, kind: ExecutionLink["kind"], targetId: string): ExecutionLink | undefined {
-    const row = this.statement(
-      "SELECT link_id FROM execution_links WHERE project_id = ? AND entity_id = ? AND kind = ? AND target_id = ? AND ended_at IS NULL " +
-        "ORDER BY attempt DESC LIMIT 1",
-    ).get(projectId, entityId, kind, targetId) as { link_id: string } | undefined;
+  openAttemptFor(
+    projectId: string,
+    entityId: string,
+    kind: ExecutionLink["kind"],
+    targetId: string,
+    checkpointKey?: string,
+  ): ExecutionLink | undefined {
+    const rows = this.statement(
+      "SELECT link_id, checkpoint_key FROM execution_links WHERE project_id = ? AND entity_id = ? AND kind = ? AND target_id = ? AND ended_at IS NULL " +
+        "ORDER BY attempt DESC",
+    ).all(projectId, entityId, kind, targetId) as Array<{ link_id: string; checkpoint_key: string | null }>;
+    // The caller's own conversation first, when it said which one it is: two
+    // attempts of one target are otherwise told apart only by recency, and
+    // recency is not identity (review F2).
+    const mine = checkpointKey === undefined ? undefined : rows.find((row) => row.checkpoint_key === checkpointKey);
+    const row = mine ?? (checkpointKey !== undefined && rows.some((entry) => entry.checkpoint_key !== null) ? undefined : rows[0]);
     return row ? this.executionLink(projectId, row.link_id) : undefined;
   }
 

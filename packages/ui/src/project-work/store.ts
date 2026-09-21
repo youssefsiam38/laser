@@ -676,6 +676,26 @@ export class ProjectWorkStore {
     }
   }
 
+  /**
+   * One attachment's bytes, for a surface that has to read a stored document
+   * rather than a summary of it — a verification report, for instance
+   * (M21-T19).
+   *
+   * Reads only; nothing is cached here, because a blob is content-addressed
+   * and the record that names it is already in the cache.
+   */
+  async readBlob(
+    params: Omit<ClientRequests["project/work/blob/read"]["params"], "projectId">,
+  ): Promise<ProjectWorkOutcome<ClientRequests["project/work/blob/read"]["result"]>> {
+    const projectId = this.#snapshot.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
+    try {
+      return { ok: true, value: await this.#request("project/work/blob/read", { ...params, projectId }) };
+    } catch (error) {
+      return { ok: false, failure: describeProjectWorkError(error) };
+    }
+  }
+
   async search(query: string, options: { kinds?: ProjectWorkKind[]; limit?: number } = {}): Promise<ProjectWorkOutcome<ClientRequests["project/work/search"]["result"]>> {
     const projectId = this.#snapshot.projectId;
     if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
