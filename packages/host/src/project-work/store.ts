@@ -41,10 +41,19 @@ import {
   taskActionTransition,
   taskTransition,
   TASK_ACTION_TARGET,
+  REPOSITORY_CAPTURE_HISTORY_MAX,
   type AttemptRepositoryRecord,
+  type DecisionCaptureBinding,
+  type DecisionProofKind,
   type PlanGraphReport,
+  type ProjectWorkActor,
+  type RepositoryCaptureAttachReason,
+  type RepositoryCaptureHistoryPage,
+  type RepositoryCaptureHistoryQuery,
+  type RepositoryLinkCaptureRevision,
   type ProjectTaskBody,
   type RepositoryChangeRef,
+  type RepositoryLinkAcceptance,
   type RepositoryLinkContext,
   type RepositoryStateRef,
   type TaskConflict,
@@ -94,12 +103,14 @@ import {
   bodyDigest,
   canonicalJson,
   mintApprovalId,
+  mintCaptureRevisionId,
   mintCommentId,
   mintDecisionId,
   mintEntityId,
   mintEvidenceId,
   mintLinkId,
   mintProjectId,
+  mintProofBindingId,
   mintRepositoryId,
   mintRevisionId,
   repositoryIdentityKey,
@@ -139,6 +150,35 @@ export interface ProjectWorkStoreOptions {
 export interface ProjectWorkWriteOrigin {
   origin: ProjectWorkOrigin;
   idempotencyKey: string;
+}
+
+/**
+ * One capture association a gate read while it was preparing a decision
+ * (D-363).
+ *
+ * The blob **and** the association that made it current: the pair is what the
+ * decision's own transaction rechecks, so a proof that moved between
+ * preparation and decision is caught even when the new capture happens to be
+ * the same bytes as some earlier one.
+ */
+export interface DecisionProofRef {
+  linkId: string;
+  blobId: string;
+  associationRevisionId: string;
+  associationSeq: number;
+}
+
+/**
+ * What a gate's preparation established, handed to the decision it was for.
+ *
+ * Preparation is not a decision: this is only ever *bound* inside the
+ * transaction that really writes the approval or the completion, and a
+ * refused decision leaves no binding behind.
+ */
+export interface DecisionProofPreparation {
+  /** The gate's own words, so a moved proof refuses in the decision's language. */
+  gate: string;
+  refs: DecisionProofRef[];
 }
 
 interface EntityRow {
@@ -428,9 +468,12 @@ export class ProjectWorkStore {
         "blobs",
         "evidence",
         "decisions",
+        "decision_capture_bindings",
+        "decision_capture_binding_sets",
         "approvals",
         "comments",
         "execution_links",
+        "repository_link_captures",
         "repository_links",
         "edges",
         "revisions",
@@ -1391,6 +1434,12 @@ export class ProjectWorkStore {
     mode?: ApprovalMode | undefined;
     skipReason?: string | undefined;
     note?: string | undefined;
+    /**
+     * The captures the gate prepared this approval on (D-363). Present
+     * whenever the preparation ran, including when it found nothing to keep,
+     * and bound inside this transaction or the approval does not happen.
+     */
+    proof?: DecisionProofPreparation | undefined;
   } & ProjectWorkWriteOrigin): { approval: ProjectWorkApproval; entity: ProjectWorkEntity; seq: number; replayed?: boolean } {
     return this.once(input.projectId, "project/work/approve", input.idempotencyKey, () => {
       const entity = this.entityRow(input.projectId, input.entityId);
@@ -1450,6 +1499,20 @@ export class ProjectWorkStore {
         now,
         JSON.stringify(input.origin),
       );
+      // The proof this approval consumed, bound to this approval's own id
+      // before anything else in the transaction can succeed. A capture that
+      // moved since the gate read it refuses here, and the approval row above
+      // rolls back with the binding (D-363).
+      if (input.proof) {
+        this.bindDecisionProof({
+          projectId: input.projectId,
+          kind: "approval",
+          decisionId: approvalId,
+          entityId: entity.entity_id,
+          proof: input.proof,
+          at: now,
+        });
+      }
       this.statement("UPDATE entities SET state = ?, updated_at = ?, stale_json = NULL WHERE entity_id = ?").run(to, now, entity.entity_id);
       this.refreshAttention(entity.entity_id);
       const updated = this.entityRow(input.projectId, input.entityId);
@@ -1524,6 +1587,19 @@ export class ProjectWorkStore {
       link: ProjectWorkLinkInput;
       /** The capture the caller stored for a delivery, before it is accepted. */
       capture?: { blobId: string; bytes: number; files: number; sources: number; truncated?: string } | undefined;
+      /**
+       * What the host proved about a `verified_at` state before this write
+       * (M21-T19, D-361): the capture it stored, and the acceptance record it
+       * confirmed. Both are the host's own; a request body reaches neither.
+       */
+      verified?:
+        | {
+            captureBlobId?: string | undefined;
+            acceptance?: RepositoryLinkAcceptance | undefined;
+            /** The attempt the host tied this state to, re-derived by it. */
+            executionLinkId?: string | undefined;
+          }
+        | undefined;
     } & ProjectWorkWriteOrigin,
   ): {
     link: ProjectWorkLinkRecord;
@@ -1611,7 +1687,7 @@ export class ProjectWorkStore {
           ...(payload.captureBlobId ? { captureBlobId: payload.captureBlobId } : {}),
           ...(payload.display ? { display: payload.display } : {}),
         };
-        this.insertRepositoryLink(linkId, entity.entity_id, payload.subjectRevisionId, repositoryLink, now);
+        this.insertRepositoryLink(linkId, entity.entity_id, payload.subjectRevisionId, repositoryLink, now, "link");
         record = { type: "repository", repository: repositoryLink };
       } else if (payload.type === "evidence") {
         const revision = this.revisionRow(input.projectId, payload.revisionId);
@@ -1636,6 +1712,17 @@ export class ProjectWorkStore {
             payload.verifiedAt.repositoryId,
           );
           if (!known) throw new ProjectWorkRefusedError("That repository is not one this project knows.");
+          // The attempt a state came out of is recorded on the link, and only
+          // after this store has agreed it is one of its own: a client cannot
+          // substitute another project's attempt into the record (M21-T19).
+          const attemptId = input.verified?.executionLinkId;
+          if (attemptId !== undefined) {
+            const attempt = this.statement("SELECT 1 AS present FROM execution_links WHERE project_id = ? AND link_id = ?").get(
+              input.projectId,
+              attemptId,
+            );
+            if (!attempt) throw new ProjectWorkNotFoundError("That attempt is not one this project has.");
+          }
           const verifiedLinkId = mintLinkId();
           const verified: RepositoryLink = {
             projectId: input.projectId,
@@ -1646,8 +1733,14 @@ export class ProjectWorkStore {
             target: { state: payload.verifiedAt.state },
             createdBy: input.origin.actor,
             createdAt: now,
+            // Durability and acceptance are the host's findings, established
+            // before this transaction opened (D-361). The capture exists by
+            // now or the write never got here.
+            ...(input.verified?.captureBlobId ? { captureBlobId: input.verified.captureBlobId } : {}),
+            ...(attemptId ? { executionLinkId: attemptId } : {}),
+            ...(input.verified?.acceptance ? { acceptance: input.verified.acceptance } : {}),
           };
-          this.insertRepositoryLink(verifiedLinkId, entity.entity_id, payload.revisionId, verified, now);
+          this.insertRepositoryLink(verifiedLinkId, entity.entity_id, payload.revisionId, verified, now, "record_verified_at");
           repositoryLinkId = verifiedLinkId;
         }
         const evidenceId = mintEvidenceId();
@@ -1794,7 +1887,7 @@ export class ProjectWorkStore {
         ...(payload.executionLinkId ? { executionLinkId: payload.executionLinkId } : {}),
         ...(payload.display ? { display: payload.display } : {}),
       };
-      this.insertRepositoryLink(linkId, row.entity_id, subject.revisionId, link, now);
+      this.insertRepositoryLink(linkId, row.entity_id, subject.revisionId, link, now, "accept_delivery");
       this.statement("UPDATE entities SET updated_at = ? WHERE entity_id = ?").run(now, row.entity_id);
       links.push(link);
     }
@@ -1812,10 +1905,21 @@ export class ProjectWorkStore {
     return { link: { type: "delivery", links, ...(input.capture ? { capture: input.capture } : {}) }, seq };
   }
 
-  /** One repository link row. The same columns whichever door wrote it. */
-  private insertRepositoryLink(linkId: string, entityId: string, revisionId: string, link: RepositoryLink, now: string): void {
+  /**
+   * One repository link row. The same columns whichever door wrote it — and,
+   * when it arrives with a capture, the first immutable association between
+   * the two, written in this same transaction (D-363).
+   */
+  private insertRepositoryLink(
+    linkId: string,
+    entityId: string,
+    revisionId: string,
+    link: RepositoryLink,
+    now: string,
+    gate?: string,
+  ): void {
     this.statement(
-      "INSERT INTO repository_links (link_id, project_id, entity_id, revision_id, relation, repository_id, subject_json, target_json, published_path, created_by_json, created_at, supersedes_link_id, capture_blob_id, display_json, execution_link_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO repository_links (link_id, project_id, entity_id, revision_id, relation, repository_id, subject_json, target_json, published_path, created_by_json, created_at, supersedes_link_id, capture_blob_id, display_json, execution_link_id, acceptance_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     ).run(
       linkId,
       link.projectId,
@@ -1832,24 +1936,407 @@ export class ProjectWorkStore {
       link.captureBlobId ?? null,
       link.display ? JSON.stringify(link.display) : null,
       link.executionLinkId ?? null,
+      link.acceptance ? JSON.stringify(link.acceptance) : null,
     );
+    if (link.captureBlobId) {
+      this.appendCaptureAssociation({
+        projectId: link.projectId,
+        linkId,
+        blobId: link.captureBlobId,
+        at: now,
+        reason: "first_capture",
+        actor: link.createdBy,
+        ...(gate ? { gate } : {}),
+      });
+    }
   }
 
   /**
-   * Attach a canonical capture to a link that had none (M21-T18).
+   * Append one immutable link-to-capture association (D-363).
+   *
+   * Only ever called inside the transaction that made the association true —
+   * the link's own insert, or a compare-and-set that really moved the pointer.
+   * `seq` is this link's own next number rather than a clock: two associations
+   * written in the same millisecond stay ordered, and nothing infers which
+   * came first from a timestamp.
+   */
+  private appendCaptureAssociation(input: {
+    projectId: string;
+    linkId: string;
+    blobId: string;
+    at: string;
+    reason: RepositoryCaptureAttachReason;
+    actor: ProjectWorkActor;
+    gate?: string;
+    supersedesBlobId?: string;
+  }): RepositoryLinkCaptureRevision {
+    const previous = this.statement(
+      "SELECT revision_id, seq FROM repository_link_captures WHERE project_id = ? AND link_id = ? ORDER BY seq DESC LIMIT 1",
+    ).get(input.projectId, input.linkId) as { revision_id: string; seq: number } | undefined;
+    const revisionId = mintCaptureRevisionId();
+    const seq = Number(previous?.seq ?? 0) + 1;
+    this.statement(
+      "INSERT INTO repository_link_captures (revision_id, project_id, link_id, blob_id, supersedes_blob_id, supersedes_revision_id, attached_at, seq, reason, gate, actor_json) " +
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      revisionId,
+      input.projectId,
+      input.linkId,
+      input.blobId,
+      input.supersedesBlobId ?? null,
+      input.supersedesBlobId !== undefined ? (previous?.revision_id ?? null) : null,
+      input.at,
+      seq,
+      input.reason,
+      input.gate ?? null,
+      JSON.stringify(input.actor),
+    );
+    return {
+      revisionId,
+      linkId: input.linkId,
+      blobId: input.blobId,
+      ...(input.supersedesBlobId !== undefined ? { supersedesBlobId: input.supersedesBlobId } : {}),
+      ...(input.supersedesBlobId !== undefined && previous ? { supersedesRevisionId: previous.revision_id } : {}),
+      attachedAt: input.at,
+      seq,
+      reason: input.reason,
+      ...(input.gate ? { gate: input.gate } : {}),
+      actor: input.actor,
+    };
+  }
+
+  /** One association row, as the protocol shape. */
+  private toCaptureAssociation(row: Record<string, unknown>): RepositoryLinkCaptureRevision {
+    return {
+      revisionId: row["revision_id"] as string,
+      linkId: row["link_id"] as string,
+      blobId: row["blob_id"] as string,
+      ...(row["supersedes_blob_id"] ? { supersedesBlobId: row["supersedes_blob_id"] as string } : {}),
+      ...(row["supersedes_revision_id"] ? { supersedesRevisionId: row["supersedes_revision_id"] as string } : {}),
+      attachedAt: row["attached_at"] as string,
+      seq: Number(row["seq"]),
+      reason: row["reason"] as RepositoryCaptureAttachReason,
+      ...(row["gate"] ? { gate: row["gate"] as string } : {}),
+      actor: JSON.parse(row["actor_json"] as string) as ProjectWorkActor,
+    };
+  }
+
+  /**
+   * The association that makes a capture this link's proof **right now**
+   * (D-363).
+   *
+   * Read by a gate while it prepares, and read again inside the decision's own
+   * transaction: a decision binds the association it checked, or it is refused
+   * because somebody moved the proof underneath it.
+   */
+  currentCaptureAssociation(projectId: string, linkId: string): RepositoryLinkCaptureRevision | undefined {
+    const row = this.statement(
+      "SELECT * FROM repository_link_captures WHERE project_id = ? AND link_id = ? ORDER BY seq DESC LIMIT 1",
+    ).get(projectId, linkId) as Record<string, unknown> | undefined;
+    return row ? this.toCaptureAssociation(row) : undefined;
+  }
+
+  /**
+   * The link's own original association, when this database can attest one
+   * independently (D-363).
+   *
+   * `first_capture` only: that row was written inside the link's own insert,
+   * so it *is* the proof the link was created with, and a delivery accepted
+   * before decisions bound their own proof can honestly be read against it.
+   *
+   * A `legacy_baseline` is explicitly **not** that. It records the only
+   * association a migration could see — whatever the pointer happened to hold
+   * when this release first opened the database — and says nothing about what
+   * an older acceptance consumed: the pointer may already have been corrected
+   * once by a gate that ran before this history existed. Attributing it to an
+   * old decision would upgrade a partial proof into a certificate, so the
+   * honest answer is nothing, and the decision is reviewed again.
+   */
+  originalCaptureAssociation(projectId: string, linkId: string): RepositoryLinkCaptureRevision | undefined {
+    const row = this.statement(
+      "SELECT * FROM repository_link_captures WHERE project_id = ? AND link_id = ? ORDER BY seq ASC LIMIT 1",
+    ).get(projectId, linkId) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    const association = this.toCaptureAssociation(row);
+    return association.reason === "first_capture" ? association : undefined;
+  }
+
+  /**
+   * One bounded page of capture history: associations, or the proof bindings
+   * of decisions (D-363).
+   *
+   * Bounded **in total** rather than per link, which is what makes an older
+   * association reachable at all: forty links times fifty rows is not a page,
+   * and the fifty-first association of the first link was previously
+   * unreadable through any request. So the rows are ordered stably
+   * (`link_id`, then `seq` newest-first inside a link), cut at the bound, and
+   * what did not fit is reached with the cursor this returns.
+   *
+   * `linkIds` is the scope the caller resolved — the repository links of the
+   * entity being read — so a request can never page across a project it did
+   * not ask about. A named `linkId` must be one of them.
+   */
+  captureHistoryPage(
+    projectId: string,
+    query: RepositoryCaptureHistoryQuery & { linkIds: readonly string[]; entityId?: string | undefined },
+  ): RepositoryCaptureHistoryPage {
+    const limit = Math.max(1, Math.min(query.limit ?? REPOSITORY_CAPTURE_HISTORY_MAX, REPOSITORY_CAPTURE_HISTORY_MAX));
+    if (query.of === "decisions") return this.decisionBindingPage(projectId, query, limit);
+
+    if (query.revisionId !== undefined) {
+      // An exact association, which is how a stored binding is read back: one
+      // row, by its own id, with no page to walk.
+      const row = this.statement(
+        `SELECT * FROM repository_link_captures WHERE project_id = ? AND revision_id = ? AND link_id IN (${placeholders(query.linkIds)})`,
+      ).get(projectId, query.revisionId, ...query.linkIds) as Record<string, unknown> | undefined;
+      return { of: "associations", associations: row ? [this.toCaptureAssociation(row)] : [], bindings: [] };
+    }
+    const scope = query.linkId !== undefined ? query.linkIds.filter((id) => id === query.linkId) : query.linkIds;
+    if (scope.length === 0) return { of: "associations", associations: [], bindings: [] };
+    const after = query.cursor === undefined ? undefined : associationCursor(query.cursor);
+    // One row more than the bound, so "there is more" is a fact rather than an
+    // inference from a full page.
+    const rows = this.statement(
+      `SELECT * FROM repository_link_captures WHERE project_id = ? AND link_id IN (${placeholders(scope)}) ` +
+        (after ? "AND (link_id > ? OR (link_id = ? AND seq < ?)) " : "") +
+        "ORDER BY link_id ASC, seq DESC LIMIT ?",
+    ).all(
+      projectId,
+      ...scope,
+      ...(after ? [after.linkId, after.linkId, after.seq] : []),
+      limit + 1,
+    ) as Array<Record<string, unknown>>;
+    const page = rows.slice(0, limit).map((row) => this.toCaptureAssociation(row));
+    const last = page[page.length - 1];
+    return {
+      of: "associations",
+      associations: page,
+      bindings: [],
+      ...(rows.length > limit && last ? { nextCursor: `${last.linkId}:${String(last.seq)}` } : {}),
+    };
+  }
+
+  private decisionBindingPage(
+    projectId: string,
+    query: RepositoryCaptureHistoryQuery & { linkIds: readonly string[]; entityId?: string | undefined },
+    limit: number,
+  ): RepositoryCaptureHistoryPage {
+    const filters = ["project_id = ?"];
+    const params: unknown[] = [projectId];
+    if (query.decisionId !== undefined) {
+      filters.push("decision_id = ?");
+      params.push(query.decisionId);
+    }
+    if (query.entityId !== undefined) {
+      filters.push("entity_id = ?");
+      params.push(query.entityId);
+    }
+    if (query.linkId !== undefined) {
+      filters.push("link_id = ?");
+      params.push(query.linkId);
+    }
+    const after = query.cursor === undefined ? undefined : decisionCursor(query.cursor);
+    if (after) {
+      filters.push("(decision_id > ? OR (decision_id = ? AND link_id > ?))");
+      params.push(after.decisionId, after.decisionId, after.linkId);
+    }
+    const rows = this.statement(
+      `SELECT * FROM decision_capture_bindings WHERE ${filters.join(" AND ")} ORDER BY decision_id ASC, link_id ASC LIMIT ?`,
+    ).all(...params, limit + 1) as Array<Record<string, unknown>>;
+    const page = rows.slice(0, limit).map(
+      (row): DecisionCaptureBinding => ({
+        kind: row["decision_kind"] as DecisionProofKind,
+        decisionId: row["decision_id"] as string,
+        entityId: row["entity_id"] as string,
+        linkId: row["link_id"] as string,
+        blobId: row["blob_id"] as string,
+        associationRevisionId: row["association_revision_id"] as string,
+        associationSeq: Number(row["association_seq"]),
+        boundAt: row["bound_at"] as string,
+      }),
+    );
+    const last = page[page.length - 1];
+    // "Known" is only ever answered about **one** named decision, because it is
+    // a fact about that decision: a decision this store bound holds a set row,
+    // even when the set is empty, and a decision older than this history holds
+    // none and stays unknown rather than being read as having rested on
+    // nothing.
+    //
+    // Scoped exactly like the rows beside it. Answering `known` across the
+    // whole project while the bindings are filtered by entity would tell a
+    // read about one item that some *other* item's decision rested on nothing
+    // — a true row about the wrong subject, which is the one kind of answer
+    // this history may not give.
+    const known =
+      query.decisionId === undefined
+        ? undefined
+        : this.statement(
+            "SELECT 1 AS present FROM decision_capture_binding_sets WHERE project_id = ? AND decision_id = ?" +
+              (query.entityId !== undefined ? " AND entity_id = ?" : "") +
+              " LIMIT 1",
+          ).get(projectId, query.decisionId, ...(query.entityId !== undefined ? [query.entityId] : [])) !== undefined;
+    return {
+      of: "decisions",
+      associations: [],
+      bindings: page,
+      ...(rows.length > limit && last ? { nextCursor: `${last.decisionId}:${last.linkId}` } : {}),
+      ...(known !== undefined ? { known } : {}),
+    };
+  }
+
+  /**
+   * Bind a decision to the exact captures it was prepared on, inside the
+   * decision's own transaction (D-363).
+   *
+   * The gate read each association while it was preparing; this checks, under
+   * the write lock, that every one of them is **still** what the link's
+   * canonical pointer and its newest association say — and refuses the whole
+   * decision if one moved. It never quietly re-reads whatever is current now:
+   * the person decided on what they were shown, and a decision recorded
+   * against a proof nobody checked is the failure this exists to prevent.
+   *
+   * A refusal throws, so the transaction that would have written the approval
+   * or the completion rolls back with it: no binding, and no decision.
+   */
+  private bindDecisionProof(input: {
+    projectId: string;
+    kind: DecisionProofKind;
+    decisionId: string;
+    entityId: string;
+    proof: DecisionProofPreparation;
+    at: string;
+  }): void {
+    for (const ref of input.proof.refs) {
+      const link = this.statement("SELECT capture_blob_id FROM repository_links WHERE project_id = ? AND link_id = ?").get(
+        input.projectId,
+        ref.linkId,
+      ) as { capture_blob_id: string | null } | undefined;
+      const current = this.currentCaptureAssociation(input.projectId, ref.linkId);
+      const unchanged =
+        link?.capture_blob_id === ref.blobId &&
+        current !== undefined &&
+        current.revisionId === ref.associationRevisionId &&
+        current.seq === ref.associationSeq &&
+        current.blobId === ref.blobId;
+      if (!unchanged) {
+        throw new ProjectWorkRefusedError(
+          `${input.proof.gate} was being prepared when this record's evidence changed somewhere else, so it was not decided on what you were looking at. Try again.`,
+        );
+      }
+      this.statement(
+        "INSERT INTO decision_capture_bindings (binding_id, project_id, decision_kind, decision_id, entity_id, link_id, blob_id, association_revision_id, association_seq, bound_at) " +
+          "VALUES (?,?,?,?,?,?,?,?,?,?)",
+      ).run(
+        mintProofBindingId(),
+        input.projectId,
+        input.kind,
+        input.decisionId,
+        input.entityId,
+        ref.linkId,
+        ref.blobId,
+        ref.associationRevisionId,
+        ref.associationSeq,
+        input.at,
+      );
+    }
+    // The set row is written whether or not there were any: a decision that
+    // rested on no repository evidence recorded that it rested on none, which
+    // is a different answer from the silence a decision older than this
+    // history leaves behind.
+    this.statement(
+      "INSERT INTO decision_capture_binding_sets (project_id, decision_kind, decision_id, entity_id, bindings, bound_at) VALUES (?,?,?,?,?,?) " +
+        "ON CONFLICT(project_id, decision_kind, decision_id) DO NOTHING",
+    ).run(input.projectId, input.kind, input.decisionId, input.entityId, input.proof.refs.length, input.at);
+  }
+
+  /**
+   * Attach a canonical capture to a link that had none, or correct one that
+   * was not enough (M21-T18, M21-T19).
    *
    * Used when a decision — an approval, a completion — reaches a link that was
    * recorded before anyone knew it would be leant on. The link's identity is
    * untouched: only the capture it can be read from is added.
+   *
+   * A correction names the blob it read (`replacing`), so the pointer moves
+   * off exactly that capture and off no other: an idempotent attach can never
+   * freeze a partial proof in place, and two callers cannot race one link into
+   * pointing at a capture neither of them checked. Nothing is deleted — the
+   * capture it replaces keeps its own content address in the store.
+   *
+   * The compare-and-set is honest about losing (D-363): the association is
+   * appended **only** when the pointer really moved, and a caller that lost
+   * the race is told `false` rather than left to assume it won. An attach that
+   * finds the pointer already on this exact blob is the same write repeated,
+   * and appends nothing.
+   *
+   * `gate` is context, not a verdict: a correction taken while a gate was
+   * being prepared is recorded as a preparation, because the decision it was
+   * for may still be refused after this returns.
    */
-  attachCapture(projectId: string, linkId: string, blobId: string): void {
-    this.write(() => {
-      this.statement("UPDATE repository_links SET capture_blob_id = ? WHERE project_id = ? AND link_id = ? AND capture_blob_id IS NULL").run(
-        blobId,
+  attachCapture(
+    projectId: string,
+    linkId: string,
+    blobId: string,
+    replacing?: string | undefined,
+    context?: { gate?: string | undefined; actor?: ProjectWorkActor | undefined } | undefined,
+  ): boolean {
+    return this.write(() => {
+      const changes = Number(
+        replacing !== undefined
+          ? this.statement(
+              "UPDATE repository_links SET capture_blob_id = ? WHERE project_id = ? AND link_id = ? AND capture_blob_id = ?",
+            ).run(blobId, projectId, linkId, replacing).changes
+          : this.statement(
+              "UPDATE repository_links SET capture_blob_id = ? WHERE project_id = ? AND link_id = ? AND capture_blob_id IS NULL",
+            ).run(blobId, projectId, linkId).changes,
+      );
+      if (changes !== 1) return false;
+      // The row exists: the compare-and-set just moved it. Its creator stands
+      // in when the caller named no actor of its own.
+      const link = this.statement("SELECT created_by_json FROM repository_links WHERE project_id = ? AND link_id = ?").get(
         projectId,
         linkId,
-      );
+      ) as { created_by_json: string };
+      this.appendCaptureAssociation({
+        projectId,
+        linkId,
+        blobId,
+        at: this.now(),
+        reason: "gate_preparation",
+        actor: context?.actor ?? (JSON.parse(link.created_by_json) as ProjectWorkActor),
+        ...(context?.gate ? { gate: context.gate } : {}),
+        ...(replacing !== undefined ? { supersedesBlobId: replacing } : {}),
+      });
+      return true;
     });
+  }
+
+  /**
+   * Does an approval, a completion or a piece of acceptance evidence rest on
+   * this repository link?
+   *
+   * Any of these makes the link part of a decision's record: a decision that
+   * bound this link's proof (D-363), the evidence that names it, an acceptance
+   * the host confirmed on it, or an approved or completed subject it was
+   * recorded against.
+   */
+  private decisionRestsOn(projectId: string, entityId: string, linkId: string): boolean {
+    // The strongest answer first, because it is the exact one: a decision
+    // recorded that it was made on this link's proof.
+    const bound = this.statement(
+      "SELECT 1 AS present FROM decision_capture_bindings WHERE project_id = ? AND link_id = ? LIMIT 1",
+    ).get(projectId, linkId) as { present: number } | undefined;
+    if (bound) return true;
+    const named = this.statement(
+      "SELECT 1 AS present FROM evidence WHERE project_id = ? AND entity_id = ? AND repository_link_id = ? LIMIT 1",
+    ).get(projectId, entityId, linkId) as { present: number } | undefined;
+    if (named) return true;
+    const accepted = this.statement(
+      "SELECT acceptance_json FROM repository_links WHERE project_id = ? AND link_id = ?",
+    ).get(projectId, linkId) as { acceptance_json: string | null } | undefined;
+    if (accepted?.acceptance_json) return true;
+    const entity = this.statement("SELECT state FROM entities WHERE entity_id = ?").get(entityId) as { state: string } | undefined;
+    return entity?.state === "approved" || entity?.state === "done";
   }
 
   unlink(input: { projectId: string; entityId: string; expectedRevisionId: string; linkId: string } & ProjectWorkWriteOrigin): {
@@ -1861,6 +2348,27 @@ export class ProjectWorkStore {
       const entity = this.entityRow(input.projectId, input.entityId);
       this.requireCurrent(entity, input.expectedRevisionId);
       const now = this.now();
+      // A link a decision rests on is not something an agent takes away, and
+      // not something anybody erases (review F7, D-332). Creating an
+      // `implemented_by` is a person's act; destroying one has to be at least
+      // as deliberate, and a *record* of what was accepted survives either
+      // way — a correction supersedes, it does not delete the provenance the
+      // approval or the completion was read against.
+      const provenance = this.statement(
+        "SELECT relation FROM repository_links WHERE project_id = ? AND link_id = ? AND entity_id = ?",
+      ).get(input.projectId, input.linkId, entity.entity_id) as { relation: string } | undefined;
+      if (provenance && (provenance.relation === "implemented_by" || provenance.relation === "verified_at")) {
+        if (input.origin.actor.kind !== "person") {
+          throw new ProjectWorkRefusedError(
+            "Only a person removes what a decision was made on. Record what is wrong with it as evidence, and propose the change instead.",
+          );
+        }
+        if (this.decisionRestsOn(input.projectId, entity.entity_id, input.linkId)) {
+          throw new ProjectWorkRefusedError(
+            "A decision on this work was made against that record, so it stays. Accept the corrected state as a new delivery or a new acceptance: the old one is superseded, never erased.",
+          );
+        }
+      }
       let removed = 0;
       removed += Number(
         this.statement("DELETE FROM edges WHERE project_id = ? AND link_id = ? AND (subject_entity = ? OR object_entity = ?)").run(
@@ -1924,6 +2432,11 @@ export class ProjectWorkStore {
     action: ProjectTaskAction;
     evidenceId?: string | undefined;
     note?: string | undefined;
+    /**
+     * The captures the gate prepared this completion on (D-363), bound to the
+     * completion's own event sequence inside this transaction.
+     */
+    proof?: DecisionProofPreparation | undefined;
   } & ProjectWorkWriteOrigin): {
     entity: ProjectWorkEntity;
     transition: { from: ProjectTaskState; to: ProjectTaskState };
@@ -1993,6 +2506,19 @@ export class ProjectWorkStore {
         actorLabel: input.origin.actor.label,
         ...(input.origin.sessionId ? { sessionId: input.origin.sessionId } : {}),
       });
+      // A completion has no id of its own, so the decision it is bound under is
+      // the sequence it was raised at: exact, monotonic, and two completions in
+      // one millisecond still have two keys (D-363).
+      if (input.proof) {
+        this.bindDecisionProof({
+          projectId: input.projectId,
+          kind: "task_completion",
+          decisionId: String(seq),
+          entityId: entity.entity_id,
+          proof: input.proof,
+          at: now,
+        });
+      }
       // Whatever was waiting on this Task now knows where it stands.
       const cascaded = this.applyCascade(input.projectId, { keys: [entity.key] }, now);
       return {
@@ -2372,6 +2898,12 @@ export class ProjectWorkStore {
     repositories?: readonly AttemptRepositoryRecord[] | undefined;
     /** The checkpoint namespace this attempt's refs were read from. */
     checkpointKey?: string | undefined;
+    /**
+     * The attempt this call is closing, when the caller knows which one it is
+     * (review F2). An id that names no open attempt on this Task is refused,
+     * never resolved to whichever one happens to be newest.
+     */
+    executionLinkId?: string | undefined;
   } & ProjectWorkWriteOrigin): {
     link: ExecutionLink;
     entity: ProjectWorkEntity;
@@ -2390,15 +2922,40 @@ export class ProjectWorkStore {
       // (M21-T18): the row that carries its base commit and its checkpoints is
       // the row that has to carry its terminal outcome, or the record of what
       // happened is split in two and neither half is an attempt.
-      const open = ending
-        ? (this.statement(
-            "SELECT link_id, attempt, started_at, base_commit, repositories_json FROM execution_links " +
-              "WHERE project_id = ? AND entity_id = ? AND kind = ? AND target_id = ? AND ended_at IS NULL " +
-              "ORDER BY attempt DESC LIMIT 1",
-          ).get(input.projectId, entity.entity_id, input.execution.kind, input.execution.targetId) as
-            | { link_id: string; attempt: number; started_at: string; base_commit: string | null; repositories_json: string | null }
-            | undefined)
-        : undefined;
+      //
+      // Which open attempt is decided by identity, never by recency. The row
+      // is already narrowed by kind and target, so two different sessions can
+      // never collide; two attempts of the *same* target are told apart by the
+      // checkpoint namespace the caller is reading, or by the link it names.
+      // A caller whose identity matches no open attempt is refused rather than
+      // closing a row that is not its own (review F2).
+      type OpenRow = { link_id: string; attempt: number; started_at: string; base_commit: string | null; repositories_json: string | null; checkpoint_key: string | null };
+      let open: OpenRow | undefined;
+      if (ending) {
+        const rows = this.statement(
+          "SELECT link_id, attempt, started_at, base_commit, repositories_json, checkpoint_key FROM execution_links " +
+            "WHERE project_id = ? AND entity_id = ? AND kind = ? AND target_id = ? AND ended_at IS NULL " +
+            "ORDER BY attempt DESC",
+        ).all(input.projectId, entity.entity_id, input.execution.kind, input.execution.targetId) as OpenRow[];
+        const named = input.executionLinkId;
+        if (named !== undefined) {
+          open = rows.find((row) => row.link_id === named);
+          if (!open) {
+            throw new ProjectWorkRefusedError(
+              "That attempt is not open on this task, so it cannot be closed. Read the task's attempts and close the one this session started.",
+            );
+          }
+        } else if (input.checkpointKey !== undefined && rows.some((row) => row.checkpoint_key !== null)) {
+          open = rows.find((row) => row.checkpoint_key === input.checkpointKey);
+          if (!open) {
+            throw new ProjectWorkRefusedError(
+              "No attempt this conversation started is open on this task, so there is nothing here for it to close.",
+            );
+          }
+        } else {
+          open = rows[0];
+        }
+      }
       const attempt =
         input.execution.attempt ??
         open?.attempt ??
@@ -2433,7 +2990,10 @@ export class ProjectWorkStore {
         this.statement(
           "UPDATE execution_links SET profile_id = COALESCE(?, profile_id), branch = COALESCE(?, branch), " +
             "repository_id = COALESCE(?, repository_id), base_commit = COALESCE(?, base_commit), ended_at = ?, outcome = ?, " +
-            "repositories_json = COALESCE(?, repositories_json), checkpoint_key = COALESCE(?, checkpoint_key) WHERE link_id = ?",
+            // The checkpoint namespace an attempt was recorded under is its
+            // identity, not a field a later call may re-point: a second
+            // session's key must never end up on this session's row (F2).
+            "repositories_json = COALESCE(?, repositories_json), checkpoint_key = COALESCE(checkpoint_key, ?) WHERE link_id = ?",
         ).run(
           link.profileId ?? null,
           link.branch ?? null,
@@ -2966,6 +3526,7 @@ export class ProjectWorkStore {
       ...(row["capture_blob_id"] ? { captureBlobId: row["capture_blob_id"] as string } : {}),
       ...(row["execution_link_id"] ? { executionLinkId: row["execution_link_id"] as string } : {}),
       ...(row["display_json"] ? { display: JSON.parse(row["display_json"] as string) as RepositoryLinkContext } : {}),
+      ...(row["acceptance_json"] ? { acceptance: JSON.parse(row["acceptance_json"] as string) as RepositoryLinkAcceptance } : {}),
     }));
   }
 
@@ -3007,11 +3568,22 @@ export class ProjectWorkStore {
    * An attempt that has not ended is the one a closing call is closing, and
    * the one whose `startedAt` bounds the window its checkpoints are read from.
    */
-  openAttemptFor(projectId: string, entityId: string, kind: ExecutionLink["kind"], targetId: string): ExecutionLink | undefined {
-    const row = this.statement(
-      "SELECT link_id FROM execution_links WHERE project_id = ? AND entity_id = ? AND kind = ? AND target_id = ? AND ended_at IS NULL " +
-        "ORDER BY attempt DESC LIMIT 1",
-    ).get(projectId, entityId, kind, targetId) as { link_id: string } | undefined;
+  openAttemptFor(
+    projectId: string,
+    entityId: string,
+    kind: ExecutionLink["kind"],
+    targetId: string,
+    checkpointKey?: string,
+  ): ExecutionLink | undefined {
+    const rows = this.statement(
+      "SELECT link_id, checkpoint_key FROM execution_links WHERE project_id = ? AND entity_id = ? AND kind = ? AND target_id = ? AND ended_at IS NULL " +
+        "ORDER BY attempt DESC",
+    ).all(projectId, entityId, kind, targetId) as Array<{ link_id: string; checkpoint_key: string | null }>;
+    // The caller's own conversation first, when it said which one it is: two
+    // attempts of one target are otherwise told apart only by recency, and
+    // recency is not identity (review F2).
+    const mine = checkpointKey === undefined ? undefined : rows.find((row) => row.checkpoint_key === checkpointKey);
+    const row = mine ?? (checkpointKey !== undefined && rows.some((entry) => entry.checkpoint_key !== null) ? undefined : rows[0]);
     return row ? this.executionLink(projectId, row.link_id) : undefined;
   }
 
@@ -3286,6 +3858,33 @@ export class ProjectWorkStore {
   static canonical(value: unknown): string {
     return canonicalJson(value);
   }
+}
+
+/** `?` for each id, so a scoped `IN (…)` is always parameterised. */
+function placeholders(ids: readonly string[]): string {
+  return ids.map(() => "?").join(",");
+}
+
+/**
+ * Where an association page stopped: the link, and the sequence inside it.
+ *
+ * Plain rather than encoded, and parsed strictly: ids are base64url and hold
+ * no colon, so the last one separates the two halves and anything else is not
+ * a cursor this host minted.
+ */
+function associationCursor(cursor: string): { linkId: string; seq: number } | undefined {
+  const at = cursor.lastIndexOf(":");
+  if (at <= 0) return undefined;
+  const seq = Number.parseInt(cursor.slice(at + 1), 10);
+  if (!Number.isSafeInteger(seq)) return undefined;
+  return { linkId: cursor.slice(0, at), seq };
+}
+
+/** Where a binding page stopped: the decision, and the link inside it. */
+function decisionCursor(cursor: string): { decisionId: string; linkId: string } | undefined {
+  const at = cursor.lastIndexOf(":");
+  if (at <= 0) return undefined;
+  return { decisionId: cursor.slice(0, at), linkId: cursor.slice(at + 1) };
 }
 
 function encodeCursor(updatedSeq: number, entityId: string): string {

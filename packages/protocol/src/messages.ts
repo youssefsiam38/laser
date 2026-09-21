@@ -20,6 +20,14 @@ import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./feat
 import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
 import type { ProjectWorkMentionOutcome, ProjectWorkMentionProjection } from "./project-work-mentions.js";
 import type {
+  VerificationStartParams,
+  VerificationStartResult,
+  VerificationStateParams,
+  VerificationStateResult,
+  VerificationStopParams,
+  VerificationStopResult,
+} from "./project-work-verification.js";
+import type {
   ProjectTaskActionParams,
   ProjectTaskActionResult,
   ProjectTaskLinkExecutionParams,
@@ -1800,6 +1808,20 @@ export interface ClientRequests {
    * ours locally on this machine.
    */
   "pi/project/pr/viewed": { params: GitPrViewedParams; result: GitPrViewedResult };
+  /**
+   * Verify one Project Task in this checkout (M21-T19).
+   *
+   * Run control only: the run is a bounded, stoppable Command in the worker
+   * that owns the directory, because that is the only place the Task's own
+   * verification commands can be executed. The *authority* — which criteria
+   * exist, what each one came out as, whether anything converged — stays with
+   * the host and is reached over the project-work bridge, never from here.
+   */
+  "pi/project/verify/start": { params: VerificationStartParams; result: VerificationStartResult };
+  /** Where a run has got to, and its report once it has one. */
+  "pi/project/verify/state": { params: VerificationStateParams; result: VerificationStateResult };
+  /** End a run. What it already proved is still reported. */
+  "pi/project/verify/stop": { params: VerificationStopParams; result: VerificationStopResult };
   /**
    * Subdirectories of `path` (the home directory when omitted), for picking a
    * project without typing a path (M10-T6). Directories only, hidden ones
