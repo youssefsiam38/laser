@@ -66,6 +66,9 @@ import {
   type ProjectWorkWrongProject,
   type ProjectTaskLinkExecutionResult,
   PROJECT_WORK_READ_METHODS,
+  type VerificationBridgeResult,
+  type VerificationDeviation,
+  type VerificationEnvelope,
   type ProjectWorkInteropMethod,
 } from "@lasercode/protocol";
 import { projectRootOf } from "../paths.js";
@@ -80,7 +83,17 @@ import {
   repositoryFor,
   type IdentifiedRepository,
 } from "./delivery.js";
-import { buildCapture, captureReadable, evidenceUnreviewable, storeCapture, type StoredCapture } from "./captures.js";
+import {
+  buildCapture,
+  captureReadable,
+  evidenceUnreviewable,
+  readCaptureBlob,
+  requiredComplete,
+  storeCapture,
+  type StoredCapture,
+} from "./captures.js";
+import { expectedRequiredFacts } from "./required-facts.js";
+import { convergeTask, evaluate, gatherAuthorities, planFrom, readerOf, storeReport } from "./verification/index.js";
 import {
   ProjectWorkConflictError,
   ProjectWorkNotFoundError,
@@ -91,6 +104,7 @@ import {
 import { ProjectWorkExport } from "./export/index.js";
 import { ProjectWorkImport } from "./import/index.js";
 import { ProjectWorkPublish } from "./publish/index.js";
+import { ProjectWorkGate } from "./gate.js";
 import type { ProjectWorkStore } from "./store.js";
 
 /**
@@ -239,6 +253,7 @@ export class ProjectWorkMethods {
     };
     const request = this.attemptSession(this.fenceProject(params.request, projectId), params);
     try {
+      if (params.verify) return await this.verifyStep(params, request, projectId, bridgeCaller);
       if (params.research) return await this.researchWrite(params, request, projectId, bridgeCaller);
       const result = await this.handle(request, bridgeCaller);
       if (request.method === "project/task/link-execution" && params.attempt) {
@@ -319,7 +334,7 @@ export class ProjectWorkMethods {
           origin,
           idempotencyKey: params.idempotencyKey,
         });
-        return this.recordBasedOn(result, params.projectId, params.idempotencyKey, caller);
+        return this.gate(caller, origin).recordBasedOn(result, params.projectId, params.idempotencyKey);
       }
       case "project/work/revise": {
         const params = request.params;
@@ -335,7 +350,7 @@ export class ProjectWorkMethods {
           origin,
           idempotencyKey: params.idempotencyKey,
         });
-        return this.recordBasedOn(result, params.projectId, params.idempotencyKey, caller);
+        return this.gate(caller, origin).recordBasedOn(result, params.projectId, params.idempotencyKey);
       }
       case "project/work/archive": {
         const params = request.params;
@@ -445,10 +460,18 @@ export class ProjectWorkMethods {
         // provenance"). A full durable budget refuses the gate here — with
         // nothing approved — rather than accepting a digest and losing the
         // evidence to the next pruning.
-        if (params.decision === "approved") {
-          const covered = [params.entityId, ...params.covers.map((revision) => revision.entityId)];
-          await this.keepEvidenceReviewable(params.projectId, covered, "This approval", caller);
-        }
+        // And the approval binds the exact proofs that preparation checked, in
+        // the transaction that writes it: a capture corrected in between
+        // refuses the approval rather than becoming, after the fact, what the
+        // person approved on (D-363).
+        const proof =
+          params.decision === "approved"
+            ? await this.gate(caller, origin).keepEvidenceReviewable(
+                params.projectId,
+                [params.entityId, ...params.covers.map((revision) => revision.entityId)],
+                "This approval",
+              )
+            : undefined;
         const result = this.store.approve({
           projectId: params.projectId,
           entityId: params.entityId,
@@ -459,6 +482,7 @@ export class ProjectWorkMethods {
           ...(params.mode !== undefined ? { mode: params.mode } : {}),
           ...(params.skipReason !== undefined ? { skipReason: params.skipReason } : {}),
           ...(params.note !== undefined ? { note: params.note } : {}),
+          ...(proof ? { proof } : {}),
           origin,
           idempotencyKey: params.idempotencyKey,
         });
@@ -501,11 +525,30 @@ export class ProjectWorkMethods {
         const params = request.params;
         const origin = this.originFor(params.origin, caller);
         this.requireWritable(params.projectId);
-        if (params.link.type === "delivery") return this.acceptDelivery(params, caller, origin);
+        const gate = this.gate(caller, origin);
+        if (params.link.type === "delivery") return gate.acceptDelivery(params);
+        // A state a verification names is validated against git and captured
+        // before it is stored, whoever asked and whether or not they asked for
+        // it to be native evidence (D-361): a link that names a commit nobody
+        // ever had, or one whose checkpoint has been pruned, would otherwise
+        // sit in the record looking exactly like proof.
+        const verified =
+          params.link.type === "evidence" && params.link.verifiedAt
+            ? await gate.prepareVerifiedAt({
+                projectId: params.projectId,
+                entityId: params.link.entityId,
+                revisionId: params.link.revisionId,
+                repositoryId: params.link.verifiedAt.repositoryId,
+                state: params.link.verifiedAt.state,
+                ...(params.link.verifiedAt.acceptance ? { acceptance: params.link.verifiedAt.acceptance } : {}),
+                ...(params.link.verifiedAt.attempt ? { attempt: params.link.verifiedAt.attempt } : {}),
+              })
+            : undefined;
         return this.store.link({
           projectId: params.projectId,
           expectedRevisionId: params.expectedRevisionId,
           link: params.link,
+          ...(verified ? { verified } : {}),
           origin,
           idempotencyKey: params.idempotencyKey,
         });
@@ -530,9 +573,10 @@ export class ProjectWorkMethods {
         // Done rests on evidence, and evidence that cannot be read is not
         // evidence: everything this Task's delivery links name is captured
         // before the Task can be completed.
-        if (params.action === "complete") {
-          await this.keepEvidenceReviewable(params.projectId, [params.entityId], "Marking this task done", caller);
-        }
+        const proof =
+          params.action === "complete"
+            ? await this.gate(caller, origin).keepEvidenceReviewable(params.projectId, [params.entityId], "Marking this task done")
+            : undefined;
         return this.store.taskAction({
           projectId: params.projectId,
           entityId: params.entityId,
@@ -540,6 +584,7 @@ export class ProjectWorkMethods {
           action: params.action,
           ...(params.evidenceId !== undefined ? { evidenceId: params.evidenceId } : {}),
           ...(params.note !== undefined ? { note: params.note } : {}),
+          ...(proof ? { proof } : {}),
           origin,
           idempotencyKey: params.idempotencyKey,
         });
@@ -550,7 +595,7 @@ export class ProjectWorkMethods {
         this.requireWritable(params.projectId);
         const { sessionPath: _sessionPath, ...execution } = params.execution;
         void _sessionPath;
-        const facts = await this.attemptFacts(params, caller);
+        const facts = await this.gate(caller, origin).attemptFacts(params);
         const result = this.store.linkExecution({
           projectId: params.projectId,
           entityId: params.entityId,
@@ -663,276 +708,26 @@ export class ProjectWorkMethods {
   // ------------------------------------------------------- repository facts
 
   /**
-   * One detail read, plus — when it was asked for — what git still has.
+   * Repository provenance for one call (M21-T18, M21-T19, review F4).
    *
-   * `repositoryStatus` is opt-in because it spawns git per repository, and
-   * because the answer it gives is never needed to *read* a link: a link says
-   * what it always said. It is needed to say whether that can still be looked
-   * at, which is a different question and gets a different field.
+   * Everything that reads git, keeps a capture or refuses a decision for want
+   * of one lives in {@link ProjectWorkGate}; this authority routes to it and
+   * keeps the rules about who may call what. The gate is built per call
+   * because the checkout and the actor are per call.
    */
+  private gate(caller: ProjectWorkCaller, origin?: ProjectWorkOrigin): ProjectWorkGate {
+    return new ProjectWorkGate({
+      store: this.store,
+      caller: {
+        ...(caller.cwd !== undefined ? { cwd: caller.cwd } : {}),
+        origin: origin ?? this.originFor(undefined, caller),
+      },
+    });
+  }
+
   private async get(params: ProjectWorkGetParams, caller: ProjectWorkCaller): Promise<ProjectWorkGetResult> {
     this.requireProject(params.projectId);
-    const detail = this.store.get({
-      projectId: params.projectId,
-      ...(params.entityId !== undefined ? { entityId: params.entityId } : {}),
-      ...(params.key !== undefined ? { key: params.key } : {}),
-      ...(params.revisionId !== undefined ? { revisionId: params.revisionId } : {}),
-      ...(params.body ? { body: params.body } : {}),
-      ...(params.include ? { include: params.include } : {}),
-    });
-    if (params.include?.repositoryStatus !== true || detail.repositoryLinks.length === 0) return detail;
-    const repositories = await this.repositoriesOf(params.projectId, caller);
-    const status: RepositoryLinkAvailability[] = [];
-    for (const link of detail.repositoryLinks) {
-      status.push(
-        await linkAvailability(
-          link,
-          repositoryFor(repositories, link.repositoryId)?.repository,
-          captureReadable(this.store, params.projectId, link),
-        ),
-      );
-    }
-    return { ...detail, repositoryStatus: status };
-  }
-
-  /**
-   * The checkout git is read in for this call.
-   *
-   * The worker bridge names the directory the attempt runs in; a client call
-   * is answered from the project's own current folder. Neither one decides
-   * *which* project may be changed — that is resolved before this runs.
-   */
-  private checkoutOf(projectId: string, caller: ProjectWorkCaller): string | undefined {
-    return caller.cwd ?? this.store.projectPaths(projectId)[0];
-  }
-
-  private async repositoriesOf(projectId: string, caller: ProjectWorkCaller): Promise<IdentifiedRepository[]> {
-    const checkout = this.checkoutOf(projectId, caller);
-    if (!checkout) return [];
-    return identifyRepositories(this.store, projectId, checkout);
-  }
-
-  /**
-   * What this attempt's repositories did, read from git (M21-T18).
-   *
-   * Never fatal: a checkout that is not a repository, a git that will not run
-   * or a workspace that has moved leaves the attempt with its identity, its
-   * profile and its outcome, and no repository record — which is honest. What
-   * it must never do is guess.
-   */
-  private async attemptFacts(
-    params: ProjectTaskLinkExecutionParams,
-    caller: ProjectWorkCaller,
-  ): Promise<{ repositories?: AttemptRepositoryRecord[]; checkpointKey?: string }> {
-    const checkout = this.checkoutOf(params.projectId, caller);
-    if (!checkout) return {};
-    const open = this.store.openAttemptFor(params.projectId, params.entityId, params.execution.kind, params.execution.targetId);
-    const checkpointKey = params.execution.sessionPath
-      ? checkpointSessionKey(params.execution.sessionPath)
-      : open
-        ? this.store.attemptCheckpointKey(params.projectId, open.linkId)
-        : undefined;
-    try {
-      const repositories = await attemptRepositoryFacts(this.store, {
-        projectId: params.projectId,
-        checkout,
-        startedAt: open?.startedAt ?? params.execution.startedAt ?? new Date().toISOString(),
-        ...(params.execution.endedAt ? { endedAt: params.execution.endedAt } : {}),
-        ...(checkpointKey ? { sessionKey: checkpointKey } : {}),
-        ...(open?.repositories ? { previous: open.repositories } : {}),
-        ...(params.execution.baseCommitObjectId ?? open?.baseCommitObjectId
-          ? { baseCommitObjectId: (params.execution.baseCommitObjectId ?? open?.baseCommitObjectId) as string }
-          : {}),
-      });
-      return {
-        ...(repositories.length > 0 ? { repositories } : {}),
-        ...(checkpointKey ? { checkpointKey } : {}),
-      };
-    } catch {
-      return checkpointKey ? { checkpointKey } : {};
-    }
-  }
-
-  /**
-   * The code state a revision was derived from (M21-T18).
-   *
-   * Recorded for a write made from a session with a checkout — the worker
-   * bridge — as one `based_on` link per repository, at the exact commit each
-   * one was on. A person editing a Spec in the workspace has no session
-   * checkout and gets none: inventing the project folder's current `HEAD` as
-   * "what this was derived from" would be a guess, and this record exists
-   * because guesses are what it replaces.
-   *
-   * Research is the one kind that is left out, and for a reason rather than
-   * for cost: a finding's provenance is the `SourceRef` it was read from, not
-   * the code that happened to be checked out while the agent read a web page.
-   *
-   * A failure here never undoes the revision: provenance is a record beside
-   * the work, not a condition of it.
-   */
-  private async recordBasedOn(
-    result: ProjectWorkWriteResult,
-    projectId: string,
-    idempotencyKey: string,
-    caller: ProjectWorkCaller,
-  ): Promise<ProjectWorkWriteResult> {
-    if (caller.cwd === undefined || result.replayed === true || result.entity.kind === "research") return result;
-    let states: Awaited<ReturnType<typeof currentStates>>;
-    try {
-      states = await currentStates(this.store, projectId, caller.cwd);
-    } catch {
-      return result;
-    }
-    const links: RepositoryLink[] = [];
-    for (const row of states) {
-      try {
-        const written = this.store.link({
-          projectId,
-          expectedRevisionId: result.revision.revisionId,
-          link: {
-            type: "repository",
-            relation: "based_on",
-            subjectEntityId: result.entity.entityId,
-            subjectRevisionId: result.revision.revisionId,
-            repositoryId: row.repositoryId,
-            target: { state: row.state },
-            ...(row.branch ? { display: { branch: row.branch } } : {}),
-          },
-          origin: this.originFor(undefined, caller),
-          idempotencyKey: `${idempotencyKey}-based-on-${row.repositoryId}`,
-        });
-        if (written.link.type === "repository") links.push(written.link.repository);
-      } catch {
-        // The revision is written and current; its provenance is best effort.
-      }
-    }
-    return links.length > 0 ? { ...result, basedOn: links } : result;
-  }
-
-  /**
-   * Accept one exact repository change as the delivery of this work.
-   *
-   * The whole of the leap's `implemented_by` rule lives in these steps, in
-   * this order:
-   *
-   * 1. **A person accepts delivery.** An agent reports evidence and proposes;
-   *    it never decides that what it wrote is what was wanted (D-332).
-   * 2. **The change is checked against git**, not taken on trust: the repository
-   *    must be one this project knows and has open here, both ends must exist,
-   *    and the diff digest must be the digest of the diff that is actually
-   *    there. A change that has moved is refused, with what to do.
-   * 3. **The canonical capture is stored before the acceptance is written.** A
-   *    full durable budget refuses the whole thing — there is no accepted
-   *    delivery whose evidence was never kept.
-   * 4. **The links are appended**, one per accepted subject revision, and a
-   *    correction supersedes without removing anything.
-   */
-  private async acceptDelivery(
-    params: ProjectWorkLinkParams,
-    caller: ProjectWorkCaller,
-    origin: ProjectWorkOrigin,
-  ): Promise<ProjectWorkLinkResult> {
-    if (params.link.type !== "delivery") throw new ProjectWorkRefusedError("That is not a delivery.");
-    const payload = params.link;
-    if (origin.actor.kind !== "person") {
-      throw new ProjectWorkRefusedError(
-        "Only a person accepts a change as the delivery of a task. Report the evidence for it and ask for review instead.",
-      );
-    }
-    const repositories = await this.repositoriesOf(params.projectId, caller);
-    const repository = repositoryFor(repositories, payload.repositoryId);
-    if (!repository) {
-      throw new ProjectWorkRefusedError(
-        "That repository is not one this project has open here, so the change it names cannot be read. Open the project at the checkout that holds it and accept the delivery there.",
-      );
-    }
-    const capture = await this.captureDelivery(params.projectId, payload, repository.repository);
-    return this.store.link({
-      projectId: params.projectId,
-      expectedRevisionId: params.expectedRevisionId,
-      link: payload,
-      capture,
-      origin,
-      idempotencyKey: params.idempotencyKey,
-    });
-  }
-
-  /** Read the change, prove it is the one that was previewed, and keep it. */
-  private async captureDelivery(
-    projectId: string,
-    payload: Extract<ProjectWorkLinkParams["link"], { type: "delivery" }>,
-    repository: HostRepository,
-  ): Promise<StoredCapture> {
-    const diff = await diffBetween(repository, payload.change.base.commitObjectId, payload.change.head.commitObjectId);
-    if (!diff) {
-      throw new ProjectWorkRefusedError(
-        "That change is not in the repository any more, so it cannot be accepted as the delivery. Pick a change that is still there — a commit, or a checkpoint that has not been pruned.",
-      );
-    }
-    if (diff.digest !== payload.change.diffDigest) {
-      throw new ProjectWorkRefusedError(
-        "That change is not what it was when you looked at it. Look at the difference again, then accept it.",
-      );
-    }
-    const built = await buildCapture({
-      repository,
-      repositoryId: payload.repositoryId,
-      change: payload.change,
-      now: new Date().toISOString(),
-    });
-    if (!built) {
-      throw new ProjectWorkRefusedError(
-        "That change could not be read out of the repository, so there would be nothing to review later. Try again, or pick a change that is still there.",
-      );
-    }
-    return storeCapture(this.store, { projectId, entityId: payload.entityId, capture: built, gate: "Accepting this delivery" });
-  }
-
-  /**
-   * Keep what a decision rests on readable, or refuse the decision.
-   *
-   * For every `implemented_by` / `verified_at` link on the entities a decision
-   * covers: if its capture is already stored, nothing happens; if git still
-   * has the change, the bounded capture is taken now and attached; if neither,
-   * the decision is refused naming what is missing. Nothing is ever approved
-   * or completed on evidence that cannot be looked at (D-345).
-   */
-  private async keepEvidenceReviewable(
-    projectId: string,
-    entityIds: readonly string[],
-    gate: string,
-    caller: ProjectWorkCaller,
-  ): Promise<void> {
-    const links: RepositoryLink[] = [];
-    for (const entityId of new Set(entityIds)) {
-      for (const link of this.store.repositoryLinksOf(projectId, entityId)) {
-        if (link.relation === "implemented_by" || link.relation === "verified_at") links.push(link);
-      }
-    }
-    if (links.length === 0) return;
-    const repositories = await this.repositoriesOf(projectId, caller);
-    for (const link of links) {
-      if (captureReadable(this.store, projectId, link)) continue;
-      const repository = repositoryFor(repositories, link.repositoryId)?.repository;
-      const availability = await linkAvailability(link, repository, false);
-      if (!repository || !availability.sourceAvailable) {
-        throw evidenceUnreviewable(link, availability.missing, gate);
-      }
-      if (!("change" in link.target)) {
-        // A state link names one commit and no difference; git still has it,
-        // which is the whole of what "reviewable" can mean for a state.
-        continue;
-      }
-      const built = await buildCapture({
-        repository,
-        repositoryId: link.repositoryId,
-        change: link.target.change,
-        now: new Date().toISOString(),
-      });
-      if (!built) throw evidenceUnreviewable(link, availability.missing, gate);
-      const stored = storeCapture(this.store, { projectId, entityId: link.subject.entityId, capture: built, gate });
-      this.store.attachCapture(projectId, link.linkId, stored.blobId);
-    }
+    return this.gate(caller).get(params);
   }
 
   // --------------------------------------------- import, export, publish
@@ -1141,6 +936,166 @@ export class ProjectWorkMethods {
   }
 
   /**
+   * One step of a verification run (M21-T19).
+   *
+   * Two steps, and the host owns both ends of each:
+   *
+   * - **plan** derives every criterion from this store, at the exact revisions
+   *   the Task's own links name, and hands back the commands the Task
+   *   declared. A verifier cannot add a criterion, remove one, or change which
+   *   revision it was taken from.
+   * - **report** takes the command runs — exit codes and bounded output, the
+   *   one thing only the process that ran them can know — evaluates every
+   *   criterion here, stores the canonical report as `verification` evidence
+   *   at the exact revision, and moves the Task to `needs_review` only when
+   *   everything it could decide came out satisfied and nothing blocks.
+   *
+   * The carrier request is the real call each step is: a read for the plan, a
+   * link for the report. Its result is answered as usual, and the verification
+   * answer rides beside it, the way a research write's does.
+   */
+  private async verifyStep(
+    params: ProjectWorkBridgeParams,
+    request: ProjectWorkRequest,
+    projectId: string,
+    caller: ProjectWorkCaller,
+  ): Promise<ProjectWorkBridgeResult> {
+    const verify = params.verify!;
+    if (verify.action === "plan") {
+      if (request.method !== "project/work/get") {
+        throw new ProtocolError(ErrorCodes.InvalidParams, "A verification plan is read with the task it is for.");
+      }
+      const result = await this.handle(request, caller);
+      const entityId = (result as ProjectWorkGetResult).entity.entityId;
+      const gathered = gatherAuthorities(readerOf(this.store), projectId, entityId);
+      return { method: request.method, result, projectId, verifyResult: { plan: planFrom(gathered) } };
+    }
+    if (request.method !== "project/work/link") {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "A verification report is stored as evidence on the task it is about.");
+    }
+    return this.verifyReport(request.params, verify, projectId, caller);
+  }
+
+  /**
+   * Evaluate and store one run's report.
+   *
+   * The caller's link payload supplies the fence and the idempotency key and
+   * nothing else: the record's kind, role, summary, detail and outcome are
+   * assembled here from the host's own evaluation, so an agent can report what
+   * a command did and never what it meant.
+   */
+  private async verifyReport(
+    linkParams: ProjectWorkLinkParams,
+    verify: Extract<VerificationEnvelope, { action: "report" }>,
+    projectId: string,
+    caller: ProjectWorkCaller,
+  ): Promise<ProjectWorkBridgeResult> {
+    this.requireWritable(projectId);
+    const payload = linkParams.link;
+    if (payload.type !== "evidence") {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "A verification report is stored as evidence on the task it is about.");
+    }
+    const entityId = payload.entityId;
+    const gathered = gatherAuthorities(readerOf(this.store), projectId, entityId);
+    const plan = planFrom(gathered);
+    const repositoryLinks = [
+      ...this.store.repositoryLinksOf(projectId, entityId),
+      ...(gathered.design ? this.store.repositoryLinksOf(projectId, gathered.design.detail.entity.entityId) : []),
+    ];
+    const evidence = [
+      ...gathered.task.evidence,
+      ...(gathered.design ? gathered.design.detail.evidence : []),
+    ];
+    const completeness = new Map<string, boolean>();
+    const evaluation = evaluate({
+      plan,
+      gathered,
+      commands: verify.commands,
+      repositoryLinks,
+      evidence,
+      // Convergence reads what was stored when the person accepted, never git:
+      // the contract protects this evidence against the day retention prunes
+      // the checkpoint it came from (D-361).
+      captureReadable: (link) => captureReadable(this.store, projectId, link),
+      // And, for native evidence, whether the capture the acceptance was
+      // taken against holds every source it rests on — read out of the stored
+      // blob, never out of git (M21-T19), and checked against what the record
+      // says that capture must be rather than against itself (review F2).
+      //
+      // The capture read here is the one the **decision bound**, not the
+      // link's current pointer (D-363): a partial acceptance never becomes
+      // native evidence because somebody later corrected what the link points
+      // at. An acceptance written before that binding existed is read against
+      // the link's own original association — the row written inside the
+      // link's insert, which this store can attribute to it independently —
+      // and never against a migration baseline, which is only what the
+      // migration happened to see and says nothing about what that acceptance
+      // consumed. With neither, the honest answer is that this is not proved
+      // here, and the criterion asks for the review again.
+      //
+      // Answered once per link: several visual criteria commonly rest on the
+      // same acceptance, and a capture is up to four megabytes.
+      captureComplete: (link) => {
+        const known = completeness.get(link.linkId);
+        if (known !== undefined) return known;
+        const bound = link.acceptance?.captureBlobId ?? this.store.originalCaptureAssociation(projectId, link.linkId)?.blobId;
+        const capture = bound === undefined ? undefined : readCaptureBlob(this.store, projectId, bound);
+        const answer = capture !== undefined && requiredComplete(capture, expectedRequiredFacts(this.store, projectId, link));
+        completeness.set(link.linkId, answer);
+        return answer;
+      },
+      ...(verify.stopped ? { stopped: true } : {}),
+    });
+    // A deviation is a proposal a person accepts; a run never records one as
+    // accepted, whatever it sends.
+    const deviations: VerificationDeviation[] = (verify.deviations ?? []).map((deviation) => ({
+      ...deviation,
+      state: "proposed",
+    }));
+    const origin = this.originFor(linkParams.origin, caller);
+    const stored = storeReport({
+      store: this.store,
+      projectId,
+      entityId,
+      expectedRevisionId: plan.task.revisionId,
+      plan,
+      evaluation,
+      commands: verify.commands,
+      deviations,
+      runId: verify.runId,
+      startedAt: verify.startedAt,
+      endedAt: verify.endedAt,
+      ...(verify.stopped ? { stopped: verify.stopped } : {}),
+      origin,
+      idempotencyKey: linkParams.idempotencyKey,
+    });
+    const moved = convergeTask({
+      store: this.store,
+      projectId,
+      entityId,
+      expectedRevisionId: plan.task.revisionId,
+      evidenceId: stored.evidence.evidenceId,
+      report: stored.report,
+      origin,
+      idempotencyKey: linkParams.idempotencyKey,
+    });
+    const state = moved?.state ?? this.store.get({ projectId, entityId, body: { mode: "none" } }).entity.state;
+    const verifyResult: VerificationBridgeResult = {
+      report: stored.report,
+      evidenceId: stored.evidence.evidenceId,
+      blobId: stored.blobId,
+      taskState: state,
+      ...(moved ? { transition: { from: moved.from, to: moved.to } } : {}),
+    };
+    return {
+      method: "project/work/link",
+      result: { link: { type: "evidence", evidence: stored.evidence }, seq: stored.seq },
+      projectId,
+      verifyResult,
+    };
+  }
+
+  /**
    * What an attempt ran in, as one supporting evidence record.
    *
    * The execution link carries identity, profile, branch and base commit; the
@@ -1298,6 +1253,9 @@ export function toProtocolError(error: unknown): unknown {
       recovery: error.recovery,
       usedBytes: error.usedBytes,
       limitBytes: error.limitBytes,
+      ...(error.measure === "bytes"
+        ? {}
+        : { measure: error.measure, ...(error.usedCount !== undefined ? { usedCount: error.usedCount } : {}), ...(error.limitCount !== undefined ? { limitCount: error.limitCount } : {}) }),
     } satisfies ProjectWorkQuotaRefusal);
   }
   if (error instanceof ProjectWorkRefusedError) {

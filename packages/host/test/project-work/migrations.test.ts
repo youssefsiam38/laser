@@ -91,6 +91,61 @@ describe("schema versioning", () => {
     }
   });
 
+  it("adds the decision-proof tables without touching what a v4 database holds", () => {
+    // A database from the format before decisions bound their own proof: its
+    // work, its links and the capture history it already had must come
+    // through the upgrade unchanged, and the new tables must arrive empty
+    // rather than backfilled with a past nobody recorded (D-363).
+    let projectId = "";
+    let linkId = "";
+    const first = new ProjectWorkStore({ file });
+    try {
+      projectId = first.projectIdFor(join(base, "alpha"))!;
+      const spec = first.create({ projectId, kind: "spec", title: "One", body: specBody(), origin: person, idempotencyKey: "one" });
+      const repositoryId = first.ensureRepository({ projectId, name: "app", gitCommonDir: join(base, "alpha/app/.git") });
+      const blobId = first.putBlob({ projectId, mediaType: "application/json", data: Buffer.from("a capture", "utf8") }).blobId;
+      const written = first.link({
+        projectId,
+        expectedRevisionId: spec.revision.revisionId,
+        link: {
+          type: "repository",
+          relation: "based_on",
+          subjectEntityId: spec.entity.entityId,
+          subjectRevisionId: spec.revision.revisionId,
+          repositoryId,
+          target: { state: { vcs: "git", objectFormat: "sha1", commitObjectId: "a".repeat(40) } },
+          captureBlobId: blobId,
+        },
+        origin: person,
+        idempotencyKey: "link",
+      });
+      if (written.link.type !== "repository") throw new Error("unreachable");
+      linkId = written.link.repository.linkId;
+    } finally {
+      first.close();
+    }
+
+    const raw = new DatabaseSync(file);
+    raw.exec("DROP TABLE decision_capture_bindings");
+    raw.exec("DROP TABLE decision_capture_binding_sets");
+    raw.exec("PRAGMA user_version = 4");
+    raw.close();
+
+    const upgraded = new ProjectWorkStore({ file });
+    try {
+      expect(existsSync(`${file}.v4.backup`), "a copy first, because approvals are not reproducible").toBe(true);
+      const association = upgraded.currentCaptureAssociation(projectId, linkId);
+      expect(association?.reason, "the capture history it already had is untouched").toBe("first_capture");
+      expect(
+        upgraded.captureHistoryPage(projectId, { of: "decisions", linkIds: [linkId] }),
+        "and nothing is invented about what older decisions rested on",
+      ).toEqual({ of: "decisions", associations: [], bindings: [] });
+      expect(upgraded.get({ projectId, key: "SPEC-1", body: { mode: "none" } }).entity.title).toBe("One");
+    } finally {
+      upgraded.close();
+    }
+  });
+
   it("leaves the version alone when a step cannot be applied", () => {
     // A table that collides with the one the first step creates: the step
     // throws, and the transaction takes the version bump back with it.

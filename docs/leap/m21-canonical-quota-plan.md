@@ -1,4 +1,9 @@
-# M21-T2 — canonical metadata accounting and quotas (plan, not implementation)
+# M21-T2 — canonical metadata accounting and quotas
+
+> **Implemented.** §§1–12 below are the source audit and the original plan; the
+> parent's amendment (D-365) and then §13 override them where they differ.
+> Read §13 for what the code actually does.
+
 
 Parent inspection returned checkpoint40c89aa1 for the bounded migration,
 global recovery-copy, no-clamp and historical-reference corrections in
@@ -347,3 +352,125 @@ quota protocol types. No UI or worker writes. Use focused host project-work
 and relevant protocol suites, build/types/identity; parent owns the full gate.
 One independent storage review follows implementation. No general budget
 framework, raised limits, silent canonical deletion or unbounded per-write scan.
+
+## 13. What was implemented, and where the plan changed
+
+The repair landed on the merged `36e163ed` backend. Files written:
+`packages/host/src/project-work/{accounting.ts,store.ts,schema.ts,errors.ts,
+methods.ts}`, `packages/protocol/src/project-work-methods.ts`, and the tests
+`packages/host/test/project-work/quota.test.ts` plus assertion updates in
+`{store,bodies}.test.ts` and `packages/protocol/test/project-work-methods.test.ts`.
+
+### The definition
+
+`accounting.ts` is the single definition: `ROW_OVERHEAD_BYTES = 64` plus the
+UTF-8 length of every stored TEXT value and the byte length of every stored
+BLOB; integers, reals and nulls are covered by the floor. A `blobs` row is
+charged its own metadata **plus** its deduplicated payload once, and gives the
+payload back — keeping the row and its metadata charge — when a derived blob is
+released. `blob_chunks` is never charged: it is that same payload.
+
+Classification lives in the same file and is the guard test's input:
+
+| Class | Tables | Why |
+| --- | --- | --- |
+| `CANONICAL_TABLES` | `projects`, `project_paths`, `repositories`, `entities`, `revisions`, `edges`, `comments`, `approvals`, `decisions`, `evidence`, `repository_links`, `repository_link_captures`, `execution_links`, `decision_capture_bindings`, `decision_capture_binding_sets`, `blobs`, `idempotency` | charged, counted, refused at the cap, never auto-evicted |
+| `BOOKKEEPING_TABLES` | `key_sequences` | ≤ one row per project per kind, and a row that never grows — a stated bound, not an appeal to "workspace shape" |
+| `DERIVED_TABLES` | `events` (≤ `eventsRetained`, pruned on every raise), `search_projection` (≤ 1 per entity, rebuildable) | reproducible and bounded; never a reason to refuse |
+| `UNPARTITIONED_TABLES` | `blob_chunks` | the payload already counted through `blobs.bytes` |
+
+`project_paths` and `repositories` are charged as canonical identity mappings,
+per the amendment; the plan's §2 claim that they are bounded by workspace shape
+is withdrawn.
+
+### Enforcement: one net decision per transaction
+
+Charges are **stored** in a `charged_bytes` column on each canonical table.
+`ProjectWorkStore.chargeRow` prices a row from what is really in it and moves a
+per-transaction ledger by the difference from what that row was charged before,
+so the same call answers an insert, an update that grew and an update that
+shrank. `creditRows` gives back the persisted charge immediately before the
+`DELETE` that uses the same `WHERE`.
+
+Admission is decided once, in `settle()`, inside the transaction and before the
+commit: a ceiling is only consulted when the transaction's **net** delta for
+that dimension is positive, against the usage the transaction started with.
+That is what lets an over-cap store recover — a deletion that credits more than
+the idempotency receipt it writes afterwards costs is admitted even though the
+store is still over the limit when it finishes. Cost is one counter read per
+project touched plus one global sum, whatever the transaction wrote; every
+statement shape is fixed per table, so the prepared-statement cache is
+O(tables).
+
+A refusal throws inside the transaction, so the rows, the counters, the
+`projects.seq` bump, the events and the idempotency receipt roll back together.
+
+### Counts
+
+`projects.record_count` counts charged rows. New ceilings, configurable through
+the existing `ProjectWorkQuota`: `projectRecords` 200 000, `globalRecords`
+1 000 000. `PROJECT_WORK_PROJECT_BYTES_DEFAULT` (512 MB),
+`PROJECT_WORK_GLOBAL_BYTES_DEFAULT` (4 GB) and
+`PROJECT_WORK_PROJECT_ENTITIES_DEFAULT` (20 000) are unchanged; no limit was
+raised. `ProjectWorkQuotaError` gained `measure`/`usedCount`/`limitCount`, and
+`ProjectWorkQuotaRefusal` carries them as optional fields over the wire —
+`usedBytes` and `limitBytes` remain bytes and only bytes. No new RPC method, no
+usage meter.
+
+### Deletion (A-2)
+
+An explicit entity deletion now also removes and credits the rows it used to
+orphan: that entity's `repository_link_captures`, `decision_capture_bindings`
+and `decision_capture_binding_sets`. Before any of that, `proofConsumedElsewhere`
+refuses the deletion outright when a **surviving other** item's decision bound
+one of these links or blobs, when another item's evidence names one of these
+links, or when another item's link is proved by one of these blobs. Nothing is
+blindly unbound and nothing is left pointing at missing proof. `unlink` credits
+each predicate it already deleted by, and takes a removed repository link's own
+association history with it.
+
+Project-scoped idempotency receipts intentionally survive an entity deletion —
+they answer the same key for ever — so the counters do not return exactly to
+their pre-write values, and the test asserts the remaining difference is
+precisely the receipts.
+
+### Migration
+
+`PROJECT_WORK_SCHEMA_VERSION` 5 → 6, one `step`, inside the existing
+backup-then-atomic-step machinery. It adds `charged_bytes` (idempotently, by
+asking the table what it has) and `record_count`, then recomputes every row's
+charge from its own stored values and **replaces** `bytes`, `record_count` and
+`entity_count`. No row is deleted, no column but `charged_bytes` is written, and
+re-running it recomputes rather than accumulates. One log line per project.
+
+A store can be over its cap afterwards. It stays fully readable, and only growth
+is refused. `reconcileUsage()` is the independent recount: it derives the totals
+from the raw rows and never sums `charged_bytes`, so a forgotten recharge after
+an UPDATE is a test failure rather than silent drift.
+
+### Copy
+
+The refusal sentences no longer offer archiving as a way to make room —
+archiving hides an item and keeps every byte of its history — and no longer say
+"Nothing was saved" when the caller's gate stored evidence in an **earlier**
+transaction: `approve` and `taskAction` carrying a `proof` preparation refuse
+with a sentence that says the prepared evidence is kept and readable and that
+the decision itself was not recorded.
+
+### Withdrawn from the plan
+
+- §3's "observed file-size factor … expected ≈1.2–1.6×": not implemented and
+  not measured. The budget is logical; nothing claims a relationship to the
+  size of the SQLite file.
+- §11 A-1's "no new cap" and §2's "bounded by workspace shape": superseded by
+  the amendment.
+- §4's per-statement `requireRoom(projectId, addedBytes, …)`: replaced by the
+  net per-transaction settlement above, for the reason the amendment gives.
+
+### Evidence
+
+- `pnpm -r build` — clean.
+- `env -i PATH="$PATH" HOME="$HOME" pnpm -F @lasercode/host exec vitest run test/project-work` — 21 files, 335 tests passing (311 before this work, 24 new in `quota.test.ts`).
+- `pnpm -F @lasercode/protocol exec vitest run test/project-work.test.ts test/project-work-methods.test.ts test/schemas.test.ts` — 95 passing, no type errors.
+- `pnpm identity:check` — clean.
+- Not run here (the parent owns the full gate): `pnpm verify`, the UI and worker suites.
