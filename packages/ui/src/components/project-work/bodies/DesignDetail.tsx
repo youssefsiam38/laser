@@ -32,6 +32,7 @@ import { DesignCanvas } from "@/components/design/DesignCanvas";
 import { DesignIndexPanel, type DesignIndexAccess } from "@/components/design/DesignIndexPanel";
 import { HostContextPanel, type GroundHostPage } from "@/components/design/HostContextPanel";
 import { useDesignAccess } from "@/components/design/use-design-access";
+import { FoundationWizard } from "@/components/design/FoundationWizard";
 import { NodeInspector } from "@/components/design/NodeInspector";
 import { PrototypeStage } from "@/components/design/PrototypeStage";
 import { ScreenInspector, type GroundSketch } from "@/components/design/ScreenInspector";
@@ -197,7 +198,11 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
     };
   }, [body.foundation?.tokensBlobId, hasClient, liveIndex?.tokensDocument, projectId]);
 
-  const tokens = useMemo(() => frameTokens(liveIndex?.tokensDocument ?? foundationTokens), [liveIndex?.tokensDocument, foundationTokens]);
+  // Built source wins over the proposed foundation's blob or inline tokens.
+  const tokens = useMemo(
+    () => frameTokens(liveIndex?.tokensDocument ?? foundationTokens ?? draft.foundation?.tokens),
+    [liveIndex?.tokensDocument, foundationTokens, draft.foundation?.tokens],
+  );
   const entries = useMemo(() => {
     const map = new Map<string, KitIndexEntry>();
     for (const entry of liveIndex?.entries ?? []) {
@@ -362,6 +367,49 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
   const aggregate = designAggregateFidelity(draft);
   const sketchOnly = designIsSketchOnly(draft);
   const validation = useMemo(() => validateDesignBody(draft, { primitives: KIT_NAMES }), [draft]);
+
+  // The Foundation slot (M21-T14): a greenfield design is its foundation
+  // until it has screens, so the wizard is the body rather than a panel
+  // beside an empty canvas.
+  const foundation = draft.foundation;
+  if (foundation) {
+    return (
+      <div data-slot="design-detail" className="flex min-w-0 flex-col gap-5">
+        <Section title="Brief">
+          <Prose text={draft.brief} />
+        </Section>
+        <FoundationWizard
+          body={draft}
+          foundation={foundation}
+          context={context}
+          editable={editable}
+          dirty={dirty}
+          onChange={(next) => setDraft((current) => ({ ...current, foundation: next }))}
+          onSave={save}
+          index={liveIndex}
+        />
+        {dirty && editable ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="ghost" disabled={saving} onClick={() => setDraft(body)}>
+              <Undo2 />
+              Discard
+            </Button>
+            <Button size="sm" disabled={saving} onClick={() => void save()}>
+              <Save />
+              {saving ? "Saving…" : "Save revision"}
+            </Button>
+          </div>
+        ) : null}
+        {conflict ? (
+          <p role="alert" className="text-xs leading-xs text-ink-2">
+            {conflict} Your edits are still here; read the latest revision and apply them again.
+          </p>
+        ) : null}
+        {!designIsEmpty(draft) ? <DesignCanvas body={draft} tokenProperties={tokens.properties} contextFor={editContext} sketchBytes={sketchBytes} className="h-[32rem] min-h-80" /> : null}
+        <DesignIndexPanel access={access} />
+      </div>
+    );
+  }
 
   if (designIsEmpty(draft)) {
     return (

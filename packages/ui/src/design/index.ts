@@ -13,5 +13,6 @@ export * from "./kit-css.js";
 export * from "./prototype.js";
 export * from "./review.js";
 export * from "./sketch.js";
+export * from "./foundation.js";
 export * from "./tokens.js";
 export * from "./tree-model.js";
