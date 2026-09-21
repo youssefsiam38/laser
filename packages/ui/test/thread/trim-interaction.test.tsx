@@ -32,6 +32,7 @@ import { resetAnchoredMessages, standingRows } from "../../src/runtime/anchored-
 import { MessageEditPresentation, TranscriptPresentation } from "../../src/runtime/transcript-presentation.js";
 import { sessionState } from "../agents/fixtures.js";
 import { motionMs } from "../../src/motion.js";
+import { LIST_DOM_ORDER_DEBOUNCE_MS } from "./list-dom-order.js";
 import type { EarlierPage } from "../../src/runtime/history-loader.js";
 
 const SESSION = "/project/session.jsonl";
@@ -136,6 +137,7 @@ afterEach(async () => {
   resetAnchoredMessages();
   prefetchSpy?.mockRestore();
   prefetchSpy = undefined;
+  vi.useRealTimers();
   vi.clearAllMocks();
   stable.actions.loadEarlierEntries.mockImplementation(async () => PAGE);
 });
@@ -420,6 +422,10 @@ describe("a trim while somebody is reading", () => {
   });
 
   it("keeps the active logical transcript, focus, place, draft and action identity above soft targets", async () => {
+    // The list's own DOM-order pass is driven below, at its own boundary, so
+    // none of what this test asserts races it. Only the two timer functions
+    // that debounce it are faked; no time is slept through.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const store = createStateStore(opened());
     const presentation = store.presentation;
     // The conversation is read in before the cache is watching, so nothing is
@@ -484,6 +490,18 @@ describe("a trim while somebody is reading", () => {
     await act(async () => { await Promise.resolve(); });
     observer.disconnect();
 
+    // The list re-sorts its row containers into index order on its own
+    // debounce, and the row somebody is reading is one of the containers it
+    // moves. Everything below is asserted after that pass, not before it: a
+    // reorder that drops the reader's focus, place or draft is exactly the
+    // failure this test exists for. The pass is not a scroll and must not
+    // become one.
+    const scrollBeforeSort = viewport.scrollTop;
+    const orderBeforeSort = [...container.querySelectorAll("[data-message-id]")].map(node => (node as HTMLElement).dataset.messageId!);
+    await act(async () => { vi.advanceTimersByTime(LIST_DOM_ORDER_DEBOUNCE_MS); await Promise.resolve(); });
+    expect([...container.querySelectorAll("[data-message-id]")].map(node => (node as HTMLElement).dataset.messageId!), "the pass really did re-sort the containers").not.toEqual(orderBeforeSort);
+    expect(viewport.scrollTop).toBe(scrollBeforeSort);
+
     const after = store.getSnapshot().open[SESSION]!;
     expect(after.trimmed).toBeUndefined();
     expect(after.blocks).toBe(beforeTrim.blocks);
@@ -499,9 +517,11 @@ describe("a trim while somebody is reading", () => {
     expect(anchorAfter).not.toBeNull();
     expect(Math.abs(anchorAfter!.getBoundingClientRect().top - anchorTopBefore)).toBeLessThanOrEqual(LINE);
 
-    // Focus is on the same node, not merely on something like it.
+    // Focus is on the same node, not merely on something like it, and that
+    // node is still the one inside the row it belongs to.
     expect(document.activeElement).toBe(action);
     expect(action.isConnected).toBe(true);
+    expect(rowOf(knownId)!.contains(action)).toBe(true);
 
     // The draft is untouched.
     expect(draft.getSnapshot().draft).toBe("half an edit");

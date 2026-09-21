@@ -14,7 +14,7 @@ patchedDependencies:
     hash: 19356044d84eaf8d3f3030d6b3d374a5f5d1524f851b370210ec6b3ee9be15f0
     path: patches/@earendil-works__pi-coding-agent@0.85.0.patch
   '@legendapp/list@3.3.5':
-    hash: 52bcddbf5af3ad3337434a3e132675791e54ea38c785b6c365561392c8bf9f11
+    hash: f499322d16cd9c78886687539cb7552819ea772067362eb4d0a2a651ff37fb12
     path: patches/@legendapp__list@3.3.5.patch
   '@narumitw/pi-goal@0.54.4':
     hash: 5f2752b39af2be966e72de8498d0e40734590e707b3135c7a486b2ce8f5b8c64
@@ -235,7 +235,7 @@ importers:
         version: 3.2.2(react@19.1.1)
       '@legendapp/list':
         specifier: 3.3.5
-        version: 3.3.5(patch_hash=52bcddbf5af3ad3337434a3e132675791e54ea38c785b6c365561392c8bf9f11)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
+        version: 3.3.5(patch_hash=f499322d16cd9c78886687539cb7552819ea772067362eb4d0a2a651ff37fb12)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
       '@lobehub/icons':
         specifier: 5.18.0
         version: 5.18.0(@lobehub/ui@5.40.0)(@types/react@19.1.12)(antd@6.6.2(react-dom@19.1.1(react@19.1.1))(react@19.1.1))(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
@@ -7945,7 +7945,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
 
-  '@legendapp/list@3.3.5(patch_hash=52bcddbf5af3ad3337434a3e132675791e54ea38c785b6c365561392c8bf9f11)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)':
+  '@legendapp/list@3.3.5(patch_hash=f499322d16cd9c78886687539cb7552819ea772067362eb4d0a2a651ff37fb12)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)':
     dependencies:
       react: 19.1.1
       use-sync-external-store: 1.6.0(react@19.1.1)
