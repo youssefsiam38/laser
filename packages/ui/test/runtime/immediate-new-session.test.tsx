@@ -122,11 +122,12 @@ function persistPrompts(): Record<string, ContentBlock[][]> {
   return history;
 }
 
-function createdState(params: { cwd: string; agentName?: string }, path = `${params.cwd}/fresh.jsonl`): SessionState {
-  const kind = params.agentName === "chat" ? "chat" as const
-    : params.agentName === "beam" ? "beam" as const
-      : params.agentName ? "root" as const : undefined;
-  const agent = params.agentName && kind ? { agentName: params.agentName, kind } : undefined;
+function createdState(params: { cwd: string; agentName?: string; sessionKind?: string }, path = `${params.cwd}/fresh.jsonl`): SessionState {
+  // As the worker records it: a Chat by its kind and no definition, anything
+  // else by the agent it runs (`docs/plain-chat.md`).
+  const agent = params.sessionKind === "chat"
+    ? agentInfo({ kind: "chat" })
+    : params.agentName ? agentInfo({ kind: "root", agentName: params.agentName }) : undefined;
   const state = sessionState({ path, cwd: params.cwd, messageCount: 0, ...(agent ? { agent } : {}) });
   world.states[path] = state;
   world.sessions.push(summary({ path, cwd: params.cwd, messageCount: 0, ...(agent ? { agent } : {}) }));

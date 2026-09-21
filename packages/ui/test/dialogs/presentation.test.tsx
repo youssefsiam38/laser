@@ -80,13 +80,13 @@ it("retains answers and the deadline through the real optimistic remove/failed-r
 });
 function Row({ id }: { id: string }) { useRegisterToolRow(id); return null; }
 function Placement({ label }: { label: string }) { const ids = useToolRowIds(); return <output aria-label={label}>{[...ids].join(",")}</output>; }
-it("does not let a mounted main-thread tool suppress the Beam footer fallback", async () => {
-  await act(async () => root.render(<><ToolRowScope scope="/same"><Row id="tool" /><Placement label="main" /></ToolRowScope><ToolRowScope scope="/same"><Placement label="beam" /></ToolRowScope></>));
+it("does not let a mounted main-thread tool suppress a second surface's footer fallback", async () => {
+  await act(async () => root.render(<><ToolRowScope scope="/same"><Row id="tool" /><Placement label="main" /></ToolRowScope><ToolRowScope scope="/same"><Placement label="second" /></ToolRowScope></>));
   expect(host.querySelector('[aria-label="main"]')!.textContent).toBe("tool");
-  expect(host.querySelector('[aria-label="beam"]')!.textContent).toBe("");
-  await act(async () => root.render(<><ToolRowScope scope="/next"><Placement label="main" /></ToolRowScope><ToolRowScope scope="/same"><Row id="beam-tool" /><Placement label="beam" /></ToolRowScope></>));
+  expect(host.querySelector('[aria-label="second"]')!.textContent).toBe("");
+  await act(async () => root.render(<><ToolRowScope scope="/next"><Placement label="main" /></ToolRowScope><ToolRowScope scope="/same"><Row id="second-tool" /><Placement label="second" /></ToolRowScope></>));
   expect(host.querySelector('[aria-label="main"]')!.textContent).toBe("");
-  expect(host.querySelector('[aria-label="beam"]')!.textContent).toBe("beam-tool");
+  expect(host.querySelector('[aria-label="second"]')!.textContent).toBe("second-tool");
 });
 it("re-issues a question with the same id and new options as the new question", async () => {
   const send = vi.fn(async () => {});

@@ -6,10 +6,10 @@ import type { SessionView } from "../../src/store.js";
 import { view as makeView } from "../agents/fixtures.js";
 
 /**
- * Beam's bubble puts a second composer on screen over the session's own, and
- * both offer the microphone. Two things used to be global and would have made
- * the second one speak for the first: the scope the transcription is filed
- * under, and the textarea a finished phrase is typed into.
+ * More than one composer can be on screen at once, and each offers the
+ * microphone. Two things used to be global and would have made the second one
+ * speak for the first: the scope the transcription is filed under, and the
+ * textarea a finished phrase is typed into.
  */
 const mocks = vi.hoisted(() => ({ view: undefined as SessionView | undefined, dictating: false, currentProject: undefined as string | undefined,
   cancel: vi.fn(), sink: vi.fn(), text: "", setText: vi.fn(), toast: vi.fn() }));
@@ -121,7 +121,7 @@ describe("the microphone in a second composer", () => {
   });
 
   it("discards through a neutral, named button beside stop without modifying text", async () => {
-    mocks.view = sessionView("/state/beam/b1.jsonl", "/state/beam"); mocks.dictating = true;
+    mocks.view = sessionView("/state/chat/c1.jsonl", "/state/chat"); mocks.dictating = true;
     mocks.text = "Keep my typed draft";
     await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
     const discard = container.querySelector<HTMLButtonElement>('[aria-label="Discard recording"]')!;
@@ -132,7 +132,7 @@ describe("the microphone in a second composer", () => {
   });
 
   it("is offered in every session this browser can record in; whether the host can transcribe is the press's question", async () => {
-    mocks.view = sessionView("/state/beam/b1.jsonl", "/state/beam");
+    mocks.view = sessionView("/state/chat/c1.jsonl", "/state/chat");
     await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
     expect(container.querySelector('[data-slot="dictate"]')).not.toBeNull();
 
@@ -142,14 +142,14 @@ describe("the microphone in a second composer", () => {
   });
 
   it("files a recording under the session it was spoken into, not the one that mounted last", async () => {
-    mocks.view = sessionView("/state/beam/b1.jsonl", "/state/beam");
+    mocks.view = sessionView("/state/chat/c1.jsonl", "/state/chat");
     await act(async () => root.render(<TooltipProvider><DictateButton /></TooltipProvider>));
     // Mounting claims nothing: the composer that is not recording must not
     // take the scope from the one that is.
     expect(readDictationScope()).toBeUndefined();
 
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Dictate a message"]')!.click());
-    expect(readDictationScope()).toEqual({ cwd: "/state/beam", path: "/state/beam/b1.jsonl" });
+    expect(readDictationScope()).toEqual({ cwd: "/state/chat", path: "/state/chat/c1.jsonl" });
   });
 
   it("types a finished phrase into its own composer, not the first one on the page", async () => {
@@ -157,7 +157,7 @@ describe("the microphone in a second composer", () => {
     other.innerHTML = '<div data-slot="composer"><textarea id="main"></textarea></div>';
     document.body.prepend(other);
     try {
-      mocks.view = sessionView("/state/beam/b1.jsonl", "/state/beam");
+      mocks.view = sessionView("/state/chat/c1.jsonl", "/state/chat");
       mocks.dictating = true;
       await act(async () =>
         root.render(
@@ -180,7 +180,7 @@ describe("the microphone in a second composer", () => {
       await act(async () => sink("spoken"));
       expect(mocks.setText).toHaveBeenCalledWith("spoken typed words");
       // Recording claims the scope for the session this composer shows.
-      expect(readDictationScope()).toEqual({ cwd: "/state/beam", path: "/state/beam/b1.jsonl" });
+      expect(readDictationScope()).toEqual({ cwd: "/state/chat", path: "/state/chat/c1.jsonl" });
     } finally {
       other.remove();
     }
@@ -196,7 +196,7 @@ describe("the microphone in a second composer", () => {
     document.documentElement.style.setProperty("--motion-morph", "0.4s");
     vi.useFakeTimers();
     try {
-      mocks.view = sessionView("/state/beam/b1.jsonl", "/state/beam");
+      mocks.view = sessionView("/state/chat/c1.jsonl", "/state/chat");
       mocks.dictating = true;
       await act(async () =>
         root.render(

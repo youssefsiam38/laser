@@ -92,6 +92,7 @@ describe("namespacing", () => {
       [storageKey("session")]: '{"/p":"/p/s.jsonl"}',
       [storageKey("project")]: "/p",
       [storageKey("session-tab-last")]: "{}",
+      // A key a surface this version does not have wrote (M23): still purged.
       [storageKey("beam-session")]: "/beam/b.jsonl",
       [storageKey("session-groups")]: "[]",
       [storageKey("session-pins")]: "[]",

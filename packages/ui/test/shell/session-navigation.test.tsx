@@ -17,7 +17,7 @@ const fixture = vi.hoisted(() => ({ state: { destination: { phase: "ready-code",
   { path: "/one/working.jsonl", cwd: "/one", name: "Active work", modifiedAt: "2026-09-07T03:00:00Z", messageCount: 2, attention: "working" },
   { path: "/one/finished.jsonl", cwd: "/one", name: "Finished work", modifiedAt: "2026-09-07T02:00:00Z", messageCount: 2, attention: "finished_unread" },
   { path: "/two/waiting.jsonl", cwd: "/two", name: "Review needed", modifiedAt: "2026-09-07T01:00:00Z", messageCount: 2, attention: "waiting_for_input" },
-], open: {}, workers: {}, agents: { snapshot: null, loading: false, error: null, runs: {}, events: [], chooseBeamModel: null } } }));
+], open: {}, workers: {}, agents: { snapshot: null, loading: false, error: null, runs: {}, events: []} } }));
 vi.mock("@/runtime", async () => ({
   ...await import("../../src/runtime/threadList.js"),
   useCapability: () => ({ state: "available" }),

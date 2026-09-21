@@ -22,7 +22,7 @@ vi.mock("../../src/runtime/index.js", async (importActual) => ({
   useLaserState: (selector: (state: unknown) => unknown) => selector({
     current: mocks.session?.path,
     open: mocks.session ? { [mocks.session.path]: { path: mocks.session.path, state: mocks.session } } : {},
-    agents: { snapshot: { workspaces: { chat: "/private/chat", beam: "/private/beam" } }, runs: {}, events: [] },
+    agents: { snapshot: { workspaces: { chat: "/private/chat" } }, runs: {}, events: [] },
     sessions: [], workers: {}, connection: "open",
   }),
   useSessionMeta: () => ({ session: mocks.session, path: mocks.session?.path }),

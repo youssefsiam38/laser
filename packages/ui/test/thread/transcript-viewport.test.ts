@@ -37,13 +37,13 @@ describe("scoped transcript destinations", () => {
     abort.abort(); expect(await pending).toBe("cancelled");
   });
 
-  it("keeps main and Beam intents independent even at the same canonical path", async () => {
-    const main = new TranscriptViewport(), beam = new TranscriptViewport();
-    main.configure("/same"); beam.configure("/same");
-    main.setIds(["row"]); beam.setIds(["row"]);
+  it("keeps two surfaces' intents independent even at the same canonical path", async () => {
+    const main = new TranscriptViewport(), second = new TranscriptViewport();
+    main.configure("/same"); second.configure("/same");
+    main.setIds(["row"]); second.setIds(["row"]);
     const pending = main.ensureVisible({ messageId: "row" }, { reason: "find" });
-    beam.cancel();
-    // Beam cancelling its own surface says nothing about the main one; the
+    second.cancel();
+    // One surface cancelling its own says nothing about the main one; the
     // main destination ends because its own surface has no engine to land on.
     expect(await pending).toBe("missing");
   });

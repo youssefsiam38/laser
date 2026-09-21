@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * The sessions panel since the agents leap: Chat | Code tabs, the Beam group,
+ * The sessions panel since the agents leap: Chat | Code tabs,
  * children nested under their parent on a lineage rail, the End agent row
  * action and the parent's children chip. Interaction tests through the DOM
  * over a real store (`LaserStoreProvider`) and a real remote thread list.
