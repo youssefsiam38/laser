@@ -10,6 +10,7 @@
 import {
   DEFAULT_AGENT_NAME,
   effectiveAgents,
+  isChatWorkspaceCwd,
   isTerminalRunStatus,
   sessionKindOf,
   type AgentDefinition,
@@ -28,11 +29,11 @@ import {
 // Sessions and kinds
 // ---------------------------------------------------------------------------
 
-/** `"chat"` when `cwd` is the Chat workspace, else `null` for a project. */
-export function isWorkspaceCwd(cwd: string | undefined, snapshot: AgentsSnapshot | null | undefined): "chat" | null {
-  if (!cwd || !snapshot) return null;
-  return cwd === snapshot.workspaces.chat ? "chat" : null;
-}
+// Whether a directory is the Chat workspace is one rule, `isChatWorkspaceCwd`
+// in the protocol package: containment (a conversation's own per-session
+// folder counts, D-u) over the roots the host sends, including the retired
+// pre-M23 one. The host answers with the same rule, so a session cannot be a
+// chat in one surface and a project in the other (M23 review, S1).
 
 /**
  * How a session relates to the agents feature. The catalog's own attribution
@@ -46,7 +47,7 @@ export function agentKindOf(
   if (!summary) return "root";
   if (summary.agent) return summary.agent.kind;
   if (summary.parentPath) return "child";
-  return isWorkspaceCwd(summary.cwd, snapshot) ?? "root";
+  return isChatWorkspaceCwd(summary.cwd, snapshot?.workspaces) ? "chat" : "root";
 }
 
 /**
@@ -60,7 +61,7 @@ export function sessionKindFor(
 ): SessionKind {
   const agent = summary?.agent;
   if (agent) return agent.sessionKind ?? sessionKindOf(agent.kind);
-  return isWorkspaceCwd(summary?.cwd, snapshot) === "chat" ? "chat" : "project";
+  return isChatWorkspaceCwd(summary?.cwd, snapshot?.workspaces) ? "chat" : "project";
 }
 
 /**

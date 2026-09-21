@@ -60,8 +60,9 @@ are the entry points, and a floating launcher that opens a bubble is a second
 conversation surface the product no longer has. Removal covers the spark, the
 bubble and its maximize path, `BeamState`, `agents/beam/choose-model`, the
 first-provider prompt, the Beam sidebar group and mark, `<state>/workspaces/beam`
-(existing Beam sessions are re-homed as Chat sessions on next host start and
-keep their history), the Beam empty state, the Beam-specific composer
+(existing Beam sessions are re-homed as Chat sessions — listed and opened as
+Chats, keeping their history *and* the working directory they already have;
+nothing on disk moves), the Beam empty state, the Beam-specific composer
 isolation rules, the Beam instruction template with its state-location
 fields, and the M13-T100 overlap rule that existed only for the bubble.
 
@@ -82,7 +83,13 @@ fields, and the M13-T100 overlap rule that existed only for the bubble.
   profile ids by the M22 migration, then ignored; the keys stay one release.
 - Existing sessions whose `lasercode/agent` record names `beam` or `chat`
   open as `sessionKind: "chat"`; the record is not rewritten (history is
-  evidence). Sessions under `workspaces/beam` are listed in the Chat tab.
+  evidence). Sessions under `workspaces/beam` are listed in the Chat tab and
+  open in the directory their session header names. **Nothing is moved**: the
+  header is never rewritten, and the engine ensures the directory it names, so
+  moving the folder would hand the person an empty working directory with
+  their files stranded beside it and grow the retired directory back at every
+  start. "Re-homed" is a mapping — `isChatWorkspace` accepts the retired
+  directory as a chat workspace — not a migration on disk (M23 review, B1).
 - Agent files that list `beam`, `chat` or `namer` in `allowedAgents` validate
   with a warning on that field and run with the name dropped.
 
@@ -128,9 +135,9 @@ and is a larger change than this milestone.
 | --- | --- |
 | Protocol | `AgentKind` → `"custom"` only; `BUILTIN_AGENT_NAMES`, `BuiltinAgentName`, `BeamState`, `NamerState`, `ChatState` removed; `agents/builtin/*`, `agents/beam/choose-model`, `agents/namer/qualify` removed from messages, schemas and policy; `SessionAgentInfo` gains `sessionKind`; instruction-template field catalogue loses the Beam and Namer fields; `startup-screen.ts` "beam" is a drawing, untouched |
 | Worker | `agents/definitions.ts`, `session-config.ts`, `instruction-templates.ts`, `engine-instructions.ts`: no built-in branches, chat template constant; `namer.ts` reduced to the one-shot function on the naming profile; `first-turn.ts` naming call; `stable-sdk.ts` and `worker-lifetime.ts` naming pin removal; `packages.ts` Beam skill remnants; tests for each |
-| Host | `agents/builtins.ts` deleted; `agents/{index,store,validate,models}.ts` no built-in synthesis; `paths.ts` `workspaceAgentFor` → chat only, Beam workspace re-home at start; `catalog.ts`, `session-projection.ts`, `transcript-delivery.ts` chat kind; `router.ts`, `server.ts`, `worker-client.ts` removed methods and first-provider Beam prompt |
+| Host | `agents/builtins.ts` deleted; `agents/{index,store,validate,models}.ts` no built-in synthesis; `paths.ts` `workspaceAgentFor` → chat only, the retired Beam workspace accepted as a chat workspace where it is; `catalog.ts`, `session-projection.ts`, `transcript-delivery.ts` chat kind; `router.ts`, `server.ts`, `worker-client.ts` removed methods and first-provider Beam prompt |
 | UI | `components/beam/*` deleted; `Shell.tsx`, `Rail.tsx`, `TopBar.tsx`, `SessionsPanel.tsx`, `session-groups.ts`, `GlobalSearch.tsx` lose the Beam group, mark and spark; `agents/page/{AgentList,AgentsEditorColumn,BuiltinPanel,dialogs,model,instruction-template-model}` lose built-ins; `agent-selector.tsx` no built-in rows; `Composer.tsx`, `Thread.tsx`, `main-destination*.ts`, `new-session.ts`, `threadList.ts`, `LaserProvider.tsx`, `store.ts`, `device-storage.ts`, `history-*.ts`, `projection.ts`, `view-cache.ts`, `transcript-presentation.ts`, `finished-mentions.ts`, `use-conversation-find.tsx`, `FleetPanel.tsx`, `DictateButton.tsx`, `loading-state.tsx`, `thinking-indicator.tsx`, `theme/presets.ts` Beam tokens; every test naming Beam or Namer |
 | Desktop | `main.ts`, `startup-ground.ts`, `error-page.ts` Beam references |
-| Persistence | host state built-in choices ignored after M22 migration; `workspaces/beam` re-homed; session records untouched |
+| Persistence | host state built-in choices ignored after M22 migration; `workspaces/beam` kept in place and read as Chat; session records untouched |
 | Docs and gates | `agents.md` §7 rewritten, `product-boundary.md` Beam/Chat/Namer rows, `architecture.md`, `mobile.md`, `ux-fleet.md`, `ux-elements.md`, `ux-theme.md` Beam tokens, `environment-policy.md`, `project-mentions.md`, `transcript-reading.md`; `scripts/browser-check` fixtures that drive Beam are deleted with it; identity guard for "Beam" and "Namer" on person surfaces; `clean-machine.mjs` no longer expects the Beam skill |
 | Plan | M13 rows naming Beam/Namer stay as history; M18-T17 behaviour superseded |

@@ -16,7 +16,6 @@ export {
   customAgentsForProject,
   defaultAgentDefinitionInput,
   isActiveRun,
-  isWorkspaceCwd,
   latestRunForSession,
   runList,
   runStatusLabel,

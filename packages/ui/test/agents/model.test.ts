@@ -10,7 +10,6 @@ import {
   customAgentsForProject,
   defaultAgentDefinitionInput,
   isActiveRun,
-  isWorkspaceCwd,
   latestRunForSession,
   RUN_STATUS_TONE,
   runStatusLabel,
@@ -71,11 +70,21 @@ describe("run status vocabulary", () => {
 describe("sessions and kinds", () => {
   const snap = snapshot();
 
-  it("detects the Chat workspace by directory", () => {
-    expect(isWorkspaceCwd("/state/chat", snap)).toBe("chat");
-    expect(isWorkspaceCwd("/p", snap)).toBeNull();
-    expect(isWorkspaceCwd("/state/chat", null)).toBeNull();
-    expect(isWorkspaceCwd(undefined, snap)).toBeNull();
+  it("places a record-less session by containment, not by the workspace root alone (D-u)", () => {
+    // A Chat conversation runs in its own folder under the workspace, and a
+    // pre-M23 one runs under the retired sibling directory. Both are Chats
+    // here, exactly as the host reads them — one rule, `isChatWorkspaceCwd`
+    // in the protocol package (M23 review, S1).
+    expect(sessionKindFor(summary({ path: "/c", cwd: "/state/chat" }), snap)).toBe("chat");
+    expect(sessionKindFor(summary({ path: "/c", cwd: "/state/chat/session-c3d4" }), snap)).toBe("chat");
+    expect(sessionKindFor(summary({ path: "/b", cwd: "/state/beam/session-aaa" }), snap)).toBe("chat");
+    expect(agentKindOf(summary({ path: "/c", cwd: "/state/chat/session-c3d4" }), snap)).toBe("chat");
+    // A sibling that merely shares the prefix is a project of its own.
+    expect(sessionKindFor(summary({ path: "/o", cwd: "/state/chatty/session-c3d4" }), snap)).toBe("project");
+    expect(sessionKindFor(summary({ path: "/p", cwd: "/p" }), snap)).toBe("project");
+    // Before the snapshot arrives nothing is a chat by directory.
+    expect(sessionKindFor(summary({ path: "/c", cwd: "/state/chat" }), null)).toBe("project");
+    expect(agentKindOf(summary({ path: "/c", cwd: "/state/chat" }), null)).toBe("root");
   });
 
   it("reads a session's kind from its record, mapping a pre-M23 one to Chat", () => {

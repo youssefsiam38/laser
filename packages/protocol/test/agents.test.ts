@@ -3,8 +3,11 @@ import {
   PROJECT_DIR_NAME,
   RETIRED_AGENT_NAMES,
   canReferenceAgent,
+  chatWorkspaceRoots,
   effectiveAgents,
+  isChatWorkspaceCwd,
   isRetiredAgentName,
+  isWithinWorkspaceRoot,
   sessionKindOf,
   type AgentDefinition,
 } from "../src/index.js";
@@ -82,5 +85,65 @@ describe("session kinds", () => {
     expect([...RETIRED_AGENT_NAMES]).toEqual(["beam", "chat", "namer"]);
     expect(isRetiredAgentName("namer")).toBe(true);
     expect(isRetiredAgentName("reviewer")).toBe(false);
+  });
+});
+
+/**
+ * The one directory rule every surface answers "is this a Chat conversation's
+ * working directory" with (M23 review, S1; D-u). The host adds alias
+ * resolution by passing its own containment test; the roots it checks, and
+ * what counts as inside one, are decided here and nowhere else.
+ */
+describe("the Chat workspace directory rule", () => {
+  const workspaces = { chat: "/state/workspaces/chat" };
+
+  it("accepts the workspace root and every per-session folder under it", () => {
+    expect(isChatWorkspaceCwd("/state/workspaces/chat", workspaces)).toBe(true);
+    expect(isChatWorkspaceCwd("/state/workspaces/chat/session-c3d4", workspaces)).toBe(true);
+    expect(isChatWorkspaceCwd("/state/workspaces/chat/session-c3d4/nested", workspaces)).toBe(true);
+  });
+
+  it("accepts the retired directory a pre-M23 conversation still names", () => {
+    // Nothing moves those folders and nothing rewrites those headers
+    // (`docs/plain-chat.md`, "Migration"): the rule is what makes them Chats.
+    expect(chatWorkspaceRoots(workspaces)).toEqual(["/state/workspaces/chat", "/state/workspaces/beam"]);
+    expect(isChatWorkspaceCwd("/state/workspaces/beam", workspaces)).toBe(true);
+    expect(isChatWorkspaceCwd("/state/workspaces/beam/session-aaa", workspaces)).toBe(true);
+  });
+
+  it("refuses a sibling that merely starts with the same characters", () => {
+    expect(isChatWorkspaceCwd("/state/workspaces/chatty", workspaces)).toBe(false);
+    expect(isChatWorkspaceCwd("/state/workspaces/chatty/session-c3d4", workspaces)).toBe(false);
+    expect(isChatWorkspaceCwd("/state/workspaces/beamer/session-aaa", workspaces)).toBe(false);
+    expect(isChatWorkspaceCwd("/home/someone/work", workspaces)).toBe(false);
+  });
+
+  it("reads a trailing separator, on either side, as the same directory", () => {
+    expect(isChatWorkspaceCwd("/state/workspaces/chat/", workspaces)).toBe(true);
+    expect(isChatWorkspaceCwd("/state/workspaces/chat/session-c3d4/", workspaces)).toBe(true);
+    expect(isChatWorkspaceCwd("/state/workspaces/chat/session-c3d4", { chat: "/state/workspaces/chat/" })).toBe(true);
+    expect(isWithinWorkspaceRoot("C:\\state\\workspaces\\chat\\session-c3d4", "C:/state/workspaces/chat")).toBe(true);
+  });
+
+  it("says no rather than guessing while the snapshot has not arrived", () => {
+    expect(chatWorkspaceRoots(undefined)).toEqual([]);
+    expect(chatWorkspaceRoots({})).toEqual([]);
+    expect(isChatWorkspaceCwd("/state/workspaces/chat", undefined)).toBe(false);
+    expect(isChatWorkspaceCwd("/state/workspaces/chat", null)).toBe(false);
+    expect(isChatWorkspaceCwd(undefined, workspaces)).toBe(false);
+    expect(isChatWorkspaceCwd("", workspaces)).toBe(false);
+  });
+
+  it("lets a caller answer with its own containment, which is how the host resolves aliases", () => {
+    // What `realpathSync` does on macOS, in one line: the same directory,
+    // reached by two names, is one directory.
+    const real = (path: string): string => (path.startsWith("/private/") ? path.slice("/private".length) : path);
+    const resolving = (cwd: string, root: string): boolean => isWithinWorkspaceRoot(real(cwd), real(root));
+    const aliased = { chat: "/var/state/workspaces/chat" };
+    expect(isChatWorkspaceCwd("/private/var/state/workspaces/chat/session-aaa", aliased, resolving)).toBe(true);
+    expect(isChatWorkspaceCwd("/private/var/state/workspaces/beam/session-aaa", aliased, resolving)).toBe(true);
+    expect(isChatWorkspaceCwd("/private/var/state/workspaces/chatty", aliased, resolving)).toBe(false);
+    // Without it, the plain rule cannot know the two names are one place.
+    expect(isChatWorkspaceCwd("/private/var/state/workspaces/chat/session-aaa", aliased)).toBe(false);
   });
 });

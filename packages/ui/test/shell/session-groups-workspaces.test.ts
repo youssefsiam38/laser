@@ -41,9 +41,18 @@ describe("Chat sessions, including pre-M23 records and workspace layouts", () =>
   });
 
   it("recognises every private per-session directory as part of the Chat workspace", () => {
+    // The one shared rule (`isChatWorkspaceCwd`, M23 review S1): containment
+    // over the roots the host sends, the retired pre-M23 directory included,
+    // and a trailing separator says nothing about which directory this is.
+    expect(workspaceKindOf(workspaces.chat, workspaces)).toBe("chat");
     expect(workspaceKindOf(`${workspaces.chat}/session-c3d4`, workspaces)).toBe("chat");
+    expect(workspaceKindOf(`${workspaces.chat}/session-c3d4/`, workspaces)).toBe("chat");
+    expect(workspaceKindOf("/state/workspaces/beam/session-aaa", workspaces)).toBe("chat");
     expect(workspaceKindOf("/state/workspaces/chatty/session-c3d4", workspaces)).toBeUndefined();
+    expect(workspaceKindOf("/state/workspaces/beamer", workspaces)).toBeUndefined();
     expect(workspaceKindOf("/p", workspaces)).toBeUndefined();
+    expect(workspaceKindOf(undefined, workspaces)).toBeUndefined();
+    expect(workspaceKindOf(`${workspaces.chat}/session-c3d4`, {})).toBeUndefined();
   });
 
   it("groups private descendants correctly before their agent metadata arrives", () => {

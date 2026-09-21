@@ -4,12 +4,16 @@
  *
  * Three things a person would notice if they were got wrong:
  *
- * 1. conversations kept under `<state>/workspaces/beam` are re-homed and still
- *    open, still listed, with their transcripts untouched;
+ * 1. conversations kept under `<state>/workspaces/beam` are read as Chats
+ *    where they are — nothing is moved, so their files stay in the directory
+ *    their session header names (M23 review, B1);
  * 2. a session whose stored record names `beam` or `chat` reads as a Chat,
  *    without that record being rewritten;
  * 3. an agent file listing one of the removed names in `allowedAgents` keeps
  *    working, with a warning on that field and the name dropped.
+ *
+ * Opening one of those conversations through a real worker — the case the
+ * move got wrong — is proved in `retired-workspace-open.e2e.test.ts`.
  */
 import { GLOBAL_AGENTS_DIR_NAME, PRODUCT_NAME, SESSION_AGENT_ENTRY_TYPE } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +23,7 @@ import { join } from "node:path";
 import { SessionCatalog } from "../../src/catalog.js";
 import { AgentStore } from "../../src/agents/store.js";
 import { HostServer } from "../../src/server.js";
-import { chatWorkspaceDir, isChatWorkspace, rehomeRetiredWorkspaces, retiredBeamWorkspaceDir, workspacesDir } from "../../src/paths.js";
+import { chatWorkspaceDir, isChatWorkspace, retiredBeamWorkspaceDir, workspacesDir } from "../../src/paths.js";
 
 let base: string;
 let stateDir: string;
@@ -44,68 +48,40 @@ function workspaceFolder(parent: string, name: string, contents = "kept"): strin
 }
 
 describe("conversations kept in the retired workspace", () => {
-  it("moves every folder into the chat workspace, keeps what is in them, and clears the old directory", () => {
-    workspaceFolder(beamDir(), "session-aaa", "first chat");
-    workspaceFolder(beamDir(), "session-bbb", "second chat");
-    mkdirSync(chatDir(), { recursive: true });
-
-    const result = rehomeRetiredWorkspaces(root());
-    expect(result.moved.map((path) => path.replace(`${chatDir()}/`, "")).sort()).toEqual(["session-aaa", "session-bbb"]);
-    expect(result.kept).toEqual([]);
-    // The work inside them is the person's, and it came along untouched.
-    expect(readFileSync(join(chatDir(), "session-aaa", "notes.md"), "utf8")).toBe("first chat");
-    expect(readFileSync(join(chatDir(), "session-bbb", "notes.md"), "utf8")).toBe("second chat");
-    // Nothing is left behind, including the directory itself.
-    expect(existsSync(beamDir())).toBe(false);
-
-    // Idempotent: a second start finds nothing to do and says so.
-    expect(rehomeRetiredWorkspaces(root())).toEqual({ moved: [], kept: [] });
-  });
-
-  it("leaves a folder it cannot move exactly where it is, and moves the rest", () => {
-    workspaceFolder(beamDir(), "session-aaa", "from the retired folder");
-    workspaceFolder(beamDir(), "session-bbb", "also retired");
-    // A folder of the same name is already there: the one that arrives second
-    // must not overwrite the one that is already a person's conversation.
-    workspaceFolder(chatDir(), "session-aaa", "already a chat");
-
-    const result = rehomeRetiredWorkspaces(root());
-    expect(result.moved).toEqual([join(chatDir(), "session-bbb")]);
-    expect(result.kept).toEqual([join(beamDir(), "session-aaa")]);
-    expect(readFileSync(join(chatDir(), "session-aaa", "notes.md"), "utf8")).toBe("already a chat");
-    expect(readFileSync(join(beamDir(), "session-aaa", "notes.md"), "utf8")).toBe("from the retired folder");
-    // Something is still in it, so the directory stays.
-    expect(existsSync(beamDir())).toBe(true);
-  });
-
-  it("does nothing at all when the retired folder was never there", () => {
-    expect(rehomeRetiredWorkspaces(root())).toEqual({ moved: [], kept: [] });
-    expect(existsSync(beamDir())).toBe(false);
-  });
-
-  it("happens at host start, without anything being asked of it", async () => {
-    workspaceFolder(beamDir(), "session-aaa", "a conversation from before");
-    const host = new HostServer({
-      agentDir: join(base, "agent"),
-      sessionDir: join(base, "sessions"),
-      stateDir,
-      log: () => {},
-    });
-    try {
-      expect(readFileSync(join(chatDir(), "session-aaa", "notes.md"), "utf8")).toBe("a conversation from before");
-      expect(existsSync(beamDir())).toBe(false);
-    } finally {
-      await host.close();
+  it("leaves every folder exactly where it is, at every host start, and creates nothing beside it", async () => {
+    const kept = workspaceFolder(beamDir(), "session-aaa", "a conversation from before");
+    // Two starts: "re-homed as Chat" is a mapping, not a move, so neither one
+    // may touch a byte of this. A move would strand the person's files,
+    // because nothing rewrites the session header that names this directory
+    // — the engine would recreate it, empty, on the first open (B1).
+    for (const pass of [1, 2]) {
+      const host = new HostServer({
+        agentDir: join(base, "agent"),
+        sessionDir: join(base, "sessions"),
+        stateDir,
+        log: () => {},
+      });
+      try {
+        expect(readFileSync(join(kept, "notes.md"), "utf8"), `pass ${pass}`).toBe("a conversation from before");
+        expect(existsSync(join(chatDir(), "session-aaa")), `pass ${pass}`).toBe(false);
+      } finally {
+        await host.close();
+      }
     }
   });
 
-  it("keeps routing a transcript that still names the retired folder as a chat", () => {
-    // The move does not rewrite a stored session header, so a conversation
-    // written before M23 still names the old directory. It is a chat either
-    // way, and a reader that forgot that would stop listing it.
+  it("reads the retired folder, and every folder in it, as the chat workspace", () => {
+    // A conversation written before M23 still names the old directory, and
+    // nothing rewrites it. It is a chat either way, and a reader that forgot
+    // that would stop listing it and stop opening it.
     const workspaces = { chat: chatDir() };
+    expect(isChatWorkspace(chatDir(), workspaces)).toBe(true);
     expect(isChatWorkspace(join(chatDir(), "session-aaa"), workspaces)).toBe(true);
+    expect(isChatWorkspace(beamDir(), workspaces)).toBe(true);
     expect(isChatWorkspace(join(beamDir(), "session-aaa"), workspaces)).toBe(true);
+    // The one shared rule is containment, not a shared prefix (S1).
+    expect(isChatWorkspace(`${chatDir()}ty`, workspaces)).toBe(false);
+    expect(isChatWorkspace(join(root(), "beamer", "session-aaa"), workspaces)).toBe(false);
     expect(isChatWorkspace(join(base, "project"), workspaces)).toBe(false);
   });
 });

@@ -23,10 +23,10 @@
  * deliberate lever for a person who genuinely wants both to share one
  * directory.
  */
-import { DATA_DIR_NAME, WORKTREES_DIR_NAME } from "@lasercode/protocol";
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmdirSync, statSync } from "node:fs";
+import { DATA_DIR_NAME, RETIRED_CHAT_WORKSPACE_DIRNAME, WORKTREES_DIR_NAME, isChatWorkspaceCwd } from "@lasercode/protocol";
+import { mkdirSync, mkdtempSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { canonical } from "./trust.js";
 
 /** Directory containment, not a string prefix; existing aliases resolve to the same place. */
@@ -42,16 +42,15 @@ export function isWithinDirectory(cwd: string, root: string): boolean {
 /**
  * True when `cwd` is inside the container plain Chat conversations run in.
  *
- * The retired sibling counts too. A conversation that ran under
- * `workspaces/beam` before M23 still names that directory in its session
- * header — the header is not rewritten, and the folder move at host start does
- * not change what an existing transcript says — so a reader that only knew
- * `workspaces/chat` would stop listing it and stop opening it. It is a chat,
- * it stays a chat (`docs/plain-chat.md`, "Migration").
+ * The rule itself — which roots count, including the retired sibling a
+ * pre-M23 conversation still names in its session header — is
+ * `isChatWorkspaceCwd` in the protocol package, so the host and the UI cannot
+ * drift apart about it (M23 review, S1). The host is the one caller that can
+ * touch the filesystem, so it answers with alias-resolving containment: it is
+ * about to create a directory and resolve trust with this answer.
  */
 export function isChatWorkspace(cwd: string, workspaces: { chat: string }): boolean {
-  if (isWithinDirectory(cwd, workspaces.chat)) return true;
-  return isWithinDirectory(cwd, retiredBeamWorkspaceDir(dirname(workspaces.chat)));
+  return isChatWorkspaceCwd(cwd, workspaces, isWithinDirectory);
 }
 
 /** `$XDG_DATA_HOME/laser` and the platform equivalents. */
@@ -92,57 +91,19 @@ export function chatWorkspaceDir(stateDir: string): string {
   return join(workspacesDir(stateDir), "chat");
 }
 
-/** Where the removed Beam built-in's conversations were kept before M23. */
-export function retiredBeamWorkspaceDir(workspacesRoot: string): string {
-  return join(workspacesRoot, "beam");
-}
-
 /**
- * Move every workspace folder left under `workspaces/beam` into
- * `workspaces/chat`, so a conversation that ran there before M23 opens as the
- * Chat it now is and is listed in the Chat tab (`docs/plain-chat.md`,
- * "Migration").
+ * Where the removed Beam built-in's conversations were kept before M23.
  *
- * One move per folder, and each one is independent: a folder whose name is
- * already taken, or which cannot be moved at all, is left exactly where it is
- * rather than costing the person the rest. The empty `beam` directory is
- * removed afterwards; a directory that still holds something is kept, because
- * something is still in it. Idempotent — a second run finds nothing to do.
+ * They are left exactly where they are (M23 review, B1). "Re-homed as Chat"
+ * is a mapping, not a move: the folder is accepted as a chat workspace by
+ * {@link isChatWorkspace} and the conversation is listed and opened as the
+ * Chat it now is. Moving the folder would strand the person's files, because
+ * nothing rewrites the stored session header that names this path — the
+ * engine would then recreate this directory, empty, the first time the
+ * conversation was opened (`docs/plain-chat.md`, "Migration").
  */
-export function rehomeRetiredWorkspaces(workspacesRoot: string): { moved: string[]; kept: string[] } {
-  const from = retiredBeamWorkspaceDir(workspacesRoot);
-  const moved: string[] = [];
-  const kept: string[] = [];
-  let entries: string[];
-  try {
-    entries = readdirSync(from);
-  } catch {
-    return { moved, kept }; // nothing was ever there, which is the usual case
-  }
-  const to = join(workspacesRoot, "chat");
-  if (entries.length > 0 && ensureWorkspace(to)) return { moved, kept: entries.map((entry) => join(from, entry)) };
-  for (const entry of entries) {
-    const source = join(from, entry);
-    const target = join(to, entry);
-    try {
-      if (statSync(target, { throwIfNoEntry: false })) {
-        kept.push(source);
-        continue;
-      }
-      renameSync(source, target);
-      moved.push(target);
-    } catch {
-      kept.push(source);
-    }
-  }
-  if (kept.length === 0) {
-    try {
-      rmdirSync(from);
-    } catch {
-      // An empty directory that will not go is harmless; nothing reads it.
-    }
-  }
-  return { moved, kept };
+export function retiredBeamWorkspaceDir(workspacesRoot: string): string {
+  return join(workspacesRoot, RETIRED_CHAT_WORKSPACE_DIRNAME);
 }
 
 /**

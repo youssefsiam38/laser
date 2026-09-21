@@ -160,3 +160,55 @@ into this branch and the whole workspace is green.
 | `pnpm -r build`, `pnpm -r typecheck` | clean |
 | `pnpm verify` | passed in 113 s |
 | `pnpm identity:check` | clean |
+
+## M23 review fixes (UI half)
+
+### S1 · one directory rule, in the protocol
+
+D-u said a record-less session falls back to "is its cwd **inside**
+`workspaces.chat`", but `isWorkspaceCwd` (`packages/ui/src/agents/model.ts`)
+tested the root for equality, while `workspaceKindOf`
+(`components/shell/session-groups.ts`) did its own normalized prefix
+containment and the host had a third rule of its own. One rule now:
+`isChatWorkspaceCwd` in `@lasercode/protocol` (`src/agents.ts`, beside
+`sessionKindOf`) — containment over the roots the host sends in
+`AgentsSnapshot.workspaces`, the retired pre-M23 sibling directory included,
+with the containment test injectable so the host can resolve filesystem
+aliases first.
+
+- `isWorkspaceCwd` is **deleted**; `agentKindOf`, `sessionKindFor` and
+  `runtime/new-session.ts` call the protocol rule directly.
+- `workspaceKindOf` stays as the group vocabulary's `"chat" | undefined`
+  shape and does nothing but delegate, so its twelve call sites are unchanged.
+- Host: `isChatWorkspace` (`packages/host/src/paths.ts`) delegates too,
+  passing its realpath-resolving `isWithinDirectory`.
+- Tests: `packages/protocol/test/agents.test.ts` "the Chat workspace directory
+  rule" (containment, the retired directory, a sibling that merely shares the
+  prefix, trailing separators, an unarrived snapshot, an alias-resolving
+  caller); `packages/ui/test/agents/model.test.ts` "places a record-less
+  session by containment, not by the workspace root alone (D-u)";
+  `packages/ui/test/shell/session-groups-workspaces.test.ts` "recognises every
+  private per-session directory as part of the Chat workspace".
+
+### S3 · `LaserThreadScope` — deferred, deliberately, with the reason
+
+**Not removed.** The review asks for the dead second-surface seam to go; the
+removal is not bounded the way this fix is. Measured at this revision:
+
+| File | What the seam owns there | Lines at stake |
+| --- | --- | --- |
+| `packages/ui/src/runtime/LaserProvider.tsx` | `LaserThreadScope`, `ScopedRuntime`, `ScopeComposerMemory`, `createScopedStateStore`, `ThreadScopeRefusalContext`/`useThreadScopeRefusal`, `attachScope`/`claimScope`/`scopeClaims`/`scopeRevision`, and the `readScoped === readState` parameterization of `buildActions` (~8 branch points across ~300 lines of actions) | ~500 |
+| `packages/ui/src/runtime/history-owners.ts` | the whole owner-local transcript window (D-236) exists so a second surface can page one session independently; it **re-runs the store reducer** per surface | 173 (+206 test) |
+| `packages/ui/src/runtime/view-cache.ts` | the `"scope"` retention reason and `environment.scoped()` accounting | ~15 |
+| `packages/ui/src/runtime/transcript-presentation.ts` | the "never a thread scope" ownership rule | ~5 |
+| `packages/ui/src/runtime/index.ts`, `new-session.ts` | exports and the quiet-launch path shared with the main surface | ~10 |
+| `packages/ui/test/runtime/scope-adapter-identity.test.tsx`, `packages/ui/test/thread/first-turn-refusal.test.tsx`, `packages/ui/test/runtime/history-owners.test.ts` | the tests that would go with it | 813 |
+
+That is well over the ~600-line bound this fix was given, and it lands on the
+transcript reducer path (`history-owners.ts` feeds `reduce` its own action
+stream before React sees a transaction), which is exactly the code a
+half-removal would break silently. Removing the seam is a task with its own
+row and its own evidence — M24's consultation row or M26's tool contract
+pre-work, per the review — not a side effect of a review fix. Until then
+`LaserThreadScope` stays mounted nowhere and fully tested; nothing in this fix
+touched it.

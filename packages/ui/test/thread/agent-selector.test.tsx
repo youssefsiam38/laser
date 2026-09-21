@@ -66,7 +66,6 @@ vi.mock("@assistant-ui/react", async (importActual) => ({
 vi.mock("@/agents", async (importActual) => ({
   ...(await importActual<typeof import("@/agents")>()),
   agentDisplayName: (name: string) => name === "default" ? "Default agent" : name,
-  isWorkspaceCwd: (cwd: string | undefined) => cwd === "/workspaces/chat" ? "chat" : null,
   useAgentsSnapshot: () => mocks.snapshot,
   useAgentsStatus: () => ({ loading: false, error: null, loaded: true }),
 }));

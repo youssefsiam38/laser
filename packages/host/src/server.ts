@@ -54,7 +54,7 @@ import { OutboundPressure, fenceReasonText } from "./transport-pressure.js";
 import { PackageService, SetupService } from "./packages.js";
 import { ResourceService } from "./resources/index.js";
 import { TaskRegister } from "./tasks/register.js";
-import { defaultAgentDir, defaultStateDir, ensureWorkspace, isChatWorkspace, projectRootOf, rehomeRetiredWorkspaces, workspacesDir } from "./paths.js";
+import { defaultAgentDir, defaultStateDir, ensureWorkspace, isChatWorkspace, projectRootOf, workspacesDir } from "./paths.js";
 import { canonical } from "./trust.js";
 import { createHostPressureController, createHostPressureSampler, type HostPressureController, type HostPressureSample } from "./pressure/index.js";
 import { ProjectEnvStore, projectEnvTrustAllows } from "./project-env.js";
@@ -215,6 +215,15 @@ export interface HostRelayDevice {
 /** Update kinds after which Pi may have appended to the session file. */
 const PERSISTING_UPDATES = new Set(["message_end", "compaction_end", "entry_appended", "agent_end", "agent_settled"]);
 
+/**
+ * The stamp that makes the D-347 naming carry a once-ever migration, beside
+ * the migration record it belongs to. Written when the carry has been settled
+ * one way or the other — it wrote the profile a person had chosen before
+ * M23, or a choice was already in force — and read before every later pass,
+ * so clearing the naming assignment in Settings stays cleared (M23 review, S2).
+ */
+const NAMING_CARRY_RECORD = "naming-carry.json";
+
 /** New log rows are batched for this long before one notification goes out. */
 const LOG_APPEND_FLUSH_MS = 120;
 
@@ -370,6 +379,8 @@ export class HostServer {
   private knownProfileIds: ReadonlySet<string> = new Set();
   /** The one-way settings migration runs once per host run, behind the first worker. */
   private profilesMigrated = false;
+  /** The D-347 naming carry runs once *ever*, stamped in the state directory. */
+  private namingCarryDone = false;
   /** Set by `close()`: background work started behind a request must not outlive the host. */
   private closing = false;
   /** Bounded harness-failure handoff through exact successor workers. */
@@ -418,11 +429,12 @@ export class HostServer {
     // the session with the reason when it still cannot be created).
     const problem = ensureWorkspace(workspaces.chat);
     if (problem) this.log(`could not create the workspace ${workspaces.chat}: ${problem}`);
-    // Conversations that ran in the removed Beam workspace are re-homed here,
-    // once, and are listed in the Chat tab afterwards (`docs/plain-chat.md`).
-    const rehomed = rehomeRetiredWorkspaces(workspacesRoot);
-    if (rehomed.moved.length > 0) this.log(`moved ${rehomed.moved.length} chat workspace folder(s) out of the retired layout`);
-    for (const left of rehomed.kept) this.log(`a retired workspace folder could not be moved and was left in place: ${left}`);
+    // A conversation that ran in the removed built-in's workspace keeps the
+    // folder its session header names, and is listed and opened as the Chat it
+    // now is (`isChatWorkspace`; `docs/plain-chat.md`, "Migration"). Nothing is
+    // moved at start: the header is never rewritten, so a move would leave the
+    // person's files behind while the engine recreated the folder they came
+    // from, empty, the first time they opened the conversation (M23 review).
 
     // The log store is a nice-to-have: a host that cannot open SQLite still
     // runs sessions, and `pi/logs/*` explains itself instead of failing blank.
@@ -1241,17 +1253,30 @@ export class HostServer {
    *
    * Before M23 the profile session naming ran on could live on the Namer
    * built-in rather than in Settings. The built-in is gone, so that choice is
-   * written to `namingProfileId` — once, and only when nothing is assigned to
-   * naming yet, so it never overwrites a choice a person made in Settings.
-   * Without this, naming would silently stop for everyone who chose it there
-   * (`docs/plain-chat.md`, "Migration").
+   * written to `namingProfileId` — once ever, and only when nothing is
+   * assigned to naming yet, so it never overwrites a choice a person made in
+   * Settings. Without this, naming would silently stop for everyone who chose
+   * it there (`docs/plain-chat.md`, "Migration").
+   *
+   * "Once ever" is the point of the stamp. The migration pass runs on every
+   * provider connect, the legacy key stays in `agents.json` for a release, and
+   * a person who deliberately *clears* the naming assignment has made a
+   * choice too — without the stamp the next pass would quietly write the old
+   * profile back over it (M23 review, S2).
    *
    * The worker is the only writer of the global settings file, so this goes
    * through the ordinary settings request rather than a method of its own.
    */
   private async carryNamingProfile(cwd: string, worker: WorkerClient, report: ModelProfileMigrationReport): Promise<void> {
-    if (report.assignments.namingProfileId) return;
+    if (this.namingCarrySettled()) return;
+    // A choice is in force: the carry has nothing left to do, now or ever.
+    if (report.assignments.namingProfileId) {
+      this.stampNamingCarry({ carried: false, why: "naming already had a profile assigned" });
+      return;
+    }
     const carried = this.agents.retiredNamingProfileId;
+    // Nothing to carry, or nothing to carry it to yet: a later pass, with more
+    // providers and therefore more profiles, may still resolve it.
     if (!carried || !report.profiles.some((profile) => profile.id === carried)) return;
     try {
       await worker.request("pi/settings/set", {
@@ -1260,9 +1285,37 @@ export class HostServer {
         changes: [{ path: NAMING_PROFILE_SETTING, op: "set", value: carried }],
       });
       report.assignments = { ...report.assignments, namingProfileId: carried };
+      this.stampNamingCarry({ carried: true, profileId: carried });
       this.log(`agents: session naming kept the model profile it was already using`);
     } catch (error) {
+      // Unstamped: the write did not happen, so the migration has not run yet.
       this.log(`agents: the naming model profile could not be carried over: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /** True once the naming carry has run, or been settled by a choice already made. */
+  private namingCarrySettled(): boolean {
+    if (this.namingCarryDone) return true;
+    const stateDir = this.stateDir;
+    if (!stateDir) return false;
+    // A state directory this host cannot write is a host that would repeat the
+    // carry on every pass; the in-memory flag at least holds it to this run.
+    this.namingCarryDone = existsSync(join(stateDir, NAMING_CARRY_RECORD));
+    return this.namingCarryDone;
+  }
+
+  private stampNamingCarry(outcome: { carried: boolean; profileId?: string; why?: string }): void {
+    this.namingCarryDone = true;
+    const stateDir = this.stateDir;
+    if (!stateDir) return;
+    try {
+      writeFileSync(
+        join(stateDir, NAMING_CARRY_RECORD),
+        `${JSON.stringify({ version: 1, at: new Date().toISOString(), ...outcome }, null, 2)}\n`,
+        { mode: 0o600 },
+      );
+    } catch (error) {
+      this.log(`agents: the naming carry could not be recorded: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

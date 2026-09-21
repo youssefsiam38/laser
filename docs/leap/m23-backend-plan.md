@@ -204,7 +204,9 @@ plus the tests below and the new `host/test/agents/retired-builtins.test.ts`.
   an `allowedAgents` warning naming them, and it takes priority over the
   `profile` warning because only a person can clear it. `normalizeInput` drops
   them on save too, so nothing can put one back. The file is never rewritten.
-- **Beam sessions are re-homed and still work.** `rehomeRetiredWorkspaces`
+- **Beam sessions are re-homed and still work.** *(Superseded by "M23 review
+  fixes (host half)" below: B1 deleted the move. Kept as the record of what
+  T3 landed.)* `rehomeRetiredWorkspaces`
   moves each `<workspaces>/beam/*` folder into `<workspaces>/chat` at host
   start — independently, skipping a name already taken, removing the old
   directory only when it is empty, idempotent. Because a stored session header
@@ -227,3 +229,62 @@ clean; `pnpm -F @lasercode/cli test` 96 passed; `pnpm identity:check`.
 caused by the protocol removal and are listed for its owner in
 [`m23-ui-red-spots.md`](m23-ui-red-spots.md). `packages/desktop` needed no
 change: its three "beam" mentions are the startup-screen drawing.
+
+## M23 review fixes (host half)
+
+### B1 · the retired workspace is mapped, not moved
+
+`rehomeRetiredWorkspaces` is **deleted**, with its host-start call
+(`server.ts`), its export (`host/src/index.ts`) and its tests. It physically
+renamed `<workspaces>/beam/<session>` → `<workspaces>/chat/<session>` while
+nothing rewrote the stored session header that still named the old path, so
+the first open of such a conversation had `resolveTrust` → `ensureWorkspace`
+and the worker's `ensureWorkspaceSessionCwd` recreate the old directory
+**empty**: the person's files stayed behind under `chat/`, and the retired
+directory grew back at every later start.
+
+What "re-homed as Chat" means now, and all it ever meant on screen: the folder
+stays where it is, `isChatWorkspace` accepts the retired directory as a chat
+workspace, and the conversation is listed and opened as the Chat it is, in the
+working directory it always had. `retiredBeamWorkspaceDir` stays (it names the
+directory; the name itself now comes from
+`RETIRED_CHAT_WORKSPACE_DIRNAME` in the protocol package).
+
+- Test: `packages/host/test/agents/retired-workspace-open.e2e.test.ts` — a
+  genuine engine-written chat session, put back into the pre-M23 layout
+  (folder under `workspaces/beam`, header naming it, a `beam` record), opened
+  through a real worker across two further host starts: it lists as
+  `{ kind: "chat", sessionKind: "chat" }`, opens with `sessionKind: "chat"`
+  and `cwd` = the original folder, the person's file in it is untouched, the
+  two workspace directories' listings are unchanged and the transcript bytes
+  are identical. Proven to fail on the pre-fix behaviour (the file is gone
+  from the session's cwd).
+- `packages/host/test/agents/retired-builtins.test.ts` drops the four
+  move tests and gains "leaves every folder exactly where it is, at every host
+  start, and creates nothing beside it" and a containment table for
+  `isChatWorkspace`.
+
+### S1 · one directory rule
+
+`isChatWorkspace` now delegates to `isChatWorkspaceCwd`
+(`@lasercode/protocol`, beside `sessionKindOf`), passing the host's
+realpath-resolving `isWithinDirectory` as the containment test. The roots it
+checks — the chat workspace and the retired sibling — are decided in one
+place, shared with the UI. See `m23-ui-plan.md` for the UI half.
+
+### S2 · the naming carry is once-ever
+
+`carryNamingProfile` was gated on "naming is unassigned right now", so a
+person who deliberately cleared **Naming conversations** in Settings had the
+retired Namer's profile written back at the next migration pass, for as long
+as the legacy key stays in `agents.json`. It is now stamped in
+`<stateDir>/naming-carry.json` (beside the model-profile migration record) the
+moment it is settled — either because the carry wrote the profile, or because
+a choice was already in force — and never runs again. A pass that finds a
+carried id no profile answers to yet is left unstamped, so a later pass with
+more providers can still resolve it.
+
+- Test: `packages/host/test/agents/profiles-migration.test.ts` "carries it
+  once ever: a naming choice the person clears afterwards stays cleared"
+  (fails without the stamp), plus the stamp assertion in "never overrules a
+  naming profile Settings already assigns".

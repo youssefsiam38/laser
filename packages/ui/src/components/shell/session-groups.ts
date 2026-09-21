@@ -6,7 +6,7 @@
  * piece and is module-level so `Rail` and `SessionsPanel` share it without a
  * context the shell would have to own.
  */
-import { sessionKindOf, WORKTREES_DIR_NAME } from "@lasercode/protocol";
+import { isChatWorkspaceCwd, sessionKindOf, WORKTREES_DIR_NAME } from "@lasercode/protocol";
 import { useSyncExternalStore } from "react";
 import type { AgentRun, SessionSummary } from "@lasercode/protocol";
 
@@ -42,16 +42,15 @@ export type SessionGroupKind = "project" | "chat";
 
 export const workspacesOf = (state: Pick<AppState, "agents">): Workspaces => state.agents.snapshot?.workspaces ?? {};
 
-/** `"chat"` when the Chat workspace contains a directory, else `undefined`. */
+/**
+ * `"chat"` when the Chat workspace contains this directory, else `undefined`
+ * — the group vocabulary's shape for the one directory rule,
+ * `isChatWorkspaceCwd` in the protocol package, which the host answers with
+ * too (M23 review, S1). The rule is containment over the roots the host sent,
+ * including the retired pre-M23 one; this adds nothing to it.
+ */
 export function workspaceKindOf(cwd: string | undefined, workspaces: Workspaces): "chat" | undefined {
-  if (!cwd) return undefined;
-  const path = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
-  const within = (root: string | undefined): boolean => {
-    if (root === undefined) return false;
-    const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
-    return path === normalizedRoot || path.startsWith(`${normalizedRoot}/`);
-  };
-  return within(workspaces.chat) ? "chat" : undefined;
+  return isChatWorkspaceCwd(cwd, workspaces) ? "chat" : undefined;
 }
 
 export const isChildSession = (summary: Pick<SessionSummary, "agent" | "parentPath">): boolean =>
