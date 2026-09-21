@@ -427,3 +427,19 @@ of interface code", named in the test as the **copy proxy** it is: it asserts
 the sentences the offer shows, not source discovery.
 Validated: `pnpm -F @lasercode/ui exec vitest run test/design` → 106 passed;
 `pnpm -F @lasercode/ui exec tsc --noEmit` → clean.
+
+## Parent integration: gated draft-to-review transition
+
+The final host test establishes that `draft → approved` is refused. Staging a
+profile creates a draft for gated Designs too, but the window only requested
+review on the standalone path. Parent reproduced the missing call with a
+request-order assertion (red: review index -1), then added the same fenced
+review transition before gated approval. A refused review stops before any
+approval request. No host authority changed.
+
+Validation on the integrated tree: UI design/shared-token tests 125 passed,
+UI typecheck passed, host foundation/gate/router tests 31 passed, identity
+check passed. The UI tests prove actual request fields/order; host tests prove
+the state rule. They are not browser acceptance. Full merged verification
+passed build/typecheck and all non-UI packages but hit an unrelated image-pool
+fixture assertion, separately owned under M16-T82. No full gate is claimed.

@@ -184,10 +184,21 @@ export function FoundationWizard({ body, foundation, context, editable, dirty, o
         context.onChanged();
         return;
       }
-      const outcome = await context.store.approve(
-        { entityId: gate.subject?.entityId ?? context.detail.entity.entityId, expectedRevisionId: gate.subject?.revisionId ?? read.value.revision.revisionId },
-        { gate: "design", decision: "approved", covers: gate.covers.slice() },
-      );
+      const subject = {
+        entityId: gate.subject?.entityId ?? context.detail.entity.entityId,
+        expectedRevisionId: gate.subject?.revisionId ?? read.value.revision.revisionId,
+      };
+      // The profile was just staged in a draft revision. Gated designs need
+      // the same review transition as standalone ones before taking a decision.
+      if ((gate.subject?.state ?? read.value.entity.state) === "draft") {
+        const sent = await context.store.review(subject, "request_review");
+        if (!sent.ok) {
+          actions.toast("error", sent.failure.message);
+          context.onChanged();
+          return;
+        }
+      }
+      const outcome = await context.store.approve(subject, { gate: "design", decision: "approved", covers: gate.covers.slice() });
       if (!outcome.ok) {
         actions.toast("error", outcome.failure.message);
         return;

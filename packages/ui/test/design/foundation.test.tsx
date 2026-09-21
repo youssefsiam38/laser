@@ -153,6 +153,7 @@ function detailWithGate(body: DesignBody, over: Partial<Detail> = {}): Detail {
 /** How the host answers the gate read the approval makes before deciding. */
 type GateAnswer = "ready" | "refused" | "none";
 let gateAnswer: GateAnswer = "ready";
+let reviewFailure: string | undefined;
 
 /** The read-back answer for a design no spec gates (D-352). */
 function detailWithoutGate(body: DesignBody): Detail {
@@ -171,6 +172,7 @@ function makeStore(): ProjectWorkStore {
       return { ref: {}, entity: { entityId: params["entityId"], key: "DES-3" }, revision: { index: 2, revisionId: "r2", digest: "b".repeat(64) }, seq: 8 };
     }
     if (method === "project/work/review") {
+      if (reviewFailure) throw new Error(reviewFailure);
       return { entity: { entityId: params["entityId"], key: "DES-3", state: "needs_review" }, seq: 11 };
     }
     if (method === "project/work/create") {
@@ -205,6 +207,7 @@ beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   calls.length = 0;
   gateAnswer = "ready";
+  reviewFailure = undefined;
   nextKey = 1;
   toast.mockReset();
   container = document.createElement("div");
@@ -402,11 +405,29 @@ describe("approval", () => {
     // the worker would record for the same foundation.
     expect(stored.foundation?.profile?.digest).toBe(await foundationProfileDigest(foundation));
 
-    const approve = calls.find((call) => call.method === "project/work/approve");
+    // Staging the profile makes a draft revision. The real host refuses
+    // draft → approved, whether or not this Design belongs to a Spec gate.
+    const reviewIndex = calls.findIndex((call) => call.method === "project/work/review");
+    const approveIndex = calls.findIndex((call) => call.method === "project/work/approve");
+    expect(reviewIndex).toBeGreaterThanOrEqual(0);
+    expect(reviewIndex).toBeLessThan(approveIndex);
+    expect(calls[reviewIndex]?.params).toMatchObject({ entityId: "e1", expectedRevisionId: "r2", action: "request_review" });
+    const approve = calls[approveIndex];
     expect(approve?.params["gate"]).toBe("design");
     expect(approve?.params["decision"]).toBe("approved");
     expect(approve?.params["covers"]).toEqual([{ entityId: "e1", kind: "design", key: "DES-3", revisionId: "r2", digest: "b".repeat(64) }]);
     expect(toast).toHaveBeenCalledWith("info", expect.stringContaining("Foundation approved"));
+  });
+
+  it("does not approve a gated foundation when its review transition is refused", async () => {
+    reviewFailure = "This revision changed before it could enter review.";
+    const body = bodyFixture(foundationFixture());
+    await render(body, contextFor(body));
+    await type(container.querySelector("#foundation-approve-key"), "DES-3");
+    await click(button("Approve the foundation"));
+    expect(calls.some((call) => call.method === "project/work/review")).toBe(true);
+    expect(calls.some((call) => call.method === "project/work/approve")).toBe(false);
+    expect(toast).toHaveBeenCalledWith("error", expect.stringContaining(reviewFailure));
   });
 
   it("creates the plan with the foundation task first, and everything else depending on it", async () => {

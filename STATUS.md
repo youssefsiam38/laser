@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T19:11:34+03:00 · leap integration · HEAD: 376dd920
+**Last updated:** 2026-09-21T19:27:46+03:00 · leap integration · HEAD: 0642e977
 **Current focus:** M21 integration and acceptance gaps. T13/T14/T21 checkpoints merged, not yet accepted; T19 checkpoint returned for required corrections. M26 v0.14.0 is published and verified; M21 remains the next release gate.
 
 | Milestone | State |
@@ -35,8 +35,8 @@
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
-**Active owners:** T13/T14 final decision precedence (`8f6bbb57` authority/gate proofs passed); T18/T19 durable capture implementation (Command/convergence checkpoint `48ca7d60`, owner merge `f86b2d07`); T9/T17 explicit ephemeral SDK identity seam approved (D-362), patch and consumer implementation. T21 exact document-deletion proof + selected-checkpoint preview (`0bdafdbe` partial batch passed). M26 publication completed; all four active owners are on M21. Exact paths/sessions in `STATUS_DETAILED.md`.
-**Gate:** merged build/typecheck, host lifecycle 179/179 and UI design 97/97 pass. Full verify failed CLI timeout (focused 2/2 pass); M26 release preparation initially failed MCP status test (focused 11/11 pass); full staged gate passed on resume without bypass. Browser acceptance remains the person's (D-342).
+**Active owners:** T14 merged/done (UI125/host31); T10/T13 index Command session binding queued; T18/T19 final Native UI and capture-completeness corrections (`209eac6c` preserved; new owner); T9/T17 explicit ephemeral SDK identity seam approved (D-362), patch and consumer implementation. T21 exact document-deletion proof + selected-checkpoint preview (`0bdafdbe` partial batch passed). M26 publication completed; three feature owners plus isolated M16-T82 image-test fixture stability owner are active. Exact paths/sessions in `STATUS_DETAILED.md`.
+**Gate:** merged build/typecheck and non-UI suites pass (host1216/worker1643/protocol728). Full UI hit one image-accessibility asynchronous URL assertion; fixture owner investigates without weakening safety checks. Focused design/UI125 and host31 pass. First clean-env attempt omitted DISPLAY; desktop display is now preserved. Browser acceptance remains the person’s (D-342).
 **Published:** v0.14.0 Latest (M26), v0.13.0 (M23), v0.12.0 (M22). Candidate `ac098597`; exact-source CI `35616431166` and release `35616858358` attempt4 pass. Twelve assets, manifest digests and source-bound provenance verified by release controller; evidence `docs/leap/m26-release-evidence.json`. Parent merged release metadata (`64c701cc`), identity check passes. Final integrated main-branch gates remain required.
 **Next dependency-ready work:** finish active corrections/review, close T9/T17 worker mention-context delivery gap (tasks reopened), then T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
 **Recent implementation checkpoints:** T18 `85ee5ea4` (reopened: durable verification capture missing); T9 `222d86c0`; T17 `133d55cd`; T12 `92cc43c9` + `f15eb7d1`; T8 `98a01428`.
