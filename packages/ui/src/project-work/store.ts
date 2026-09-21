@@ -432,6 +432,118 @@ export class ProjectWorkStore {
     });
   }
 
+  // -- review, comments and gates (M21-T8) -----------------------------------
+
+  /**
+   * Write a comment against the exact revision the person was reading.
+   *
+   * `revisionId` is the revision the *anchor* belongs to — which may be an
+   * older one, because reviewing a superseded revision is a real thing to do —
+   * while `expectedRevisionId` fences the write against the entity moving
+   * underneath. Both are sent, always.
+   */
+  async comment(
+    entity: { entityId: string; expectedRevisionId: string },
+    input: {
+      revisionId: string;
+      anchor: ClientRequests["project/work/comment"]["params"]["anchor"];
+      text: string;
+      blocking?: boolean | undefined;
+      parentCommentId?: string | undefined;
+      sessionId?: string | undefined;
+      actorLabel?: string | undefined;
+    },
+  ): Promise<ProjectWorkOutcome<ClientRequests["project/work/comment"]["result"]>> {
+    const projectId = this.#snapshot.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
+    return this.#write("project/work/comment", {
+      projectId,
+      entityId: entity.entityId,
+      expectedRevisionId: entity.expectedRevisionId,
+      revisionId: input.revisionId,
+      anchor: input.anchor,
+      text: input.text,
+      ...(input.blocking === undefined ? {} : { blocking: input.blocking }),
+      ...(input.parentCommentId ? { parentCommentId: input.parentCommentId } : {}),
+      idempotencyKey: this.#newKey(),
+      ...origin(input),
+    });
+  }
+
+  /** Address, resolve or reopen one comment. The host decides who may (D-332). */
+  async resolveComment(
+    entity: { entityId: string; expectedRevisionId: string },
+    commentId: string,
+    resolution: ClientRequests["project/work/resolve-comment"]["params"]["resolution"],
+  ): Promise<ProjectWorkOutcome<ClientRequests["project/work/resolve-comment"]["result"]>> {
+    const projectId = this.#snapshot.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
+    return this.#write("project/work/resolve-comment", {
+      projectId,
+      entityId: entity.entityId,
+      expectedRevisionId: entity.expectedRevisionId,
+      commentId,
+      resolution,
+      idempotencyKey: this.#newKey(),
+    });
+  }
+
+  /** Ask for a decision, or take one back to draft. Never an approval. */
+  async review(
+    entity: { entityId: string; expectedRevisionId: string },
+    action: ClientRequests["project/work/review"]["params"]["action"],
+    options: { note?: string | undefined; supersededByEntityId?: string | undefined } = {},
+  ): Promise<ProjectWorkOutcome<ClientRequests["project/work/review"]["result"]>> {
+    const projectId = this.#snapshot.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
+    return this.#write("project/work/review", {
+      projectId,
+      entityId: entity.entityId,
+      expectedRevisionId: entity.expectedRevisionId,
+      action,
+      ...(options.note ? { note: options.note } : {}),
+      ...(options.supersededByEntityId ? { supersededByEntityId: options.supersededByEntityId } : {}),
+      idempotencyKey: this.#newKey(),
+    });
+  }
+
+  /**
+   * Record a gate decision, with the complete digest set it covers (D-332).
+   *
+   * `covers` comes from the gate report the host answered with, unchanged: a
+   * client that assembled its own set would be approving what it believes
+   * rather than what the project holds.
+   */
+  async approve(
+    entity: { entityId: string; expectedRevisionId: string },
+    input: {
+      gate: ClientRequests["project/work/approve"]["params"]["gate"];
+      decision: ClientRequests["project/work/approve"]["params"]["decision"];
+      covers: ClientRequests["project/work/approve"]["params"]["covers"];
+      mode?: ClientRequests["project/work/approve"]["params"]["mode"] | undefined;
+      skipReason?: string | undefined;
+      note?: string | undefined;
+      sessionId?: string | undefined;
+      actorLabel?: string | undefined;
+    },
+  ): Promise<ProjectWorkOutcome<ClientRequests["project/work/approve"]["result"]>> {
+    const projectId = this.#snapshot.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
+    return this.#write("project/work/approve", {
+      projectId,
+      entityId: entity.entityId,
+      expectedRevisionId: entity.expectedRevisionId,
+      gate: input.gate,
+      decision: input.decision,
+      covers: input.covers,
+      ...(input.mode ? { mode: input.mode } : {}),
+      ...(input.skipReason ? { skipReason: input.skipReason } : {}),
+      ...(input.note ? { note: input.note } : {}),
+      idempotencyKey: this.#newKey(),
+      ...origin(input),
+    });
+  }
+
   /** One entity at one exact revision. Reads are never cached behind a fence. */
   async get(params: Omit<ClientRequests["project/work/get"]["params"], "projectId">): Promise<ProjectWorkOutcome<ClientRequests["project/work/get"]["result"]>> {
     const projectId = this.#snapshot.projectId;

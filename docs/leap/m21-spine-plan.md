@@ -19,6 +19,7 @@ links optional** (D-331, D-352).
 | M21-T3 Host authority, methods, policy and event stream | done | `env -i … pnpm -F @lasercode/host test` |
 | M21-T4 Bounded bodies, search and derived projections | done | `env -i … pnpm -F @lasercode/host test` |
 | M21-T15 Plan DAG and Project Task engine | done | `env -i … pnpm -F @lasercode/host test` (1121; `project-work/task-engine.test.ts` 17), `pnpm -F @lasercode/protocol test` (631) |
+| M21-T8 Comments, reviews and approval gates (host half) | done | `env -i … pnpm -F @lasercode/host test` (1139; `project-work/gates.test.ts` 18), `pnpm -F @lasercode/protocol test` (643; `project-work-gates.test.ts` 12) |
 
 ---
 
@@ -411,3 +412,85 @@ items while `needsYou` stays exact.
 `PlanGraphProblem.problem` is one of `cycle`, `unknown_task`, `not_a_task`,
 `self_dependency`, `dependency_outside_plan`; every one carries `keys[]` and a
 sentence written for a person.
+
+
+---
+
+## M21-T8 · Comments, reviews and the three digest-bound gates
+
+The UI half is in [`m21-workspace-plan.md`](m21-workspace-plan.md) § M21-T8.
+
+### What landed
+
+| File | What it owns |
+| --- | --- |
+| `packages/host/src/project-work/gates.ts` | `GateEngine` over a `GateReader` the store implements: the three gates' required revisions, the complete digest set, the prerequisites, the blocking-comment refusal, and `check()` — the one place a decision is allowed or refused |
+| `packages/host/src/project-work/store.ts` | the gate reader, anchor orphaning on write and on every revision, approval invalidation, the gate check inside `approve`, gate attention, and `gates` on every `get` |
+| `packages/protocol/src/project-work.ts` | `GATE_ROLES`/`GATE_PROBLEMS`/`GATE_STATES`, `GateReport` and its parts, `GATE_OUTCOMES` + `gateOutcome` + `gateDecisionAllowed`, `commentThreads`, `openBlockingComments`, `commentResolutionAllowed` |
+| `packages/protocol/src/project-work-bodies.ts` | `SpecBody.gated`, `anchorTargets`, `findAnchorTarget`, `anchorResolves`, `describeAnchor` |
+| `packages/protocol/src/project-work-methods.ts` | `gates?: GateReport` on `project/work/get`, and `gateReportSchema` |
+| `packages/host/test/project-work/gates.test.ts` | 18 tests over the router harness (zero worker attempts) |
+| `packages/protocol/test/project-work-gates.test.ts` | 11 tests: anchors, threads, the outcome vocabulary |
+
+`methods.ts` was **not** edited: `store.get` already flows through it, so the
+gate report reaches the wire without touching the file M21-T17 owns.
+
+### Decisions where the contract is silent
+
+1. **The gated opt-in is `gated: true` on the Spec body**, not a review action.
+   It is part of what a person approved: it travels with the revision, the
+   digest, the export and the audit, and a later revision that turned the gates
+   off is visible as a change to the bytes. A new member of the closed
+   `PROJECT_WORK_REVIEW_ACTIONS` set would have been invisible in all four.
+2. **Each gate is decided on its own subject**: brief on the Spec, design on
+   the linked Design (or on the Spec when the gate is skipped with a recorded
+   reason), build on the linked Plan. The subject is where the state moves and
+   what the fence is taken against; the *report* is always the Spec's, so the
+   card reads the same from any of the three.
+3. **The build gate covers Spec + Design + Plan, and binds the task graph
+   through the Plan's digest.** The Plan body enumerates the task keys and
+   their dependencies, so approving the Plan's exact digest approves the exact
+   graph; `planGraph.ok` and "at least one task" are requirements rather than
+   64 more covered revisions.
+4. **Off the gated path an approval is still a record, but no gate binds it.**
+   A Spec nobody put on the gated path (and anything not linked to one) keeps
+   the spine's rules — person-only, no blocking comment open, every covered
+   digest exactly what the store holds — and gains no requirements,
+   prerequisites or mode obligation. "Gates only when chosen" (D-352) is
+   enforced by refusing to *impose* a gate, not by refusing the record.
+5. **A draft is not up for decision.** `ARTIFACT_EDGES` has no
+   `draft → approved`, so a gated draft's gate is `waiting` with
+   "…has not been sent for review yet", and `project/work/review
+   request_review` is the small deliberate act that opens it.
+6. **A comment is never refused for its anchor.** An anchor that does not
+   resolve in the current revision is stored `orphaned`, and every revision
+   re-decides every comment's orphaned flag in the same transaction — a lost
+   target never loses the comment, and a target that comes back un-orphans it.
+   A text range is fenced by the sha256 of the exact slice, so an edit inside
+   the quoted words orphans rather than silently re-pointing.
+7. **Invalidation is "covers it, or `propagateStale` reaches it".** A revision
+   whose digest actually changed invalidates every non-invalidated approval
+   that covers the changed entity, plus the approvals of the artifacts the
+   change made stale — the reachable downstream and nothing else. Identical
+   bytes invalidate nothing.
+8. **A change request is a record, not an edit.** `changes_requested` writes
+   the approval with its note and returns the subject to `draft`; the revision
+   it was taken against is untouched and still current, which is the leap's
+   "never edits the approved bytes" made structural.
+9. **Blocking comments are collected across everything a gate covers**, not
+   only the subject, and the refusal names them as `KEY commentId` so a person
+   can go straight to them.
+10. **Gate attention is bounded.** After a comment, a resolution, an approval
+    or a revision, only the Spec and its linked Design and Plan are
+    recomputed — never a walk of the project. A gate that is `ready` or
+    `invalidated`, or anything with an open blocking comment, is what joins the
+    queue; a `waiting` gate waits on the work, not on a person.
+
+### Wire shapes the workspace consumes
+
+| Read or write | Shape |
+| --- | --- |
+| `project/work/get` (spec, design, plan) | `gates: { specEntityId, specKey, gated, next?, gates: [{ gate, state, subject?, requirements[], covers[], outcomes[], blockingComments[], approval?, refusal? }] }` |
+| `project/work/get` (any) | `comments[].orphaned` is the anchor's current truth, recomputed on every revision |
+| `project/work/approve` | refusals: the wrong subject, an outcome the gate does not have, a build approval with no mode, a missing or moved covered revision, an unmet requirement, an open blocking comment (named), an agent |
+| `project/work/attention` | `gate` for a ready or invalidated gate, `blocking_comment` while one is open |

@@ -28,7 +28,7 @@
  *    contracts, so one revision cannot become a resource problem.
  */
 import { z } from "zod";
-import { PROJECT_WORK_TEXT_MAX, projectWorkKeySchema } from "./project-work.js";
+import { PROJECT_WORK_TEXT_MAX, projectWorkKeySchema, type ProjectWorkAnchor } from "./project-work.js";
 
 const opaqueId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "an id this app minted");
 const digest = z.string().regex(/^[0-9a-f]{64}$/, "a sha256 digest");
@@ -78,6 +78,18 @@ export interface SpecBody {
   constraints: string[];
   /** Long-form prose, for the document view. Markdown, rendered, never executed. */
   document?: string;
+  /**
+   * True when this Spec was put on the gated path (leap, "Gates only when
+   * chosen", D-352).
+   *
+   * The opt-in lives in the body rather than in a side table because it is
+   * part of what a person approved: it travels with the revision, with the
+   * export and with the digest, and a later revision that quietly turned the
+   * gates off would be visible as a change to the bytes. Absent means the
+   * Spec is ungated, which is what every Spec is until someone chooses
+   * otherwise; nothing about an ungated Spec is pending.
+   */
+  gated?: boolean;
 }
 
 export const specBodySchema = z
@@ -95,6 +107,7 @@ export const specBodySchema = z
       .max(256),
     constraints: z.array(line).max(64),
     document: markdown.optional(),
+    gated: z.boolean().optional(),
   })
   .strict();
 
@@ -1100,5 +1113,199 @@ export function searchableBodyValues(body: ProjectWorkBody): string[] {
       push(body.task.notes);
       return values;
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Comment anchors (M21-T8)
+// ---------------------------------------------------------------------------
+
+/**
+ * One place a comment can be anchored to, in a body as it is right now.
+ *
+ * The identity is the semantic target — a requirement id, a design node, a
+ * flow edge, a screen, a question, a phase — never a coordinate: "coordinates
+ * only position a pin" (leap, "Design contract"). A revision that keeps the id
+ * keeps the comment in place; one that drops it leaves the comment orphaned
+ * and visible rather than deleted.
+ */
+export interface AnchorTarget {
+  target: ProjectWorkAnchor["target"];
+  /** The stable id this anchor is keyed by. Empty for the whole entity. */
+  id: string;
+  /** What to call it on screen: "Requirement 1", "Screen · Review". */
+  label: string;
+  /** The anchored text, when this target has any. Fences a text range. */
+  text?: string;
+  /** For a design node: which screen it is on. */
+  screenId?: string;
+}
+
+const target = (input: AnchorTarget): AnchorTarget => input;
+
+/**
+ * Every target a comment in this body could be anchored to.
+ *
+ * Used three ways: the inspector lists the pins, a new comment picks one, and
+ * the host decides after a revision whether an existing anchor still resolves.
+ */
+export function anchorTargets(body: ProjectWorkBody): AnchorTarget[] {
+  const targets: AnchorTarget[] = [target({ target: "entity", id: "", label: "The whole item" })];
+  switch (body.kind) {
+    case "spec": {
+      const spec = body.spec;
+      targets.push(target({ target: "section", id: "brief", label: "Brief", text: spec.brief }));
+      if (spec.problem !== undefined) targets.push(target({ target: "section", id: "problem", label: "Problem", text: spec.problem }));
+      spec.outcomes.forEach((outcome, index) => {
+        targets.push(target({ target: "section", id: `outcome:${index + 1}`, label: `Outcome ${index + 1}`, text: outcome }));
+      });
+      spec.nonGoals.forEach((nonGoal, index) => {
+        targets.push(target({ target: "section", id: `non-goal:${index + 1}`, label: `Non-goal ${index + 1}`, text: nonGoal }));
+      });
+      for (const requirement of spec.requirements) {
+        targets.push(target({ target: "section", id: requirement.id, label: `Requirement · ${requirement.level}`, text: requirement.text }));
+      }
+      for (const criterion of spec.acceptance) {
+        targets.push(target({ target: "section", id: criterion.id, label: "Acceptance criterion", text: criterion.text }));
+      }
+      spec.constraints.forEach((constraint, index) => {
+        targets.push(target({ target: "section", id: `constraint:${index + 1}`, label: `Constraint ${index + 1}`, text: constraint }));
+      });
+      if (spec.document !== undefined) targets.push(target({ target: "section", id: "document", label: "Document", text: spec.document }));
+      return targets;
+    }
+    case "research": {
+      const research = body.research;
+      targets.push(target({ target: "section", id: "question", label: "The question", text: research.question }));
+      for (const question of research.questions) {
+        targets.push(target({ target: "section", id: question.id, label: "Question", text: question.text }));
+      }
+      for (const finding of research.findings) {
+        targets.push(target({ target: "section", id: finding.id, label: "Finding", text: finding.claim }));
+      }
+      return targets;
+    }
+    case "design": {
+      const design = body.design;
+      for (const screen of design.screens) {
+        targets.push(target({ target: "region", id: screen.id, label: `Screen · ${screen.name}`, text: screen.name }));
+        if (!("tree" in screen.content)) continue;
+        for (const node of screen.content.tree.nodes) {
+          targets.push(
+            target({
+              target: "node",
+              id: node.id,
+              label: "component" in node && "primitive" in node.component ? `Node · ${node.component.primitive}` : "Node",
+              screenId: screen.id,
+              ...(node.text !== undefined ? { text: node.text } : {}),
+            }),
+          );
+        }
+      }
+      for (const flow of design.flows) {
+        targets.push(target({ target: "flow_edge", id: flow.id, label: `Flow · ${flow.trigger}` }));
+      }
+      for (const tokenId of designTokenIds(design)) {
+        targets.push(target({ target: "token", id: tokenId, label: `Token · ${tokenId}` }));
+      }
+      return targets;
+    }
+    case "plan": {
+      const plan = body.plan;
+      targets.push(target({ target: "section", id: "brief", label: "Brief", text: plan.brief }));
+      for (const phase of plan.phases) {
+        targets.push(target({ target: "section", id: phase.id, label: `Phase · ${phase.name}`, text: phase.summary ?? phase.name }));
+        // A task *in this plan*: the comment belongs to the plan's shape, not
+        // to the Task entity, which has comments of its own.
+        for (const taskKey of phase.taskKeys) {
+          if (targets.some((candidate) => candidate.target === "section" && candidate.id === taskKey)) continue;
+          targets.push(target({ target: "section", id: taskKey, label: `Task · ${taskKey}`, text: taskKey }));
+        }
+      }
+      return targets;
+    }
+    case "task": {
+      const task = body.task;
+      targets.push(target({ target: "section", id: "outcome", label: "Outcome", text: task.outcome }));
+      for (const criterion of task.acceptance) {
+        targets.push(target({ target: "section", id: criterion.id, label: "Acceptance criterion", text: criterion.text }));
+      }
+      if (task.notes !== undefined) targets.push(target({ target: "section", id: "notes", label: "Notes", text: task.notes }));
+      return targets;
+    }
+  }
+}
+
+/** Every token a design's nodes actually reference, once each, in order. */
+function designTokenIds(design: DesignBody): string[] {
+  const ids: string[] = [];
+  for (const screen of design.screens) {
+    if (!("tree" in screen.content)) continue;
+    for (const node of screen.content.tree.nodes) {
+      for (const value of Object.values(node.props)) {
+        if (value.type !== "token") continue;
+        if (!ids.includes(value.tokenId)) ids.push(value.tokenId);
+      }
+    }
+  }
+  return ids;
+}
+
+/** The target an anchor points at, or `undefined` when the body lost it. */
+export function findAnchorTarget(body: ProjectWorkBody, anchor: ProjectWorkAnchor): AnchorTarget | undefined {
+  if (anchor.target === "entity") return { target: "entity", id: "", label: "The whole item" };
+  const targets = anchorTargets(body);
+  if (anchor.target === "text") {
+    const section = targets.find((candidate) => candidate.target === "section" && candidate.id === anchor.sectionId);
+    if (!section?.text) return undefined;
+    if (anchor.from >= anchor.to || anchor.to > section.text.length) return undefined;
+    return { ...section, target: "text", text: section.text.slice(anchor.from, anchor.to) };
+  }
+  const id =
+    anchor.target === "section"
+      ? anchor.sectionId
+      : anchor.target === "node"
+        ? anchor.nodeId
+        : anchor.target === "flow_edge"
+          ? anchor.edgeId
+          : anchor.target === "token"
+            ? anchor.tokenId
+            : anchor.regionId;
+  return targets.find((candidate) => candidate.target === anchor.target && candidate.id === id);
+}
+
+/**
+ * Does this anchor still resolve in this body?
+ *
+ * A text range also has to still say what it said: the hash is taken over the
+ * exact slice, so an edit inside the quoted words orphans the comment instead
+ * of silently moving it onto different text. The hash function is supplied by
+ * the caller, because this package is the one place that never reaches for
+ * `node:crypto`.
+ */
+export function anchorResolves(body: ProjectWorkBody, anchor: ProjectWorkAnchor, hashText: (value: string) => string): boolean {
+  const found = findAnchorTarget(body, anchor);
+  if (!found) return false;
+  if (anchor.target !== "text") return true;
+  return found.text !== undefined && hashText(found.text) === anchor.textHash;
+}
+
+/** What an anchor is called when its target is gone and only the anchor is left. */
+export function describeAnchor(anchor: ProjectWorkAnchor): string {
+  switch (anchor.target) {
+    case "entity":
+      return "The whole item";
+    case "section":
+      return `Section ${anchor.sectionId}`;
+    case "node":
+      return `Node ${anchor.nodeId}`;
+    case "text":
+      return `A quoted range in ${anchor.sectionId}`;
+    case "flow_edge":
+      return `Flow ${anchor.edgeId}`;
+    case "token":
+      return `Token ${anchor.tokenId}`;
+    case "region":
+      return `Screen ${anchor.regionId}`;
   }
 }
