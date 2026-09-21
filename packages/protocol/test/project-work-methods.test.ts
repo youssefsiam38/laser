@@ -18,6 +18,12 @@ import {
   projectWorkUpdatedSchema,
   type ProjectWorkMethod,
 } from "../src/project-work-methods.js";
+import {
+  DECISION_PROOF_KINDS,
+  REPOSITORY_CAPTURE_HISTORY_MAX,
+  type DecisionCaptureBinding,
+  type RepositoryCaptureHistoryPage,
+} from "../src/project-work.js";
 import { clientParamsSchemas, parseClientRequest, ProtocolError } from "../src/schemas.js";
 import { METHOD_POLICY, NOTIFICATION_SCOPE, methodPolicy, notificationScope } from "../src/method-policy.js";
 import { NOTIFICATION_PRESSURE, isSheddable } from "../src/transport-pressure.js";
@@ -223,11 +229,87 @@ describe("notifications", () => {
     expect(schema.safeParse({ ...base, link: { ...stateOnly, target: { state } } }).success).toBe(false);
   });
 
+  it("carries the attempt a verified state came out of, as identity the host re-derives (M21-T19)", () => {
+    const schema = projectWorkParamsSchemas["project/work/link"];
+    const state = { vcs: "git" as const, objectFormat: "sha1" as const, commitObjectId: "1".repeat(40), checkpointId: "refs/x/1" };
+    const link = (verifiedAt: unknown) => ({
+      projectId: SAMPLE_PROJECT_ID,
+      expectedRevisionId: SAMPLE_REVISION_ID,
+      idempotencyKey: "accept-1",
+      link: {
+        type: "evidence" as const,
+        entityId: SAMPLE_ENTITY_ID,
+        revisionId: SAMPLE_REVISION_ID,
+        kind: "person_acceptance" as const,
+        role: "acceptance" as const,
+        summary: "I looked at the build.",
+        outcome: "passed" as const,
+        verifiedAt,
+      },
+    });
+    const attempt = { taskEntityId: SAMPLE_ENTITY_ID, executionLinkId: "lnk_1" };
+    expect(
+      schema.safeParse(link({ repositoryId: "repo_1", state, acceptance: { kind: "checkpoint_preview" }, attempt })).success,
+    ).toBe(true);
+    // A plain state link needs none of it, and is not native evidence.
+    expect(schema.safeParse(link({ repositoryId: "repo_1", state })).success).toBe(true);
+    // The attempt is two exact ids or nothing: a half-named one is refused at
+    // the boundary, and an acceptance with none of it is refused by the host,
+    // in a sentence that says which attempt it needs.
+    expect(schema.safeParse(link({ repositoryId: "repo_1", state, attempt: { executionLinkId: "lnk_1" } })).success).toBe(false);
+    expect(schema.safeParse(link({ repositoryId: "repo_1", state, attempt: { ...attempt, extra: 1 } })).success).toBe(false);
+  });
+
   it("lets a read ask git what it still has, and defaults to not asking", () => {
     const schema = projectWorkParamsSchemas["project/work/get"];
     const base = { projectId: SAMPLE_PROJECT_ID, entityId: SAMPLE_ENTITY_ID };
     expect(schema.parse({ ...base, include: { links: true, repositoryStatus: true } }).include?.repositoryStatus).toBe(true);
     expect(schema.parse(base).include?.repositoryStatus).toBeUndefined();
+  });
+
+  it("lets a read ask for one bounded page of capture history, and defaults to not asking", () => {
+    const schema = projectWorkParamsSchemas["project/work/get"];
+    const base = { projectId: SAMPLE_PROJECT_ID, entityId: SAMPLE_ENTITY_ID };
+    // The history is a separate question from the link's current pointer, so it
+    // is opt-in — and a **selection** rather than a flag, because "every
+    // association of every link" is not a bounded answer (D-363).
+    expect(
+      schema.parse({ ...base, include: { links: true, captureHistory: { of: "associations", linkId: "lnk_1", limit: 10 } } }).include
+        ?.captureHistory,
+    ).toEqual({ of: "associations", linkId: "lnk_1", limit: 10 });
+    expect(
+      schema.parse({ ...base, include: { captureHistory: { of: "decisions", decisionId: "apv_1" } } }).include?.captureHistory?.of,
+    ).toBe("decisions");
+    expect(schema.parse(base).include?.captureHistory).toBeUndefined();
+    // A flag, an unknown selection, a page past the bound and an unknown
+    // member are all refused at the boundary rather than clamped in the host.
+    expect(schema.safeParse({ ...base, include: { captureHistory: true } }).success).toBe(false);
+    expect(schema.safeParse({ ...base, include: { captureHistory: { of: "everything" } } }).success).toBe(false);
+    expect(
+      schema.safeParse({ ...base, include: { captureHistory: { of: "associations", limit: REPOSITORY_CAPTURE_HISTORY_MAX + 1 } } }).success,
+    ).toBe(false);
+    expect(schema.safeParse({ ...base, include: { captureHistory: { of: "associations", cursor: "" } } }).success).toBe(false);
+    expect(schema.safeParse({ ...base, include: { captureHistory: { of: "associations", every: true } } }).success).toBe(false);
+  });
+
+  it("names the two decisions that bind the proof they consumed, and nothing else", () => {
+    // A short closed list on purpose: these are the acts that may not be taken
+    // on evidence nobody can read afterwards. A third is a decision with its
+    // own row, not a shape that quietly accepts one (D-363).
+    expect([...DECISION_PROOF_KINDS]).toEqual(["approval", "task_completion"]);
+    const binding: DecisionCaptureBinding = {
+      kind: "approval",
+      decisionId: "apv_1",
+      entityId: SAMPLE_ENTITY_ID,
+      linkId: "lnk_1",
+      blobId: "blb_1",
+      associationRevisionId: "rlc_1",
+      associationSeq: 2,
+      boundAt: "2026-03-01T09:00:00.000Z",
+    };
+    const page: RepositoryCaptureHistoryPage = { of: "decisions", associations: [], bindings: [binding], known: true };
+    expect(page.bindings[0]?.blobId, "a decision names a capture by content address, never a pointer").toBe("blb_1");
+    expect(page.known, "and whether this store knows what it rested on at all").toBe(true);
   });
 
   it("keeps the attention count exact even when the item list is cut", () => {
