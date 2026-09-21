@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { setImmediate as yieldToIO } from "node:timers/promises";
-import { goalPromptId, toolDisplayLabel, toolSearchContent, toolOutputText, type SearchableTool, type ClientRequests, type SessionSummary } from "@lasercode/protocol";
+import { goalPromptId, projectWorkMentionProse, toolDisplayLabel, toolSearchContent, toolOutputText, type SearchableTool, type ClientRequests, type SessionSummary } from "@lasercode/protocol";
 
 type Source = "user" | "assistant" | "reasoning" | "tool";
 // Saved JSONL has tool calls but no SessionState snapshot, so host indexing can
@@ -27,10 +27,16 @@ export function searchableMessage(entry: unknown, pending?: Map<string, Searchab
     return searchableTool({ ...call, name: call?.name ?? e.message.toolName ?? "", result: toolOutputText(e.message), isError: e.message.isError }).map(text => ({ text, source: "tool" }));
   }
   const source: Source = e.message?.role === "user" ? "user" : e.message?.role === "assistant" ? "assistant" : "tool";
-  if (typeof content === "string") return [{ text: content, source }];
+  // A prompt that mentions project work carries the identity of what it
+  // mentions at its foot, where a person never reads it (M21-T9). The index
+  // stores what the transcript shows: the prose, with its keys in it once —
+  // never the link lines beside them, which would score the same key twice
+  // and put an opaque id in an excerpt.
+  const visible = (text: string): string => (source === "user" ? projectWorkMentionProse(text) : text);
+  if (typeof content === "string") return [{ text: visible(content), source }];
   if (!Array.isArray(content)) return [];
   return content.flatMap((p: { type?: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: unknown }): Array<{ text: string; source: Source }> => {
-    if (p?.type === "text" && typeof p.text === "string") return [{ text: p.text, source }];
+    if (p?.type === "text" && typeof p.text === "string") return [{ text: visible(p.text), source }];
     if (p?.type === "thinking" && typeof p.thinking === "string") return [{ text: p.thinking, source: "reasoning" }];
     if (p?.type === "toolCall") {
       const call = { name: p.name ?? "", args: p.arguments };

@@ -51,12 +51,15 @@ import type {
   ThreadComposerRuntime,
   ThreadMessageLike,
 } from "@assistant-ui/react";
-import type { ContentBlock, ImageContent, PendingMessage, UiDialogResponse } from "@lasercode/protocol";
+import type { ContentBlock, ImageContent, PendingMessage, ProjectWorkMentionOutcome, UiDialogResponse } from "@lasercode/protocol";
 import type { HostClient } from "../client.js";
 import { asRawClient, getMobileDictationAdapter } from "../pwa/index.js";
 import { newBlockId, type Action, type SessionView } from "../store.js";
 import { firstTurnFromRunConfig, type TentativeFirstTurn } from "./first-turn.js";
 import { projectSessionView, type ProjectionResult } from "./projection.js";
+// The project lifecycle leap (M21-T9): a mention travels as an identity.
+import { expandWorkMentions } from "../project-work/mentions.js";
+import { knownProjectWork } from "../project-work/registry.js";
 
 /** `pending` is the tray; the other three go straight to the engine. */
 export type SendBehavior = "prompt" | "steer" | "followUp" | "pending";
@@ -120,6 +123,25 @@ export function contentBlocksFromAppendMessage(message: AppendMessage): ContentB
   if (text.length > 0) blocks.push({ type: "text", text: text.join("\n\n") });
   blocks.push(...images);
   return blocks;
+}
+
+/**
+ * The message, with the identity of every project artifact it mentions
+ * (M21-T9).
+ *
+ * The draft carries the human form the person picked — `@TASK-44 "Rework the
+ * picker"` — and this is where the identity behind it joins the message: the
+ * pin the picker recorded, or, for a key someone simply typed, the revision
+ * this window has read in the project they are writing from. The prose is not
+ * touched, so what the person wrote is what is sent, and the host validates
+ * every identity before a worker sees any of it.
+ */
+function withWorkMentions(blocks: ContentBlock[], cwd: string | undefined): ContentBlock[] {
+  const store = knownProjectWork(cwd);
+  const resolver = {
+    byKey: (key: string) => store?.getSnapshot().items.find((item) => item.key === key)?.ref,
+  };
+  return blocks.map((block) => (block.type === "text" ? { ...block, text: expandWorkMentions(block.text, resolver) } : block));
 }
 
 export function textOfContentBlocks(blocks: readonly ContentBlock[]): string {
@@ -282,9 +304,16 @@ export async function sendToSession(
     text: textOfContentBlocks(content),
     images: imagesOfContent(content),
   });
-  let result: { accepted: boolean };
+  let result: { accepted: boolean; projectWork?: ProjectWorkMentionOutcome[] };
   try {
     result = await client.request("session/prompt", { path, content, ...(firstTurn ? { firstTurn } : {}) });
+    // What the host made of the project work this message mentioned (M21-T9).
+    // The message went; a mention it could not read, or read at a different
+    // revision than the chip pinned, is said once and in words.
+    for (const outcome of result.projectWork ?? []) {
+      if (outcome.status === "sent" || !outcome.note) continue;
+      dispatch?.({ type: "toast", level: outcome.status === "unavailable" ? "warning" : "info", text: outcome.note });
+    }
   } catch (error) {
     // Nothing reached the worker: a permanent bubble for a message Pi never
     // saw would also corrupt the next real user message's reconciliation.
@@ -491,7 +520,7 @@ export function createThreadAdapter(deps: ThreadAdapterDeps): ExternalStoreAdapt
   };
 
   const send = async (message: AppendMessage, lane: SendLane): Promise<void> => {
-    const content = contentBlocksFromAppendMessage(message);
+    const content = withWorkMentions(contentBlocksFromAppendMessage(message), deps.view?.state.cwd);
     if (content.length === 0) return;
     // The sending composer's runtime owns this value. Capturing it from the
     // message prevents another composer on the same path from replacing it.

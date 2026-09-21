@@ -18,6 +18,7 @@ import type { AgentIsolationDefault, WorkspaceShape } from "./workspace.js";
 import type { AccountUsageState, PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
 import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
 import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
+import type { ProjectWorkMentionOutcome, ProjectWorkMentionProjection } from "./project-work-mentions.js";
 import type {
   ProjectTaskActionParams,
   ProjectTaskActionResult,
@@ -1352,8 +1353,20 @@ export interface ClientRequests {
        * explicit composer choice.
        */
       firstTurn?: { agentName: string; model?: ModelRef | null; thinkingLevel?: ThinkingLevel };
+      /**
+       * The bounded projection of every project-work mention in `content`
+       * (M21-T9). **Host-supplied**: a client never sends this, and one that
+       * does has it replaced by what the host itself read and validated —
+       * project, revision, digest and read scope — before the worker sees it.
+       */
+      projectWork?: ProjectWorkMentionProjection[];
     };
-    result: { accepted: boolean; queued: boolean };
+    result: {
+      accepted: boolean;
+      queued: boolean;
+      /** What became of each project-work mention this message carried (M21-T9). */
+      projectWork?: ProjectWorkMentionOutcome[];
+    };
   };
   "session/cancel": { params: { path: string }; result: {} };
   "session/set_mode": { params: { path: string; mode: string }; result: {} };

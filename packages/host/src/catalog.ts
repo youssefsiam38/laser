@@ -20,7 +20,7 @@ import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { defaultAgentDir, projectRootOf } from "./paths.js";
 import { sessionKindOf, type ModelRef, type SessionAgentInfo, type SessionAgentRecord, type SessionSummary } from "@lasercode/protocol";
-import { SESSION_AGENT_ENTRY_TYPE, SESSION_FALLBACK_ENTRY_TYPE, goalPromptId, toolOutputText } from "@lasercode/protocol";
+import { SESSION_AGENT_ENTRY_TYPE, SESSION_FALLBACK_ENTRY_TYPE, goalPromptId, projectWorkMentionProse, toolOutputText } from "@lasercode/protocol";
 
 export interface CatalogEntry extends SessionSummary {
   size: number;
@@ -416,7 +416,10 @@ function textOf(content: unknown): string | undefined {
             .map((part) => part.text)
             .join(" ")
         : "";
-  const collapsed = raw.replace(/\s+/g, " ").trim();
+  // A prompt that mentions project work carries the identity of what it
+  // mentions at its foot (M21-T9). A preview shows what the transcript shows:
+  // the prose, never the link lines under it.
+  const collapsed = projectWorkMentionProse(raw).replace(/\s+/g, " ").trim();
   if (!collapsed) return undefined;
   return collapsed.length > FIRST_MESSAGE_MAX ? `${collapsed.slice(0, FIRST_MESSAGE_MAX - 1)}…` : collapsed;
 }

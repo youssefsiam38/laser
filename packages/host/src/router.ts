@@ -24,7 +24,7 @@
  *   pi/ui/response       every live worker (the worker that owns the dialog id
  *                        answers; the others ignore it)
  */
-import { AGENT_ISOLATION_DEFAULTS, ENVIRONMENT_DESCRIBE_METHOD, ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isCheckpointRetention, isTerminalRunStatus, parseClientRequest, type AgentIsolationDefault, type AgentRun, type AgentWorktreeStatus, type CheckpointRetention, type JsonRpcError, type JsonRpcResponse, type ProjectEnvStatus, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
+import { AGENT_ISOLATION_DEFAULTS, ENVIRONMENT_DESCRIBE_METHOD, ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, PROJECT_WORK_MENTION_MAX, ProtocolError, decisionPushPayload, isCheckpointRetention, isTerminalRunStatus, parseClientRequest, projectWorkMentionSpans, type AgentIsolationDefault, type AgentRun, type AgentWorktreeStatus, type CheckpointRetention, type ContentBlock, type JsonRpcError, type JsonRpcResponse, type ProjectEnvStatus, type ProjectWorkEntity, type ProjectWorkGetResult, type ProjectWorkMentionOutcome, type ProjectWorkMentionProjection, type ProjectWorkRef, type ProjectWorkRevision, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { HOST_ENVIRONMENT_METHOD, applyHostEnvironment } from "./environment.js";
@@ -49,6 +49,7 @@ import type { TaskRegister } from "./tasks/register.js";
 import { createPrivateSessionWorkspace, ensureWorkspace, isChatWorkspace, isWithinDirectory, projectRootOf } from "./paths.js";
 import type { PrefsStore } from "./prefs.js";
 import type { ProjectWorkMethods } from "./project-work/methods.js";
+import { mentionProblemSentence, mentionProjection, type MentionReading } from "./project-work/mention-projection.js";
 import type { FeatureService } from "./features.js";
 import type { ProjectRegistry } from "./projects.js";
 import type { PushService } from "./push.js";
@@ -151,6 +152,15 @@ export interface RouterDeps {
   projectWork?: ProjectWorkMethods | undefined;
   /** Why project work is missing, so a refusal can say so. */
   projectWorkUnavailable?: string | undefined;
+  /**
+   * Where a project is open on this computer, newest path first (M21-T9).
+   *
+   * A mention's provenance names the project a person would recognise
+   * (`[from acme TASK-44@3]`), and only the store knows which folders an
+   * opaque project id has been opened at. Absent, provenance falls back to
+   * the id, which is true but harder to read.
+   */
+  projectPaths?: ((projectId: string) => readonly string[]) | undefined;
   /**
    * Per-session route leases (RP-4c), shared with the pool that releases under
    * them. Absent, this Router owns a private one: routing is still serialized
@@ -1157,6 +1167,12 @@ export class Router {
       case "pi/worker/pressure":
         throw new ProtocolError(ErrorCodes.Unsupported, "The app manages its own session runtimes.");
 
+      // A prompt is the one place a person's words carry a reference to
+      // something the host owns (M21-T9): the mentions in it are validated
+      // here, projected here, and only then does the worker see them.
+      case "session/prompt":
+        return this.promptWithMentions(req, actor);
+
       // The project lifecycle (M21-T3). Every one of these is answered by the
       // host's own authority over the canonical store — reads *and* writes —
       // so nothing here starts, prepares or touches a worker. The rules live
@@ -1417,6 +1433,149 @@ export class Router {
    * false), so the retry opens the worker that replaces it. That is why even a
    * `session/prompt` is safe to send again here: it was never delivered.
    */
+  /**
+   * A prompt, with the project work it mentions validated and projected
+   * (M21-T9, leap "Cross-session mentions and context").
+   *
+   * The message carries the identity of everything it mentions — project,
+   * kind, entity, revision and the digest the sender pinned. This is where
+   * those claims meet the authority: the connection has to be allowed to read
+   * project work at all, the project has to exist here, the exact revision
+   * has to still be stored, and the digest has to be the one the store holds.
+   * What the worker receives is never the client's claim; it is the bounded
+   * projection the host built from what it read itself.
+   *
+   * Nothing here can stop a message being sent. A mention that cannot be read
+   * keeps its identity in the transcript and comes back as an outcome the
+   * sender can show; the words the person wrote go out either way.
+   */
+  private async promptWithMentions(
+    req: Extract<TypedClientRequest, { method: "session/prompt" }>,
+    actor: ActorIdentity,
+  ): Promise<unknown> {
+    // Whatever a client put here is dropped: a projection is the host's word,
+    // never a caller's (the schema accepts the field so a host can forward it).
+    const { projectWork: _claimed, ...params } = req.params;
+    const pinned = promptMentionRefs(params.content);
+    if (pinned.length === 0) return this.forwardToWorker({ ...req, params } as TypedClientRequest);
+    const read = this.readMentions(pinned, actor);
+    const forwarded = await this.forwardToWorker({
+      ...req,
+      params: { ...params, ...(read.projections.length > 0 ? { projectWork: read.projections } : {}) },
+    } as TypedClientRequest);
+    const result = (forwarded ?? {}) as Record<string, unknown>;
+    return { ...result, projectWork: read.outcomes };
+  }
+
+  /** Validate every mention once, in the order the message named them. */
+  private readMentions(
+    refs: readonly ProjectWorkRef[],
+    actor: ActorIdentity,
+  ): { projections: ProjectWorkMentionProjection[]; outcomes: ProjectWorkMentionOutcome[] } {
+    // Reading a mention is a project-work read, so it is admitted by the same
+    // scope a `project/work/get` would need. A connection that may prompt but
+    // may not read project work sends its words without the content.
+    const mayRead = this.deps.access.authorize("project/work/get", actor).ok && this.deps.projectWork !== undefined;
+    const projections: ProjectWorkMentionProjection[] = [];
+    const outcomes: ProjectWorkMentionOutcome[] = [];
+    for (const ref of refs) {
+      const found = mayRead ? this.readMention(ref, actor) : { problem: "unreadable" as const };
+      if ("problem" in found) {
+        const detail = mentionProblemSentence(found.problem, ref.key);
+        projections.push(
+          mentionProjection({
+            ref,
+            entity: unreadableEntity(ref),
+            revision: unreadableRevision(ref),
+            body: undefined,
+            projectName: this.projectDisplayName(ref.projectId),
+            unavailable: { reason: found.problem, detail },
+          }),
+        );
+        outcomes.push({ ref, status: "unavailable", note: detail });
+        continue;
+      }
+      const reading = found.reading;
+      projections.push(mentionProjection(reading));
+      // The digest is the sender's proof that it pinned what the store holds.
+      // When they disagree the store wins and the sender is told which
+      // revision was actually read, rather than a mention quietly standing
+      // for content nobody saw.
+      if (reading.ref.digest !== ref.digest) {
+        outcomes.push({
+          ref: reading.ref,
+          status: "repinned",
+          note: `${ref.key} was re-read from this computer's copy, which differs from the one this message pinned.`,
+        });
+      } else {
+        outcomes.push({ ref: reading.ref, status: "sent" });
+      }
+    }
+    return { projections, outcomes };
+  }
+
+  /**
+   * One mention, read at the exact revision it names.
+   *
+   * A stale revision is not a refusal: the message said which revision it
+   * meant, so that is the one that is read, even when the entity has moved on
+   * (the projection says so). Only a revision that is no longer stored, an
+   * entity that is gone, or a project this computer does not have becomes a
+   * problem — and each of those is named separately, because "it did not work"
+   * is not something a person can act on.
+   */
+  private readMention(
+    ref: ProjectWorkRef,
+    actor: ActorIdentity,
+  ): { reading: MentionReading } | { problem: "unknown_project" | "unknown_entity" | "unknown_revision" | "released" } {
+    const work = this.projectWork();
+    const caller = { actor, source: "client" as const };
+    const base = {
+      projectId: ref.projectId,
+      entityId: ref.entityId,
+      body: { mode: "full" as const },
+      include: { comments: false, approvals: false, evidence: false, links: false, history: false },
+    };
+    let detail;
+    try {
+      detail = work.handle({ method: "project/work/get", params: { ...base, revisionId: ref.revisionId } }, caller) as ProjectWorkGetResult;
+    } catch {
+      try {
+        work.handle({ method: "project/work/get", params: base }, caller);
+        return { problem: "unknown_revision" };
+      } catch {
+        try {
+          work.handle({ method: "project/work/list", params: { projectId: ref.projectId, limit: 1 } }, caller);
+          return { problem: "unknown_entity" };
+        } catch {
+          return { problem: "unknown_project" };
+        }
+      }
+    }
+    const page = detail.body;
+    if (page?.released) {
+      return { problem: "released" };
+    }
+    return {
+      reading: {
+        ref: detail.ref,
+        entity: detail.entity,
+        revision: detail.revision,
+        body: page?.body,
+        projectName: this.projectDisplayName(ref.projectId),
+      },
+    };
+  }
+
+  /** The name a person calls this project, for a mention's provenance. */
+  private projectDisplayName(projectId: string): string {
+    const paths = this.deps.projectPaths?.(projectId) ?? [];
+    const current = paths[0];
+    if (!current) return projectId;
+    const known = this.deps.projects.list().find((project) => canonical(project.cwd) === canonical(current));
+    return known?.name ?? current.split(/[\\/]/u).filter(Boolean).at(-1) ?? projectId;
+  }
+
   private async forwardToWorker(req: TypedClientRequest): Promise<unknown> {
     try {
       return await this.forwardOnce(req);
@@ -1802,4 +1961,71 @@ function toRpcError(error: unknown): JsonRpcError {
   }
   if (error instanceof WorkerRpcError) return error.rpc;
   return { code: ErrorCodes.Internal, message: error instanceof Error ? error.message : String(error) };
+}
+
+/**
+ * Every project-work mention a prompt pins, in the order it names them
+ * (M21-T9).
+ *
+ * The identities live at the foot of the message, where a person never reads
+ * them and the transcript never draws them; the prose carries the human form.
+ * A token with no definition is a key somebody typed and is left alone — this
+ * never guesses a revision for it.
+ */
+function promptMentionRefs(content: readonly ContentBlock[]): ProjectWorkRef[] {
+  const refs: ProjectWorkRef[] = [];
+  const seen = new Set<string>();
+  for (const block of content) {
+    if (block.type !== "text") continue;
+    for (const span of projectWorkMentionSpans(block.text)) {
+      const ref = span.ref;
+      if (!ref) continue;
+      const identity = `${ref.projectId}\u0000${ref.entityId}\u0000${ref.revisionId}`;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      refs.push(ref);
+      if (refs.length >= PROJECT_WORK_MENTION_MAX) return refs;
+    }
+  }
+  return refs;
+}
+
+/**
+ * The identity a mention keeps when its body cannot be read.
+ *
+ * The chip in the transcript says what it always said; the projection carries
+ * the same name with the reason beside it. Nothing here pretends to know a
+ * state or a title the store did not give up — the key is the whole claim.
+ */
+function unreadableEntity(ref: ProjectWorkRef): ProjectWorkEntity {
+  return {
+    projectId: ref.projectId,
+    entityId: ref.entityId,
+    kind: ref.kind,
+    key: ref.key,
+    keyNumber: 0,
+    title: ref.label,
+    state: "draft",
+    currentRevisionId: ref.revisionId,
+    currentDigest: ref.digest,
+    revisionCount: 1,
+    createdAt: "",
+    updatedAt: "",
+  };
+}
+
+function unreadableRevision(ref: ProjectWorkRef): ProjectWorkRevision {
+  return {
+    projectId: ref.projectId,
+    entityId: ref.entityId,
+    revisionId: ref.revisionId,
+    kind: ref.kind,
+    index: 1,
+    title: ref.label,
+    digest: ref.digest,
+    bodyBytes: 0,
+    createdAt: "",
+    origin: { actor: { kind: "person", label: "" } },
+    state: "draft",
+  };
 }

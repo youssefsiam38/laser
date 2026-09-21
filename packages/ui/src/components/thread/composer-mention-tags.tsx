@@ -29,6 +29,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, type ComponentProps, type 
 
 import { cn } from "@/lib/utils";
 
+import type { ProjectWorkKind } from "@lasercode/protocol";
+
 import type { FinishedMentions, MentionKind } from "./finished-mentions.js";
 
 /**
@@ -45,7 +47,22 @@ const KIND_CLASS: Record<MentionKind, string> = {
   file: "outline-solid",
   directory: "outline-dashed",
   agent: "outline-solid bg-[color-mix(in_oklab,var(--live)_18%,transparent)]",
+  // Project work carries its kind's own colour (M21-T9): the same token the
+  // badge, the board column and the workspace use, so `@TASK-44` reads as a
+  // Task before anything is sent. The tint is applied as a style because the
+  // token is chosen at runtime from a closed set of five, and a class name
+  // built at runtime is a class name that does not ship.
+  work: "outline-solid",
 };
+
+/** The kind's own token, as the tint and hairline of one tag. */
+function workTagStyle(kind: ProjectWorkKind): { background: string; outlineColor: string } {
+  const token = `var(--kind-${kind})`;
+  return {
+    background: `color-mix(in oklab, ${token} 14%, transparent)`,
+    outlineColor: `color-mix(in oklab, ${token} 45%, transparent)`,
+  };
+}
 
 /**
  * The layer itself. It subscribes to the draft on its own so the composer
@@ -105,6 +122,7 @@ export function ComposerMentionTags({
         data-slot="composer-mention-tag"
         data-mention-kind={tag.type}
         data-mention-label={tag.label}
+        {...(tag.workKind ? { "data-work-kind": tag.workKind, style: workTagStyle(tag.workKind) } : {})}
         className={cn(TAG_CLASS, KIND_CLASS[tag.type])}
       >
         {tag.token}

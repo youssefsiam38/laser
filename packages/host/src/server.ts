@@ -914,6 +914,10 @@ export class HostServer {
       routeLeases: this.routeLeases,
       projectWork: this.projectWorkMethods,
       projectWorkUnavailable: this.projectWorkUnavailable,
+      // Only the store knows which folders an opaque project id has been
+      // opened at, and a mention's provenance names a project a person
+      // recognises (M21-T9).
+      ...(this.projectWork ? { projectPaths: (projectId: string) => this.projectWork!.projectPaths(projectId) } : {}),
     });
 
     this.http = createServer((req, res) => this.serveHttp(req, res));

@@ -4,6 +4,12 @@ import {
   type Unstable_TriggerItem,
   type Unstable_TriggerMatcher,
 } from "@assistant-ui/react";
+import {
+  projectWorkMentionDefinitions,
+  projectWorkMentionSpans as projectWorkSpans,
+} from "@lasercode/protocol";
+
+import { workMentionSegmentId } from "@/project-work/mentions";
 
 export type ProjectPath = { ok: true; directory: string; prefix: string; head: string } | { ok: false; error: string };
 type Segment = ReturnType<Unstable_DirectiveFormatter["parse"]>[number];
@@ -210,12 +216,47 @@ export function projectMentionSpans(text: string): ProjectMentionSpan[] {
   return spans;
 }
 
+/**
+ * The spans a transcript draws as something other than prose, in one order:
+ * the anchored paths this module has always chipped, and the project work a
+ * message pinned (M21-T9).
+ *
+ * A pinned mention is drawn from the identity the message carries, and the
+ * identity lines at the foot of the message are dropped — they are how the
+ * mention survives a reload, not something a person should ever read.
+ */
+function transcriptSpans(text: string): Array<{ start: number; end: number; segment: Segment | undefined }> {
+  const spans: Array<{ start: number; end: number; segment: Segment | undefined }> = [];
+  for (const span of projectMentionSpans(text)) {
+    spans.push({ start: span.start, end: span.end, segment: { kind: "mention", type: span.type, id: span.id, label: span.label } });
+  }
+  for (const span of projectWorkSpans(text)) {
+    if (!span.ref) continue;
+    spans.push({
+      start: span.start,
+      end: span.end,
+      segment: { kind: "mention", type: "work", id: workMentionSegmentId(span.ref), label: span.title ?? span.key },
+    });
+  }
+  // The definitions themselves: removed, never rendered.
+  for (const definition of projectWorkMentionDefinitions(text)) {
+    spans.push({ start: definition.start, end: Math.min(text.length, definition.end + 1), segment: undefined });
+  }
+  return spans.sort((a, b) => a.start - b.start);
+}
+
 function parseReadableProjectMentions(text: string): Segment[] {
   const segments: Segment[] = [];
   let textStart = 0;
-  for (const span of projectMentionSpans(text)) {
-    if (textStart < span.start) segments.push({ kind: "text", text: text.slice(textStart, span.start) });
-    segments.push({ kind: "mention", type: span.type, id: span.id, label: span.label });
+  for (const span of transcriptSpans(text)) {
+    if (span.start < textStart) continue;
+    if (textStart < span.start) {
+      // The blank line that separates the prose from the identity lines goes
+      // with them: a message must not end in the gap where they were.
+      const between = span.segment ? text.slice(textStart, span.start) : text.slice(textStart, span.start).replace(/\s+$/u, "");
+      if (between) segments.push({ kind: "text", text: between });
+    }
+    if (span.segment) segments.push(span.segment);
     textStart = span.end;
   }
   if (textStart < text.length) segments.push({ kind: "text", text: text.slice(textStart) });

@@ -31,6 +31,7 @@ import {
   PROFILE_NAME_MAX,
 } from "./fallback.js";
 import { PROVIDER_FAILURE_CLASSES } from "./provider-failure.js";
+import { PROJECT_WORK_MENTION_MAX, projectWorkMentionProjectionSchema } from "./project-work-mentions.js";
 import { WORKER_MODES } from "./runtime-recovery.js";
 import { runtimeActivationParamsSchemas } from "./runtime-activation.js";
 import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
@@ -786,6 +787,10 @@ export const clientParamsSchemas = {
         model: modelRefSchema.nullable().optional(),
         thinkingLevel: thinkingLevelSchema.optional(),
       }).strict().optional(),
+      // Host-supplied (M21-T9). Accepted on the wire so a host may forward its
+      // own validated projection to a worker with the prompt it belongs to;
+      // whatever a client sends here is replaced, never trusted.
+      projectWork: z.array(projectWorkMentionProjectionSchema).max(PROJECT_WORK_MENTION_MAX).optional(),
     })
     .strict(),
   "session/cancel": z.object({ path: sessionPath }).strict(),

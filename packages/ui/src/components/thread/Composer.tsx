@@ -13,7 +13,7 @@ import {
   ComposerSend,
   ComposerToolbar,
 } from "@/components/assistant-ui/elements/composer";
-import { ComposerTriggerPopover } from "@/components/assistant-ui/elements/composer-trigger-popover.aui";
+import { ComposerTriggerPopover, type PickerNavigation } from "@/components/assistant-ui/elements/composer-trigger-popover.aui";
 import { ContextRingButton } from "@/components/assistant-ui/elements/context-display";
 import { ComposerDraftRestore } from "@/components/assistant-ui/elements/draft-restore";
 import { ComposerQueue } from "@/components/assistant-ui/elements/message-queue";
@@ -26,7 +26,18 @@ import { DictateButton } from "@/components/mobile";
 import { CapabilityNotice } from "@/components/capability-gate";
 // The project lifecycle leap (M21-T6): `/spec`, `/research`, `/design`, `/plan`.
 import { onWorkQuote, useProjectWorkCommands } from "@/components/project-work";
-import { KIND_ICON } from "@/project-work/vocabulary";
+// The project lifecycle leap (M21-T9): `@SPEC-12`, `@task:` and the rest.
+import {
+  decodeWorkMentionItemId,
+  nextWorkMentionLabel,
+  pinWorkMention,
+  mentionRowDescription,
+  useWorkMentions,
+  workMentionItemId,
+  workMentionToken,
+  type WorkMentionCandidate,
+} from "@/project-work/mentions";
+import { KIND_ICON, KIND_LABEL } from "@/project-work/vocabulary";
 import { errorText, useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { finishActiveDictation } from "@/pwa";
@@ -41,6 +52,7 @@ import { useDirectoryPage } from "./use-directory-page.js";
 import { ComposerMentionField } from "./composer-mention-tags.js";
 import { createFinishedMentions, type FinishedMentions } from "./finished-mentions.js";
 import { explorerItems, explorerNavigation, explorerPageItem, mentionFormatter, mentionItemId } from "./project-explorer-model.js";
+import { replaceProjectQuery } from "./project-path.js";
 import { useTranscriptViewport } from "./transcript-viewport.js";
 
 /**
@@ -432,7 +444,64 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
 // ---------------------------------------------------------------------------
 
 /** The `@` picker's rows: what each kind of result looks like in the list. */
-const MENTION_ICONS = { agent: Bot, file: FileText, directory: FolderOpen, next: ChevronRight, previous: ChevronLeft } as const;
+const MENTION_ICONS = {
+  agent: Bot, file: FileText, directory: FolderOpen, next: ChevronRight, previous: ChevronLeft,
+  // The five kinds keep their own icons here too (D-355): a row in the picker
+  // looks like the badge it will become.
+  spec: KIND_ICON.spec, research: KIND_ICON.research, design: KIND_ICON.design, plan: KIND_ICON.plan, task: KIND_ICON.task,
+} as const;
+
+/**
+ * One project-work row (M21-T9). The label is what the insertion writes, the
+ * description says what kind it is and which project it is from, and the
+ * identity travels in the metadata so picking pins a revision rather than a
+ * key that could mean five things in five projects.
+ */
+function workMentionItem(candidate: WorkMentionCandidate): Unstable_TriggerItem {
+  return {
+    id: workMentionItemId(candidate.ref),
+    type: "work",
+    label: `${candidate.key} ${candidate.title}`,
+    description: candidate.title,
+    metadata: {
+      icon: candidate.kind,
+      kind: candidate.project.current ? KIND_LABEL[candidate.kind] : candidate.project.name,
+      exactKey: candidate.exactKey,
+      workKind: candidate.kind,
+      identity: candidate.key,
+      group: mentionRowDescription(candidate),
+    },
+  };
+}
+
+/**
+ * Picking project work writes the draft itself (M21-T9).
+ *
+ * The text a pick inserts depends on the draft it lands in — the same key
+ * mentioned twice at two revisions needs two labels — so the insertion cannot
+ * come from a formatter that only sees the row. It writes the human form,
+ * pins the identity beside it, and records the choice as finished, which is
+ * what closes the picker (D-299/D-304).
+ */
+function workMentionNavigation(base: PickerNavigation, mentions: FinishedMentions): PickerNavigation {
+  return {
+    ...base,
+    select: (item, text, caret) => {
+      // The identity is in the row's id, which is where a picker keeps one:
+      // an item's metadata is JSON the primitive owns, and the id is the only
+      // field that is guaranteed to arrive back unchanged.
+      const ref = item.type === "work" ? decodeWorkMentionItemId(item.id, item.label) : undefined;
+      if (!ref) return base.select(item, text, caret);
+      const label = nextWorkMentionLabel(text, ref);
+      const token = workMentionToken(ref, label);
+      const draft = replaceProjectQuery(text, caret, `${token.slice(1)} `);
+      if (!draft) return null;
+      pinWorkMention(label, ref);
+      mentions.noteChoice({ token, type: "work", label: ref.key, workKind: ref.kind });
+      return draft;
+    },
+  };
+}
 
 const SLASH_ICONS = {
   // The project lifecycle leap (D-352): one row per kind, with the kind's own
@@ -592,12 +661,20 @@ function useHandleMentions() {
   const mentions = mentionsRef.current;
   const path = useLaserState(s => (s.current ? s.open[s.current]?.path : undefined));
   const sessionCwd = useLaserState(s => (s.current ? s.open[s.current]?.state.cwd : undefined));
-  const { currentProject } = useLaserStable();
+  const { currentProject, projects, projectInfo } = useLaserStable();
   const childRuns = useRunsForRoot(path);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const cwd = sessionCwd ?? currentProject;
   const page = useDirectoryPage(cwd, query, open);
+  // Project work, from this project first and then every other project this
+  // device can read (M21-T9). A projectless Chat has no current project and
+  // still mentions: the list is simply every project, ungrouped by "here".
+  const workProjects = useMemo(
+    () => projects.map((cwd) => ({ cwd, name: projectInfo[cwd]?.name ?? cwd.split(/[\\/]/u).filter(Boolean).at(-1) ?? cwd })),
+    [projects, projectInfo],
+  );
+  const work = useWorkMentions(query, open, { currentCwd: cwd, projects: workProjects });
   const items = useMemo(
     () => [
       // @name completes to a child agent of this session, by the name the
@@ -614,22 +691,28 @@ function useHandleMentions() {
     search: (nextQuery: string) => {
       const all = (mention.adapter.search?.("") ?? []).map(item => ({ ...item, metadata: { ...item.metadata, identity: item.label } }));
       const handles = /[/\\\\~]/u.test(nextQuery) ? [] : rankSlashCommandMatches(all, nextQuery);
-      if (nextQuery !== query) return handles;
-      return [...handles,
+      // One adapter, three sources. A key typed exactly is the answer to the
+      // question, so it goes above everything; the rest of the project work
+      // sits between the handles and the folder, current project first.
+      const workItems = work.candidates.map(workMentionItem);
+      const exact = workItems.filter((item) => item.metadata?.exactKey === true);
+      const rest = workItems.filter((item) => item.metadata?.exactKey !== true);
+      if (nextQuery !== query) return [...exact, ...handles, ...rest];
+      return [...exact, ...handles, ...rest,
         ...(page.navigation.previous ? [explorerPageItem("previous")] : []),
         ...explorerItems(page.entries, cwd ?? ""),
         ...(page.navigation.next ? [explorerPageItem("next")] : []),
       ];
     },
-  }), [mention.adapter, query, page.entries, cwd, page.navigation.next, page.navigation.previous]);
-  const navigation = explorerNavigation(page.navigation);
+  }), [mention.adapter, query, page.entries, cwd, page.navigation.next, page.navigation.previous, work.candidates]);
+  const navigation = useMemo(() => workMentionNavigation(explorerNavigation(page.navigation), mentions), [page.navigation, mentions]);
   // The insertion is the moment the choice is made, and the only place that
   // knows the exact range it wrote; everything after it is ordinary typing.
   const directive = useMemo(
     () => ({ ...mention.directive, formatter: mentionFormatter, onInserted: (item: Unstable_TriggerItem) => mentions.noteInsertion(item) }),
     [mention.directive, mentions],
   );
-  return { adapter, directive, mentions, navigation, loading: page.loading,
+  return { adapter, directive, mentions, navigation, loading: page.loading || work.loading,
     issue: page.issue, retry: page.retry, directory: page.directory, setQuery, setOpen };
 }
 

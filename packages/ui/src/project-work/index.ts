@@ -42,6 +42,31 @@ export {
 } from "./store.js";
 export { useProjectWork, useProjectWorkById, useProjectWorkSnapshot, useProjectWorkStore } from "./hooks.js";
 export {
+  candidateOfListItem,
+  candidateOfSearchResult,
+  clearSessionTaskLinks,
+  clearWorkMentionPins,
+  decodeWorkMentionItemId,
+  expandWorkMentions,
+  mentionRowDescription,
+  nextWorkMentionLabel,
+  parseWorkMentionQuery,
+  parseWorkMentionSegment,
+  pinWorkMention,
+  pinnedWorkMentions,
+  rankWorkMentions,
+  useSessionTaskLink,
+  useWorkMentions,
+  workMentionItemId,
+  workMentionSegmentId,
+  workMentionToken,
+  WORK_MENTION_PREFIXES,
+  type MentionProject,
+  type SessionTaskLink,
+  type WorkMentionCandidate,
+  type WorkMentionQuery,
+} from "./mentions.js";
+export {
   closeWorkspace,
   honourWorkLinkFromLocation,
   landWorkLink,

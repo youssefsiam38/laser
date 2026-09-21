@@ -118,6 +118,11 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { dateTime, shortCwd } from "@/format";
+// The project lifecycle leap (M21-T9): a session that is an attempt at a Task
+// wears that Task's key, in the sidebar, as a chip that opens it.
+import { WorkMentionChip } from "@/components/project-work/MentionChip";
+import { useProjectWorkStore } from "@/project-work/hooks";
+import { useSessionTaskLink } from "@/project-work/mentions";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { mergeSessions, useCapability, useLaserStable, useLaserState } from "@/runtime";
@@ -1276,6 +1281,12 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
   // move into a project (M13-T58); the same rule that put it in the Chat tab.
   const movable = workspaceKind === "chat" && !row.child && !archived;
 
+  // The Task this conversation is an attempt at, when it is one (M21-T9).
+  // Read by the session's opaque id from the project's own execution links,
+  // never from its title; a project this window has not read has no chip.
+  const sessionId = useLaserState((s) => (path ? s.sessions.find((summary) => summary.path === path)?.id : undefined));
+  const taskLink = useSessionTaskLink(sessionId, useProjectWorkStore(row.cwd || undefined));
+
   const runningOn = runningOnText(row, useProfileNamesMap());
   const shownTitle = title ?? (path ? path.split("/").pop()?.slice(0, 8) : "New session") ?? "New session";
   // A child leads with the instance name its parent gave it; the session's
@@ -1377,6 +1388,7 @@ export const ThreadListItem: FC<{ editing: string | undefined; onEdit(id: string
               <span className="min-w-0 truncate"><ThreadListItemPrimitive.Title fallback={shownTitle} /></span>
             )}
           </span>
+          {taskLink ? <WorkMentionChip workKey={taskLink.key} kind="task" target={taskLink.target} className="shrink-0" /> : null}
           {isPinned && row.cwd && <span data-slot="pinned-session-project" {...(workspaceKind ? {} : { title: row.cwd })} aria-label={workspaceKind ? `Workspace: ${workspaceLabel}` : `Project: ${row.cwd}`} className="max-w-16 shrink-0 truncate rounded-sm bg-surface-2 px-1 text-xs leading-4 text-ink-3">{workspaceLabel}</span>}
         </ThreadListItemPrimitive.Trigger>
       )}
