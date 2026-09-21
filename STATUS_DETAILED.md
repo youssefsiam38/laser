@@ -5996,7 +5996,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T16 | Plans and Tasks workspace | done | claude-2026-09-21-leap | `faf53146` (merged with T7 conflicts resolved by the orchestrator in `store.ts`/`WorkDetail.tsx`/`Inspector.tsx`); `pnpm -F @lasercode/ui test` (`plan-graph`, `plan-detail`, `task-detail`, `board-transitions` 42) | see notes |
 | M21-T17 | Model tools and execution linking | done | claude-2026-09-21-leap | `133d55cd` (six commits, merged); protocol 631, pi-extension 237, worker 1498, host 1140; `pnpm tool-eval` 42/42 (21 fixtures × 2 profiles); `pnpm verify` passed | see notes |
 | M21-T18 | Checkpoints, changes and delivery evidence | done | claude-2026-09-21-leap | `85ee5ea4` (+ `sessionPath` closure by the orchestrator); protocol 668, host 1172 (`project-work/delivery.test.ts` 14 over real git repos), worker 1499; `pnpm verify` passed in the worker's tree | see notes |
-| M21-T19 | Verification and convergence | todo | — | — | `PLAN.md` M21 |
+| M21-T19 | Verification and convergence | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T20 | Cross-session continuity and recovery | todo | — | — | `PLAN.md` M21 |
 | M21-T21 | Import, export and repository publication | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T22 | Security, privacy, relay and resource hardening | todo | — | — | `PLAN.md` M21 |
@@ -6041,6 +6041,9 @@ live work holding its row when a snapshot thins — because both are real hazard
 #### M21-T8 notes
 - 2026-09-21 done (`98a01428`): host `gates.ts` `GateEngine` (Brief/Design/Build subjects and requirements, complete digest set, person-only, blocking comments named, invalidation on material revise via covers ∪ `propagateStale`), comments with semantic anchors re-decided orphaned per revision; protocol gate report/anchor helpers, `SpecBody.gated` opt-in (decision 1); UI `GateCard` (Approve disabled with the host's reason, typed key confirmation, Enter never approves), `CommentsPanel` (threads, anchors, blocking, batched one-revision request), `ApprovalRequestCard` above the composer opening the workspace at the exact revision.
 - 2026-09-21 claimed by claude-2026-09-21-leap: host gate rules (`project-work/gates.ts` + the store's comment/review/approve paths) and the UI comments/gate card/Approval Card; write set disjoint from T16 (plan/task/board files) and T17 (bridge/methods wiring).
+
+#### M21-T19 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: host/worker verifier over the four authorities, Native evidence only from accepted M20 checkpoint previews linked `verified_at`, browser matrices as declared requirements, deviation workflow, affected-only stale graph, final report; Task detail consumes the report.
 
 #### M21-T18 notes
 - 2026-09-21 done (`85ee5ea4`): per-repository attempt records (base state, checkpoints resolved to commit ids by session key + turn, change first→last, changed paths from git feeding T15's observed scope, commits), `based_on` on bridge-made revisions, `implemented_by` only through person-confirmed "accept as delivery" verifying the diff digest, `verified_at` from verification evidence in one transaction, git-action `linkRef` (commit id identity; branch/PR display), links never retarget, missing objects report `unavailable` never HEAD, canonical captures stored before acceptance with quota refusal (-32011), superseding links append; host reads git itself (`source-control/read.ts`); schema v2. D-357.a–j in `docs/leap/m21-tools-plan.md`. The `executionShape().sessionPath` line closed by the orchestrator.
