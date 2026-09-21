@@ -5992,7 +5992,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T12 | Native validation runner and source selection | todo | — | — | `PLAN.md` M21 |
 | M21-T13 | Design workspace and anchored review | todo | — | — | `PLAN.md` M21 |
 | M21-T14 | Greenfield design foundation | todo | — | — | `PLAN.md` M21 |
-| M21-T15 | Plan DAG and Project Task engine | todo | — | — | `PLAN.md` M21 |
+| M21-T15 | Plan DAG and Project Task engine | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T16 | Plans and Tasks workspace | todo | — | — | `PLAN.md` M21 |
 | M21-T17 | Model tools and execution linking | todo | — | — | `PLAN.md` M21 |
 | M21-T18 | Checkpoints, changes and delivery evidence | todo | — | — | `PLAN.md` M21 |
@@ -6003,7 +6003,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T23 | Product-language and element reconciliation | todo | — | — | `PLAN.md` M21 |
 | M21-T24 | End-to-end project lifecycle acceptance | todo | — | — | `PLAN.md` M21 |
 | M21-T25 | Release the project lifecycle leap | todo | — | — | `PLAN.md` M21 |
-| M21-T26 | Research phase: adapters, tools and loop | todo | — | — | `PLAN.md` M21; `docs/research-phase.md` |
+| M21-T26 | Research phase: adapters, tools and loop | in-progress | claude-2026-09-21-leap | — | see notes |
 
 #### M21-T5–T6 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: one UI worker (client store → workspace shell) from the merged spine; plan in `docs/leap/m21-workspace-plan.md`.
@@ -6011,6 +6011,12 @@ live work holding its row when a snapshot thins — because both are real hazard
 #### M21-T10 notes
 - 2026-09-21 done (`9306d0fa`): `packages/worker/src/design/index/` L0 parsers (stack, styles incl. Tailwind config as text, DTCG tokens, components with typed props, templates/routes, assets/i18n), digest-keyed cache, eras with `useForNewWork`, L1 one-shot synthesis on `designIndexProfileId` with citation checks, review actions preserved by stable ids with "changed since review", `<project>/.laser/design/{index,review}.json` writer refusing machine paths, bounded stoppable Command with progress by files; three tools linted and fixture-replayed (engine registration is M21-T17's — deviation 1), no host change (index authority is M21-T13's — deviation 2); no new dependencies. Merge fix by the orchestrator: the strict fixture parser from the M26 batch dropped `world.designIndex`.
 - 2026-09-21 claimed by claude-2026-09-21-leap (row title aligned with `PLAN.md` as amended by D-353): worker-side Design Index (L0 parsers, L1 synthesis on `designIndexProfileId`, storage, review, digest cache, bounded Command) in parallel with the UI; plan in `docs/leap/m21-design-index-plan.md`.
+
+#### M21-T15 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: host engine over the spine store (DAG validation, readiness, transitions, stale, assignments, conflicts, evidence rules); gate semantics from T8 are consumed through the store's approval records already present since T1/T2.
+
+#### M21-T26 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: worker-side Research adapters, tools and loop per `docs/research-phase.md`; tools linted and fixture-replayed like the Design Index; engine registration through M21-T17.
 
 #### M21-T1–T4 notes
 - 2026-09-21 T3/T4 done: `project-work/methods.ts` (16 methods, actor person/agent by source, `cwd` resolution on `list`, trust gates mutations only, conflict -32010 / quota -32011, audit rows without bodies), `notifier.ts` (updated always, attention on change), `project_write` scope replaces the `settings` stopgap; `search()` repairs stale projections before answering, `releaseDerived()` labelled release, ranged blob reads. UI capability map pinned by the orchestrator. Wire shapes for T5/T6 and T17/T26 in `docs/leap/m21-spine-plan.md`.
