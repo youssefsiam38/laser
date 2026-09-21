@@ -164,7 +164,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
   );
   // A write the tool has not made yet (`tool-preview.ts`): the same card the
   // person's git actions show, outside the fold, with no control of its own.
-  const previewed = state === "done" ? toolPreview(result) : undefined;
+  const previewed = state === "done" ? toolPreview(result, toolName) : undefined;
   const footer = (
     <>
       {previewed ? <ToolPreviewRow preview={previewed} toolName={toolName} /> : null}

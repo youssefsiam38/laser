@@ -262,6 +262,48 @@ describe("the truncation measure", () => {
     expect(evaluation.measures.find((measure) => measure.id === "truncation")!.pass).toBe(false);
   });
 
+  // F-S4: two truncated pages in one run are two judgements, not one.
+  it("judges every truncated call, not only the first", () => {
+    const evaluation = evaluateRun(
+      run(
+        [
+          call({ tool: "inspect_agent", index: 0, args: { runId: "r", messages: 10 }, text: big }),
+          call({ tool: "inspect_agent", index: 1, args: { runId: "r", messages: 6 }, text: big }),
+          call({ tool: "inspect_agent", index: 2, args: { runId: "r", messages: 2 }, text: "small" }),
+        ],
+        { fixture: truncationFixture },
+      ),
+    );
+    const truncation = evaluation.measures.find((measure) => measure.id === "truncation")!;
+    expect(truncation.pass).toBe(true);
+    expect(truncation.detail).toContain("2 truncated results");
+  });
+
+  it("fails when the second truncated result was never narrowed, though the first was", () => {
+    const evaluation = evaluateRun(
+      run(
+        [
+          call({ tool: "inspect_agent", index: 0, args: { runId: "r", messages: 10 }, text: big }),
+          call({ tool: "inspect_agent", index: 1, args: { runId: "r", messages: 6 }, text: big }),
+          call({ tool: "inspect_agent", index: 2, args: { runId: "r", messages: 8 }, text: "small" }),
+        ],
+        { fixture: truncationFixture },
+      ),
+    );
+    const truncation = evaluation.measures.find((measure) => measure.id === "truncation")!;
+    expect(truncation.pass).toBe(false);
+    expect(truncation.detail).toContain("call 2");
+  });
+
+  it("does not call a result truncated for containing a word", () => {
+    const evaluation = evaluateRun(
+      run([call({ tool: "inspect_agent", index: 0, args: { runId: "r", messages: 4 }, text: "it says the compiler omitted a frame from the stack it printed" })], {
+        fixture: fixture({ measures: ["schema", "selection", "budget", "truncation"] }),
+      }),
+    );
+    expect(evaluation.measures.find((measure) => measure.id === "truncation")!.detail).toContain("no result reached");
+  });
+
   it("counts a result that says something was left out, however short it is", () => {
     const evaluation = evaluateRun(
       run(
@@ -396,5 +438,15 @@ describe("the report", () => {
     expect(table).toContain("1 of 2 runs failed.");
     // Nothing in the table runs past a narrow terminal.
     for (const line of table.split("\n")) expect(line.length).toBeLessThanOrEqual(120);
+  });
+
+  // N6: one tool may have more than one fixture; the count says how many
+  // fixtures ran, not how many tools they were about.
+  it("counts two fixtures of one tool as two", () => {
+    const first = evaluateRun(run([call({ tool: "inspect_agent", index: 0, args: { runId: "r" } })], { fixture: { ...fixture(), source: "/fixtures/inspect_agent.json" } }));
+    const second = evaluateRun(
+      run([call({ tool: "inspect_agent", index: 0, args: { runId: "r" } })], { fixture: { ...fixture({ task: "Check the other one." }), source: "/fixtures/inspect_agent-blocked.json" } }),
+    );
+    expect(buildReport("recorded", [first, second]).totals.fixtures).toBe(2);
   });
 });

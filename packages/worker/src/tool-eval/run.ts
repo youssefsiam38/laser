@@ -18,13 +18,13 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PRODUCT_NAME, parseToolError, type ModelProfile, type SessionUpdate, type ToolError } from "@lasercode/protocol";
+import { PRODUCT_NAME, isRecord, parseToolError, type ModelProfile, type SessionUpdate, type ToolError } from "@lasercode/protocol";
 import { fallbackDefaultAgent, fallbackPolicy } from "../agents/definitions.js";
 import { rootRecord } from "../agents/session-config.js";
 import { StableSdkDriver } from "../drivers/stable-sdk.js";
 import type { DriverAgentOptions, DriverEvent } from "../driver.js";
 import type { RecordedStep, ToolEvalFixture } from "./fixture.js";
-import { estimateTokens, startRecordedProvider, type RecordedProvider } from "./recorded-provider.js";
+import { CHARACTERS_PER_TOKEN, estimateTokens, startRecordedProvider, type RecordedProvider } from "./recorded-provider.js";
 import { ScriptedWorld } from "./world.js";
 
 /** One profile of the matrix, as a run needs it. */
@@ -94,8 +94,6 @@ export interface RunFixtureOptions {
 const DEFAULT_TIMEOUT_MS = 120_000;
 /** The id the fixtures use when a call has to name a task the run started. */
 const TASK_ID_PLACEHOLDER = "{{taskId}}";
-
-const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 
 /** Run one fixture on one profile and report what happened. */
 export async function runFixture(options: RunFixtureOptions): Promise<ToolEvalRun> {
@@ -201,7 +199,7 @@ export async function runFixture(options: RunFixtureOptions): Promise<ToolEvalRu
     mode: live ? "live" : "recorded",
     calls: observed.sort((left, right) => left.index - right.index),
     requests,
-    inputTokens: estimateTokens("x".repeat(inputBytes)),
+    inputTokens: tokensFromBytes(inputBytes),
     outputTokens: outputTokens(observed, provider ? fixture.steps.slice(0, requests) : undefined),
     model,
     settled,
@@ -311,6 +309,15 @@ function resultText(result: unknown): string {
 function withError(text: string): { error?: ToolError } {
   const error = parseToolError(text);
   return error ? { error } : {};
+}
+
+/**
+ * The prompt's cost, from the bytes the requests really carried: the same
+ * four-characters-to-a-token estimate {@link estimateTokens} makes, done as
+ * arithmetic rather than by building a request-sized string to measure.
+ */
+function tokensFromBytes(bytes: number): number {
+  return Math.ceil(bytes / CHARACTERS_PER_TOKEN);
 }
 
 /**

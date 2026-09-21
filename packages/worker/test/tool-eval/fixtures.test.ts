@@ -16,6 +16,8 @@
  */
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { LASER_TOOL_NAMES } from "@lasercode/protocol";
+import { laserToolRegistry } from "@lasercode/pi-extension";
 import { loadFixtures, TOOL_EVAL_MEASURES, type ToolEvalFixture } from "../../src/tool-eval/fixture.js";
 import { profilesFrom } from "../../src/tool-eval/harness.js";
 import { evaluateRun } from "../../src/tool-eval/measures.js";
@@ -70,9 +72,18 @@ describe("the tool evaluation matrix", () => {
         expect(run.model, `${profile.name} ran on the wrong model`).toBe(profile.model);
       }
     }
+    // F-S1: the pin that makes the list above honest. Every run registered the
+    // real tools, so the registry now holds the whole tool surface of a root
+    // session and a child one; a tool registered without a fixture, or a
+    // fixture for a tool nobody registers, fails here rather than passing
+    // silently. The protocol's own list — what the transcript reads, which may
+    // not import the engine — is pinned to the same set.
+    const registered = [...laserToolRegistry().keys()].sort();
+    expect(registered, "every registered tool has an evaluation fixture, and every fixture a registered tool").toEqual([...TOOLS].sort());
+    expect([...LASER_TOOL_NAMES].sort(), "LASER_TOOL_NAMES names exactly the registered tools").toEqual(registered);
     const report = buildReport("recorded", results);
     expect(report.pass).toBe(true);
-    expect(report.totals).toEqual({ fixtures: TOOLS.length, runs: TOOLS.length * profiles.length, failed: 0 });
+    expect(report.totals).toEqual({ fixtures: fixtures.length, runs: TOOLS.length * profiles.length, failed: 0 });
     // The report a person reads holds every profile and every tool, and says so.
     const table = reportTable(report);
     for (const profile of profiles) expect(table).toContain(profile.name);

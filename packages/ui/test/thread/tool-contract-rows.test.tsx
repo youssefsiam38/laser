@@ -293,7 +293,22 @@ describe("reading a preview payload", () => {
     };
     expect(toolPreview(toolResult("preview", PREVIEW_DETAILS))).toEqual(expected);
     expect(toolPreview(PREVIEW_DETAILS)).toEqual(expected);
-    expect(toolPreview(toolResult(JSON.stringify(PREVIEW_DETAILS)))).toEqual(expected);
+    // The text path belongs to the tools that could have promised this shape.
+    expect(toolPreview(toolResult(JSON.stringify(PREVIEW_DETAILS)), "export_project_work")).toBeUndefined();
+    expect(toolPreview(toolResult(JSON.stringify(PREVIEW_DETAILS)), "remove_agent_worktree")).toEqual(expected);
+  });
+
+  // F-S2: a command's output is not a promise about the transcript.
+  it("never reads a preview out of an engine or MCP tool's text", () => {
+    const payload = JSON.stringify({ preview: true, digest: "b8f0c1a4e93d5f17", summary: "Export SPEC-12 to the tracker." });
+    for (const tool of ["bash", "read", "edit", "mcp__tracker__create_issue", undefined]) {
+      expect(toolPreview(toolResult(payload), tool), tool ?? "an unnamed row").toBeUndefined();
+    }
+    // The two strict paths are unchanged for every row: a declared output, or
+    // the result object itself, is the producer saying so.
+    expect(toolPreview(toolResult("done", { preview: true, digest: "b8f0c1a4e93d5f17", summary: "Export SPEC-12 to the tracker." }), "bash")?.summary).toBe(
+      "Export SPEC-12 to the tracker.",
+    );
   });
 
   it("needs `preview: true`, a digest and a sentence; anything else is an ordinary result", () => {
@@ -321,6 +336,6 @@ describe("reading a preview payload", () => {
 
   it("does not hunt for a preview inside a large body", () => {
     const padding = JSON.stringify("pad") + ":1,";
-    expect(toolPreview(toolResult(`{"preview":true,${padding.repeat(8000)}"digest":"b8f0c1a4e93d5f17"}`))).toBeUndefined();
+    expect(toolPreview(toolResult(`{"preview":true,${padding.repeat(8000)}"digest":"b8f0c1a4e93d5f17"}`), "remove_agent_worktree")).toBeUndefined();
   });
 });

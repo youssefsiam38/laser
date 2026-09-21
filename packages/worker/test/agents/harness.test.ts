@@ -20,7 +20,7 @@ import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { WorktreeManager, worktreeSlug, type CreateWorktreeInput, type Worktree, type WorktreeFacts } from "../../src/agents/worktrees.js";
 import { projectBashPrefix } from "../../src/project-env.js";
 import type { IndexedTask } from "../../src/agents/tasks.js";
-import { AGENT_EVENT_MESSAGE_TYPE, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, type AgentDefinition, type AgentIsolationDefault, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse, type WorkspaceShape } from "@lasercode/protocol";
+import { AGENT_EVENT_MESSAGE_TYPE, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, TOOL_ERROR_COMMITTED_SENTENCE, carriedToolError, renderToolError, type AgentDefinition, type AgentIsolationDefault, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse, type WorkspaceShape } from "@lasercode/protocol";
 
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -194,6 +194,8 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true, isolationDefault
   let autoResolveChildPrompts = true;
   let admitNewWork = true;
   let facts: WorktreeFacts = { exists: true, unmergedCommits: 0, uncommittedFiles: 0 };
+  /** git refusing to give the directory back: what makes a cleanup dishonest if it is not reported. */
+  let removalFails: string | undefined;
   let root: string | undefined = "/repo";
   let workspaceShape: WorkspaceShape = {
     cwd: projectCwd,
@@ -217,7 +219,11 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true, isolationDefault
       return worktree;
     },
     async runSetup() { return { status: "not-present" }; },
-    async remove(root_, path, branch) { this.removed.push(path); this.removedWith.push({ root: root_, path, ...(branch !== undefined ? { branch } : {}) }); },
+    async remove(root_, path, branch) {
+      this.removed.push(path);
+      this.removedWith.push({ root: root_, path, ...(branch !== undefined ? { branch } : {}) });
+      if (removalFails !== undefined) throw new Error(removalFails);
+    },
     ownedBy: () => undefined,
     async rootOf() { return root; },
     async facts() { return facts; },
@@ -273,6 +279,8 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true, isolationDefault
     /** What the child's branch and directory hold, when the parent asks to remove them. */
     setWorktreeFacts: (next: WorktreeFacts) => { facts = next; },
     setWorktreeRoot: (next: string | undefined) => { root = next; },
+    /** git cannot remove the directory: the worktree survives a cleanup. */
+    setRemovalFails: (message: string | undefined) => { removalFails = message; },
   };
 }
 
@@ -1781,6 +1789,53 @@ describe("AgentHarness", () => {
     expect(world.worktrees.removed).toHaveLength(1);
     expect(world.runsNotified()).toHaveLength(0);
     expect((await root.handle.bridge.inspectFleet()).rows).toEqual([]);
+  });
+
+  // D-350.b, F-S3: `committed` is a fact about the world, not a default. A
+  // start that made a worktree and could not take it back says so, and a
+  // refusal that happened before anything was made says the opposite.
+  it("reports a start that left its worktree behind as committed, naming what survived", async () => {
+    const root = world.openRoot("lead");
+    world.setFailOpen(true);
+    world.setRemovalFails("fatal: 'w1' contains modified or untracked files, use --force to delete it");
+    const failure = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(HarnessError);
+    const reported = carriedToolError(failure);
+    expect(reported?.committed).toBe(true);
+    expect(reported?.code).toBe("start_agent_left_a_worktree");
+    expect(reported?.message).toContain("/repo/.worktrees/");
+    expect(reported?.next).toContain("git worktree remove");
+    // The rendering the model and the transcript read says the same thing.
+    expect(renderToolError(reported!)).toContain(TOOL_ERROR_COMMITTED_SENTENCE);
+    expect(world.runsNotified()).toHaveLength(0);
+  });
+
+  it("reports a start that never made anything as uncommitted", async () => {
+    const root = world.openRoot("lead");
+    const failure = await root.handle.bridge.startAgent({ agentName: "nobody", subagentName: "w", task: "t" }).catch((error: unknown) => error);
+    expect(carriedToolError(failure)?.committed ?? false).toBe(false);
+    expect(world.worktrees.created).toEqual([]);
+  });
+
+  it("reports a run it cannot find as its own failure, with nothing changed", async () => {
+    const root = world.openRoot("lead");
+    const failure = await root.handle.bridge.stopAgent({ runId: "run_9" }).catch((error: unknown) => error);
+    expect(carriedToolError(failure)).toMatchObject({ code: "no_such_run", committed: false });
+    expect(carriedToolError(failure)?.next).toContain("inspect_fleet");
+  });
+
+  it("reports a worktree removal git only half did as committed", async () => {
+    const parent = world.openRoot("lead");
+    const started = await parent.handle.bridge.startAgent({ agentName: "worker", subagentName: "Iso", task: "t" });
+    await world.harness.bridgeOf("/sessions/child-1.jsonl")!.completeRun({ status: "completed", message: "done" });
+    world.setRemovalFails("fatal: could not remove the worktree administrative files");
+    const failure = await parent.handle.bridge.removeAgentWorktree({ runId: started.runId }).catch((error: unknown) => error);
+    const reported = carriedToolError(failure);
+    expect(reported).toMatchObject({ code: "worktree_partly_removed", committed: true });
+    expect(reported?.message).toContain("was not fully removed");
+    expect(reported?.next).toContain("git worktree remove --force");
+    // A half-removal is never recorded as a removal.
+    expect(world.harness.run(started.runId)!.worktree?.removedAt).toBeUndefined();
   });
 
   it("says a run exactly once, as `agents/run`, and never a second time as something else", async () => {

@@ -30,9 +30,11 @@
  *     prompt.
  */
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import {
   AGENT_EVENT_MESSAGE_TYPE,
   AGENT_INSPECT_MESSAGES_DEFAULT,
+  ErrorCodes,
   AGENT_INSPECT_MESSAGES_MAX,
   AGENT_MESSAGE_MAX,
   AGENT_TASK_EXCERPT,
@@ -211,6 +213,28 @@ export interface PrepareSessionInput {
   /** The project this session belongs to: the git toplevel is resolved from it for worktrees. */
   projectCwd: string;
 }
+
+/**
+ * The two recoveries a failed stop can have (D-350.b, F-S3).
+ *
+ * Before the abort is asked for, nothing has happened to the run and the
+ * caller may simply try again. After it, the request is out, the run's queue
+ * was taken over, and whether the turn survived is not something this call
+ * can promise — so the refusal says something was committed and points at the
+ * read that settles it. The recovery travels on the `HarnessError`, which is
+ * what the tool layer turns into the contract's error shape.
+ */
+const STOP_NOT_SIGNALLED = {
+  code: "stop_agent_not_started",
+  committed: false,
+  next: "call inspect_fleet to see whether that run is still going, then stop_agent with the runId it shows",
+} as const;
+
+const STOP_SIGNALLED = {
+  code: "stop_agent_unconfirmed",
+  committed: true,
+  next: "call inspect_fleet to see whether that run ended; stop_agent again only if it is still running",
+} as const;
 
 interface Entry {
   path: string | undefined;
@@ -907,10 +931,10 @@ export class AgentHarness {
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
           this.diagnose(entry, "warn", "stop-control-failed", { runId, stage: "clear-queue", error: reason });
-          throw new HarnessError(`Could not stop this agent safely: ${reason}`);
+          throw new HarnessError(`Could not stop this agent safely: ${reason}`, ErrorCodes.InvalidParams, STOP_NOT_SIGNALLED);
         }
         const driver = this.host.driver(state.run.sessionPath);
-        if (!driver) throw new HarnessError("The agent session is no longer open.");
+        if (!driver) throw new HarnessError("The agent session is no longer open.", ErrorCodes.InvalidParams, STOP_NOT_SIGNALLED);
         return { kind: "idle", driver };
       }
 
@@ -920,7 +944,7 @@ export class AgentHarness {
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         this.diagnose(entry, "warn", "stop-control-failed", { runId, stage: "clear-queue", error: reason });
-        throw new HarnessError(`Could not stop this agent safely: ${reason}`);
+        throw new HarnessError(`Could not stop this agent safely: ${reason}`, ErrorCodes.InvalidParams, STOP_NOT_SIGNALLED);
       }
       this.retainTakenMessages(entry, state, preserved);
       const ticket = entry.lifecycle.beginStop(runId, {
@@ -929,7 +953,7 @@ export class AgentHarness {
         interruptOutcome: { ok: false, cancelled: true, error: "The agent was explicitly stopped before the interrupt redirect could start." },
       });
       const driver = this.host.driver(state.run.sessionPath);
-      if (!ticket || !driver) throw new HarnessError("The agent invocation ended before stop control could be established.");
+      if (!ticket || !driver) throw new HarnessError("The agent invocation ended before stop control could be established.", ErrorCodes.InvalidParams, STOP_NOT_SIGNALLED);
       if (ticket.refusedInterruptToken !== undefined) this.removeProvisionalInterrupt(entry, runId, ticket.refusedInterruptToken);
       this.cancelControlledDialogs(entry, state);
       return { kind: "control", ticket, driver, wait: entry.lifecycle.waitForTerminal(runId) };
@@ -944,7 +968,10 @@ export class AgentHarness {
           const next = entry.lifecycle.nextLocalAfterFence(runId, (pending) => pending.engine);
           if (next) this.kickMessage(state, next);
         });
-        throw new HarnessError(`Could not stop this agent safely: ${reason}`);
+        // The abort was asked for and the engine refused it: the request went
+        // out, the run's queue was taken over and handed back, and whether the
+        // turn survived is not something this call can promise.
+        throw new HarnessError(`Could not stop this agent safely: ${reason}`, ErrorCodes.InvalidParams, STOP_SIGNALLED);
       }
       await this.withEntry(entry, () => {
         if (isTerminalRunStatus(state.run.status)) return;
@@ -958,7 +985,9 @@ export class AgentHarness {
       void this.controlInvocation(entry, state, plan.driver, plan.ticket.token, "initial");
     }
     const controlled = await plan.ticket.outcome;
-    if (!controlled.ok) throw new HarnessError(controlled.error);
+    // The stop was signalled to the invocation before this resolved, so the
+    // run may be ending even though the call is failing.
+    if (!controlled.ok) throw new HarnessError(controlled.error, ErrorCodes.InvalidParams, STOP_SIGNALLED);
     await plan.wait;
     return state.run;
   }
@@ -1286,39 +1315,75 @@ export class AgentHarness {
       handle.discard();
       // Only ever a worktree this start created: a child that shares its
       // parent's checkout leaves nothing behind, and nothing there is touched.
-      if (worktree) await this.worktrees.remove(worktree.root, worktree.path, worktree.branch).catch(() => undefined);
+      // What matters to the caller is whether the cleanup worked: a worktree
+      // and a branch that survive are a change this call made and did not
+      // undo, and saying "Nothing was changed." over them would be a lie
+      // (D-350.b).
+      const leftBehind = worktree ? await this.undoWorktree(worktree) : undefined;
       const message = error instanceof Error ? error.message : String(error);
-      throw error instanceof HarnessError ? error : new HarnessError(`Could not start ${agentName}: ${message}`);
+      const sentence = error instanceof HarnessError ? error.message : `Could not start ${agentName}: ${message}`;
+      if (leftBehind) {
+        throw new HarnessError(`${sentence} ${leftBehind}`, ErrorCodes.InvalidParams, {
+          code: "start_agent_left_a_worktree",
+          committed: true,
+          next: `call inspect_fleet to see that no agent owns it, then remove it yourself with git worktree remove ${worktree!.path}, or start the agent again — it makes its own`,
+        });
+      }
+      if (error instanceof HarnessError) throw error;
+      throw new HarnessError(sentence, ErrorCodes.InvalidParams, {
+        code: "start_agent_refused",
+        committed: false,
+        next: "call start_agent again with an agent_name from the list in this tool's description, or do the work here yourself",
+      });
     }
-    // The server attaches on open; attaching again is idempotent for the same path.
-    handle.attach(state.path, state.id);
-    const entry = this.byPath.get(state.path)!;
-    entry.isolation = isolation;
-    const childDriver = this.host.driver(state.path);
-    if (childDriver) await childDriver.rename(subagentName).catch(() => undefined);
 
-    const runState = this.createRun(entry, {
-      origin: "agent",
-      task,
-      goal,
-      parentRunId: this.activeRun(parent.path)?.runId,
-      isolation,
-      ...(childProfile.substituted ? { substitutedProfile: childProfile.substituted } : {}),
-    });
-    this.event({
-      kind: "started",
-      sessionPath: state.path,
-      runId,
-      counterpart: { sessionPath: parent.path, label: labelOf(parent.role) },
-      summary: `Started by ${labelOf(parent.role)}`,
-    });
-    this.event({
-      kind: "message_sent",
-      sessionPath: parent.path,
-      runId,
-      counterpart: { sessionPath: state.path, label: subagentName },
-      summary: `Sent the task to ${subagentName}`,
-    });
+    // Past this line the child session exists. Anything that fails now leaves
+    // an agent behind, so the refusal says so and names the way to reach it.
+    let runState: RunState;
+    let childDriver: SessionDriver | undefined;
+    let entry: Entry;
+    try {
+      // The server attaches on open; attaching again is idempotent for the same path.
+      handle.attach(state.path, state.id);
+      entry = this.byPath.get(state.path)!;
+      entry.isolation = isolation;
+      childDriver = this.host.driver(state.path);
+      if (childDriver) await childDriver.rename(subagentName).catch(() => undefined);
+
+      runState = this.createRun(entry, {
+        origin: "agent",
+        task,
+        goal,
+        parentRunId: this.activeRun(parent.path)?.runId,
+        isolation,
+        ...(childProfile.substituted ? { substitutedProfile: childProfile.substituted } : {}),
+      });
+      this.event({
+        kind: "started",
+        sessionPath: state.path,
+        runId,
+        counterpart: { sessionPath: parent.path, label: labelOf(parent.role) },
+        summary: `Started by ${labelOf(parent.role)}`,
+      });
+      this.event({
+        kind: "message_sent",
+        sessionPath: parent.path,
+        runId,
+        counterpart: { sessionPath: state.path, label: subagentName },
+        summary: `Sent the task to ${subagentName}`,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new HarnessError(
+        `${subagentName} was started and this call could not finish: ${message} The agent's session exists${worktree ? ` and its worktree is at ${worktree.path}` : ""}.`,
+        ErrorCodes.InvalidParams,
+        {
+          code: "start_agent_left_an_agent",
+          committed: true,
+          next: "call inspect_fleet to find the agent that was started, then send_agent_message to give it its task or stop_agent to end it",
+        },
+      );
+    }
     if (worktree) this.beginWorktreeSetup(entry, runState, worktree, childDriver);
     void this.kick(runState, task);
     return {
@@ -1331,6 +1396,26 @@ export class AgentHarness {
       isolation,
       ...(worktree ? { branch: worktree.branch, environment: worktree.environment, setup: worktree.setup } : {}),
     };
+  }
+
+  /**
+   * Undo a worktree this call created, and say what survived.
+   *
+   * `WorktreeManager.remove` is best effort: every git failure inside it is
+   * swallowed, so its promise resolving proves nothing. The directory is the
+   * evidence, and it is what a person would look for. `undefined` means it is
+   * genuinely gone; a sentence means it is not, and the caller must report
+   * that something was committed.
+   */
+  private async undoWorktree(worktree: Worktree): Promise<string | undefined> {
+    let refused: string | undefined;
+    try {
+      await this.worktrees.remove(worktree.root, worktree.path, worktree.branch);
+    } catch (error) {
+      refused = error instanceof Error ? error.message : String(error);
+    }
+    if (refused === undefined && !existsSync(worktree.path)) return undefined;
+    return `Its worktree ${worktree.path} (branch ${worktree.branch}) could not be removed and is still there${refused ? `: ${refused}` : "."}`;
   }
 
   private beginWorktreeSetup(entry: Entry, state: RunState, tree: Worktree, driver: SessionDriver | undefined): void {
@@ -1360,7 +1445,12 @@ export class AgentHarness {
     if (message.length > AGENT_MESSAGE_MAX) throw new HarnessError(`message must be at most ${AGENT_MESSAGE_MAX} characters.`);
     const child = [...this.byPath.values()].find((entry) => entry.sessionId === sessionId && entry.record.parentPath === parent.path);
     if (!child || !child.path) {
-      throw new HarnessError(`No agent session is called "${sessionId}" among the agents this session started. Use the sessionId that start_agent returned.`);
+      // Nothing was delivered and nothing was queued: the agent was not found.
+      throw new HarnessError(`No agent session is called "${sessionId}" among the agents this session started. Use the sessionId that start_agent returned.`, ErrorCodes.InvalidParams, {
+        code: "no_such_agent_session",
+        committed: false,
+        next: "call inspect_fleet to list the agents under you with their sessionIds, then send_agent_message with one of them",
+      });
     }
     type Plan =
       | { kind: "result"; result: SendAgentMessageResult }
@@ -1372,7 +1462,13 @@ export class AgentHarness {
     // finish by taking the same lock.
     const plan = await this.withEntry(child, async (): Promise<Plan> => {
       const driver = this.host.driver(child.path!);
-      if (!driver) throw new HarnessError(`The agent session "${sessionId}" is no longer open.`);
+      if (!driver) {
+        throw new HarnessError(`The agent session "${sessionId}" is no longer open.`, ErrorCodes.InvalidParams, {
+          code: "agent_session_closed",
+          committed: false,
+          next: "call inspect_fleet to see what is still under you, and start_agent again if that work still needs doing",
+        });
+      }
       const ownerId = child.lifecycle.owner();
       const executing = ownerId ? this.runStates.get(ownerId) : undefined;
       const active = executing ?? this.activeRunState(child.path!);
@@ -1477,8 +1573,15 @@ export class AgentHarness {
               if (lane === "steer") await driver.steer(pending.content);
               else await driver.followUp(pending.content);
             } catch (error) {
+              // The message is taken back out of the run's queue before this
+              // leaves, so nothing of it survives the refusal.
               child.lifecycle.remove(active.run.runId, pending);
-              throw error;
+              const reason = error instanceof Error ? error.message : String(error);
+              throw new HarnessError(`The message could not be delivered to ${labelOf(child.role)}: ${reason}`, ErrorCodes.InvalidParams, {
+                code: "message_not_delivered",
+                committed: false,
+                next: `call inspect_agent with sessionId ${sessionId} to see its status, then send_agent_message again`,
+              });
             }
           }
           this.diagnose(child, "info", "admission", { source: "parent", decision: engine ? `engine-${lane}` : "local-queue", runId: active.run.runId, mode, phase: child.lifecycle.phase().kind });
@@ -1682,7 +1785,16 @@ export class AgentHarness {
   private async stopAgent(parent: Entry, input: StopAgentInput): Promise<AgentRunSummary> {
     const runId = (input.runId ?? "").trim();
     const state = this.runStates.get(runId);
-    if (!state || state.run.parent?.sessionPath !== parent.path) throw new HarnessError(`No run called "${runId}" was started by this session.`);
+    if (!state || state.run.parent?.sessionPath !== parent.path) {
+      // Nothing has been touched: the run was never found. The code is the
+      // failure's own, not the tool's generic one, so a model (and the
+      // evaluation harness) can tell this apart from a stop that went wrong.
+      throw new HarnessError(`No run called "${runId}" was started by this session.`, ErrorCodes.InvalidParams, {
+        code: "no_such_run",
+        committed: false,
+        next: "call inspect_fleet to list the agents under you with their runIds, then stop_agent with one of them",
+      });
+    }
     const reason = input.reason?.trim();
     await this.stopRun(runId, { initiator: "parent", ...(reason ? { reason } : {}) });
     return summarize(state.run);
@@ -1702,18 +1814,34 @@ export class AgentHarness {
     if (active) {
       throw new HarnessError(
         `${target.subagentName} is still working (run ${active.run.runId}). Its ending will be delivered to you; remove the worktree then, or end the run now with stop_agent if its work is no longer needed.`,
+        ErrorCodes.InvalidParams,
+        { code: "agent_still_working", committed: false, next: `call stop_agent with runId ${active.run.runId} if its work is no longer needed, then remove_agent_worktree again` },
       );
     }
     const worktree = target.worktree;
     if (!worktree) {
       throw new HarnessError(
         `${target.subagentName} ran in your own checkout, not a worktree of its own, so there is nothing to merge and nothing to remove. Anything it changed is already in your files.`,
+        ErrorCodes.InvalidParams,
+        { code: "agent_has_no_worktree", committed: false, next: "carry on: its changes are already in your own files, so there is nothing to remove" },
       );
     }
-    if (worktree.removedAt) throw new HarnessError(`${target.subagentName}'s worktree has already been removed.`);
+    if (worktree.removedAt) {
+      throw new HarnessError(`${target.subagentName}'s worktree has already been removed.`, ErrorCodes.InvalidParams, {
+        code: "worktree_already_removed",
+        committed: false,
+        next: "carry on; call inspect_fleet if you need to see what is left under you",
+      });
+    }
 
     const root = this.worktrees.ownedBy(target.runId)?.root ?? (await this.worktrees.rootOf(parent.projectCwd));
-    if (!root) throw new HarnessError(`Could not find the git repository ${worktree.path} belongs to, so it was left alone. Remove it yourself if you are sure.`);
+    if (!root) {
+      throw new HarnessError(`Could not find the git repository ${worktree.path} belongs to, so it was left alone. Remove it yourself if you are sure.`, ErrorCodes.InvalidParams, {
+        code: "worktree_repository_not_found",
+        committed: false,
+        next: "carry on and tell the person that directory has to be removed by hand",
+      });
+    }
     const compareCwd = this.host.driver(parent.path)?.state().cwd ?? parent.projectCwd;
     const facts = await this.worktrees.facts({ path: worktree.path, branch: worktree.branch, compareCwd });
     const force = input.force === true;
@@ -1722,9 +1850,37 @@ export class AgentHarness {
         `${target.subagentName}'s worktree still holds ${describeWork(facts)}, and removing it would destroy that. ` +
           `Merge it into your checkout first — \`git merge ${worktree.branch}\` from ${compareCwd}, after reviewing it in ${worktree.path} — ` +
           "then call remove_agent_worktree again. If the work is genuinely to be thrown away, call it with force true.",
+        ErrorCodes.InvalidParams,
+        {
+          code: "worktree_holds_work",
+          committed: false,
+          next: `merge ${worktree.branch} into your checkout with git and call remove_agent_worktree again, or call it with force true to throw that work away`,
+        },
       );
     }
-    await this.worktrees.remove(root, worktree.path, worktree.branch);
+    // Removal is best effort inside the manager: the git failures there are
+    // swallowed, so a resolved promise proves nothing and the directory is the
+    // only evidence. A removal that was attempted and did not end with the
+    // directory gone is reported as committed, not as "nothing was changed":
+    // git may already have taken the branch, and a person reading the row has
+    // to go and look. The registry below is only updated when it really went.
+    let refused: string | undefined;
+    try {
+      await this.worktrees.remove(root, worktree.path, worktree.branch);
+    } catch (error) {
+      refused = error instanceof Error ? error.message : String(error);
+    }
+    if (refused !== undefined || existsSync(worktree.path)) {
+      throw new HarnessError(
+        `${target.subagentName}'s worktree at ${worktree.path} was not fully removed${refused ? `: ${refused}` : " and the directory is still there"}. Its branch ${worktree.branch} may already be gone.`,
+        ErrorCodes.InvalidParams,
+        {
+          code: "worktree_partly_removed",
+          committed: true,
+          next: `finish it yourself with git worktree remove --force ${worktree.path}, then carry on; do not call remove_agent_worktree again`,
+        },
+      );
+    }
 
     // The registry must never hold a path that no longer exists: every run of
     // that session, and the session's own record, learn it is gone.

@@ -27,11 +27,14 @@
  * ```
  *
  * It is read from the result's `details` (a Laser tool's declared output), or
- * from the result object itself, or from JSON in the result text — a stored
- * transcript keeps whichever of those the session had. Nothing here trusts the
- * payload: every string is clamped, the list is bounded, and a field of the
- * wrong type is dropped rather than rendered.
+ * from the result object itself, or — for a Laser tool, and only for one —
+ * from JSON in the result text, because a stored transcript keeps whichever
+ * of those the session had. Nothing here trusts the payload: every string is
+ * clamped, the list is bounded, and a field of the wrong type is dropped
+ * rather than rendered.
  */
+
+import { isLaserToolName, isRecord } from "@lasercode/protocol";
 
 import { resultDetails, resultText } from "./tool-summary.js";
 
@@ -58,9 +61,6 @@ export interface ToolPreview {
   /** The tool that takes the digest back, when it is not the one that previewed. */
   readonly confirmWith?: string;
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const clamp = (value: unknown, max: number): string | undefined => {
   if (typeof value !== "string") return undefined;
@@ -100,15 +100,27 @@ export function readToolPreview(value: unknown): ToolPreview | undefined {
 
 /**
  * The preview a tool result carries, if it carries one: from the result's
- * declared output (`details`), from the result object itself, or from JSON in
- * its text.
+ * declared output (`details`), from the result object itself, or — when the
+ * row names a tool of Laser's own — from JSON in its text.
+ *
+ * The last path is the loose one, and it is why `toolName` is asked for. A
+ * `bash` command that prints a JSON object, a `read` of a file that holds
+ * one, an MCP server answering in JSON: any of them can contain
+ * `preview: true`, a digest-shaped string and a summary, and drawing the
+ * "nothing has happened yet" card over work that already happened would be a
+ * lie about the transcript. Only a tool Laser registered can have promised
+ * this shape, so only a Laser tool's text is read for one (D-350.j). A caller
+ * that does not know which tool it is drawing gets the two strict paths, and
+ * a producer that wants its preview drawn anywhere puts it in `details`,
+ * which is its declared output.
  */
-export function toolPreview(result: unknown): ToolPreview | undefined {
+export function toolPreview(result: unknown, toolName?: string): ToolPreview | undefined {
   if (result === undefined || result === null) return undefined;
   const fromDetails = readToolPreview(resultDetails(result));
   if (fromDetails) return fromDetails;
   const direct = readToolPreview(result);
   if (direct) return direct;
+  if (!isLaserToolName(toolName)) return undefined;
   const text = resultText(result);
   // A preview is small and structured; a body big enough to be paged is not
   // one, and parsing megabytes to find out would cost more than it can return.
