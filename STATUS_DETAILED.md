@@ -6203,7 +6203,7 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M22-T0 | Binding contract and affected-area inventory | done | codex-2026-09-21-model-profiles | `docs/model-profiles.md`; `PLAN.md` M22; D-346; `git diff --check -- docs PLAN.md STATUS.md STATUS_DETAILED.md` | see notes |
-| M22-T1 | Protocol: profiles, assignments, methods, policy | todo | — | — | `PLAN.md` M22 |
+| M22-T1 | Protocol: profiles, assignments, methods, policy | in-progress | claude-2026-09-21-leap | — | see notes |
 | M22-T2 | Worker settings, migration and seeds | todo | — | — | `PLAN.md` M22 |
 | M22-T3 | Worker runtime on profiles | todo | — | — | `PLAN.md` M22 |
 | M22-T4 | Agents and naming on profiles | todo | — | — | `PLAN.md` M22 |
@@ -6214,6 +6214,9 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | M22-T9 | Agents page and CLI | todo | — | — | `PLAN.md` M22 |
 | M22-T10 | Documents, identity guard and reconciliation | todo | — | — | `PLAN.md` M22 |
 | M22-T11 | Migration acceptance and release | todo | — | — | `PLAN.md` M22 |
+
+#### M22-T1 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap (goal `docs/goal-project-lifecycle-leap.md`): add `ModelProfile`/`MODEL_PROFILES_SETTING`/validation, `SessionState.profile`, `AgentDefinition.profileId`, assignment settings, `models/profiles/*`, `session/profile/set`, `session/model/pin`; remove `agents/builtin/set-model`, `agents/beam/choose-model`, `agents/namer/qualify`. Delegated to a worker in an isolated worktree; the same owner continues through M22-T5.
 
 #### M22-T0 notes
 - 2026-09-21 claimed by codex-2026-09-21-model-profiles: the person settled that fallback chains and the proposed model tiers collapse into one unlimited, person-named Model Profile concept; write the binding contract with the full breaking-change inventory.
