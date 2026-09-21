@@ -5995,7 +5995,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T15 | Plan DAG and Project Task engine | done | claude-2026-09-21-leap | `2d2b5778` (merged `aa33ffbf`); host 1121 passed (`project-work/task-engine.test.ts` 17 over the wire), protocol 631 (`project-work-plan-graph.test.ts` 12) | see notes |
 | M21-T16 | Plans and Tasks workspace | done | claude-2026-09-21-leap | `faf53146` (merged with T7 conflicts resolved by the orchestrator in `store.ts`/`WorkDetail.tsx`/`Inspector.tsx`); `pnpm -F @lasercode/ui test` (`plan-graph`, `plan-detail`, `task-detail`, `board-transitions` 42) | see notes |
 | M21-T17 | Model tools and execution linking | done | claude-2026-09-21-leap | `133d55cd` (six commits, merged); protocol 631, pi-extension 237, worker 1498, host 1140; `pnpm tool-eval` 42/42 (21 fixtures × 2 profiles); `pnpm verify` passed | see notes |
-| M21-T18 | Checkpoints, changes and delivery evidence | todo | — | — | `PLAN.md` M21 |
+| M21-T18 | Checkpoints, changes and delivery evidence | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T19 | Verification and convergence | todo | — | — | `PLAN.md` M21 |
 | M21-T20 | Cross-session continuity and recovery | todo | — | — | `PLAN.md` M21 |
 | M21-T21 | Import, export and repository publication | todo | — | — | `PLAN.md` M21 |
@@ -6030,6 +6030,9 @@ live work holding its row when a snapshot thins — because both are real hazard
 #### M21-T8 notes
 - 2026-09-21 done (`98a01428`): host `gates.ts` `GateEngine` (Brief/Design/Build subjects and requirements, complete digest set, person-only, blocking comments named, invalidation on material revise via covers ∪ `propagateStale`), comments with semantic anchors re-decided orphaned per revision; protocol gate report/anchor helpers, `SpecBody.gated` opt-in (decision 1); UI `GateCard` (Approve disabled with the host's reason, typed key confirmation, Enter never approves), `CommentsPanel` (threads, anchors, blocking, batched one-revision request), `ApprovalRequestCard` above the composer opening the workspace at the exact revision.
 - 2026-09-21 claimed by claude-2026-09-21-leap: host gate rules (`project-work/gates.ts` + the store's comment/review/approve paths) and the UI comments/gate card/Approval Card; write set disjoint from T16 (plan/task/board files) and T17 (bridge/methods wiring).
+
+#### M21-T18 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: host/worker linking of attempts to M20 base/checkpoints/diffs/commits/PRs, `based_on`/`implemented_by`/`verified_at` repository links, canonical captures for gate/done evidence surviving checkpoint pruning, changed files from git, distinct repositories.
 
 #### M21-T17 notes
 - 2026-09-21 done (`133d55cd`): `project/work/bridge` (closed union over the 16 strict params, `project_write`/`native`) over a now-bidirectional fd-3 link (`WorkerServer.hostRequest` ↔ `WorkerClient.onRequest`, only the bridge routed); host `handleBridge` (project from the worker's cwd, agent actor, wrong-project mutations refused naming the owner, research operations re-applied with the applier's body stored, attempts write evidence with workspace shape/checkout); one companion module `modules/project-work.ts` registering 4 lifecycle + 3 design-index + 4 research tools through `registerLaserTool`, gated; worker `project-work/` (tools, bounded provenance-labelled context packet at `before_agent_start`, `/design implement` packet, `ResearchStore`); `LASER_TOOL_NAMES` +11; matrix 21 fixtures with `ScriptedProjectWorkWorld`. D-356.a–f in `docs/leap/m21-tools-plan.md`; the UI's Start…/`/design implement` request shapes published there.
