@@ -177,6 +177,123 @@ one-line fact about whether anything was saved, and `next` as the suggested
 next call. Never show `code` as the headline — it is for correlation and for
 the evaluation harness.
 
+## M26-T3 — the evaluation harness
+
+Owner: worker "Tool evaluation harness", branch
+`agents/tool-evaluation-harness-37b0a366`, base `3e48f73c`.
+
+What landed:
+
+| Path | What |
+| --- | --- |
+| `packages/worker/src/tool-eval/fixture.ts` | the fixture format and its loader: task, expected tool, allowed tools, budget, wrong-tool threshold, declared measures, the world, and the recorded provider responses |
+| `packages/worker/src/tool-eval/run.ts` | one fixture on one profile through the real driver, the real engine and the real tool registrations; collects every call, its arguments, its result and what the turn cost |
+| `packages/worker/src/tool-eval/recorded-provider.ts` | the replay provider: an OpenAI-compatible server on 127.0.0.1 that answers each request with the fixture's next recorded response, as the profile's model |
+| `packages/worker/src/tool-eval/world.ts` | `ScriptedWorld`, the harness bridge a run gets instead of the real fleet: refusals are real `HarnessError`s with their codes and `next` calls, and no agent, worktree or run is ever touched |
+| `packages/worker/src/tool-eval/schema-check.ts` | the closed-schema validator behind the schema measure |
+| `packages/worker/src/tool-eval/measures.ts` | the six measures of the contract's §4, and the recorded-outcome check that refuses to measure a run that no longer matches its recording |
+| `packages/worker/src/tool-eval/report.ts` | the JSON report and the text table, pass/fail per measure per tool per profile |
+| `packages/worker/src/tool-eval/harness.ts`, `cli.ts` | the matrix (fixtures × profiles) and `pnpm tool-eval` |
+| `packages/worker/test/fixtures/tool-eval/*.json` | one fixture per registered tool, and `profiles/settings.json`, the two-profile matrix |
+| `packages/worker/test/tool-eval/*.test.ts` | the matrix assertion (every fixture, every measure, every profile), the measures' own negative cases, the format's refusals, and the live code path against a local provider |
+
+### How a fixture is written
+
+```jsonc
+{
+  "tool": "task_output",                       // the tool this fixture is for
+  "task": "Run the build log script …",        // the person's prompt, really sent
+  "expectedTool": "task_output",
+  "allowedTools": ["bash", "task_output", "inspect_fleet"],
+  "wrongToolThreshold": 0,                     // share of calls allowed outside that list
+  "budget": { "calls": 5, "inputTokens": 66000, "outputTokens": 400 },
+  "measures": ["retry", "truncation"],         // schema/selection/budget always apply
+  "truncationBytes": 2000,
+  "world": { "role": "root", "agents": […], "catalog": […], "search": "unconnected" },
+  "steps": [                                   // the recorded provider responses, in order
+    { "toolCall": { "name": "task_output", "args": { "taskId": "{{taskId}}", "tail": 400 } } },
+    { "toolCall": { "name": "task_stop", "args": { … } }, "fails": true, "delayMs": 500 },
+    { "text": "…the answer the run ends on…" }
+  ]
+}
+```
+
+- `fails: true` records that the tool refused this call when the fixture was
+  written. It is checked: a call that starts failing, stops failing, or fails
+  without the contract's error shape makes the run unmeasurable instead of
+  letting the following steps answer something that never happened.
+- `{{taskId}}` is the one substitution: a call can only name a background task
+  the run itself started, and the runner fills in the id the way a model reads
+  it out of an earlier result.
+- `delayMs` is how long the recorded model took to answer. It is how a fixture
+  waits for real work — a background command finishing — without the runner
+  knowing anything about that work.
+- `world.role: "child"` runs the session as an agent's own run, where
+  `complete_agent_run` is registered and the parent tools are not: the
+  contract's capability gating, exercised rather than asserted.
+- `world.search: "unconnected"` offers `web_search` with no connected search
+  provider. That is how the one `external` tool is evaluated without leaving
+  the machine: the refusal is the real one, and what is proven is that it is
+  typed, actionable and recovered from. A live run uses the person's own
+  provider and really searches.
+
+### What a recorded run proves, and what it does not
+
+Real: the registered tool surface and its schemas, D-277's label stripping,
+the engine's own turn and tool loop, every `ToolError` rendering, the
+background tools' real commands and real output windows, the context a turn
+actually costs. Scripted: the model (recorded responses) and the fleet
+(`ScriptedWorld`). A recorded run therefore proves that the tools behave as
+the contract says when a model uses them this way; it does not prove that a
+model *will* use them this way — that is what `--live` is for, and what the
+wrong-tool and budget measures then mean something stronger about.
+
+### Adding a fixture when M21/M24/M25 land
+
+The retry measure wants a stale `expectedRevisionId` and a truncated page.
+No Laser tool carries a revision yet (T2 deviation 2), so today's retry
+fixtures use the analogues that do exist: `task_output` on a task id from an
+earlier session (a stale reference the tool refuses with the call to make
+instead), and narrowing `tail`/`messages` after a large page. When the
+lifecycle tools land:
+
+1. Register the tool through `registerLaserTool` (it is then in
+   `laserToolRegistry()`, which is what the measures read).
+2. Add `packages/worker/test/fixtures/tool-eval/<tool>.json` with the task, the
+   allowed tools, a budget and the recorded steps.
+3. For a mutation of project work, declare `"measures": ["retry"]` and record
+   the real conflict: a first call carrying an `expectedRevisionId` the world
+   has moved past, the typed conflict that comes back, and one informed retry
+   with the revision the error named. For a preview/confirm tool, declare
+   `"unsafe"` and record the unconfirmed call, its refusal, and the confirmed
+   call that follows.
+4. Teach `ScriptedWorld` the new bridge methods beside the existing ones,
+   keeping refusals in the harness's own words with their codes and `next`
+   calls. The world is the only part a new tool has to extend.
+5. Add the tool's name to `TOOLS` in
+   `packages/worker/test/tool-eval/fixtures.test.ts`, which pins that every
+   registered tool has a fixture.
+
+### Decisions
+
+- **D-350.f — a recorded run is checked against its recording.** Without it a
+  fixture degrades silently: the first call starts failing, every later
+  recorded step answers a result that never came, and the measures are read
+  off a fiction that still says "ok". The check compares the tools, their
+  order and their outcomes, and requires an expected failure to carry the
+  contract's error shape.
+- **D-350.g — the harness bridge is scripted; nothing else is.** A run must be
+  startable live, on a person's machine, with a real model choosing the calls.
+  A real bridge would then start real agents and remove real worktrees. So the
+  fleet is scripted and everything else — registration, schemas, the engine
+  turn, the background commands, the error path — is the product's own.
+- **D-350.h — `pnpm tool-eval` is not in `pnpm verify`.** The vitest suite
+  already runs the whole recorded matrix (≈ 3 s, inside
+  `pnpm -F @lasercode/worker test`), so putting the CLI in verify would run it
+  twice and add a build dependency to a gate that has one already. The command
+  exists for a person who wants the report, and for `--live`, which no gate may
+  ever run.
+
 ## Checkpoints
 
 - **T1 done.** `packages/protocol/src/tool-contract.ts` (+49 tests),
@@ -190,3 +307,11 @@ the evaluation harness.
   `docs/agents.md` §2 and §6 gained annotation columns. New tests: harness
   contract + error shape (subagents), task tools + error shape
   (background-work), `web_search` spec + error shape (web-access).
+- **T3 done.** `packages/worker/src/tool-eval/` (10 modules), ten fixtures and
+  a two-profile matrix under `packages/worker/test/fixtures/tool-eval/`, 46
+  tests in `packages/worker/test/tool-eval/`. The whole recorded matrix — 10
+  tools × 2 profiles, every measure — runs in about 3 seconds inside the
+  worker's own suite. `pnpm tool-eval` prints the table and `--out` writes the
+  JSON; `pnpm tool-eval --live --profile <name>` is the person's own run.
+  §4 of the contract now defines each measure exactly and documents the live
+  command.

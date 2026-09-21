@@ -18,6 +18,7 @@
     "sandbox": "node scripts/sandbox.mjs",
     "direction:check": "node --test scripts/check-direction.test.mjs && node scripts/check-direction.mjs",
     "verify": "node scripts/verify.mjs",
+    "tool-eval": "node packages/worker/dist/tool-eval/cli.js",
     "test:release": "node --test scripts/release/test/*.test.mjs",
     "test:browser-check": "node --test scripts/browser-check/test/*.test.mjs",
     "verify:install": "bash scripts/release/verify-install.sh",

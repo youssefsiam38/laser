@@ -1,0 +1,196 @@
+/**
+ * What one conformance fixture says (M26-T3, `docs/agent-tool-contract.md` §4).
+ *
+ * A fixture is one task given to one tool, plus the provider responses a model
+ * gave for it: the sequence of tool calls and the final answer. The runner
+ * replays those responses through the real engine and the real tool
+ * registrations, so the schema validation, the label stripping and the
+ * `ToolError` path a measure reads are the product's own, not a simulation of
+ * them.
+ *
+ * The format is deliberately small and declarative, because every tool that
+ * lands after this one has to write one: a task, the tools the task may use,
+ * a budget, and the recorded steps. Everything else has a default.
+ */
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+
+/** How many calls and how much context one task may cost. */
+export interface ToolEvalBudget {
+  /** Tool calls executed in the whole run, engine tools included. */
+  calls: number;
+  /** Estimated prompt tokens summed over every provider request of the run. */
+  inputTokens: number;
+  /** Estimated completion tokens summed over every recorded response. */
+  outputTokens: number;
+}
+
+/**
+ * The measures a fixture is judged by. `schema`, `selection` and `budget`
+ * apply to every fixture; the other three are declared by the fixtures that
+ * exercise them, because a tool with no destructive path cannot have an
+ * unsafe attempt to recover from.
+ */
+export const TOOL_EVAL_MEASURES = ["schema", "selection", "budget", "retry", "unsafe", "truncation"] as const;
+export type ToolEvalMeasureId = (typeof TOOL_EVAL_MEASURES)[number];
+/** Applied to every fixture, declared or not. */
+export const ALWAYS_MEASURED: readonly ToolEvalMeasureId[] = ["schema", "selection", "budget"];
+
+/**
+ * One recorded provider response: a tool call the model made, or its answer.
+ *
+ * `fails` records what the tool answered when the fixture was recorded. It is
+ * not a wish: a recorded run checks every call against it, so a tool that
+ * starts failing — or quietly stops refusing — breaks the fixture instead of
+ * passing it with the following step answering a result that never came.
+ */
+export type RecordedStep =
+  | { toolCall: { name: string; args: Record<string, unknown>; id?: string }; fails?: boolean; delayMs?: number }
+  | { text: string; delayMs?: number };
+
+/** One agent the fixture's world already has, as the scripted bridge answers for it. */
+export interface ToolEvalWorldAgent {
+  agentName: string;
+  subagentName: string;
+  sessionId: string;
+  runId: string;
+  /** running, needs_input, completed, blocked, failed or cancelled. */
+  status: "running" | "needs_input" | "completed" | "blocked" | "failed" | "cancelled";
+  task: string;
+  /** How many assistant messages `inspect_agent` can hand back. */
+  messageCount?: number;
+  /** Whether it was started with a worktree of its own, and whether that branch still holds work. */
+  worktree?: { branch: string; unmergedCommits?: number };
+  /** The question it is paused on, when its status is needs_input. */
+  question?: { text: string };
+}
+
+/** The state the scripted harness bridge answers from. No real agent is started. */
+export interface ToolEvalWorld {
+  /** root: the parent tools are registered. child: only `complete_agent_run` is. */
+  role?: "root" | "child";
+  /** The agents `start_agent` may start, as the catalog in its description. */
+  catalog?: Array<{ agentName: string; description: string }>;
+  agents?: ToolEvalWorldAgent[];
+  /**
+   * `unconnected` registers `web_search` with no usable search provider, which
+   * is how the one external tool is evaluated without leaving the machine: the
+   * refusal is the real one a person with no connected provider gets. `off`
+   * (the default) does not offer the tool at all.
+   */
+  search?: "unconnected" | "off";
+}
+
+export interface ToolEvalFixture {
+  /** The Laser tool this fixture is the conformance fixture for. */
+  tool: string;
+  /** The task, as a person would write it. Sent for real; the stub answers it from `steps`. */
+  task: string;
+  /** The tool that answers the task. */
+  expectedTool: string;
+  /** Every tool this task may legitimately use, the expected one included. */
+  allowedTools: string[];
+  /** The most calls outside `allowedTools`, as a share of all calls. 0 means none. */
+  wrongToolThreshold: number;
+  budget: ToolEvalBudget;
+  measures: ToolEvalMeasureId[];
+  /** A result longer than this counts as truncated for the truncation measure. */
+  truncationBytes?: number;
+  world: ToolEvalWorld;
+  steps: RecordedStep[];
+  /** Where it was read from, for the report. Filled in by the loader. */
+  source?: string;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
+
+function fail(source: string, what: string): never {
+  throw new Error(`${source} is not a usable tool-evaluation fixture: ${what}`);
+}
+
+function requireString(value: unknown, source: string, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) fail(source, `${field} must be a non-empty string.`);
+  return value;
+}
+
+function requireNumber(value: unknown, source: string, field: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) fail(source, `${field} must be a number of zero or more.`);
+  return value;
+}
+
+function parseStep(value: unknown, source: string, index: number): RecordedStep {
+  if (!isRecord(value)) fail(source, `steps[${String(index)}] must be an object.`);
+  const delay = value["delayMs"] === undefined ? {} : { delayMs: requireNumber(value["delayMs"], source, `steps[${String(index)}].delayMs`) };
+  if (value["text"] !== undefined) return { text: requireString(value["text"], source, `steps[${String(index)}].text`), ...delay };
+  const call = value["toolCall"];
+  if (!isRecord(call)) fail(source, `steps[${String(index)}] must carry either text or toolCall.`);
+  const args = call["args"];
+  if (args !== undefined && !isRecord(args)) fail(source, `steps[${String(index)}].toolCall.args must be an object.`);
+  if (value["fails"] !== undefined && typeof value["fails"] !== "boolean") fail(source, `steps[${String(index)}].fails must be true or false.`);
+  return {
+    toolCall: {
+      name: requireString(call["name"], source, `steps[${String(index)}].toolCall.name`),
+      args: isRecord(args) ? args : {},
+      ...(call["id"] !== undefined ? { id: requireString(call["id"], source, `steps[${String(index)}].toolCall.id`) } : {}),
+    },
+    ...(value["fails"] === true ? { fails: true } : {}),
+    ...delay,
+  };
+}
+
+/**
+ * Read one fixture, refusing anything the runner could only half-understand.
+ * A fixture is data a person writes by hand, so every refusal names the field.
+ */
+export function parseFixture(value: unknown, source: string): ToolEvalFixture {
+  if (!isRecord(value)) fail(source, "the file must hold a JSON object.");
+  const tool = requireString(value["tool"], source, "tool");
+  const allowed = value["allowedTools"];
+  if (!Array.isArray(allowed) || allowed.length === 0) fail(source, "allowedTools must list at least the expected tool.");
+  const budget = value["budget"];
+  if (!isRecord(budget)) fail(source, "budget must declare calls, inputTokens and outputTokens.");
+  const steps = value["steps"];
+  if (!Array.isArray(steps) || steps.length === 0) fail(source, "steps must hold at least one recorded response.");
+  const declared = value["measures"];
+  if (declared !== undefined && !Array.isArray(declared)) fail(source, "measures must be a list.");
+  const measures = new Set<ToolEvalMeasureId>(ALWAYS_MEASURED);
+  for (const measure of (declared ?? []) as unknown[]) {
+    const name = requireString(measure, source, "measures[]");
+    if (!(TOOL_EVAL_MEASURES as readonly string[]).includes(name)) fail(source, `"${name}" is not a measure; the measures are ${TOOL_EVAL_MEASURES.join(", ")}.`);
+    measures.add(name as ToolEvalMeasureId);
+  }
+  const world = value["world"];
+  if (world !== undefined && !isRecord(world)) fail(source, "world must be an object.");
+  const expected = requireString(value["expectedTool"], source, "expectedTool");
+  const allowedTools = allowed.map((entry, index) => requireString(entry, source, `allowedTools[${String(index)}]`));
+  if (!allowedTools.includes(expected)) fail(source, "allowedTools must contain expectedTool.");
+  return {
+    tool,
+    task: requireString(value["task"], source, "task"),
+    expectedTool: expected,
+    allowedTools,
+    wrongToolThreshold: value["wrongToolThreshold"] === undefined ? 0 : requireNumber(value["wrongToolThreshold"], source, "wrongToolThreshold"),
+    budget: {
+      calls: requireNumber(budget["calls"], source, "budget.calls"),
+      inputTokens: requireNumber(budget["inputTokens"], source, "budget.inputTokens"),
+      outputTokens: requireNumber(budget["outputTokens"], source, "budget.outputTokens"),
+    },
+    measures: TOOL_EVAL_MEASURES.filter((measure) => measures.has(measure)),
+    ...(value["truncationBytes"] !== undefined ? { truncationBytes: requireNumber(value["truncationBytes"], source, "truncationBytes") } : {}),
+    world: (world ?? {}) as ToolEvalWorld,
+    steps: steps.map((step, index) => parseStep(step, source, index)),
+    source,
+  };
+}
+
+/** Every fixture in a directory, in a stable order. */
+export function loadFixtures(directory: string): ToolEvalFixture[] {
+  const files = readdirSync(directory)
+    .filter((name) => name.endsWith(".json"))
+    .sort();
+  if (files.length === 0) throw new Error(`No tool-evaluation fixtures were found in ${directory}.`);
+  return files.map((name) => {
+    const path = join(directory, name);
+    return parseFixture(JSON.parse(readFileSync(path, "utf8")), path);
+  });
+}

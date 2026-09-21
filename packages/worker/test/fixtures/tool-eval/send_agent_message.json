@@ -1,0 +1,60 @@
+{
+  "tool": "send_agent_message",
+  "task": "The reviewer is waiting on a question. It should keep the existing error copy — tell it so.",
+  "expectedTool": "send_agent_message",
+  "allowedTools": [
+    "send_agent_message",
+    "inspect_agent",
+    "inspect_fleet"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 2,
+    "inputTokens": 30000,
+    "outputTokens": 250
+  },
+  "measures": [],
+  "world": {
+    "role": "root",
+    "agents": [
+      {
+        "agentName": "reviewer",
+        "subagentName": "Review login flow",
+        "sessionId": "ses_review",
+        "runId": "run_review",
+        "status": "needs_input",
+        "task": "Review the login flow and report every problem you find.",
+        "messageCount": 2,
+        "question": {
+          "text": "Should I rewrite the error copy on the sign-in screen, or keep it as it is?"
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "inspect_agent",
+        "args": {
+          "runId": "run_review",
+          "messages": 1,
+          "activity_label": "Reading the question"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "send_agent_message",
+        "args": {
+          "sessionId": "ses_review",
+          "message": "Keep the existing error copy exactly as it is and carry on with the review.",
+          "mode": "answer",
+          "activity_label": "Answering the agent"
+        }
+      }
+    },
+    {
+      "text": "Answered: it will keep the error copy as it is and carry on."
+    }
+  ]
+}

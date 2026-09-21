@@ -1,0 +1,44 @@
+{
+  "tool": "start_agent",
+  "task": "Have someone review the login flow on a branch of its own while I carry on here.",
+  "expectedTool": "start_agent",
+  "allowedTools": [
+    "start_agent"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 1,
+    "inputTokens": 20000,
+    "outputTokens": 250
+  },
+  "measures": [],
+  "world": {
+    "role": "root",
+    "catalog": [
+      {
+        "agentName": "worker",
+        "description": "Implements one scoped task and reports evidence."
+      },
+      {
+        "agentName": "reviewer",
+        "description": "Reviews a branch and reports findings."
+      }
+    ]
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "start_agent",
+        "args": {
+          "agent_name": "reviewer",
+          "subagent_name": "Review login flow",
+          "task": "Review the login flow: read the sign-in screen and its session handling, and report every problem you find with file and line.",
+          "worktree": true
+        }
+      }
+    },
+    {
+      "text": "A reviewer is on it in a worktree of its own; its findings will reach me as a message when it ends."
+    }
+  ]
+}
