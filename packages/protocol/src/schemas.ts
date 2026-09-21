@@ -259,6 +259,13 @@ const environmentKey = z.string().regex(ENVIRONMENT_KEY_PATTERN);
 const content = z.array(contentBlockSchema).min(1);
 /** A pending-tray id, as the worker mints it: `p-` and hex. */
 const pendingId = z.string().regex(/^p-[0-9a-f]{8,32}$/);
+/**
+ * The bounded projection of what a message mentioned (M21-T9). Host-supplied
+ * on every verb that sends a person's words: accepted on the wire so a host can
+ * forward its own validated reading to the worker with the message it belongs
+ * to, and replaced host-side whenever a client puts anything there.
+ */
+const projectWorkMentions = z.array(projectWorkMentionProjectionSchema).max(PROJECT_WORK_MENTION_MAX).optional();
 
 // ---------- M4 values (settings, packages, providers, logs) ----------
 
@@ -792,7 +799,7 @@ export const clientParamsSchemas = {
       // Host-supplied (M21-T9). Accepted on the wire so a host may forward its
       // own validated projection to a worker with the prompt it belongs to;
       // whatever a client sends here is replaced, never trusted.
-      projectWork: z.array(projectWorkMentionProjectionSchema).max(PROJECT_WORK_MENTION_MAX).optional(),
+      projectWork: projectWorkMentions,
     })
     .strict(),
   "session/cancel": z.object({ path: sessionPath }).strict(),
@@ -830,15 +837,18 @@ export const clientParamsSchemas = {
   // destination file is the host's to choose (M13-T58).
   "pi/session/move": z.object({ path: sessionPath, cwd }).strict(),
   "pi/session/close": z.object({ path: sessionPath }).strict(),
-  "pi/session/steer": z.object({ path: sessionPath, content }).strict(),
-  "pi/session/follow_up": z.object({ path: sessionPath, content }).strict(),
+  // `projectWork` is host-supplied on every send verb (M21-T9); the schema
+  // accepts it so a host can forward its own reading, and the host drops
+  // whatever a client put there before it ever reaches a worker.
+  "pi/session/steer": z.object({ path: sessionPath, content, projectWork: projectWorkMentions }).strict(),
+  "pi/session/follow_up": z.object({ path: sessionPath, content, projectWork: projectWorkMentions }).strict(),
   "pi/session/clear_queue": z.object({ path: sessionPath }).strict(),
 
   // The pending tray (pending.ts). Laser's own list, so every operation names
   // one message by the id the worker minted for it.
   "session/pending/list": z.object({ path: sessionPath }).strict(),
-  "session/pending/add": z.object({ path: sessionPath, content }).strict(),
-  "session/pending/edit": z.object({ path: sessionPath, id: pendingId, content }).strict(),
+  "session/pending/add": z.object({ path: sessionPath, content, projectWork: projectWorkMentions }).strict(),
+  "session/pending/edit": z.object({ path: sessionPath, id: pendingId, content, projectWork: projectWorkMentions }).strict(),
   "session/pending/remove": z.object({ path: sessionPath, id: pendingId }).strict(),
   "session/pending/steer": z.object({ path: sessionPath, id: pendingId }).strict(),
   "session/pending/clear": z.object({ path: sessionPath }).strict(),

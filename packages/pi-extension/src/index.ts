@@ -23,9 +23,15 @@
 
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { AgentHarnessBridge, BackgroundWorkOptions } from "./agents-bridge.js";
-import type { ProjectWorkBridge } from "./project-work-bridge.js";
+import type { ProjectMentionContext, ProjectWorkBridge } from "./project-work-bridge.js";
 import type { PromptProvenanceObserver } from "./prompt-provenance.js";
-export type { ProjectWorkBridge, ProjectWorkToolBinding } from "./project-work-bridge.js";
+export type {
+  ProjectMentionContext,
+  ProjectMentionContextBlock,
+  ProjectMentionContextMessage,
+  ProjectWorkBridge,
+  ProjectWorkToolBinding,
+} from "./project-work-bridge.js";
 export { createPromptProvenanceObserver, recordInstructionWrite } from "./prompt-provenance.js";
 // The one door every Laser tool goes through (D-350), exported so a
 // conformance fixture can read a tool's spec without starting a session.
@@ -97,6 +103,12 @@ export interface LaserExtensionOptions {
   mcp?: McpModuleOptions;
   /** This session's project work (M21-T17); omit and none of its tools load. */
   projectWork?: ProjectWorkBridge;
+  /**
+   * What this session's messages mentioned (M21-T9), for the model to read
+   * beside the message that mentioned it. Independent of `projectWork`: a
+   * session with no project work of its own still has mentions.
+   */
+  mentionContext?: ProjectMentionContext;
   /** Delivers messages to the worker (in-process callback). */
   send: (message: OutboundMessage) => void;
   /**
@@ -143,6 +155,7 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
         ...(options.backgroundWork ? { backgroundWork: options.backgroundWork } : {}),
         ...(options.mcp ? { mcp: options.mcp } : {}),
         ...(options.projectWork ? { projectWork: options.projectWork } : {}),
+        ...(options.mentionContext ? { mentionContext: options.mentionContext } : {}),
         ...(options.commands ? { commands: options.commands } : {}),
       };
       const wanted = new Set<ModuleName>(options.only ?? modules.map((m) => m.name));

@@ -281,19 +281,27 @@ export async function sendToSession(
   firstTurn?: TentativeFirstTurn,
 ): Promise<SendBehavior> {
   if (content.length === 0) return behavior;
+  // What the host made of the project work a message mentioned is said in the
+  // same words whichever key the person pressed (M21-T9).
+  const sayOutcomes = (outcomes: ProjectWorkMentionOutcome[] | undefined): void => {
+    for (const outcome of outcomes ?? []) {
+      if (outcome.status === "sent" || !outcome.note) continue;
+      dispatch?.({ type: "toast", level: outcome.status === "unavailable" ? "warning" : "info", text: outcome.note });
+    }
+  };
   if (behavior === "steer") {
-    await client.request("pi/session/steer", { path, content });
+    sayOutcomes((await client.request("pi/session/steer", { path, content })).projectWork);
     return "steer";
   }
   if (behavior === "followUp") {
-    await client.request("pi/session/follow_up", { path, content });
+    sayOutcomes((await client.request("pi/session/follow_up", { path, content })).projectWork);
     return "followUp";
   }
   if (behavior === "pending") {
     // Laser's own tray, not the engine's queue: the row that appears can be
     // steered, edited or dropped on its own, and nothing has interrupted the
     // run to put it there.
-    await client.request("session/pending/add", { path, content });
+    sayOutcomes((await client.request("session/pending/add", { path, content })).projectWork);
     return "pending";
   }
   const optimisticId = newBlockId();
@@ -307,13 +315,9 @@ export async function sendToSession(
   let result: { accepted: boolean; projectWork?: ProjectWorkMentionOutcome[] };
   try {
     result = await client.request("session/prompt", { path, content, ...(firstTurn ? { firstTurn } : {}) });
-    // What the host made of the project work this message mentioned (M21-T9).
     // The message went; a mention it could not read, or read at a different
     // revision than the chip pinned, is said once and in words.
-    for (const outcome of result.projectWork ?? []) {
-      if (outcome.status === "sent" || !outcome.note) continue;
-      dispatch?.({ type: "toast", level: outcome.status === "unavailable" ? "warning" : "info", text: outcome.note });
-    }
+    sayOutcomes(result.projectWork);
   } catch (error) {
     // Nothing reached the worker: a permanent bubble for a message Pi never
     // saw would also corrupt the next real user message's reconciliation.
@@ -331,7 +335,7 @@ export async function sendToSession(
   // in. Steering lands mid-run, so the real user message will arrive after
   // assistant deltas — drop the stand-in rather than leave two user bubbles.
   dispatch?.({ type: "optimisticFailed", path, id: optimisticId });
-  await client.request("pi/session/steer", { path, content });
+  sayOutcomes((await client.request("pi/session/steer", { path, content })).projectWork);
   return "steer";
 }
 

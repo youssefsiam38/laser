@@ -24,6 +24,7 @@ import type {
   ContentBlock,
   ModelRef,
   PromptInfo,
+  ProjectWorkMentionProjection,
   PiExtensionCommand,
   PiExtensionMessage,
   ProviderCaptureLink,
@@ -42,6 +43,7 @@ import type {
 } from "@lasercode/protocol";
 import type { AgentHarnessBridge, BackgroundWorkOptions, HarnessSessionRole } from "./agents/bridge.js";
 import type { ProjectWorkBridge as ProjectWorkExtensionBridge } from "@lasercode/pi-extension";
+import type { SessionMentionContext } from "./project-work/mentions.js";
 
 /**
  * Which agent a session runs as (M13). Everything here is product vocabulary:
@@ -101,6 +103,17 @@ export interface DriverOpenOptions {
    * unregistered, which is what a worker with no host link is.
    */
   projectWork?: ProjectWorkExtensionBridge;
+  /**
+   * This session's project-work **mention** context (M21-T9): the host's
+   * bounded projection of what a message mentioned, put in front of the model
+   * for that message and nothing else.
+   *
+   * Deliberately separate from `projectWork` above. Reading a mention is not a
+   * project capability: a projectless Chat and a session discussing another
+   * project's work receive the projection without gaining a tool, a project or
+   * a writable bridge (leap, "Cross-session mentions and context").
+   */
+  mentionContext?: SessionMentionContext;
   /**
    * What the companion's provider-capture producer may know about its link to
    * the app (RP-7): how far behind it is, and whether bodies are kept at all.
@@ -200,6 +213,13 @@ export interface PromptOptions {
   /** False sends the text verbatim: no slash-command dispatch, no template expansion. */
   expandPromptTemplates?: boolean;
   /**
+   * The host's bounded projection of every project-work mention in `content`
+   * (M21-T9). Host-supplied and already validated; the driver only carries it
+   * to this session's mention context, keyed to the message the engine
+   * accepts. Absent means the message mentioned nothing the host could read.
+   */
+  projectWork?: readonly ProjectWorkMentionProjection[];
+  /**
    * Called once the engine has accepted this exact prompt, before its turn runs.
    * Not called for a preflight refusal. A later run failure does not revoke
    * acceptance: the user message already belongs to the engine and must not be
@@ -207,6 +227,12 @@ export interface PromptOptions {
    * the accepted engine run.
    */
   onAccepted?: () => void;
+}
+
+/** What a steer or follow-up carries beside its words. */
+export interface QueuedSendOptions {
+  /** See {@link PromptOptions.projectWork}. */
+  projectWork?: readonly ProjectWorkMentionProjection[];
 }
 
 /**
@@ -237,8 +263,8 @@ export interface SessionDriver {
   /** Restore the prior runtime when prompt preflight did not accept ownership. */
   rollbackFirstTurn?(): Promise<void>;
   prompt(content: ContentBlock[], options?: PromptOptions): Promise<{ accepted: boolean; queued: boolean }>;
-  steer(content: ContentBlock[]): Promise<void>;
-  followUp(content: ContentBlock[]): Promise<void>;
+  steer(content: ContentBlock[], options?: QueuedSendOptions): Promise<void>;
+  followUp(content: ContentBlock[], options?: QueuedSendOptions): Promise<void>;
   clearQueue(): Promise<ClearedQueue>;
   abort(): Promise<void>;
 
