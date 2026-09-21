@@ -53,9 +53,13 @@ pins the wrong behaviour with the literal `"ckpt_17"`.
    **filesystem truth**, in the shape the host already uses for a background
    command's log file (`tasks/register.ts#isInsideRoot`): the deepest existing
    part of the target is resolved with `realpath`, and the result must still be
-   inside the project. A link **above** the target that leads out is refused; a
-   link that stays inside is the person's own folder layout and is allowed. The
-   final component is never followed: an existing leaf link is refused outright.
+   inside the project. An **ancestor** link that leads out is refused; an
+   ancestor link that stays inside is the person's own folder layout and is
+   allowed. The **final component** is a stricter rule: a path whose own last
+   name is a link is refused *unconditionally*, wherever it points, inside the
+   project included. So an export root, an import root or a file that is itself
+   a link is never used — only a link *above* one is followed, and only when it
+   resolves back inside the project.
 3. New `insideProjectAt(projectRoot, base, path)` for the nested resolutions
    that today pass an already-resolved absolute root as the "project"
    (`export/index.ts`, `publish/index.ts`, `import/adapters.ts`): contained
@@ -68,9 +72,11 @@ pins the wrong behaviour with the literal `"ckpt_17"`.
 5. `kindOf` uses `lstatSync` and gains a `"link"` answer, so a link is never
    mistaken for a free name (`nextRevisionRoot`) or a file to delete
    (`staleFiles`).
-6. `readTextFile` opens with `O_NOFOLLOW`, `fstat`s the **descriptor** and
-   refuses anything that is not a regular file within the ceiling — the bound
-   is kept and the bytes read are the bytes of the file that was measured.
+6. `readTextFile` opens with `O_NOFOLLOW`, `fstat`s the **descriptor** for the
+   regular-file check, and then enforces the ceiling **on the read**: at most
+   `maxBytes + 1` bytes are ever pulled in, and the extra byte arriving is the
+   refusal. A file that grows between the `fstat` and the read cannot exceed
+   the bound the method promises.
 7. `writeFileAtomic(path, contents, { within })` creates the directory and then
    re-resolves it through `realpath`, refusing without writing anything if it
    does not resolve inside the project or lands in a forbidden area; the
@@ -134,6 +140,16 @@ asserts the refusal *and* that nothing was opened, read, created, written,
 renamed or unlinked. There is no runnable traversal and no path on the machine
 these tests could reach if the boundary were broken.
 
+`packages/host/test/project-work/interop-git.test.ts` (new) does the same for
+the checkpoint resolver, with `git` itself mocked: every invocation is
+recorded, and `checkpointCommit` is proved to refuse an id outside the
+checkpoint namespace **without running git at all**, to refuse a `for-each-ref`
+answer naming a *descendant* ref rather than the exact one asked for (the
+pattern matches whole path components, so `…/checkpoints/<key>` would otherwise
+answer for every turn under it), to refuse several matches, an absent ref, a
+malformed object id, and a ref that does not resolve to a commit. No
+repository is created or touched.
+
 ## Residual limitation, stated precisely
 
 This is containment, not atomicity. Node exposes no `openat`/`mkdirat`, so a
@@ -149,26 +165,51 @@ ancestor replacement inside a folder the person trusted.
 
 ## Evidence
 
-Commands run in this worktree (`env -i PATH="$PATH" HOME="$HOME"` throughout),
-at commit `fda60db4`:
+Commands run in this worktree (`env -i PATH="$PATH" HOME="$HOME"` throughout).
+The first pass is commit `fda60db4`; the revised checkpoint after the three
+contract fixes below is the current one.
 
-| Command | Result |
+| Command | Result (revised checkpoint) |
 | --- | --- |
-| `vitest run test/project-work/interop-paths.test.ts` (host) | 14 passed |
-| `vitest run test/project-work/` (host) | 13 files, 191 passed |
+| `vitest run test/project-work/interop-paths.test.ts` (host) | 15 passed |
+| `vitest run test/project-work/interop-git.test.ts` (host) | 7 passed |
+| `vitest run test/project-work/` (host) | 14 files, 199 passed |
 | `pnpm -F @lasercode/protocol test` | 46 files, 727 passed, no type errors |
-| `pnpm -F @lasercode/host test` | 113 files, 1227 tests: 1226 passed, 1 failed |
+| `pnpm -F @lasercode/host test` | 114 files, 1235 passed |
 | `pnpm -r build` | all packages built |
 | `pnpm -r typecheck` | clean |
 | `pnpm identity:check` | "every generated file agrees, no stray literals" |
 
-The one host failure is `test/session-index.test.ts > hard bounds > keeps cold
-20k/50k scans linear and cooperative` — a wall-clock ratio assertion
-(`repeat20Ms < cold20Ms / 2`) in an unrelated module, under a loaded machine.
-Re-run on its own it passes (18 passed); nothing in this change touches the
-session index.
+On the first pass the host suite had one failure,
+`test/session-index.test.ts > hard bounds > keeps cold 20k/50k scans linear and
+cooperative` — a wall-clock ratio assertion (`repeat20Ms < cold20Ms / 2`) in an
+unrelated module, under a loaded machine. It passes on its own and it passes in
+the full run at the revised checkpoint; nothing here touches the session index.
 
 No browser was used.
+
+## Follow-up fixes after parent inspection
+
+Three contract holes in the new helpers, fixed as one batch:
+
+1. **`checkpointCommit` trusted a pattern match.** `for-each-ref <ref>` treats
+   its argument as a pattern over whole path components, so a checkpoint id
+   that does not exist could still be answered by a ref *below* it. The format
+   now carries `%(refname)` beside `%(objectname)` and the name must be equal
+   to the id that was asked for; a descendant, several matches, or a different
+   name is no checkpoint. Covered by `interop-git.test.ts` with `git` mocked.
+2. **`readTextFile` bounded the `fstat`, not the read.** A file that grew after
+   it was measured could hand back more than `maxBytes`. The read is now
+   bounded at `maxBytes + 1` bytes and the extra byte arriving is the refusal,
+   so the ceiling the method promises holds whatever the file does. The
+   regular-file check on the descriptor is kept.
+3. **The handoff wording was broader than the code.** `insideProjectAt` refuses
+   a link at the final component unconditionally, so "exporting into a folder
+   that is a link inside your own project is allowed" was not true of the root
+   itself. The module comment, this document and the spine plan now state the
+   exact rule — ancestor links that resolve inside are followed, a path whose
+   own last name is a link is refused — rather than widening the policy to
+   match the sentence.
 
 ## What is not covered
 
@@ -177,9 +218,11 @@ No browser was used.
   `pi/project/git/commit` hand-off and the deterministic export — proved by the
   existing tests in `interop.test.ts`, which were not rewritten apart from the
   checkpoint one named above.
-- Behaviour a person should still check by hand: exporting into a folder that
-  is a link inside their own project (allowed, writes through to the real
-  folder), and publishing an export from a linked worktree checkout.
+- Behaviour a person should still check by hand: exporting into a folder whose
+  *ancestor* is a link inside their own project (allowed — it writes through to
+  the real folder), naming a link *itself* as the export or import root
+  (refused, by design, even when it points at another folder in the same
+  project), and publishing an export from a linked worktree checkout.
 - `packages/host/src/project-work/{methods,store}.ts` and `router.ts` were not
   touched (M21-T19 is active in them); no protocol change was needed —
   `checkpointId` is already an opaque bounded string on the wire and its

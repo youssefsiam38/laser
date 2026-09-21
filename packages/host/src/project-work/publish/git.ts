@@ -85,17 +85,23 @@ export function resolveCommit(cwd: string, commit: string): string | undefined {
  * - it is an **M20 checkpoint ref** — the worker's own namespace and layout
  *   (`parseCheckpointRef`), not an arbitrary ref name, not a branch, not a
  *   free-text id a caller invented;
- * - that ref is **in this repository right now**, read by its exact name so
- *   nothing is matched by prefix or pattern;
+ * - that ref is **in this repository right now, under exactly that name**.
+ *   `for-each-ref` takes its argument as a *pattern*, and a pattern matches
+ *   whole path components: `…/checkpoints/<key>` would answer for every turn
+ *   under it. So the name is read back with the object id and compared, and
+ *   anything but one exact match — a descendant, several refs, a different
+ *   name — is no checkpoint at all;
  * - what it points at is a **commit object**, which is what a checkpoint is
  *   and what a state may be recorded against.
  */
 export function checkpointCommit(cwd: string, checkpointId: string): { ref: string; commitObjectId: string } | undefined {
   if (!parseCheckpointRef(checkpointId)) return undefined;
-  const listed = gitRead(cwd, ["for-each-ref", "--format=%(objectname)", checkpointId]);
+  const listed = gitRead(cwd, ["for-each-ref", "--format=%(refname)%00%(objectname)", checkpointId]);
   const lines = (listed ?? "").split(/\r?\n/).filter((line) => line.trim() !== "");
   if (lines.length !== 1) return undefined;
-  const objectId = lines[0]!.trim();
+  const [refname, objectname] = lines[0]!.split("\0");
+  if (refname !== checkpointId) return undefined;
+  const objectId = (objectname ?? "").trim();
   if (!/^[0-9a-f]{7,64}$/.test(objectId)) return undefined;
   const commitObjectId = resolveCommit(cwd, objectId);
   return commitObjectId ? { ref: checkpointId, commitObjectId } : undefined;

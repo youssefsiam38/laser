@@ -21,6 +21,8 @@ const files = new Map<string, string>();
 const links = new Map<string, string>();
 /** Descriptors handed out by the fake `openSync`, and what they opened. */
 const open = new Map<number, string>();
+/** Where each descriptor has read up to. */
+const positions = new Map<number, number>();
 let nextDescriptor = 3;
 
 class FakeError extends Error {
@@ -75,12 +77,23 @@ const fs = {
     if (!files.has(real) && !directories.has(real)) throw new FakeError("ENOENT");
     const descriptor = nextDescriptor++;
     open.set(descriptor, real);
+    positions.set(descriptor, 0);
     return descriptor;
   }),
   fstatSync: vi.fn((descriptor: number) => statOf(open.get(descriptor)!)),
-  readFileSync: vi.fn((descriptor: number) => files.get(open.get(descriptor)!) ?? ""),
+  // Reads what the file holds *now*, from where this descriptor got to: a file
+  // that grew after it was measured hands back the bytes it really has.
+  readSync: vi.fn((descriptor: number, buffer: Buffer, offset: number, length: number) => {
+    const contents = Buffer.from(files.get(open.get(descriptor)!) ?? "", "utf8");
+    const at = positions.get(descriptor) ?? 0;
+    if (at >= contents.byteLength || length <= 0) return 0;
+    const got = contents.copy(buffer, offset, at, Math.min(at + length, contents.byteLength));
+    positions.set(descriptor, at + got);
+    return got;
+  }),
   closeSync: vi.fn((descriptor: number) => {
     open.delete(descriptor);
+    positions.delete(descriptor);
   }),
   mkdirSync: vi.fn((path: string, _options?: unknown) => {
     const real = realOf(path);
@@ -128,7 +141,7 @@ const OUTSIDE = "/home/person/elsewhere";
 /** Nothing reached the filesystem beyond looking at what a path is. */
 function expectNoFilesystemEffect(): void {
   expect(fs.openSync).not.toHaveBeenCalled();
-  expect(fs.readFileSync).not.toHaveBeenCalled();
+  expect(fs.readSync).not.toHaveBeenCalled();
   expect(fs.writeFileSync).not.toHaveBeenCalled();
   expect(fs.mkdirSync).not.toHaveBeenCalled();
   expect(fs.renameSync).not.toHaveBeenCalled();
@@ -166,10 +179,16 @@ describe("a path inside the project", () => {
     expect(insideProjectAt(PROJECT, `${PROJECT}/docs`, "sub/one.md")).toBe(`${PROJECT}/docs/sub/one.md`);
   });
 
-  it("allows a link that stays inside the project, because that is the person's own layout", () => {
+  it("allows an ancestor link that stays inside the project, and still refuses it as the final component", () => {
     directories.add(`${PROJECT}/real-docs`);
     links.set(`${PROJECT}/linked-docs`, `${PROJECT}/real-docs`);
+    // Above the target: the person's own folder layout, followed to a folder
+    // that is really theirs.
     expect(insideProjectAt(PROJECT, `${PROJECT}/linked-docs`, "one.md")).toBe(`${PROJECT}/linked-docs/one.md`);
+    // As the target itself: refused, wherever it points. Naming a link as the
+    // root of an export or an import is not something this does, inside the
+    // project included.
+    expect(() => insideProject(PROJECT, "linked-docs")).toThrow(/leads out of this project through a link/);
   });
 
   it("refuses an absolute path, an empty one and one that climbs out", () => {
@@ -237,15 +256,33 @@ describe("the file operations themselves", () => {
     expect(readTextFile(`${PROJECT}/docs/one.md`, 1024)).toBe("hello\n");
     expect(fs.openSync).toHaveBeenCalledWith(`${PROJECT}/docs/one.md`, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
 
-    fs.readFileSync.mockClear();
+    fs.readSync.mockClear();
     expect(readTextFile(`${PROJECT}/docs/one.md`, 2)).toBeUndefined();
-    expect(fs.readFileSync).not.toHaveBeenCalled();
+    expect(fs.readSync).not.toHaveBeenCalled();
     // A directory is not a document, and a link is refused by the open itself.
     expect(readTextFile(`${PROJECT}/docs`, 1024)).toBeUndefined();
     links.set(`${PROJECT}/docs/linked.md`, `${OUTSIDE}/secrets/notes.md`);
     expect(readTextFile(`${PROJECT}/docs/linked.md`, 1024)).toBeUndefined();
     // Every descriptor this opened was closed.
     expect(open.size).toBe(0);
+  });
+
+  it("keeps the ceiling on the read, not on the size it was told, and never holds more than it promised", () => {
+    const path = `${PROJECT}/docs/growing.md`;
+    files.set(path, "x".repeat(10));
+    // Measured at 10 bytes, and 50 bytes long by the time it is read: exactly
+    // the file that is still being written while an adapter looks at it.
+    fs.fstatSync.mockImplementationOnce(() => kind("file", 10));
+    files.set(path, "x".repeat(50));
+    expect(readTextFile(path, 10)).toBeUndefined();
+    // One byte over the ceiling is all that was ever pulled into memory.
+    const lengths = fs.readSync.mock.calls.map((call) => Number(call[3]));
+    expect(Math.max(...lengths)).toBeLessThanOrEqual(11);
+    expect(open.size).toBe(0);
+
+    // A file exactly at the ceiling is still read, whole.
+    files.set(path, "y".repeat(10));
+    expect(readTextFile(path, 10)).toBe("y".repeat(10));
   });
 
   it("writes through a fresh exclusive temporary file and renames it into place", () => {

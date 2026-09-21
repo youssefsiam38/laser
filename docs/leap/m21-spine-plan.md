@@ -625,10 +625,13 @@ directory. Containment is now decided against the filesystem in the shape the
 host already uses for a command's log file (`tasks/register.ts#isInsideRoot`):
 the project directory and the deepest existing part of every target are
 resolved through `realpath`, a project folder that cannot be resolved fails
-closed, the final component is never followed (`O_NOFOLLOW` reads, exclusive
-temporary file plus rename for writes, regular-file-only unlink), and `.git`
-and the settings directory apart from its export area are refused for reads as
-well as writes.
+closed, an ancestor link that leads out of the project is refused while one
+that stays inside it is allowed, a path whose **own last name** is a link is
+refused unconditionally wherever it points, nothing follows a link by accident
+(`O_NOFOLLOW` reads bounded on the read rather than on the size `fstat`
+reported, exclusive temporary file plus rename for writes, regular-file-only
+unlink), and `.git` and the settings directory apart from its export area are
+refused for reads as well as writes.
 
 Both corrections, their residual platform limitation and their tests are
 recorded in [`m21-interop-followup.md`](m21-interop-followup.md).

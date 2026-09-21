@@ -16,13 +16,19 @@
  *   folder that is not on this machine right now is a refusal, never a
  *   lexical guess;
  * - the deepest part of the target that already exists is resolved through
- *   `realpath` too, so a link **anywhere above** the target that leads out of
- *   the project is refused — and one that stays inside it is the person's own
- *   folder layout, which is allowed;
- * - the final component is never followed: a read opens with `O_NOFOLLOW`, a
- *   write goes to a fresh exclusive temporary file and is renamed over the
- *   name (rename replaces a link, it does not write through it), and a delete
- *   unlinks a regular file only.
+ *   `realpath` too, so a link **above** the target — an ancestor directory,
+ *   not the target itself — that leads out of the project is refused, while an
+ *   ancestor link that stays inside it is the person's own folder layout and
+ *   is allowed;
+ * - the **final component is refused outright when it is a link**, wherever it
+ *   points, inside the project included. So a path a caller names is only ever
+ *   used when its own last name is a real file or directory: an export root
+ *   that is itself a link is refused, even one pointing at another folder in
+ *   the same project;
+ * - and nothing follows one by accident either: a read opens with
+ *   `O_NOFOLLOW`, a write goes to a fresh exclusive temporary file and is
+ *   renamed over the name (rename replaces a link, it does not write through
+ *   it), and a delete unlinks a regular file only.
  *
  * This is containment, not atomicity. Node has no `openat`/`mkdirat`, so
  * between resolving a directory and using it another process **with write
@@ -50,7 +56,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   renameSync,
@@ -295,6 +301,13 @@ export function walkFiles(root: string, options: { max: number; extensions?: rea
  * The descriptor is opened with `O_NOFOLLOW` and measured with `fstat`, so the
  * bytes that are read are the bytes of the file that was checked — not of
  * something that took its name in between.
+ *
+ * The ceiling is enforced on the **read**, not on the size `fstat` reported: a
+ * file being written while this runs can grow between the two, and a bound
+ * that only ever looked at the old size would not be a bound at all. At most
+ * `maxBytes + 1` bytes are ever pulled into memory, and that one extra byte is
+ * the whole test — if it arrives, the file is over the ceiling and nothing is
+ * returned.
  */
 export function readTextFile(path: string, maxBytes: number): string | undefined {
   const noFollow = constants.O_NOFOLLOW ?? 0;
@@ -307,7 +320,15 @@ export function readTextFile(path: string, maxBytes: number): string | undefined
   try {
     const stat = fstatSync(handle);
     if (!stat.isFile() || stat.size > maxBytes) return undefined;
-    return readFileSync(handle, "utf8");
+    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    let read = 0;
+    for (;;) {
+      const got = readSync(handle, buffer, read, buffer.byteLength - read, null);
+      if (got <= 0) break;
+      read += got;
+      if (read > maxBytes) return undefined;
+    }
+    return buffer.subarray(0, read).toString("utf8");
   } catch {
     return undefined;
   } finally {
