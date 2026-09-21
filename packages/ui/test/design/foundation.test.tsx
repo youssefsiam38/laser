@@ -27,6 +27,7 @@ import {
   type ClientRequests,
   type DesignBody,
   type DesignFoundation,
+  type ProjectWorkApproval,
 } from "@lasercode/protocol";
 
 import { DesignDetail } from "../../src/components/project-work/bodies/DesignDetail.js";
@@ -101,11 +102,34 @@ function bodyFixture(foundation: DesignFoundation): DesignBody {
 
 type Detail = ClientRequests["project/work/get"]["result"];
 
+/** The digest the design fixture's current revision carries. */
+const CURRENT_DIGEST = "a".repeat(64);
+
+/**
+ * The approval the host would have recorded for this design's current
+ * revision: a person's `design` decision, covering the exact revision and
+ * digest, not invalidated.
+ */
+function approvalFixture(over: Partial<ProjectWorkApproval> = {}): ProjectWorkApproval {
+  return {
+    projectId: "p1",
+    approvalId: "apr_1",
+    entityId: "e1",
+    gate: "design",
+    decision: "approved",
+    covers: [{ entityId: "e1", kind: "design", key: "DES-3", revisionId: "r1", digest: CURRENT_DIGEST }],
+    at: "2026-02-03T10:00:00.000Z",
+    origin: { actor: { kind: "person", label: "You" } },
+    ...over,
+  } as ProjectWorkApproval;
+}
+
 /** The detail, with the design gate the host would answer with. */
-function detailWithGate(body: DesignBody): Detail {
+function detailWithGate(body: DesignBody, over: Partial<Detail> = {}): Detail {
   const detail = designDetail(body);
   return {
     ...detail,
+    ...over,
     gates: {
       specEntityId: "e_spec",
       specKey: "SPEC-1",
@@ -126,11 +150,28 @@ function detailWithGate(body: DesignBody): Detail {
   } as unknown as Detail;
 }
 
+/** How the host answers the gate read the approval makes before deciding. */
+type GateAnswer = "ready" | "refused" | "none";
+let gateAnswer: GateAnswer = "ready";
+
+/** The read-back answer for a design no spec gates (D-352). */
+function detailWithoutGate(body: DesignBody): Detail {
+  const detail = designDetail(body);
+  return {
+    ...detail,
+    entity: { ...detail.entity, state: "draft", currentRevisionId: "r2", currentDigest: "b".repeat(64) },
+    revision: { ...detail.revision, revisionId: "r2", index: 2, digest: "b".repeat(64) },
+  } as unknown as Detail;
+}
+
 function makeStore(): ProjectWorkStore {
   const request = (async (method: ProjectWorkMethod, params: Record<string, unknown>) => {
     calls.push({ method, params });
     if (method === "project/work/revise") {
       return { ref: {}, entity: { entityId: params["entityId"], key: "DES-3" }, revision: { index: 2, revisionId: "r2", digest: "b".repeat(64) }, seq: 8 };
+    }
+    if (method === "project/work/review") {
+      return { entity: { entityId: params["entityId"], key: "DES-3", state: "needs_review" }, seq: 11 };
     }
     if (method === "project/work/create") {
       const kind = String(params["kind"]);
@@ -141,7 +182,15 @@ function makeStore(): ProjectWorkStore {
       return { approval: { gate: "design", decision: "approved" }, entity: {}, seq: 10 };
     }
     if (method === "project/work/get") {
-      return detailWithGate(bodyFixture(foundationFixture()));
+      const body = bodyFixture(foundationFixture());
+      if (gateAnswer === "none") return detailWithoutGate(body);
+      const answer = detailWithGate(body);
+      if (gateAnswer === "ready") return answer;
+      const gates = (answer as unknown as { gates: { gates: Array<Record<string, unknown>> } }).gates;
+      return {
+        ...answer,
+        gates: { ...gates, gates: [{ ...gates.gates[0], state: "waiting", refusal: "One blocking comment must be resolved before this can be approved." }] },
+      } as unknown as Detail;
     }
     throw new Error(`the fixture does not answer ${method}`);
   }) as unknown as ConstructorParameters<typeof ProjectWorkStore>[0]["request"];
@@ -155,6 +204,7 @@ function contextFor(body: DesignBody, over: Partial<WorkBodyContext> = {}): Work
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   calls.length = 0;
+  gateAnswer = "ready";
   nextKey = 1;
   toast.mockReset();
   container = document.createElement("div");
@@ -362,7 +412,10 @@ describe("approval", () => {
   it("creates the plan with the foundation task first, and everything else depending on it", async () => {
     const foundation = foundationFixture({ status: "approved", profile: { version: 1, digest: "d".repeat(64) } });
     const body = bodyFixture(foundation);
-    await render(body, contextFor(body));
+    // The plan follows a real decision: the host's approval row, covering this
+    // exact revision, is what makes this foundation approved.
+    await render(body, contextFor(body, { detail: detailWithGate(body, { approvals: [approvalFixture()] }) }));
+    expect(container.querySelector('[data-slot="foundation-wizard"]')?.textContent).toContain("Approved");
     await click(button("Create the plan, foundation first"));
 
     const created = calls.filter((call) => call.method === "project/work/create");
@@ -374,6 +427,91 @@ describe("approval", () => {
     expect(plan.phases[0]?.id).toBe("foundation");
     expect(plan.phases[0]?.taskKeys).toEqual(["TASK-1"]);
     expect(toast).toHaveBeenCalledWith("info", expect.stringContaining("TASK-1"));
+  });
+});
+
+/**
+ * What makes a foundation approved is the host's approval row, never the
+ * body's own `status`/`profile` (review follow-up).
+ *
+ * Those two fields are written on the way to the decision — the digest is
+ * over the body's content, so they have to be in the revision the approval
+ * covers — which means a refused gate, a host that answered no, or any
+ * revision since leaves the marker behind on a foundation nobody approved.
+ */
+describe("approval is the host's record, not the body's claim", () => {
+  const wizard = (): string => container.querySelector('[data-slot="foundation-wizard"]')?.textContent ?? "";
+
+  it("does not read a staged profile digest as an approval", async () => {
+    const body = bodyFixture(foundationFixture({ status: "approved", profile: { version: 1, digest: "d".repeat(64) } }));
+    await render(body, contextFor(body, { detail: detailWithGate(body, { approvals: [] }) }));
+    expect(wizard()).not.toContain("Approved");
+    expect(wizard()).toContain("Proposed");
+    expect(button("Create the plan, foundation first")).toBeUndefined();
+    expect(container.querySelector('[data-slot="foundation-unbacked"]')?.textContent).toContain("no approval covers it");
+    // The offer to approve is still there: nothing is lost, it is asked again.
+    expect(button("Approve the foundation")).toBeDefined();
+  });
+
+  it("stops reading as approved once the host invalidated the approval", async () => {
+    const body = bodyFixture(foundationFixture({ status: "approved", profile: { version: 1, digest: "d".repeat(64) } }));
+    const invalidated = approvalFixture({ invalidatedAt: "2026-02-04T09:00:00.000Z" });
+    await render(body, contextFor(body, { detail: detailWithGate(body, { approvals: [invalidated] }) }));
+    expect(wizard()).not.toContain("Approved");
+    expect(container.querySelector('[data-slot="foundation-unbacked"]')?.textContent).toContain("no longer covers it");
+    expect(button("Create the plan, foundation first")).toBeUndefined();
+  });
+
+  it("stops reading as approved the moment a step is reopened here", async () => {
+    const body = bodyFixture(foundationFixture({ status: "approved", profile: { version: 1, digest: "d".repeat(64) } }));
+    await render(body, contextFor(body, { detail: detailWithGate(body, { approvals: [approvalFixture()] }) }));
+    expect(wizard()).toContain("Approved");
+    await click(container.querySelector('[data-step="principles"]'));
+    await click(button("Reopen"));
+    expect(wizard()).not.toContain("Approved");
+    expect(container.querySelector('[data-slot="foundation-unbacked"]')?.textContent).toContain("edited here since it was approved");
+    expect(button("Create the plan, foundation first")).toBeUndefined();
+    // Nothing was written by reopening: it is a draft edit, saved like any other.
+    expect(calls).toEqual([]);
+  });
+
+  it("says a refused gate refused, and records nothing", async () => {
+    gateAnswer = "refused";
+    const body = bodyFixture(foundationFixture());
+    await render(body, contextFor(body));
+    await type(container.querySelector("#foundation-approve-key"), "DES-3");
+    await click(button("Approve the foundation"));
+    // The revision that carries the digest was written — it has to be, for the
+    // decision to cover it — but no decision was taken.
+    expect(calls.some((call) => call.method === "project/work/revise")).toBe(true);
+    expect(calls.some((call) => call.method === "project/work/approve")).toBe(false);
+    expect(toast).toHaveBeenCalledWith("error", expect.stringContaining("blocking comment"));
+    expect(toast).not.toHaveBeenCalledWith("info", expect.stringContaining("Foundation approved"));
+    // And the surface does not read the staged body as a decision.
+    expect(wizard()).not.toContain("Approved");
+  });
+
+  it("records the person's approval on a design no spec gates, against its exact revision", async () => {
+    gateAnswer = "none";
+    const body = bodyFixture(foundationFixture());
+    await render(body, contextFor(body));
+    await type(container.querySelector("#foundation-approve-key"), "DES-3");
+    await click(button("Approve the foundation"));
+
+    // Sent for review first: the spine has no draft → approved edge.
+    const review = calls.find((call) => call.method === "project/work/review");
+    expect(review?.params["action"]).toBe("request_review");
+    expect(review?.params["expectedRevisionId"]).toBe("r2");
+
+    const approve = calls.find((call) => call.method === "project/work/approve");
+    expect(approve?.params["gate"]).toBe("design");
+    expect(approve?.params["decision"]).toBe("approved");
+    expect(approve?.params["entityId"]).toBe("e1");
+    expect(approve?.params["expectedRevisionId"]).toBe("r2");
+    // The covers are this design at the revision the host just answered with:
+    // the window assembles no digest of its own.
+    expect(approve?.params["covers"]).toEqual([{ entityId: "e1", kind: "design", key: "DES-3", revisionId: "r2", digest: "b".repeat(64) }]);
+    expect(toast).toHaveBeenCalledWith("info", expect.stringContaining("No spec gates this design"));
   });
 });
 

@@ -295,13 +295,11 @@ handlers (T19), the host canonical store or interop.
 
 ### Limits of this batch, named
 
-1. **Gate staleness after a reopen is not proved here.** The test harness
+1. **Gate staleness after a reopen is not proved here.** *(Closed by the
+   approval-authority follow-up below.)* The worker harness
    (`ScriptedProjectWorkWorld`) keeps revisions and the stale fence but models
-   no gates, and gate recomputation is the host's. What is proved is that a
-   reopen is an ordinary fenced revision: history kept, digests distinct, a
-   write against the superseded revision refused. The design gate going stale
-   when a covered revision moves is the host's existing behaviour, unchanged
-   by this batch and not re-proved in it.
+   no gates. The host-side proof now lives in
+   `packages/host/test/project-work/foundation-approval.test.ts`.
 2. **Visual acceptance stays the person's**: the five sections after the
    extraction (nothing about what is drawn changed, but the files did), the
    Foundation section and the greenfield offer in both themes and widths.
@@ -310,6 +308,105 @@ handlers (T19), the host canonical store or interop.
    already accepted. Propose it again only when the person asks…") with the
    worker's `next`. The protocol string itself was left alone deliberately —
    this batch is additive in `packages/protocol`.
+
+## Approval authority — what makes a foundation approved
+
+Same owner and branch as the batch above; second commit. This closes the
+approval item the batch left open, after the parent's diff inspection found a
+real gap in the wizard:
+
+> `FoundationWizard` read `approved = foundation.status === "approved" ||
+> foundation.profile !== undefined`, and the approve flow **writes that body
+> before** asking the host to approve it. A refused gate, or a reopen that
+> carries the fields along, therefore left the badge saying **Approved** and
+> offered **Create the plan** over a decision nobody had recorded. The
+> standalone branch said "this project has no design gate" and recorded
+> nothing at all, although the host explicitly supports an off-gated-path
+> `project/work/approve` with exact covers (D-352, `gates.ts` `check`).
+
+### What the authority actually is
+
+`packages/host/src/project-work/store.ts` and `gates.ts`, unchanged by this
+work and now proved from the outside:
+
+| Fact | Where |
+| --- | --- |
+| Off the gated path a decision is legal and durable: no Spec, no gate report, the approval is recorded on the design itself | `gates.ts` `check` — `if (!spec \|\| !report \|\| !report.gated) return { ok: true }` |
+| Every covered revision must be exactly what the store holds | `store.ts` `approve` — refuses "changed since this was prepared" |
+| Only a person approves, and `draft` has no edge to `approved` | `approve` + `artifactTransition` — hence `request_review` first |
+| A material revision invalidates the approvals that cover it; an identical-bytes save invalidates nothing | `store.ts` `invalidateApprovals` — "the digest is the test of material" |
+
+### What changed in the window
+
+| File | Change |
+| --- | --- |
+| `packages/ui/src/design/foundation.ts` | new `foundationApprovalState({ foundation, approvals, entityId, digest, dirty })` → `{ approval, approved, unbacked? }`. Approved means: a `design` approval, `decision: "approved"`, **not invalidated**, covering this entity at **the digest on screen**, *and* the foundation is complete, *and* the window holds no unsaved edits. `unbacked` is the sentence for a body that carries the marker with nothing behind it |
+| `packages/ui/src/components/design/FoundationWizard.tsx` | badge, the profile-digest line, **Create the plan** and the approve block all read that state instead of `foundation.status`/`profile`. A new `[data-slot="foundation-unbacked"]` note says which of the four cases it is (edited here, a step reopened, an approval invalidated, or a decision that was never recorded). The standalone branch now **records the approval**: `request_review` when the design is still a draft, then `project/work/approve` with `covers = [this design at the revision the host just answered with]`, and says so; a host refusal is an error toast and nothing is claimed |
+
+The digest — not the revision id — is what the window matches on, because that
+is what the host binds: a save that changed no bytes keeps the approval, and
+matching the revision id would have contradicted the host's own rule.
+
+### Staging, named honestly
+
+The approved marker (`status: "approved"` + `profile.digest`) **must** be
+written into the revision *before* the host decision, because the decision
+covers the revision that carries the digest; writing it afterwards would
+invalidate the approval it recorded. So a refused or abandoned approval leaves
+a revision whose body claims more than happened. This batch does not pretend
+otherwise: the body keeps the marker, no surface reads it as a decision, and
+the wizard says in one sentence that nothing backs it and offers the approval
+again. The host test asserts exactly this — a reopened revision still carrying
+`status: "approved"` with its approval invalidated.
+
+### Tests
+
+`packages/host/test/project-work/foundation-approval.test.ts` (new, 7 tests,
+Router + real store, no worker, **no host production writes**):
+
+- a design no Spec gates has no gate report, and is still approved on itself —
+  person actor, covers = exact revision **and** digest, entity `approved`;
+- covers whose digest is not what the store holds are refused, and nothing is
+  recorded;
+- approving a design nobody asked a decision on is refused (`draft cannot
+  become approved`), which is why the window sends for review first;
+- **reopening a step invalidates the approval** and takes the design out of
+  `approved`, while the body still claims `status: "approved"` — the point;
+- an edit to the foundation's content does the same;
+- a byte-identical save keeps the approval (state returns to `draft`, which is
+  the review spine's rule, named in the test);
+- settling it again records a second, valid approval beside the invalidated one.
+
+`packages/ui/test/design/foundation.test.tsx` (5 new tests): a staged profile
+is not an approval (no badge, no plan, the sentence, the offer still there);
+an invalidated approval stops reading as approved; reopening a step in the
+wizard stops it immediately and writes nothing; a refused host gate records no
+decision and claims nothing; the standalone path calls `request_review` then
+`approve` with the host's own revision and digest. The existing "creates the
+plan" test now supplies a real approval row, which is the behaviour change in
+one line.
+
+### Validation (approval follow-up)
+
+| Command | Result |
+| --- | --- |
+| `pnpm -F @lasercode/host exec vitest run test/project-work/gates.test.ts test/project-work/foundation-approval.test.ts test/router.design.test.ts` | 31 passed |
+| `pnpm -F @lasercode/ui exec vitest run test/design test/settings/token-editor.test.tsx` | 120 passed |
+| `pnpm -F @lasercode/worker exec vitest run test/design` | 214 passed |
+| `pnpm -F @lasercode/protocol exec vitest run test/design-foundation.test.ts test/design-workspace.test.ts` | 26 passed |
+| `pnpm -r build` / `pnpm -r typecheck` / `pnpm identity:check` | all clean |
+
+### Limits, named
+
+1. **The window needs the approvals on the read.** `WorkDetail` and the
+   Inspector both ask for `include.approvals`, so the detail the Design body
+   renders from carries them; a caller that read a design without them would
+   see an approved foundation as unapproved (never the other way round, which
+   is the safe direction).
+2. **Entity state is not the badge.** A revised design returns to `draft` even
+   when the bytes did not change; the foundation badge follows the approval
+   row and its digest, and the two can disagree in exactly that case.
+3. Visual acceptance of the new note and the standalone toast is the person's.
 
 ## Review fix (parent diff inspection)
 
