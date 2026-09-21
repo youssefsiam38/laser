@@ -1,0 +1,69 @@
+{
+  "how": "packages/host scratch test (not committed): HostServer + real worker over an exact copy of the person's state/workspaces (beam and chat folders), agents.json, global settings/auth/models-store and two real pre-M23 sessions (a Beam session and a Chat session). Lists both as Chat, opens both with sessionKind chat and no agent name in their original directories, opens a fresh Chat on the default profile, leaves every folder and both transcripts byte-identical; the M22 migration in the same start assigned naming to the Namer's profile.",
+  "listed": [
+    {
+      "file": "e-7078-83a5-be877cc243c3.jsonl",
+      "cwd": "<state>/workspaces/chat",
+      "agent": {
+        "kind": "chat",
+        "sessionKind": "chat"
+      }
+    },
+    {
+      "file": "5-7014-86cf-2fe500e6383c.jsonl",
+      "cwd": "<state>/workspaces/beam",
+      "agent": {
+        "kind": "chat",
+        "sessionKind": "chat"
+      }
+    }
+  ],
+  "beam": {
+    "cwd": "<state>/workspaces/beam",
+    "agent": {
+      "kind": "chat",
+      "sessionKind": "chat"
+    },
+    "profile": {
+      "id": "mp_01M31CNRT7NGY6HPY7M28GXRYM",
+      "name": "Default"
+    }
+  },
+  "chat": {
+    "cwd": "<state>/workspaces/chat",
+    "agent": {
+      "kind": "chat",
+      "sessionKind": "chat"
+    },
+    "profile": {
+      "id": "mp_01M31CNRT7NGY6HPY7M28GXRYM",
+      "name": "Default"
+    }
+  },
+  "fresh": {
+    "cwd": "<state>/workspaces/chat/session-gskr1I",
+    "agent": {
+      "kind": "chat",
+      "sessionKind": "chat"
+    },
+    "profile": {
+      "id": "mp_01M31CNRT7NGY6HPY7M28GXRYM",
+      "name": "Default"
+    }
+  },
+  "naming": {
+    "namingProfileId": "mp_01M31CNRT7V0QFY9SAMC7FTE1T",
+    "profiles": [
+      "mp_01M31CNRT7B7FXT8FRJN7XCVVJ:Claude Fable 5.1 profile",
+      "mp_01M31CNRT7SSF50Z0CMRP9TDEZ:GPT-6 Astra profile",
+      "mp_01M31CNRT7NGY6HPY7M28GXRYM:Default",
+      "mp_01M31CNRT7V0QFY9SAMC7FTE1T:Namer"
+    ],
+    "carry": {
+      "version": 1,
+      "at": "2026-09-21T07:07:51.497Z",
+      "carried": false,
+      "why": "naming already had a profile assigned"
+    }
+  }
+}

@@ -277,6 +277,30 @@ describe("the model choices the host holds", () => {
     expect(report.resolved).toEqual({ "builtin:beam": profiles[0]!.id, "builtin:namer": profiles[1]!.id });
   });
 
+  it("keeps naming on the model the person chose for it: the Namer's profile becomes the naming assignment", async () => {
+    writeGlobal(ZERO_ELEVEN);
+    const report = await migrateModelProfiles(adapter(), {
+      at: AT,
+      models: CATALOGUE,
+      configuredProviders: CONNECTED,
+      newId: nextId,
+      modelName: (model) => model.id,
+      legacyChoices: [beam, namer],
+    });
+    expect(report.assignments.namingProfileId).toBe(report.resolved!["builtin:namer"]);
+    expect(report.assignments.namingProfileId).not.toBe(report.assignments.defaultProfileId);
+    expect(readModelProfiles(agentDir).find((profile) => profile.id === report.assignments.namingProfileId)?.models[0]).toMatchObject(namer.model);
+  });
+
+  it("never overrules a naming assignment the file already has with the Namer's choice", async () => {
+    writeGlobal({ ...ZERO_ELEVEN, namingProfileId: undefined });
+    const first = await migrateModelProfiles(adapter(), { at: AT, models: CATALOGUE, configuredProviders: CONNECTED, newId: nextId, modelName: (model) => model.id });
+    const chosen = first.assignments.defaultProfileId!;
+    await adapter().apply("global", [{ path: "namingProfileId", op: "set", value: chosen }]);
+    const second = await migrateModelProfiles(adapter(), { at: AT, models: CATALOGUE, configuredProviders: CONNECTED, newId: nextId, modelName: (model) => model.id, legacyChoices: [namer] });
+    expect(second.assignments.namingProfileId).toBe(chosen);
+  });
+
   it("creates one single-model profile named after whatever made the choice", async () => {
     writeGlobal(ZERO_ELEVEN);
     const report = await migrateModelProfiles(adapter(), {

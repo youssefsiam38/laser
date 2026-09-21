@@ -177,7 +177,11 @@ export function planModelProfileMigration(input: MigrationInput): MigrationPlan 
     notes.push(`“${choice.label}” kept the model it was on, as the profile “${created.name}”.`);
   }
 
-  const assignments = resolveAssignments(doc, profiles, defaultProfile);
+  // The model the person chose for naming, when they chose one, is what
+  // naming should keep running on: the Namer built-in's profile fills a
+  // naming assignment the file does not have (docs/plain-chat.md, "Naming").
+  const namingChoice = profileById(profiles, resolved["builtin:namer"]);
+  const assignments = resolveAssignments(doc, profiles, defaultProfile, namingChoice);
 
   // 5. The changes themselves. A file that already says all of this gets none.
   const changes: SettingChange[] = [];
@@ -300,6 +304,7 @@ function resolveAssignments(
   doc: Doc,
   profiles: readonly ModelProfile[],
   preferredDefault: ModelProfile | undefined,
+  preferredNaming?: ModelProfile | undefined,
 ): ProfileAssignments {
   const current = assignmentsFromDoc(doc, profiles);
   const fallbackDefault =
@@ -307,7 +312,7 @@ function resolveAssignments(
     ?? preferredDefault
     ?? profileByName(profiles, "Balanced")
     ?? profiles[0];
-  const quick = profileByName(profiles, "Fast") ?? fallbackDefault;
+  const quick = preferredNaming ?? profileByName(profiles, "Fast") ?? fallbackDefault;
   const capable = profileByName(profiles, "Smart") ?? fallbackDefault;
   return {
     ...EMPTY_PROFILE_ASSIGNMENTS,
