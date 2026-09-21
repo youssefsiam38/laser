@@ -108,7 +108,7 @@ export function createCommandBus(): CommandBus & { deliver(command: PiExtensionC
         try {
           if (handler(command) === true) handled = true;
         } catch {
-          // One module's fault must not stop the others (AGENTS.md §6a).
+          // One module's fault must not stop the others (AGENTS.md invariant 11).
         }
       }
       return handled;

@@ -992,7 +992,7 @@ export class AgentHarness {
     // owns (its run's end declared or published, a successor now standing)
     // is never the successor's question. It has nobody here to answer it
     // either, and the portable surface's rule is that what cannot be routed
-    // cancels rather than hangs (AGENTS.md §4.6): the asker gets its
+    // cancels rather than hangs (docs/product-boundary.md): the asker gets its
     // fallback. A stamp without a run (a person's own command invocation on
     // this session) is only left unattributed — the person raised it and
     // can answer it in the chat. Unstamped dialogs keep the run-scoped

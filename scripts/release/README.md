@@ -191,3 +191,78 @@ electron-builder, and the first mismatch would be a 404 on a stranger's machine.
 So the installer lists the release's assets, filters by extension and by the
 architecture tokens that format could plausibly use, and insists on exactly one
 match — anything else is an error with the actual list in it.
+
+## Release and packaging failure rules
+
+These rules exist because the failures they describe escaped a local green
+check and reached a pushed release candidate. Treat them as release blockers,
+not advice.
+
+### Routine releases use the reviewed orchestrator
+
+After explicit user authorization and source review, write the release notes,
+run the read-only preview, then the transaction with the same full reviewed
+SHA and the same notes file.
+
+**Release notes are a required parameter, every release.** `--notes FILE` is a
+Markdown file written for the people who install the release: what changed and
+what it means for them, not a commit list. `--publish` refuses to run without
+it, and an empty file is refused. The orchestrator puts the notes into the
+annotated tag's body (verbatim, so headings survive) and `publish.sh` reads
+them from the tag as the release page's text; a resume before the tag exists
+must present the same notes, and a resume after it needs no file (the tag and
+the checkpoint carry them). There is no separate notes form to fill in
+afterwards.
+
+Do not spawn a release-preparation agent for this routine path and do not repeat
+the feature review. Changes to the release orchestrator still receive normal
+review. It prepares in its own worktree, stages only package version metadata
+and generated product identity, runs staged identity/full verification with no
+inherited `GIT_INDEX_FILE`, pushes the exact candidate without touching the
+caller's branch/index, adopts or waits for that SHA's trusted `ci.yml` push run,
+and creates the immutable tag only after success. After the release workflow
+passes it checks the public release through the API (not a draft, the recorded
+tag, the exact inventory with every asset uploaded, every asset's API digest
+equal to the published `SHA256SUMS`, the provenance bundle verified once against
+the tag's source, the release page carrying the tag's notes, Latest promotion).
+It fetches only the manifest and the bundle — a few kilobytes — and never the
+installers: their digests are what the manifest and the API both report, and the
+workflow attested those bytes (D-223). Resume only from its exact checkpoint;
+stale-lock recovery is explicit. It never stashes, resets, cleans, force-pushes,
+moves a tag, touches an installed process, or interprets a network/API error as
+absence.
+
+### A tag is not a downloadable release
+
+Never publish a release page while architecture jobs are running. Push the tag;
+optional early notes must remain a draft. Only `publish.sh` publishes after
+complete x64/ARM64 installers, checksums and offline provenance are uploaded and
+their remote sizes and SHA-256 digests match. Upload failures remain drafts;
+published assets must not be overwritten. A no-monitor request means report "tag
+pushed; release building", not "published". Record download readiness only after
+the digest, provenance and notes checks above pass. Run the publication
+regression tests with `node --test scripts/release/test/*.test.mjs`.
+
+### New files and the identity check
+
+**Problem:** `scripts/identity/check.mjs` intentionally scans tracked files. A
+new untracked source file can spell the product name, an app id, a directory
+name or a wire namespace literally and still pass locally; the same check fails
+in CI after the commit makes that file tracked. This has happened more than once.
+
+**Fix:** import `PRODUCT_*` from `@lasercode/protocol` in TypeScript, import
+`scripts/identity/identity.mjs` in Node scripts, or add a generated template for
+shell/YAML. Never silence the scanner for a product-bearing source file.
+
+**Prevention:** before the final identity/build/test gate, stage every intended
+new file, confirm no intended file remains under `git status` as `??`, then run
+`pnpm identity:check` and `pnpm verify`. A green check run before staging new
+files is not release evidence. After pushing, wait for the clean CI run to pass
+before creating or moving a release tag.
+
+An alternate `GIT_INDEX_FILE` may isolate release staging from unrelated work,
+but never export it into `pnpm verify` or tests: Git fixture repositories inherit
+it and read/write the wrong index. Scope it to individual staging/commit commands.
+Verification and release scripts also scrub the installed app's inherited launch
+environment and name what they removed. Do not reintroduce those variables in a
+wrapper; a test that needs one must set it explicitly inside its own process.

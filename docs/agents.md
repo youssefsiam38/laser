@@ -787,7 +787,7 @@ Notifications (host → client): `agents/updated` (`AgentsSnapshot`),
 `SessionState.agent` carry `SessionAgentInfo`.
 
 Every method has a schema, a round-trip sample and a router owner
-(`packages/protocol/test/schemas.test.ts`, AGENTS.md §6b).
+(`packages/protocol/test/schemas.test.ts`, `docs/search-content.md`).
 
 ## 10. Testing hooks
 
@@ -814,9 +814,14 @@ Every method has a schema, a round-trip sample and a router owner
 
 ## 11. Regression checks
 
-The binding list lives in `AGENTS.md` ("Agents harness regression checks"):
+This is the binding list. The harness is Laser's own (D-140); these are release
+blockers, not advice.
 
-- One `start_agent` tool and four identities only.
+- One `start_agent` tool and four identities only (`agent_name`,
+  `subagent_name`, `sessionId`, `runId`). Never a tool per agent, never a
+  separate agent id, type or profile name. The parent's verbs are
+  `send_agent_message`, `inspect_fleet`, `inspect_agent`, `stop_agent` and
+  `remove_agent_worktree`; the child's is `complete_agent_run`.
 - Children never block, and parents never wait: there is no waiting tool, and
   the `start_agent` result says not to.
 - A child paused on a question is `needs_input`, never `running`; a child that
@@ -857,4 +862,54 @@ The binding list lives in `AGENTS.md` ("Agents harness regression checks"):
   the same unstarted session and is delivered once across concurrent activation
   and retryable failure; no duplicate is deleted to make the count look right.
 - Dictation belongs to the composer that started it: with the bubble open,
-  two composers are mounted, and a phrase must land where it was spoken.
+  two composers are mounted, and a phrase must land where it was spoken. The
+  transcription scope is claimed on the way into recording, never on mount, and
+  a finished phrase is typed into the composer that owns the microphone, never
+  into the first textarea in the document.
+- Parent messages have exactly four modes (D-204): `interrupt` (the default)
+  cancels the current invocation and its foreground tools/question, fences it,
+  then runs first ahead of preserved queued work; `steer` reaches the next
+  model-call boundary without cancellation; `queue` waits after current work;
+  `answer` alone settles a typed `needs_input` question and is refused when no
+  question is open. Interrupt and stop cancel every pending question owned by
+  the exact invocation before awaiting abort; steer/queue never become answers.
+  Interrupt control failure is never reported queued/delivered. Explicit stop
+  first takes every engine queue, then commits queued-work/terminal cancellation
+  only after abort control succeeds; either failure preserves accepted work and
+  reports control failure without auto-resume. Late aborts cannot reach a
+  successor; detached background commands are not implicitly killed.
+- The parent chooses isolation per child: `start_agent`'s `worktree` defaults
+  to true, and true isolates when the workspace can (a worktree under the
+  common-dir parent's `.worktrees/` on `agents/<slug>`) and otherwise shares
+  **and says so**. The per-project default (Isolate agents · Share my checkout ·
+  Decide per agent) sits in front of `true`. Only `"strict"` refuses, still
+  naming both ways forward (git, or `worktree: false`). `false` runs the child
+  in the parent's checkout with every tool and nothing refused: the judgement
+  is the parent's, and the child is told in its role block that it is not
+  isolated (D-156). The result always says where the child is working, and
+  carries a branch only when there is one.
+- A child's worktree belongs to its parent (D-157): reviewing, merging and
+  removing it are the parent's, both agents are told so in their prompts, and
+  nothing removes one silently. `remove_agent_worktree` refuses to destroy
+  unmerged commits or uncommitted files unless told `force`, and then reports
+  what it discarded. Deleting a child's session asks what to do with its
+  worktree; `pi/session/delete` defaults to **keep** when the field is absent.
+  A person can clear a leftover from the fleet without deleting the session.
+- Tools are not part of an agent definition: every agent has every tool
+  (D-144). Nothing ends a run for taking too long — no timeout, no default
+  limit, no timed-out state — and a project with a live run is never idle, so
+  its worker is never retired underneath it. Test a run that outlives any clock.
+- Nothing is ever blocked over file freshness: the engine's `edit` matches
+  `oldText` against the file as it is on disk and refuses a match it cannot find
+  or one that is not unique, so the match itself is the proof (D-152, superseding
+  the refusal in D-151). An `edit` aimed at a file that changed since the agent
+  last read it gets one appended sentence — why the match failed when it failed,
+  or a note that the file carries unseen changes when it succeeded. A `write` is
+  never annotated but is still recorded, or the agent's own write makes its own
+  next edit speak. The module holds file metadata only, never the file's
+  contents, says nothing when it has no record, and never throws.
+- Edit, Fork and Jump work mid-turn by stopping the turn first, and the
+  driver owns that sequence (`stopFirst` on navigate and fork, D-159): a
+  failure after the stop leaves the session stopped, unmoved and served, and
+  the abandoned turn keeps its stop row. Never let the UI issue the stop and
+  the move as two requests.

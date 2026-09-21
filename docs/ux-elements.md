@@ -16,7 +16,22 @@ credentials must not be mislabeled as an API test.
 (`npx assistant-ui@latest add <name>`), then style it to
 [`packages/ui/DESIGN.md`](../packages/ui/DESIGN.md). Editing the copied
 source is expected and is the point of a registry; rebuilding it from scratch
-is not.
+is not. Standalone elements ship with demo props — strip them and feed the
+component from the real payload the surface already carries. If you build
+something this inventory claims, a reviewer will send it back.
+
+**Use the `assistant-ui` skill for every piece of UI work, everywhere.** It is
+rich and current, and it covers far more than the thread: elements, primitives,
+the runtime and `aui` client, tools and approvals, generative UI, streaming,
+thread lists, markdown, observability, mobile. Read the relevant sub-skill under
+`.agents/skills/` in this repo (project-local install via
+`npx skills add assistant-ui/skills`, tracked by `skills-lock.json`) —
+`elements` before building a surface, `primitives` before composing one,
+`runtime` before touching the adapter, `tools` before any approval or tool UI,
+`markdown` before any renderer, `thread-list` before the sessions panel. Prefer
+an assistant-ui element or primitive over hand-rolling; style it to `DESIGN.md`
+rather than rebuilding it. Its guidance is secondary only to the installed
+`.d.ts` when the two disagree.
 
 Two element families behave differently:
 

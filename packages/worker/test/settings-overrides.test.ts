@@ -1,6 +1,6 @@
 /**
  * M13-T12: `.laser` values reach the engine only as in-memory overrides
- * (AGENTS.md invariant 6b). This file pins, against the real pinned engine,
+ * (AGENTS.md invariant 6). This file pins, against the real pinned engine,
  * that they survive every reload the engine performs — and pins the engine
  * behaviour that makes the durable wrapper necessary, so a future engine bump
  * that fixes it upstream shows up here as a failing expectation rather than as

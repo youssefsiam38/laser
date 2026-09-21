@@ -165,7 +165,7 @@ export type ProjectEnvDecorator = (base: NodeJS.ProcessEnv) => NodeJS.ProcessEnv
 
 /**
  * What the model's session gets. `settings` is Laser's, always: the person
- * configures servers, never the engine's terminal behaviour (AGENTS.md §6b).
+ * configures servers, never the engine's terminal behaviour (AGENTS.md invariant 6).
  */
 export function toAdapterConfig(
   servers: Array<{ config: McpConfiguredServer; secrets?: ResolvedSecrets }>,
@@ -194,7 +194,7 @@ export function toAdapterConfig(
       freezeDirectTools: true,
       namespaceTools: false,
       // The engine's default tells the model and the person to run its own
-      // terminal commands, which Laser does not offer (AGENTS.md §6b).
+      // terminal commands, which Laser does not offer (AGENTS.md invariant 6).
       authRequiredMessage: 'Sign in to "${server}" in Settings → MCP servers, then try again.',
     },
   };

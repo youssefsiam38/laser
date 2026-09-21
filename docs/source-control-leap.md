@@ -298,7 +298,7 @@ to, the worker captures a checkpoint:
 
 - a commit object written with an **isolated temporary git index**
   (`GIT_INDEX_FILE` scoped to the capture, never exported into anything else —
-  AGENTS.md §5a already carries this rule for releases and it applies here);
+  `scripts/release/README.md` already carries this rule for releases and it applies here);
 - stored at `refs/laser/checkpoints/<sessionId>/<turnCount>`;
 - **invisible** to `git log`, `git status`, branches and the reflog of the
   person's own work; nothing is staged, stashed, reset or cleaned, ever;
@@ -457,7 +457,7 @@ Three risks were identified before the spike, and the spike answered all three
    appear to be `open` (their SSR path uses `host.shadowRoot`), so the clean
    fix is an **adopted stylesheet pushed into each root** plus one `Range` set
    per root — not `unsafeCSS`. `thread/find-ranges.ts` gains a "roots" concept.
-2. **Searchable value markers.** AGENTS.md §6b's `data-search-content` contract
+2. **Searchable value markers.** `docs/search-content.md`'s `data-search-content` contract
    assumes we own the markup. Inside their DOM we must either use their
    documented `data-*` attributes as the marker, or scope the contract to say
    the overlay's diff is searched through the same roots mechanism.
@@ -709,7 +709,7 @@ At the end: one sandbox, one message, everything in it.
 ### 13.4 Ledger and evidence
 
 `PLAN.md`, `STATUS.md` and `STATUS_DETAILED.md` are maintained exactly as
-`AGENTS.md` §3 requires: claim before code, checkpoint at each meaningful
+`AGENTS.md` (The SDLC) requires: claim before code, checkpoint at each meaningful
 sub-step, evidence (a commit, a passing command, a path) before `done`, and
 `STATUS.md` regenerated before the session ends. Each milestone's decisions are
 appended as `D-<n>`; a settled decision in §0 is changed only by a new decision
@@ -720,7 +720,7 @@ that supersedes it, never by quiet drift.
 **Nothing is released until the person has done their acceptance testing and
 said it is good.** Not a milestone, not a partial. The leap is built, merged,
 gated and put in a sandbox; the person tests; only then, and only with their
-explicit authorization, does `AGENTS.md` §5a's release orchestrator run with
+explicit authorization, does `scripts/release/README.md`'s release orchestrator run with
 notes written for the people who install it.
 
 ---

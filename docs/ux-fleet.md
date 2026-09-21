@@ -297,7 +297,7 @@ their place to answer one.
 
 Two rules are absolute:
 
-- **Nothing hangs** (AGENTS.md invariant 6). A question of a kind this build
+- **Nothing hangs** (`docs/product-boundary.md`). A question of a kind this build
   cannot draw is cancelled on sight rather than shown. A question whose tool
   row is not mounted becomes a card rather than disappearing.
 - **"No" is never a dead end.** Declining a `confirm` opens a reason field,

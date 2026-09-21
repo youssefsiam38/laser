@@ -298,7 +298,7 @@ export class LogStoreUnavailableError extends Error {
 function openDatabase(file: string): Database {
   let DatabaseSync: new (path: string) => Database;
   try {
-    // Node 22.5+ ships this; Node 24 is laser's floor (AGENTS.md §5).
+    // Node 22.5+ ships this; Node 24 is laser's floor (AGENTS.md, Commands).
     // `createRequire` rather than a static import so a Node without it fails
     // here, with an explanation, instead of failing the whole host at load.
     ({ DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as {

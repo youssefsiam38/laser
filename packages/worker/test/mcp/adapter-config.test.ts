@@ -124,7 +124,7 @@ describe("toServerEntry", () => {
       freezeDirectTools: true,
       namespaceTools: false,
       // Never the engine's default, which tells the person to run its own
-      // terminal commands (docs/mcp.md; AGENTS.md §6b).
+      // terminal commands (docs/mcp.md; AGENTS.md invariant 6).
       authRequiredMessage: 'Sign in to "${server}" in Settings → MCP servers, then try again.',
     });
     expect(config.settings?.authRequiredMessage).not.toMatch(/mcp\(|\/mcp/);

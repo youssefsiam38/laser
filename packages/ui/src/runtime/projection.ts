@@ -130,7 +130,7 @@ const EMPTY_RESULT: ProjectionResult = {
  * Partition pending dialogs into the ones a tool row owns and the ones the
  * free-standing side channel owns. A dialog is only tool-associated when the
  * worker stamped a `toolCallId` AND that tool call is in this transcript; the
- * UI never infers causality on its own (AGENTS.md inv. 6, D-2).
+ * UI never infers causality on its own (docs/product-boundary.md, D-2).
  */
 export function splitDialogs(
   dialogs: readonly UiDialogRequest[],

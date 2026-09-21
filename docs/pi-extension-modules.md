@@ -1,7 +1,7 @@
 # Writing a module for the companion extension
 
 Status: **binding for `packages/pi-extension`** (M8-T5). Read
-[`AGENTS.md`](../AGENTS.md) §6a and [`docs/ux-fleet.md`](ux-fleet.md) first —
+[`AGENTS.md`](../AGENTS.md) invariant 11 and [`docs/ux-fleet.md`](ux-fleet.md) first —
 this file is how you obey them in code.
 
 Support for a community package is **a module, never a package**. There is one
@@ -215,7 +215,7 @@ surfaces before anyone noticed.
 the worker's UI bridge as `pi/ui/request` and are answered **inline in the
 transcript** — inside the tool row that raised them when that row is on screen,
 otherwise as a card above the composer. A module needs no code for this beyond
-calling `ctx.ui`; `ctx.ui.custom()` is not emulated (AGENTS.md invariant 6),
+calling `ctx.ui`; `ctx.ui.custom()` is not emulated (`docs/product-boundary.md`),
 and anything laser cannot draw is cancelled rather than left hanging.
 
 ### Where to get the data
@@ -485,3 +485,26 @@ reads the row back through `pi/logs/query` and `pi/logs/content` like any other.
 - [`docs/agents-leap/references/pi-subagents-reference.md`](agents-leap/references/pi-subagents-reference.md)
   — what was verified about pi-subagents before it was replaced.
 - [`docs/upstream.md`](upstream.md) — patches we would like upstream, with diffs.
+
+## Goal policy and transcript regression checks
+
+- Goals have no budgets and no separate usage accounting. Preserve the exact
+  `@narumitw/pi-goal` pnpm policy patch when updating the engine; run
+  `packages/pi-goal/test/policy.test.ts` against the installed dependency.
+- The goal engine's tools belong in a request only while a goal is in play
+  (D-146): the worker switches them on for `/goal` and `session/goal/action`
+  before the engine's command dispatches, and the companion takes them away on
+  the first turn of a session with no goal. The engine refuses to start a goal
+  whose tools are not already active, so never gate them on an existing goal
+  alone. `packages/pi-goal` owns the names; `test/policy.test.ts` pins them.
+- Keep upstream completion terminating. Render its real summary as a durable
+  chat record from canonical goal-state entries plus an accepted completion
+  result. A later null clears active controls, not completed history. Never
+  fabricate another assistant response or conceal rejected/stale completions.
+- Hide only marker-bearing prompts associated with a known persisted goal ID.
+  Keep the first objective literal, keep original entry ordinals for message
+  actions, and exclude hidden scaffolding from search and catalog titles.
+- Message metadata uses `MESSAGE_METADATA_NS`, not the RPC `WIRE_NAMESPACE`.
+  Verify the visible goal-setter label, reload, session switching, detail modes
+  and keyboard disclosure. `SANDBOX_GOAL=1` exercises a tool-only completion
+  with the real engine and an isolated fake provider, without user credentials.

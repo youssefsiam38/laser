@@ -119,3 +119,16 @@ becomes a recurring burden.
   without combining percentages; duration is a period within an allowance.
   Reset timestamps are provider data: an expired countdown means refresh is
   needed, not proof the allowance has renewed.
+
+## Regression rules: prove the route, not only the parser
+
+The companion extension owns one verified usage route and keeps Pi responsible
+for OAuth. Assert the exact endpoint, test source-shaped multi-bucket/null-window
+responses and `windowDurationMins`, and distinguish security challenges, 401,
+permissions, throttling and network failures. Preserve the last good snapshot on
+refresh failure; never sum separate allowance buckets.
+
+Before claiming integration success, perform an authorized read-only live probe
+with current credentials, reporting only status/shape — not tokens, account IDs
+or raw bodies. A working undocumented endpoint is not a public API guarantee.
+Mocks that accept any URL ending in `/usage` hide exactly the defect above.

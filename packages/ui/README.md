@@ -99,7 +99,7 @@ pnpm -F @lasercode/ui build
 ## Invariants
 
 - Transcript text is never rendered as HTML: no `rehype-raw`, no
-  `dangerouslySetInnerHTML`. Agent output is untrusted data (AGENTS.md §4.9).
+  `dangerouslySetInnerHTML`. Agent output is untrusted data (AGENTS.md invariant 9).
 - No color outside the DESIGN.md tokens. Components use the Tailwind names
   mapped in `globals.css` (`bg-surface`, `text-ink-2`, `border-line`, `live`,
   `attention`, `danger`, `ok`), never raw hex.

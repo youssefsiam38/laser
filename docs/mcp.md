@@ -1,7 +1,7 @@
 # MCP servers
 
 Status: **binding design for M14** (`PLAN.md` "M14 · MCP servers"). Read
-[`AGENTS.md`](../AGENTS.md) §4 invariant 6b and [`web-search.md`](web-search.md)
+[`AGENTS.md`](../AGENTS.md) invariant 6 and [`web-search.md`](web-search.md)
 first: MCP follows the same shape — an exact-pinned upstream engine, a Laser-owned
 configuration and a Laser-owned experience — and this file is what makes that
 shape concrete for MCP.

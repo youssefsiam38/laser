@@ -244,3 +244,23 @@ once its scroller has been laid out, because a scroller with no box is a
 surface nobody can read. `packages/ui/test/list-layout.ts` gives that one
 element a window-sized box for the suites that render the real thread, and
 nothing else in the document a geometry it did not ask for.
+
+## Live activity and disclosure
+
+- assistant-ui treats a tool's `result` as terminal, even when the message is
+  still running. Keep partial output in its UI-only `artifact` channel and
+  reserve `result` for `tool_execution_end`; never trade live status for output.
+- The default `GroupedParts` indicator also appears after tool calls. Our
+  transcript uses `indicator="empty"`, with neutral waiting copy; actual
+  reasoning and running tools own their row beam. Test with partial output,
+  not only a resultless tool, and verify both aggregate and child status.
+- Batch disclosure changes anchor visible content through the animation.
+  Start the animation window after React commits, not at the menu click: a
+  large history can take longer to render than the animation itself.
+- Activity disclosures require interaction tests, not just summary/string tests.
+  Reasoning is an independently collapsible action, not a static heading inside
+  the aggregate. Share the activity row tokens across reasoning and tools; never
+  invent a token name without a theme mapping (`surface-1` is not a token).
+  Manual toggles override default-open preferences, including waiting tools;
+  approval footers remain outside the fold. Verify pointer and keyboard toggles
+  after viewport restoration settles, and check that collapsed bodies really hide.

@@ -17,7 +17,7 @@ node packages/desktop/scripts/clean-machine.mjs
 session with every bundled feature, a non-empty model list, MCP stdio tools
 reaching both the model and the inspector, the agent harness modules active,
 and the legal files present. "The file exists" is never the test;
-AGENTS.md §5a says why.
+`scripts/release/README.md` says why.
 
 ## Two rules that bound everything below
 

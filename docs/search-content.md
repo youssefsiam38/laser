@@ -109,3 +109,38 @@ excerpt so a match is counted and stepped once. Collapsed context and
 virtualized-offscreen lines are not in the tree; the overlay also searches the
 file's patch model for counts and says when matches sit in collapsed context.
 Find inside the overlay is this machinery, not a second implementation.
+
+## Search regression checks
+
+- Saved-history search belongs in the host and must not open workers. Search
+  message text, reasoning and tool bodies, not image blobs or session metadata.
+- New protocol methods need a schema round-trip sample and router coverage,
+  not just implementation tests; the complete method inventory is a release gate.
+- Rank by the best matching source (user, assistant, activity), then recency;
+  the excerpt and the destination must agree with that source. Keep older-range
+  expansion explicit and reject stale query replies.
+- Find must not wrap or replace React-owned text nodes. Use DOM ranges/native
+  highlights; force layout for the selected `content-visibility` message before
+  measuring it, and account for the sticky composer when scrolling. Verify a
+  distant match in a folded tool, not only visible paragraphs.
+- Search disclosure is transient. Closing find restores the user's detail
+  preference and focus; excerpts remain inside result rows, never overlays.
+
+## The API request inspector is deliberately different
+
+Its full-request search includes every retained JSON key, value and syntax
+character. Never apply the conversation value-only selector there. Section search
+highlights rendered content once (not its duplicate preview/JSON), and request
+find owns separate native highlight names and modal-only scrolling/keyboard
+handling.
+
+## Source disclosure
+
+Keep source menus inside the parent dialog's portal/scroll-lock boundary and test
+real wheel scrolling, not just overflow classes. Pointer details must anchor to
+the cursor, with keyboard fallback and no native `title` duplicate. Markdown file
+links resolve against their owning session/capture directory and call the native
+text-editor bridge; never resolve them against the web origin or use MIME-based
+file opening for scripts/HTML. Remote views copy the host path. File opening is
+explicit, without shell interpolation, and source controls never duplicate
+searchable prompt text.

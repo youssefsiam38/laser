@@ -52,7 +52,7 @@ files:
   # loader transpiles that source at runtime. Removing it produces an
   # installer that launches but cannot open any session with that feature
   # enabled. Read a package's `exports`, `files` and engine manifest before
-  # excluding a file type from it (AGENTS.md §5a).
+  # excluding a file type from it (docs/packaging.md).
   - "!**/node_modules/**/*.{md,markdown,map,flow}"
   # The worker reads this Markdown template at runtime; it is executable prompt
   # source, not package documentation.
@@ -77,7 +77,7 @@ files:
   # them is the same: `scripts/clean-machine.mjs` against a real packaged
   # session, with an empty PATH. Nothing here removes a file type by
   # extension, and nothing here touches an engine or provider package's
-  # executable source (AGENTS.md §5a).
+  # executable source (docs/packaging.md).
 
   # This workspace's own packages ship built output and their TypeScript
   # sources side by side, because they are linked, not published. Every one of

@@ -20,3 +20,6 @@ runtime-manifest.json
 *.sqlite-*
 docs/research/.playwright-mcp/
 /.playwright-mcp/
+
+# Local UI mockups: throwaway prototypes, never product code
+mockups/

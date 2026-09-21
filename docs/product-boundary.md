@@ -139,3 +139,31 @@ takes them away again on the first turn of a session that has no goal.
 `packages/pi-goal` owns the tool names and `test/policy.test.ts` pins them to
 the installed engine, so a version that renames one fails there rather than
 quietly leaving a tool attached everywhere.
+
+## Extension surfaces
+
+Pi owns the logic, Laser owns the experience. There is no UI bus and no
+declarative panel contract; an extension never declares a surface, a kind or an
+intent, and never ships presentation (D-147). There are exactly three places
+anything an extension does can appear, and Laser owns all three: the **tool call**
+in the transcript that did it, the **fleet** for work that outlives a turn (agent
+runs and background commands, `ux-fleet.md`), and **inline in the transcript**
+for a question the person has to answer, beside the tool approvals already there.
+Anything that fits none of them is a decision recorded in `STATUS_DETAILED.md`,
+not a bespoke view for one package. Agent work has a domain model of its own in
+[`ux-agent-work.md`](ux-agent-work.md), read from typed sources — the run
+registry and the background-task surface — never from declared UI.
+
+The portable extension UI surface is `select`, `confirm`, `input`, `editor`,
+`notify`, `setStatus`, `setWidget` (string lines), `setTitle` and
+`setEditorText`. Anything else cancels safely and never hangs; `custom()` is not
+emulated.
+
+## Upstream contributions
+
+When a task needs a change in an upstream project (pi-subagents,
+earendil-works/pi, any community package): file the PR or issue from the user's
+fork, keep it small and self-contained, and justify it on its own merits for that
+project (extensibility, correctness, headless-host support). Record the PR URL in
+the task's notes and in [`upstream.md`](upstream.md). Until merged, the task
+depends on a local patch or a pinned fork; say which.

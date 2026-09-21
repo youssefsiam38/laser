@@ -132,7 +132,7 @@ export const PI_SETTINGS_TOP_LEVEL_KEYS: readonly string[] = [
 ];
 
 /**
- * Keys the product defines for itself (AGENTS.md 6b). They live beside the
+ * Keys the product defines for itself (AGENTS.md invariant 6). They live beside the
  * engine's keys in both settings files, are read and written only by the
  * product, and never cross into the engine as overrides.
  *

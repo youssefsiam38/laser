@@ -14,7 +14,7 @@ export const goalModule: LaserModule = {
   detect: () => true,
   activate(ctx) {
     // Every hook below is the engine's, and a module that throws inside one
-    // takes the turn with it (AGENTS.md §6a: a module fails on its own). The
+    // takes the turn with it (AGENTS.md invariant 11: a module fails on its own). The
     // session's entries come from the engine — `getBranch` on a session being
     // rewritten, a shape the goal engine cannot read — and the worker's `send`
     // can be gone, so both are reported to the person instead of escaping.

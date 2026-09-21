@@ -152,7 +152,7 @@ export function uiResponseFor(
   }
 }
 
-/** The safe answer. Never a hang (AGENTS.md invariant 6). */
+/** The safe answer. Never a hang (docs/product-boundary.md, "Extension surfaces"). */
 export function cancelResponse(dialogId: string): UiDialogResponse {
   return { id: dialogId, cancelled: true };
 }
