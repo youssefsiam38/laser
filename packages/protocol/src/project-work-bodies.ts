@@ -492,15 +492,45 @@ export const designSketchSchema = z
   })
   .strict();
 
+/**
+ * A reference image a host page is shown against. Never a source of truth and
+ * never read for text: an image referenced by the repository's own docs is
+ * `mapped`, an image a person pasted is `proposed` and untrusted (D-353,
+ * `docs/design-phase.md` "Security").
+ */
+export interface HostReference {
+  /** `repository` — referenced by docs/stories; `supplied` — a person pasted it. */
+  kind: "repository" | "supplied";
+  label?: string;
+  /** Project-relative path, for an image that lives in the repository. */
+  path?: string;
+  /** Blob handle, for an image the person supplied. */
+  blobId?: string;
+  mediaType?: string;
+  bytes?: number;
+  fidelity: Extract<DesignFidelity, "mapped" | "proposed">;
+}
+
 /** The frozen host page a design in context is placed on. Parsed, never run. */
 export interface HostPage {
   routeOrPath: string;
   templatePath?: string;
-  /** Structural outline: regions, headings, lists, forms. Text, never markup. */
-  outline: Array<{ id: string; role: string; label?: string; depth: number }>;
+  /**
+   * Structural outline: regions, headings, lists, forms. Text, never markup.
+   * `structuralPath` and `textHash` are what an insertion region anchors to
+   * (see `host-page.ts`); they are optional so an outline parsed before
+   * M21-T12 still validates.
+   */
+  outline: Array<{ id: string; role: string; label?: string; depth: number; structuralPath?: string; textHash?: string; sourcePath?: string }>;
   files: string[];
   /** A person-supplied reference image, stored as a blob. Untrusted. */
   referenceBlobId?: string;
+  /** Every reference image this grounding found or was given. */
+  references?: HostReference[];
+  /** The stack the route was resolved under: `next-app`, `rails`, `blade`… */
+  stack?: string;
+  /** What the parse could not read, and why. Never guessed. */
+  gaps?: Array<{ path: string; reason: string }>;
   fidelity: Extract<DesignFidelity, "mapped" | "proposed">;
 }
 
@@ -531,7 +561,27 @@ export interface DesignBody {
   sketches: DesignSketch[];
   hostPage?: HostPage;
   insertionRegion?: InsertionRegion;
-  strategy?: { kind: DesignStrategy; reason: string; targetFiles: string[]; integrationContract?: string };
+  /**
+   * The recorded strategy: which of the two the person chose, why, what it
+   * touches and how it joins the host (`docs/design-phase.md`, "Two
+   * strategies, chosen explicitly"). `reason` is the one-line summary the
+   * surfaces already show; `reasons` and `tradeoffs` are the full proposal,
+   * and `alternative` keeps the case for the other strategy so the choice
+   * stays reviewable.
+   */
+  strategy?: {
+    kind: DesignStrategy;
+    reason: string;
+    targetFiles: string[];
+    integrationContract?: string;
+    reasons?: string[];
+    tradeoffs?: string[];
+    alternative?: { kind: DesignStrategy; reasons: string[]; tradeoffs?: string[] };
+    /** The index era the new work is composed in. */
+    eraId?: string;
+    /** True while this is a proposal for the Plan rather than a decision. */
+    proposalOnly?: boolean;
+  };
   /** The conservative aggregate across every screen. */
   fidelity: DesignFidelity;
   /** Fixture data bound to lists, text and images. Bounded, declarative. */
@@ -617,12 +667,38 @@ export const designBodySchema = z
         outline: z
           .array(
             z
-              .object({ id: opaqueId, role: z.string().min(1).max(60), label: z.string().max(200).optional(), depth: z.number().int().min(0).max(32) })
+              .object({
+                id: opaqueId,
+                role: z.string().min(1).max(60),
+                label: z.string().max(200).optional(),
+                depth: z.number().int().min(0).max(32),
+                structuralPath: z.string().min(1).max(1024).optional(),
+                textHash: digest.optional(),
+                sourcePath: z.string().min(1).max(1024).optional(),
+              })
               .strict(),
           )
           .max(500),
         files: z.array(z.string().min(1).max(1024)).max(200),
         referenceBlobId: opaqueId.optional(),
+        references: z
+          .array(
+            z
+              .object({
+                kind: z.enum(["repository", "supplied"]),
+                label: z.string().max(200).optional(),
+                path: z.string().min(1).max(1024).optional(),
+                blobId: opaqueId.optional(),
+                mediaType: z.string().min(1).max(120).optional(),
+                bytes: z.number().int().nonnegative().optional(),
+                fidelity: z.enum(["mapped", "proposed"]),
+              })
+              .strict(),
+          )
+          .max(16)
+          .optional(),
+        stack: z.string().min(1).max(60).optional(),
+        gaps: z.array(z.object({ path: z.string().min(1).max(1024), reason: line }).strict()).max(20).optional(),
         fidelity: z.enum(["mapped", "proposed"]),
       })
       .strict()
@@ -647,6 +723,14 @@ export const designBodySchema = z
         reason: paragraph,
         targetFiles: z.array(z.string().min(1).max(1024)).max(200),
         integrationContract: paragraph.optional(),
+        reasons: z.array(line).max(12).optional(),
+        tradeoffs: z.array(line).max(12).optional(),
+        alternative: z
+          .object({ kind: z.enum(DESIGN_STRATEGIES), reasons: z.array(line).max(12), tradeoffs: z.array(line).max(12).optional() })
+          .strict()
+          .optional(),
+        eraId: opaqueId.optional(),
+        proposalOnly: z.boolean().optional(),
       })
       .strict()
       .optional(),

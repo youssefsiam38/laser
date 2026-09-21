@@ -140,3 +140,126 @@ from index changes) is M21-T13's, and it reads and writes through
   @lasercode/worker test` (1344 + the existing tool-eval matrix), `pnpm -F
   @lasercode/pi-extension test` (228), `pnpm -r build`, `pnpm -r typecheck`,
   `pnpm identity:check`.
+
+---
+
+# M21-T12 · static host grounding and source selection
+
+Owner: worker "Static host grounding", branch
+`agents/static-host-grounding-f56b2b4e`, base `e42d1bb8`.
+Binding text: [`../design-phase.md`](../design-phase.md) (D-353) "Case C ·
+Design in context" — "Grounding the host page — static only", "Insertion
+region", "Two strategies, chosen explicitly", "Validation without running",
+"Security, privacy and resources"; `PLAN.md` row M21-T12. It sits beside
+M21-T10 here because it is the same engine: parse-only readers over the same
+scan, producing protocol data.
+
+## What this task owns
+
+`packages/worker/src/design/host/**` — route resolution, outlines, reference
+images, insertion regions, the Conform/Island proposal and the composition
+into a `HostPage` — plus the `ground_host_page` spec and handler beside the
+three index tools, the additive protocol fields the shapes need, tests and
+fixtures. No runner, no capture, no execution of any kind (D-353).
+
+## Shape
+
+| File | Owns |
+| --- | --- |
+| `files.ts` | the file set grounding reads: a literal map in tests, a bounded scan of the project at runtime; path helpers and the one text digest |
+| `resolve-route.ts` | a route, a template path or a view name → template, layouts, partials/includes, owning controller/loader, stylesheets, for Next (app and pages), Nuxt, SvelteKit, Remix, Rails, Blade, Jinja/Django/Twig and plain HTML |
+| `outline.ts` | template syntax → structure: regions, headings, lists, tables, forms, dialogs, components, partials and content slots, each with a role, a structural path, a text hash and its line |
+| `reference-image.ts` | repository screenshots (`mapped`) and person-supplied ones (`proposed`): size bound, type sniffed from the bytes, label flattened to plain text, never read for content |
+| `insertion-region.ts` | a region from an outline node or a box; resolving one against a re-parsed outline; the orphaned answer |
+| `strategy.ts` | the Conform/Island proposal — both cases, always, with reasons and trade-offs — and the `{ kind, reason(s), targetFiles, integrationContract, alternative, eraId, proposalOnly }` record |
+| `ground.ts` | composition into a `HostPage`, `ProjectHostGrounding` (the bridge), and the era lookup the strategy needs |
+
+## Decisions taken inside the contracts
+
+1. **A structural path is made of structure only.** Wrappers, attributes and
+   indentation contribute nothing, so re-formatting a template or adding a
+   `div` does not move an anchor. Only regions, headings, lists, tables,
+   forms, dialogs, components, partials and slots take a path segment.
+2. **The text hash is the words, and only the words.** Tags, attributes,
+   comments and template expressions are erased before hashing — `<%= @invoice.total %>`
+   contributes nothing, so renaming a variable cannot orphan a region, and no
+   expression is ever evaluated to find out what it would render.
+3. **The hash finds content; it never moves an anchor.** Structural path
+   first. Path gone → `orphaned`, with the single node that still carries the
+   same text offered as a `candidate` the person or the model has to accept.
+   Path there, words different → `changed`, still anchored, and reported.
+   That is the contract's "never silently moved", made testable.
+4. **One outline, one node per file, paths kept per file.** The composed
+   outline puts a `template` node above each file's structure rather than
+   splicing the view into the layout's `yield`: a region records
+   `{ templatePath, structuralPath }`, and splicing would let an edit in the
+   layout renumber the view's anchors.
+5. **A supplied screenshot never becomes the host.** It is bounded (4 MB),
+   its type is sniffed from its first bytes and cross-checked against the
+   declared one, its label is stripped to plain text, and it is carried as a
+   `proposed` reference beside a `mapped` outline. There is no image decoder
+   and no OCR anywhere in `design/host`, and the parse-only test now asserts
+   that too: a screenshot is a picture to lay a design over, and text lifted
+   out of one would be an injection channel.
+6. **The proposal always carries both cases.** `proposeStrategy` is
+   deterministic and every point it scores is a sentence, so the
+   recommendation and the reasons cannot disagree; Island is recorded with
+   `proposalOnly` because bundling an island into a legacy build is Plan and
+   Task work.
+7. **`ground_host_page` is defined and linted here, not registered.** Same
+   rule as M21-T10's decision 6: the spec, the handler and a conformance
+   fixture in `test/fixtures/tool-eval/design-index/` are the final shape, and
+   the engine registration is the lifecycle tool wiring (M21-T17) — a
+   concurrent worker owns the bridge/engine registration and will register
+   `ground_host_page` with the other three when it lands.
+
+## Protocol additions (all optional, all additive)
+
+`host-page.ts` (new, pure, no I/O, importable by the workspace):
+`HostOutlineAnchor`, `INSERTION_REGION_STATES`, `InsertionRegionResolution`,
+`resolveInsertionRegion`, `insertionRegionIsAnchored`,
+`applyInsertionRegionResolution`.
+`project-work-bodies.ts`: `HostReference`; `HostPage.outline[]` gains
+`structuralPath?`, `textHash?`, `sourcePath?`; `HostPage` gains `references?`,
+`stack?`, `gaps?`; `DesignBody.strategy` gains `reasons?`, `tradeoffs?`,
+`alternative?`, `eraId?`, `proposalOnly?`. A body written before any of this
+still validates.
+
+## Fixtures
+
+`packages/worker/test/fixtures/design/` gains four host shapes, read where
+they sit because grounding never writes:
+
+| Fixture | Shape | What it proves |
+| --- | --- | --- |
+| `host-next` | an app route with a layout, two components and two stylesheets | file-system routing, local import following, alias-free resolution |
+| `host-rails` | ERB view, layout, two partials, controller, two stylesheets | `render`/`render partial:`, the controller convention, `stylesheet_link_tag` |
+| `host-laravel` | Blade view with `@extends`, `@include`, `<x-…>`, a controller and a linked stylesheet | view names, component tags, the controller that calls `view('…')` |
+| `host-html` | plain HTML with SSI and comment includes, and a doc that references a screenshot | comment includes, linked stylesheets, repository reference images |
+
+SvelteKit, Nuxt, Remix and Django/Jinja are covered from literal file sets
+rather than four more directories.
+
+## What M21-T13 consumes
+
+| Need | Where it is |
+| --- | --- |
+| Ground a page | `ProjectHostGrounding` (`design/host/ground.ts`) → `HostGroundingResult` |
+| The frozen host frame | `result.hostPage` (protocol `HostPage`: outline with `structuralPath`/`textHash`, files, references, stack, gaps, fidelity) |
+| The rich outline for the canvas | `result.outline.nodes` — role, label, depth, line, `templatePath`, `sourcePath` for a partial |
+| Region highlight and anchoring | `insertionRegionFromNode` / `insertionRegionFromBox`, `outlineAnchors` |
+| The orphaned chip | `resolveRegionAgainstOutline` → `resolved` / `changed` / `orphaned` with its reason and optional candidate; `regionAfterResolution` for the stored flag |
+| The strategy chip and its reasons | `result.strategy` (`StrategyProposal`), recorded with `strategyRecord` |
+| Reference images | `hostPage.references` (`mapped` from the repository, `proposed` from a person) and `acceptSuppliedImage` for the bounds and the refusal sentences |
+| The tool | `GROUND_HOST_PAGE_SPEC` + `groundHostPageTool` against `HostGroundingBridge` |
+
+## Checkpoints
+
+- Plan and shapes fixed; protocol additions landed with
+  `packages/protocol/test/host-page.test.ts` (10 tests).
+- `design/host/*` landed with `host-route`, `host-outline` and `host-ground`
+  tests (56 tests) over four new fixtures; `ground_host_page` spec, handler
+  and conformance fixture replayed by `test/design/tools.test.ts`; the
+  parse-only module graph now covers `design/host` and asserts no image
+  decoder or OCR reaches it.
+- Validated: see the final report.
