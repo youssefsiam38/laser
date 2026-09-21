@@ -16,16 +16,13 @@ const mocks = vi.hoisted(() => {
     } as { path: string; state: { cwd: string; agent?: { agentName: string; kind: string } } } | undefined,
     snapshot: {
       defaultAgent: "default",
-      workspaces: { beam: "/builtin/beam", chat: "/builtin/chat" },
+      workspaces: { chat: "/workspaces/chat" },
       agents: [
         { name: "default", kind: "custom", scope: "global", description: "General coding" },
         { name: "researcher", kind: "custom", scope: "global", description: "Searches a large codebase" },
         // Shadows the global researcher inside /project only.
         { name: "researcher", kind: "custom", scope: "project", projectCwd: "/project", description: "This repo's researcher" },
         { name: "elsewhere", kind: "custom", scope: "project", projectCwd: "/other", description: "Another project's agent" },
-        { name: "beam", kind: "builtin", description: "Built in" },
-        { name: "chat", kind: "builtin", description: "Built in" },
-        { name: "namer", kind: "builtin", description: "Built in" },
       ],
     },
     newSession: vi.fn(async () => "/project/researcher.jsonl"),
@@ -69,8 +66,7 @@ vi.mock("@assistant-ui/react", async (importActual) => ({
 vi.mock("@/agents", async (importActual) => ({
   ...(await importActual<typeof import("@/agents")>()),
   agentDisplayName: (name: string) => name === "default" ? "Default agent" : name,
-  isBuiltinAgent: (agent: { kind: string }) => agent.kind === "builtin",
-  isWorkspaceCwd: (cwd: string | undefined) => cwd === "/builtin/beam" ? "beam" : cwd === "/builtin/chat" ? "chat" : null,
+  isWorkspaceCwd: (cwd: string | undefined) => cwd === "/workspaces/chat" ? "chat" : null,
   useAgentsSnapshot: () => mocks.snapshot,
   useAgentsStatus: () => ({ loading: false, error: null, loaded: true }),
 }));
@@ -102,6 +98,7 @@ vi.mock("@/runtime", () => ({
 }));
 
 import { SessionAgentSelector } from "../../src/components/assistant-ui/elements/agent-selector.js";
+import { agentInfo } from "../agents/fixtures.js";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -140,16 +137,13 @@ afterEach(async () => {
 const trigger = () => container.querySelector<HTMLButtonElement>('[data-slot="model-selector-trigger"]');
 const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 
-it("selects the default and searches custom agents without exposing built-ins", async () => {
+it("selects the default and searches the person's own agents", async () => {
   expect(trigger()?.textContent).toContain("Default agent");
   await act(async () => trigger()!.click());
   await settle();
 
   const text = document.body.textContent ?? "";
   expect(text).toContain("researcher");
-  expect(text).not.toContain("beam");
-  expect(text).not.toContain("chat");
-  expect(text).not.toContain("namer");
   // Scope: the project's own researcher stands in for the global one, once;
   // another project's agent is not offered here.
   expect(text).toContain("Project · This repo's researcher");
@@ -220,7 +214,7 @@ it("appears before session creation, then disappears once started or inside a bu
   mocks.unstarted = true;
   mocks.view = {
     path: "/chat/chat.jsonl",
-    state: { cwd: "/chat", agent: { agentName: "chat", kind: "chat" } },
+    state: { cwd: "/workspaces/chat", agent: agentInfo({ kind: "chat" }) },
   };
   await act(async () => root.render(<SessionAgentSelector />));
   expect(trigger()).toBeNull();
@@ -229,9 +223,9 @@ it("appears before session creation, then disappears once started or inside a bu
   await act(async () => root.render(<SessionAgentSelector />));
   expect(trigger()?.textContent).toContain("Default agent");
 
-  // Legacy/terminal-created built-in sessions can lack attribution; their
-  // reserved workspace still keeps the ordinary custom-agent picker out.
-  mocks.view = { path: "/chat/legacy.jsonl", state: { cwd: "/builtin/chat" } };
+  // A Chat conversation runs no definition at all: even one with no record,
+  // known only by its workspace directory, is offered no agent picker.
+  mocks.view = { path: "/chat/legacy.jsonl", state: { cwd: "/workspaces/chat" } };
   await act(async () => root.render(<SessionAgentSelector />));
   expect(trigger()).toBeNull();
 });

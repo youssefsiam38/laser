@@ -5,7 +5,7 @@
  * A laptop can talk to a local host today and a hosted workspace tomorrow.
  * What it kept for the first must not appear in the second — not the sessions
  * in the sidebar, not the open transcript, not the pins, the archive, the
- * remembered destination, the Beam chat, the fleet's "I have read these" mark,
+ * remembered destination, the fleet's "I have read these" mark,
  * and not a draft somebody typed. And when the app cannot establish an
  * environment at all, it must keep nothing rather than keep guessing.
  */
@@ -15,17 +15,17 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 
 import { LaserProvider, useLaserStable, useLaserState } from "../../src/runtime/LaserProvider.js";
 import { DEVICE_KEYS, deviceStore, namespaceOf } from "../../src/runtime/device-storage.js";
 import { sessionsList } from "../../src/components/shell/session-groups.js";
-import { beamStore } from "../../src/components/beam/beam-store.js";
 import { clearFinishedFleet, resetFleetState, useFleetClearedBefore } from "../../src/fleet/fleet-state.js";
 import { readDraft, writeDraft } from "../../src/components/assistant-ui/elements/draft-restore.js";
-import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../world/fake-host.js";
 import { OTHER_ENVIRONMENT_KEY, TEST_ENVIRONMENT_KEY, deviceKeyName, testDescriptor } from "./environment-fixture.js";
+import { agentInfo } from "../agents/fixtures.js";
 
 const SESSION = `${PROJECT_CWD}/one.jsonl`;
 const CHAT = "/state/chat/one.jsonl";
@@ -79,11 +79,10 @@ beforeEach(() => {
   localStorage.clear();
   deviceStore.deactivate();
   sessionsList.reset();
-  beamStore.reset();
   resetFleetState();
   world = createWorld();
   addSession(world, SESSION, PROJECT_CWD);
-  addSession(world, CHAT, world.snapshot.workspaces.chat!, { agent: { agentName: "chat", kind: "chat" } });
+  addSession(world, CHAT, world.snapshot.workspaces.chat!, { agent: agentInfo({ kind: "chat" }) });
   FakeHostClient.reset(world);
   container = document.createElement("div");
   document.body.append(container);
@@ -108,9 +107,9 @@ it("leaves nothing of one environment behind in the next", async () => {
   expect(probe.environmentKey).toBe(TEST_ENVIRONMENT_KEY);
 
   // A person's afternoon in the first environment: a session open, a pin, a
-  // Beam chat, a draft and the fleet put away.
+  // draft and the fleet put away.
   await act(async () => { await probe.openSession(SESSION); await settle(20); });
-  await act(async () => { sessionsList.togglePinned(SESSION); beamStore.setPath("/state/beam/b.jsonl"); });
+  await act(async () => { sessionsList.togglePinned(SESSION); });
   writeDraft(SESSION, "half a sentence, in the first environment");
   clearFinishedFleet("2026-01-01T00:00:00.000Z");
   expect(probe.open).toBe(1);
@@ -133,7 +132,6 @@ it("leaves nothing of one environment behind in the next", async () => {
   // guarantee itself (no resume before the environment is established) is
   // proved against the real client in `environment-handshake.test.ts`.
   expect(world.calls.slice(before).some((call) => call.method === "session/load")).toBe(true);
-  expect(beamStore.getSnapshot().path).toBeUndefined();
   expect(probe.cleared).toBeUndefined();
   expect(readDraft(SESSION)).toBeUndefined();
   // And the first environment's own namespace is gone from the device.

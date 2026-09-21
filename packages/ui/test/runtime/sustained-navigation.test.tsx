@@ -6,14 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 
 import { createThreadAdapter, type RequestClient } from "../../src/runtime/adapter.js";
 import { LaserProvider, useLaserStable, useLaserState } from "../../src/runtime/LaserProvider.js";
 import { ThreadListItem } from "../../src/components/assistant-ui/elements/thread-list.aui.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
-import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle } from "../beam/fake-host.js";
+import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle } from "../world/fake-host.js";
 import { seedProject, seedRememberedSessions } from "../../test/runtime/environment-fixture.js";
 
 let root: Root;

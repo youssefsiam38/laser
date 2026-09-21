@@ -25,11 +25,11 @@ import { agentDefinitionInputOf } from "../../../src/agents/index.js";
 import { agent, snapshot } from "../fixtures.js";
 
 describe("agents page model", () => {
-  it("orders your agents first (the default on top) and the built-ins in their fixed order", () => {
-    const snap = snapshot({ agents: [agent({ name: "zeta" }), agent({ name: "namer", kind: "builtin" }), agent({ name: "alpha" }), agent({ name: "beam", kind: "builtin" }), agent({ name: "default" }), agent({ name: "chat", kind: "builtin" })] });
-    const { custom, builtin } = agentsInScope(snap, "global");
+  it("orders your agents with the default on top, and lists nothing else", () => {
+    const snap = snapshot({ agents: [agent({ name: "zeta" }), agent({ name: "alpha" }), agent({ name: "default" })] });
+    const { custom } = agentsInScope(snap, "global");
+    // Every agent is one a person wrote (D-347): one list, no built-in section.
     expect(custom.map((a) => a.name)).toEqual(["default", "alpha", "zeta"]);
-    expect(builtin.map((a) => a.name)).toEqual(["beam", "chat", "namer"]);
     expect(agentsInScope(snapshot({ ...snap, defaultAgent: "zeta" }), "global").custom.map((a) => a.name)).toEqual(["zeta", "default", "alpha"]);
     expect(isFirstRun(snapshot({ agents: [agent({ name: "default" })] }), "global")).toBe(true);
     expect(isFirstRun(snap, "global")).toBe(false);
@@ -48,20 +48,17 @@ describe("agents page model", () => {
       "global:default",
       "global:reviewer",
     ]);
-    expect(agentsInScope(snap, "global").builtin.map((candidate) => candidate.name)).toEqual(["beam", "chat", "namer"]);
     expect(agentsInScope(snap, "project", "/p").custom.map((candidate) => `${candidate.scope}:${candidate.name}`)).toEqual([
       "project:project-only",
       "project:reviewer",
       "global:default",
       "global:reviewer",
     ]);
-    expect(agentsInScope(snap, "project", "/p").builtin).toEqual([]);
     expect(agentsInScope(snap, "effective", "/p").custom.map((candidate) => `${candidate.scope}:${candidate.name}`)).toEqual([
       "global:default",
       "project:project-only",
       "project:reviewer",
     ]);
-    expect(agentsInScope(snap, "effective", "/p").builtin).toEqual([]);
   });
 
   it("offers definitions from the owner's scope, including itself, and never another project", () => {
@@ -124,10 +121,9 @@ describe("agents page model", () => {
     expect(deletability(project, snap)).toEqual({ ok: true });
   });
 
-  it("refuses to delete the default agent and built-ins, with the reason", () => {
+  it("refuses to delete the default agent, with the reason", () => {
     const snap = snapshot();
     expect(deletability(agent({ name: "default" }), snap)).toEqual({ ok: false, reason: expect.stringContaining("default") });
-    expect(deletability(agent({ name: "beam", kind: "builtin" }), snap).ok).toBe(false);
     expect(deletability(agent({ name: "reviewer" }), snap)).toEqual({ ok: true });
     expect(deletability(agent({ name: "default" }), { defaultAgent: "reviewer" })).toEqual({ ok: true });
   });

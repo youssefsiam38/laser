@@ -40,7 +40,7 @@ vi.mock("@/components/assistant-ui/elements/empty-state", async (importActual) =
 
 import { EmptyState, LANDING_DESCRIPTION } from "../../src/components/thread/EmptyState.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
-import { sessionState } from "../agents/fixtures.js";
+import { agentInfo, sessionState } from "../agents/fixtures.js";
 
 let root: Root, container: HTMLDivElement;
 beforeEach(() => {
@@ -95,7 +95,7 @@ describe("the landing paints from local knowledge", () => {
     expect(landing.eyebrow).toBe("Private workspace");
     expect(landing.greeting).toBe("Chat");
     expect(landing.description).toBe(LANDING_DESCRIPTION.chat);
-    mocks.session = sessionState({ path: "/private/chat/c.jsonl", cwd: "/private/chat", agent: { agentName: "chat", kind: "chat" } });
+    mocks.session = sessionState({ path: "/private/chat/c.jsonl", cwd: "/private/chat", agent: agentInfo({ kind: "chat" }) });
     await render({ phase: "ready-chat", intent: 1, chat: { kind: "session", path: "/private/chat/c.jsonl" }, rememberedCode: project });
     expect(words()).toEqual(landing);
   });

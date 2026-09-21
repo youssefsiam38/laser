@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { AgentRun, SessionSummary } from "@lasercode/protocol";
 
+import { agentInfo } from "../agents/fixtures.js";
+
 import {
   codeProjectForSession,
   creationTargetForDestination,
@@ -20,7 +22,7 @@ const item = (path: string, cwd: string, modifiedAt: string, agent?: SessionSumm
   ...(agent ? { agent } : {}),
 });
 
-const CHAT = item("/chat/one", "/private/chat/one", "2026-09-10T00:00:00Z", { agentName: "chat", kind: "chat" });
+const CHAT = item("/chat/one", "/private/chat/one", "2026-09-10T00:00:00Z", agentInfo({ kind: "chat" }));
 const CODE = item("/code/new", "/project", "2026-09-11T00:00:00Z");
 const OLD_CODE = item("/code/old", "/project", "2026-09-09T00:00:00Z");
 
@@ -35,14 +37,15 @@ describe("main destination model", () => {
 
   it("creates Chat only from its landing workspace and Code only from Code memory", () => {
     const chat = { phase: "ready-chat" as const, chat: { kind: "landing" as const }, rememberedCode: { kind: "project-landing" as const, project: "/project" }, intent: 3 };
-    expect(creationTargetForDestination(chat, "/private/chat")).toEqual({ cwd: "/private/chat", agentName: "chat", intent: 3 });
+    // A Chat is asked for by kind now, never by an agent name (`docs/plain-chat.md`).
+    expect(creationTargetForDestination(chat, "/private/chat")).toEqual({ cwd: "/private/chat", sessionKind: "chat", intent: 3 });
     expect(creationTargetForDestination(chat, undefined)).toBeUndefined();
     const code = { phase: "ready-code" as const, code: { kind: "project-landing" as const, project: "/project" }, intent: 3 };
     expect(creationTargetForDestination(code, "/private/chat")).toEqual({ cwd: "/project", intent: 3 });
     expect(creationTargetForDestination({ ...code, code: { kind: "no-project-landing" as const } }, "/private/chat")).toBeUndefined();
   });
 
-  it("resolves children to the root project and lets Beam retain Code memory", () => {
+  it("resolves children to the root project and lets a Chat retain Code memory", () => {
     const root = item("/project/root", "/project", "2026-09-09T00:00:00Z");
     const child = item("/project/.worktrees/child/session", "/project/.worktrees/child", "2026-09-10T00:00:00Z", {
       agentName: "worker",
@@ -52,11 +55,16 @@ describe("main destination model", () => {
       runId: "run",
       subagentName: "child",
     });
-    const beam = item("/beam/session", "/private/beam", "2026-09-10T00:00:00Z", { agentName: "beam", kind: "beam" });
+    // A pre-M23 `beam` record is a Chat conversation: it belongs to no Code
+    // project, and leaves the remembered one alone.
+    const legacyChat = item("/beam/session", "/private/beam", "2026-09-10T00:00:00Z", agentInfo({ agentName: "beam", kind: "beam" }));
+    const chat = item("/chat/session", "/private/chat/two", "2026-09-10T00:00:00Z", agentInfo({ kind: "chat" }));
     expect(codeProjectForSession(child, [root, child], {}, "/other")).toBe("/project");
-    expect(codeProjectForSession(beam, [beam], {}, "/project")).toBe("/project");
+    expect(codeProjectForSession(legacyChat, [legacyChat], {}, "/project")).toBe("/project");
+    expect(codeProjectForSession(chat, [chat], {}, "/project")).toBe("/project");
     expect(isSessionInCodeProject(child, [root, child], {}, "/project")).toBe(true);
-    expect(isSessionInCodeProject(beam, [beam], {}, "/project")).toBe(false);
+    expect(isSessionInCodeProject(legacyChat, [legacyChat], {}, "/project")).toBe(false);
+    expect(isSessionInCodeProject(chat, [chat], {}, "/project")).toBe(false);
 
     const parentless = { ...child, agent: { ...child.agent!, parentPath: "/gone", rootPath: "/gone" } };
     const run: AgentRun = {
@@ -88,7 +96,6 @@ describe("main destination model", () => {
     const cases: [MainDestination, ReturnType<typeof landingWorkspaceOf>][] = [
       [{ phase: "ready-code", intent: 1, code: project }, { kind: "project", cwd: "/project" }],
       [{ phase: "ready-code", intent: 1, code: { kind: "project-session", project: "/project", path: "/project/new.jsonl" } }, { kind: "project", cwd: "/project" }],
-      [{ phase: "ready-code", intent: 1, code: { kind: "beam-session", path: "/b", returnTo: project } }, { kind: "beam" }],
       [{ phase: "ready-code", intent: 1, code: { kind: "no-project-landing" } }, { kind: "none" }],
       [{ phase: "ready-chat", intent: 1, chat: { kind: "landing" }, rememberedCode: project }, { kind: "chat" }],
       [{ phase: "ready-chat", intent: 1, chat: { kind: "session", path: "/c" }, rememberedCode: project }, { kind: "chat" }],

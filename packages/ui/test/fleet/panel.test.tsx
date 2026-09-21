@@ -665,9 +665,9 @@ describe("the fleet is one session's tree (M13-T51)", () => {
   const twoRoots = () => {
     fixture.state.sessions = [
       summary({ path: ROOT, name: "Root session" }),
-      summary({ path: CHILD, agent: { agentName: "default", kind: "child", subagentName: "explorer", parentPath: ROOT, rootPath: ROOT } }),
+      summary({ path: CHILD, agent: { agentName: "default", kind: "child", sessionKind: "project", subagentName: "explorer", parentPath: ROOT, rootPath: ROOT } }),
       summary({ path: OTHER, name: "Other session" }),
-      summary({ path: OTHER_CHILD, agent: { agentName: "default", kind: "child", subagentName: "reviewer", parentPath: OTHER, rootPath: OTHER } }),
+      summary({ path: OTHER_CHILD, agent: { agentName: "default", kind: "child", sessionKind: "project", subagentName: "reviewer", parentPath: OTHER, rootPath: OTHER } }),
     ];
     fixture.state.agents.runs = { r1: child, r2: otherChild };
     fixture.state.tasks.tasks = { t1: task({ id: "t1", sessionPath: OTHER }) };
@@ -733,7 +733,7 @@ describe("the fleet is one session's tree (M13-T51)", () => {
     fixture.state.agents.runs = { r1: child };
     fixture.state.current = CHILD;
     const opened = view({ path: CHILD });
-    fixture.state.open = { [CHILD]: { ...opened, state: { ...opened.state, agent: { agentName: "default", kind: "child", subagentName: "explorer", parentPath: ROOT, rootPath: ROOT } } } };
+    fixture.state.open = { [CHILD]: { ...opened, state: { ...opened.state, agent: { agentName: "default", kind: "child", sessionKind: "project", subagentName: "explorer", parentPath: ROOT, rootPath: ROOT } } } };
     await render();
     expect(container.querySelector("h4")?.textContent).toBe("Root session");
     expect(container.querySelector('[data-slot="fleet-row"][data-current="true"]')).not.toBeNull();
@@ -755,7 +755,7 @@ describe("the fleet is one session's tree (M13-T51)", () => {
     const withStray = () => {
       twoRoots();
       // GONE is not in the catalog, and the catalog has loaded: it was deleted.
-      fixture.state.sessions = [...fixture.state.sessions, summary({ path: GONE_CHILD, agent: { agentName: "default", kind: "child", subagentName: "stray", parentPath: GONE, rootPath: GONE } })];
+      fixture.state.sessions = [...fixture.state.sessions, summary({ path: GONE_CHILD, agent: { agentName: "default", kind: "child", sessionKind: "project", subagentName: "stray", parentPath: GONE, rootPath: GONE } })];
       fixture.state.agents.runs = { ...fixture.state.agents.runs, r3: strayChild };
       fixture.state.tasks.tasks = { ...fixture.state.tasks.tasks, t9: task({ id: "t9", sessionPath: GONE, command: "pnpm watch", title: "pnpm watch" }) };
     };

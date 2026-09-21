@@ -411,7 +411,7 @@ describe("createThreadListAdapter", () => {
   it("keeps a child of an archived session archived, even when it was never seen at archive time", async () => {
     const sessions = [
       summary({ path: "/parent", id: "parent" }),
-      summary({ path: "/child", id: "child", agent: { kind: "child", agentName: "default", parentPath: "/parent" } }),
+      summary({ path: "/child", id: "child", agent: { kind: "child", sessionKind: "project", agentName: "default", parentPath: "/parent" } }),
       summary({ path: "/other", id: "other" }),
     ];
     // Only the parent is in the archive set: the child was started after the
@@ -432,7 +432,7 @@ describe("createThreadListAdapter", () => {
   it("archives and restores the whole lineage, while a child alone leaves its parent alone", async () => {
     const sessions = [
       summary({ path: "/parent", id: "parent" }),
-      summary({ path: "/child-a", id: "child-a", agent: { kind: "child", agentName: "default", parentPath: "/parent" } }),
+      summary({ path: "/child-a", id: "child-a", agent: { kind: "child", sessionKind: "project", agentName: "default", parentPath: "/parent" } }),
       summary({ path: "/child-b", id: "child-b", parentPath: "/parent" }),
       summary({ path: "/grandchild", id: "grandchild", cwd: "/another-worktree", parentPath: "/child-a" }),
       summary({ path: "/other", id: "other" }),

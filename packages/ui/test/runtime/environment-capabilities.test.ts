@@ -141,8 +141,6 @@ const EXPECTED_METHOD_CAPABILITIES = {
   "agents/delete": [],
   "agents/set-default": [],
   "agents/set-policy": [],
-  "agents/builtin/set-profile": [],
-  "agents/builtin/set-instructions": [],
   "models/profiles/list": [],
   "models/profiles/save": [],
   "models/profiles/delete": [],

@@ -11,15 +11,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 
 import { LaserProvider, useLaserStable, useLaserState, useLaserView, type LaserActions } from "../../src/runtime/LaserProvider.js";
 import { isMainReady, mainTab } from "../../src/runtime/main-destination.js";
 import { SESSIONS_TAB_STORAGE_KEY } from "../../src/runtime/session-tab-memory.js";
-import { addSession, createWorld, FakeHostClient, settle, type World } from "../beam/fake-host.js";
+import { addSession, createWorld, FakeHostClient, settle, type World } from "../world/fake-host.js";
 import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
 import { clearDeviceValue, seedDeviceValue } from "../../test/runtime/environment-fixture.js";
+import { agentInfo } from "../agents/fixtures.js";
 
 const CHAT = "/state/chat/yesterday.jsonl";
 
@@ -42,12 +43,12 @@ beforeEach(() => {
   globalThis.history.replaceState(null, "", "/");
   world = createWorld();
   FakeHostClient.reset(world);
-  addSession(world, CHAT, world.snapshot.workspaces.chat!, { agent: { agentName: "chat", kind: "chat" }, firstMessage: "yesterday" });
+  addSession(world, CHAT, world.snapshot.workspaces.chat!, { agent: agentInfo({ kind: "chat" }), firstMessage: "yesterday" });
   world.overrides["session/new"] = ((params: { cwd: string; agentName?: string }) => {
     const path = `${params.cwd}/fresh.jsonl`;
-    const state = { ...world.states[CHAT]!, path, id: path, cwd: params.cwd, messageCount: 0, agent: { agentName: "chat", kind: "chat" as const } };
+    const state = { ...world.states[CHAT]!, path, id: path, cwd: params.cwd, messageCount: 0, agent: agentInfo({ kind: "chat" }) };
     world.states[path] = state;
-    world.sessions.push({ ...world.sessions[0]!, path, messageCount: 0, agent: { agentName: "chat", kind: "chat" } });
+    world.sessions.push({ ...world.sessions[0]!, path, messageCount: 0, agent: agentInfo({ kind: "chat" }) });
     return { state };
   }) as never;
   localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
@@ -75,7 +76,7 @@ describe("the Chat tab's + button", () => {
     expect(probe).toMatchObject({ tab: "chat", path: CHAT, phase: "ready" });
 
     await act(async () => {
-      await probe.actions.newSession(world.snapshot.workspaces.chat!, { agentName: "chat" });
+      await probe.actions.newSession(world.snapshot.workspaces.chat!, { sessionKind: "chat" });
       await settle(40);
     });
 

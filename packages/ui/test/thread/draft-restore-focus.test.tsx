@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 
 import { ComposerPrimitive } from "@assistant-ui/react";
@@ -19,7 +19,7 @@ import { useEffect } from "react";
 import { ComposerDraftRestore, writeDraft } from "../../src/components/assistant-ui/elements/draft-restore.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserProvider, useLaserStable } from "../../src/runtime/LaserProvider.js";
-import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../world/fake-host.js";
 import { activateTestEnvironment } from "../runtime/environment-fixture.js";
 
 const PATH = `${PROJECT_CWD}/s.jsonl`;

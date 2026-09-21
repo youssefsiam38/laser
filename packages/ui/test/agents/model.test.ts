@@ -10,7 +10,6 @@ import {
   customAgentsForProject,
   defaultAgentDefinitionInput,
   isActiveRun,
-  isBuiltinAgent,
   isWorkspaceCwd,
   latestRunForSession,
   RUN_STATUS_TONE,
@@ -19,11 +18,12 @@ import {
   runsForRoot,
   runsForSession,
   sessionAgentName,
+  sessionKindFor,
   warningsFor,
 } from "../../src/agents/index.js";
 import { agentEventTone } from "../../src/components/assistant-ui/elements/agent-handoff.js";
 import { sessionTitle } from "../../src/runtime/threadList.js";
-import { agent, run, sessionState, snapshot, summary, view } from "./fixtures.js";
+import { agent, agentInfo, run, sessionState, snapshot, summary, view } from "./fixtures.js";
 
 describe("run status vocabulary", () => {
   it("gives every status a label in the shared vocabulary and a tone", () => {
@@ -71,41 +71,55 @@ describe("run status vocabulary", () => {
 describe("sessions and kinds", () => {
   const snap = snapshot();
 
-  it("detects the built-in workspaces by directory", () => {
-    expect(isWorkspaceCwd("/state/beam", snap)).toBe("beam");
+  it("detects the Chat workspace by directory", () => {
     expect(isWorkspaceCwd("/state/chat", snap)).toBe("chat");
     expect(isWorkspaceCwd("/p", snap)).toBeNull();
-    expect(isWorkspaceCwd("/state/beam", null)).toBeNull();
+    expect(isWorkspaceCwd("/state/chat", null)).toBeNull();
     expect(isWorkspaceCwd(undefined, snap)).toBeNull();
+  });
+
+  it("reads a session's kind from its record, mapping a pre-M23 one to Chat", () => {
+    // `docs/plain-chat.md`: a stored `beam` record is a Chat conversation and
+    // is never rewritten, so the row it draws must come out of the mapping.
+    expect(sessionKindFor(summary({ path: "/b", cwd: "/state/beam", agent: agentInfo({ kind: "beam" }) }), snap)).toBe("chat");
+    expect(sessionKindFor(summary({ path: "/c", cwd: "/state/chat", agent: agentInfo({ kind: "chat" }) }), snap)).toBe("chat");
+    expect(sessionKindFor(summary({ path: "/p/a", agent: agentInfo({ kind: "root", agentName: "reviewer" }) }), snap)).toBe("project");
+    expect(sessionKindFor(summary({ path: "/p/c", agent: agentInfo({ kind: "child", agentName: "reviewer" }) }), snap)).toBe("project");
+    // No record at all: the directory places it.
+    expect(sessionKindFor(summary({ path: "/c", cwd: "/state/chat" }), snap)).toBe("chat");
+    expect(sessionKindFor(summary({ path: "/p/a" }), snap)).toBe("project");
+    expect(sessionKindFor(undefined, snap)).toBe("project");
   });
 
   it("places a session by attribution first, then parentage, then directory", () => {
     expect(agentKindOf(summary({ path: "/p/a", agent: { agentName: "reviewer", kind: "child" } }), snap)).toBe("child");
     expect(agentKindOf(summary({ path: "/p/a", parentPath: "/p/root" }), snap)).toBe("child");
-    expect(agentKindOf(summary({ path: "/b", cwd: "/state/beam" }), snap)).toBe("beam");
     expect(agentKindOf(summary({ path: "/c", cwd: "/state/chat" }), snap)).toBe("chat");
     expect(agentKindOf(summary({ path: "/p/a" }), snap)).toBe("root");
     expect(agentKindOf(undefined, snap)).toBe("root");
-    // Attribution wins over the directory: a Beam-started child in the Beam workspace is a child.
-    expect(agentKindOf(summary({ path: "/b", cwd: "/state/beam", agent: { agentName: "beam", kind: "beam" } }), snap)).toBe("beam");
+    // Attribution wins over the directory: a child an agent started inside the
+    // Chat workspace is a child, not a plain conversation.
+    expect(agentKindOf(summary({ path: "/c", cwd: "/state/chat", agent: agentInfo({ agentName: "reviewer", kind: "child" }) }), snap)).toBe("child");
   });
 
   it("names the agent a session runs, falling back to the default", () => {
-    expect(sessionAgentName(summary({ path: "/p/a", agent: { agentName: "reviewer", kind: "root" } }), snap)).toBe("reviewer");
+    expect(sessionAgentName(summary({ path: "/p/a", agent: agentInfo({ agentName: "reviewer", kind: "root" }) }), snap)).toBe("reviewer");
     expect(sessionAgentName(summary({ path: "/p/a" }), snapshot({ defaultAgent: "reviewer" }))).toBe("reviewer");
     expect(sessionAgentName(summary({ path: "/p/a" }), null)).toBe("default");
     expect(sessionAgentName(undefined, undefined)).toBe("default");
   });
 
-  it("gives the shipped agents product-facing names", () => {
-    expect(agentDisplayName("beam")).toBe("Beam");
-    expect(agentDisplayName("chat")).toBe("Chat");
-    expect(agentDisplayName("namer")).toBe("Namer");
+  it("names no agent at all for a Chat conversation", () => {
+    // A Chat session runs no definition (`docs/plain-chat.md`), so the surfaces
+    // that show “the agent” must get nothing rather than the default's name.
+    expect(sessionAgentName(summary({ path: "/c", cwd: "/state/chat", agent: agentInfo({ kind: "chat" }) }), snap)).toBeUndefined();
+    expect(sessionAgentName(summary({ path: "/b", cwd: "/state/beam", agent: agentInfo({ kind: "beam" }) }), snap)).toBeUndefined();
+    expect(sessionAgentName(summary({ path: "/c", cwd: "/state/chat" }), snap)).toBeUndefined();
+  });
+
+  it("gives the shipped default agent a product-facing name", () => {
     expect(agentDisplayName("default")).toBe("Default agent");
     expect(agentDisplayName("reviewer")).toBe("reviewer");
-    expect(isBuiltinAgent(agent({ name: "beam", kind: "builtin" }))).toBe(true);
-    expect(isBuiltinAgent(agent({ name: "default" }))).toBe(false);
-    expect(isBuiltinAgent(agent({ name: "reviewer" }))).toBe(false);
   });
 
   it("titles an unnamed, empty child session by the name its parent gave it", () => {

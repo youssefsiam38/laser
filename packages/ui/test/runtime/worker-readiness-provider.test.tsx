@@ -5,11 +5,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { storageKey } from "@lasercode/protocol";
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 import { LaserProvider, useLaserStable } from "../../src/runtime/LaserProvider.js";
 import { sessionsList } from "../../src/components/shell/session-groups.js";
-import { addSession, createWorld, FakeHostClient, settle, type World } from "../beam/fake-host.js";
+import { addSession, createWorld, FakeHostClient, settle, type World } from "../world/fake-host.js";
 import { seedProject, testDescriptor } from "./environment-fixture.js";
 
 let root: Root;

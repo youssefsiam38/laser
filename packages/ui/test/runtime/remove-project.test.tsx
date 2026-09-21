@@ -6,12 +6,12 @@ import type { ProjectInfo } from "@lasercode/protocol";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 
 import { LaserProvider, useLaserStable, useLaserState, type LaserActions } from "../../src/runtime/LaserProvider.js";
 import type { ArchiveStore } from "../../src/runtime/threadList.js";
-import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../world/fake-host.js";
 
 const FIRST = `${PROJECT_CWD}/first.jsonl`;
 const SECOND = `${PROJECT_CWD}/second.jsonl`;

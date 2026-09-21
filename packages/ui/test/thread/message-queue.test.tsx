@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 
 vi.mock("../../src/components/shell/shell-context.js", async (original) => ({
@@ -31,7 +31,7 @@ import { ComposerQueue } from "../../src/components/assistant-ui/elements/messag
 import { Composer } from "../../src/components/thread/Composer.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserProvider, useLaserStable } from "../../src/runtime/LaserProvider.js";
-import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../world/fake-host.js";
 import { useEffect } from "react";
 
 const PATH = `${PROJECT_CWD}/s.jsonl`;
@@ -372,12 +372,12 @@ describe("the pending tray", () => {
       ...world.states[PATH]!,
       isStreaming: false,
       messageCount: 0,
-      agent: { agentName: "default", kind: "root" },
+      agent: { agentName: "default", kind: "root", sessionKind: "project" },
     };
     world.sessions[0] = {
       ...world.sessions[0]!,
       messageCount: 0,
-      agent: { agentName: "default", kind: "root" },
+      agent: { agentName: "default", kind: "root", sessionKind: "project" },
     };
     await act(async () => root.render(<FirstTurnHarness />));
     await act(async () => settle(20));
@@ -416,9 +416,9 @@ describe("the pending tray", () => {
       isStreaming: false,
       messageCount: 0,
       model: { provider: "openai", id: "gpt-big" },
-      agent: { agentName: "default", kind: "root" },
+      agent: { agentName: "default", kind: "root", sessionKind: "project" },
     };
-    world.sessions[0] = { ...world.sessions[0]!, messageCount: 0, agent: { agentName: "default", kind: "root" } };
+    world.sessions[0] = { ...world.sessions[0]!, messageCount: 0, agent: { agentName: "default", kind: "root", sessionKind: "project" } };
     world.snapshot = {
       ...world.snapshot,
       agents: world.snapshot.agents.map((agent) => agent.name === "reviewer"
@@ -512,12 +512,12 @@ describe("the pending tray", () => {
       ...world.states[PATH]!,
       isStreaming: false,
       messageCount: 0,
-      agent: { agentName: "default", kind: "root" },
+      agent: { agentName: "default", kind: "root", sessionKind: "project" },
     };
     world.sessions[0] = {
       ...world.sessions[0]!,
       messageCount: 0,
-      agent: { agentName: "default", kind: "root" },
+      agent: { agentName: "default", kind: "root", sessionKind: "project" },
     };
     await act(async () => root.render(<FirstTurnHarness />));
     await act(async () => settle(20));

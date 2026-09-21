@@ -5,14 +5,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAui } from "@assistant-ui/react";
 vi.mock("../../src/client.js", async original => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 import { ThreadList } from "../../src/components/assistant-ui/elements/thread-list.aui.js";
 import { sessionFolds } from "../../src/components/assistant-ui/elements/session-folds.js";
 import { sessionsList } from "../../src/components/shell/session-groups.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserProvider, useLaserStable } from "../../src/runtime/LaserProvider.js";
-import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../world/fake-host.js";
 
 let aui: ReturnType<typeof useAui>;
 let stable: ReturnType<typeof useLaserStable>;

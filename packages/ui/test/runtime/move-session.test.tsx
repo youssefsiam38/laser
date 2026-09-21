@@ -18,6 +18,7 @@ vi.mock("../../src/client.js", async (original) => ({
 
 import { LaserProvider, useLaserStable, useLaserState } from "../../src/runtime/LaserProvider.js";
 import { addSession, createWorld, FakeWorkerClient, runTurn, settle, startTurn, type World } from "./fake-worker.js";
+import { agentInfo } from "../agents/fixtures.js";
 
 const CHAT_CWD = "/state/chat";
 const CHAT = `${CHAT_CWD}/c1.jsonl`;
@@ -78,7 +79,7 @@ beforeEach(async () => {
   outcome = {};
   world = createWorld();
   addSession(world, CHAT, CHAT_CWD);
-  world.sessions[0]!.agent = { agentName: "chat", kind: "chat" };
+  world.sessions[0]!.agent = agentInfo({ kind: "chat" });
   runTurn(world, CHAT, "ideas for dinner", "pasta");
   FakeWorkerClient.reset(world);
   container = document.createElement("div");

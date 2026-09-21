@@ -70,13 +70,13 @@ describe("agents actions", () => {
     await h.actions.remove("reviewer", { scope: "project", projectCwd: "/p" });
     expect(h.request).toHaveBeenLastCalledWith("agents/delete", { name: "reviewer", location: { scope: "project", projectCwd: "/p" } });
     expect(h.state.agents.snapshot?.agents.some((a) => a.name === "reviewer")).toBe(false);
-    await h.actions.setDefault("beam");
-    expect(h.state.agents.snapshot?.defaultAgent).toBe("beam");
+    await h.actions.setDefault("writer");
+    expect(h.state.agents.snapshot?.defaultAgent).toBe("writer");
     await h.actions.setPolicy({ maxDepth: 2 });
     expect(h.state.agents.snapshot?.policy.maxDepth).toBe(2);
     const broken = harness({});
     await expect(broken.actions.remove("reviewer", { scope: "global" })).rejects.toThrow("unknown method agents/delete");
-    await broken.actions.setDefault("beam");
+    await broken.actions.setDefault("writer");
     await broken.actions.setPolicy({ maxDepth: 1 });
     expect(broken.toasts).toEqual(["unknown method agents/set-default", "unknown method agents/set-policy"]);
     expect(broken.state.agents.snapshot).toBeNull();
@@ -99,49 +99,5 @@ describe("agents actions", () => {
     const broken = harness({});
     await expect(broken.actions.stopRun("r1")).rejects.toThrow();
     await expect(broken.actions.skills("/p")).rejects.toThrow();
-  });
-
-  it("sets each built-in's profile through one method, and leaves the snapshot alone when it fails", async () => {
-    const h = harness({
-      "agents/builtin/set-profile": ({ name, profileId }: { name: "beam" | "chat" | "namer"; profileId: string | null }) => ({
-        snapshot: snapshot({ revision: 8, builtinProfiles: { beam: null, chat: null, namer: null, [name]: profileId } }),
-      }),
-    });
-
-    await h.actions.setBuiltinProfile("beam", "mp_balanced0000000000");
-    expect(h.request).toHaveBeenLastCalledWith("agents/builtin/set-profile", { name: "beam", profileId: "mp_balanced0000000000" });
-    expect(h.state.agents.snapshot?.builtinProfiles.beam).toBe("mp_balanced0000000000");
-
-    await h.actions.setBuiltinProfile("chat", "mp_fast00000000000000");
-    expect(h.state.agents.snapshot?.builtinProfiles.chat).toBe("mp_fast00000000000000");
-    // `null` is "follow the profile new conversations use", not an error.
-    await h.actions.setBuiltinProfile("chat", null);
-    expect(h.state.agents.snapshot?.builtinProfiles.chat).toBeNull();
-
-    const broken = harness({});
-    await broken.actions.setBuiltinProfile("beam", "mp_balanced0000000000");
-    expect(broken.toasts).toEqual(["unknown method agents/builtin/set-profile"]);
-    expect(broken.state.agents.snapshot?.builtinProfiles.beam ?? null).toBeNull();
-  });
-
-  it("sets and restores a built-in's instructions, keeping failures with the editor", async () => {
-    const h = harness({
-      "agents/builtin/set-instructions": ({ name, instructions }: { name: "beam" | "chat" | "namer"; instructions: string | null }) => ({
-        snapshot: snapshot({
-          revision: 9,
-          builtinInstructions: { beam: null, chat: null, namer: null, [name]: instructions },
-          agents: snapshot().agents.map((agent) => (agent.name === name && instructions ? { ...agent, instructions } : agent)),
-        }),
-      }),
-    });
-    await h.actions.setBuiltinInstructions("chat", "Answer as a careful editor.");
-    expect(h.request).toHaveBeenLastCalledWith("agents/builtin/set-instructions", { name: "chat", instructions: "Answer as a careful editor." });
-    expect(h.state.agents.snapshot?.builtinInstructions.chat).toBe("Answer as a careful editor.");
-    await h.actions.setBuiltinInstructions("chat", null);
-    expect(h.state.agents.snapshot?.builtinInstructions.chat).toBeNull();
-
-    const broken = harness({});
-    await expect(broken.actions.setBuiltinInstructions("beam", "Be brief.")).rejects.toThrow("unknown method agents/builtin/set-instructions");
-    expect(broken.toasts).toEqual([]);
   });
 });

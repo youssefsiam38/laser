@@ -12,7 +12,7 @@ import type { ContentBlock, SessionState } from "@lasercode/protocol";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 
 import {
@@ -25,8 +25,8 @@ import {
 import { chatSendWait } from "../../src/runtime/adapter.js";
 import { isMainReady, mainError, mainTab } from "../../src/runtime/main-destination.js";
 import { StatusLine } from "../../src/components/thread/StatusLine.js";
-import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
-import { sessionState, summary } from "../agents/fixtures.js";
+import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../world/fake-host.js";
+import { agentInfo, sessionState, summary } from "../agents/fixtures.js";
 import { seedProject } from "../../test/runtime/environment-fixture.js";
 
 const CODE = `${PROJECT_CWD}/code.jsonl`;
@@ -267,19 +267,19 @@ describe("New Session is immediately usable", () => {
   });
 
   it("opens Chat New on the Chat landing without waiting, then binds the Chat agent", async () => {
-    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" }, firstMessage: "yesterday" });
+    addSession(world, CHAT, "/state/chat", { agent: agentInfo({ kind: "chat" }), firstMessage: "yesterday" });
     await mount();
     persistPrompts();
     const held = holdSessionNew();
     let creation!: Promise<string>;
     await act(async () => {
-      creation = controls.actions.newSession(world.snapshot.workspaces.chat!, { agentName: "chat" });
+      creation = controls.actions.newSession(world.snapshot.workspaces.chat!, { sessionKind: "chat" });
       await settle(20);
     });
     expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "ready", sendBlocked: false });
     expect(statusWords()).not.toMatch(/opening the conversation|preparing the workspace|loading the conversation/i);
     expect(calls("session/new")).toHaveLength(1);
-    expect(calls("session/new")[0]!.params).toMatchObject({ cwd: "/state/chat", agentName: "chat" });
+    expect(calls("session/new")[0]!.params).toMatchObject({ cwd: "/state/chat", sessionKind: "chat" });
 
     await send("hi from chat");
     held.release();

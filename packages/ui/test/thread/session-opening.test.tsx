@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ComposerPrimitive, MessagePrimitive, useAuiState } from "@assistant-ui/react";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
-vi.mock("../../src/client.js", async original => ({ ...await original<typeof import("../../src/client.js")>(), HostClient: (await import("../beam/fake-host.js")).FakeHostClient }));
+vi.mock("../../src/client.js", async original => ({ ...await original<typeof import("../../src/client.js")>(), HostClient: (await import("../world/fake-host.js")).FakeHostClient }));
 // Unrelated transcript tools/find are covered by their own integration suites.
 vi.mock("../../src/components/thread/messages.js", () => ({ ThreadMessage: () => <MessagePrimitive.Root><MessagePrimitive.Parts /></MessagePrimitive.Root> }));
 const findOptions = vi.hoisted(() => ({ current: undefined as { loadAll?: () => Promise<boolean>; partial?: boolean } | undefined }));
@@ -13,7 +13,7 @@ import { Thread } from "../../src/components/thread/Thread.js";
 import type { AppState } from "../../src/store.js";
 import { WorkbenchProvider } from "../../src/components/workbench/workbench-context.js";
 import { LaserProvider, useLaserStable, useLaserState, type LaserActions } from "../../src/runtime/LaserProvider.js";
-import { addSession, createWorld, FakeHostClient, settle as settleReal, type World } from "../beam/fake-host.js";
+import { addSession, createWorld, FakeHostClient, settle as settleReal, type World } from "../world/fake-host.js";
 import { historyWindow } from "@lasercode/protocol";
 import { seedProject, seedRememberedSessions } from "../../test/runtime/environment-fixture.js";
 

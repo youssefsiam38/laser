@@ -12,7 +12,7 @@ import { historyWindow, PRODUCT_VERSION } from "@lasercode/protocol";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 vi.mock("../../src/components/thread/messages.js", () => ({
   ThreadMessage: () => <MessagePrimitive.Root><MessagePrimitive.Parts /></MessagePrimitive.Root>,
@@ -31,7 +31,7 @@ import { installProvisionalSource, type ProvisionalSource } from "../../src/runt
 import { TAIL_RECORD_SCHEMA } from "../../src/runtime/tail-cache/bounds.js";
 import type { TailRecord } from "../../src/runtime/tail-cache/record.js";
 import type { Action, AppState } from "../../src/store.js";
-import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../world/fake-host.js";
 import { run as agentRun } from "../agents/fixtures.js";
 import { seedProject, seedRememberedSessions, TEST_ENVIRONMENT_KEY } from "./environment-fixture.js";
 

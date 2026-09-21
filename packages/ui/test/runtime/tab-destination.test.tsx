@@ -7,7 +7,7 @@ import type { ContentBlock } from "@lasercode/protocol";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 
 import {
@@ -20,13 +20,14 @@ import {
 import { chatSendWait } from "../../src/runtime/adapter.js";
 import { isMainReady, mainTab } from "../../src/runtime/main-destination.js";
 import { SESSIONS_TAB_STORAGE_KEY } from "../../src/runtime/session-tab-memory.js";
-import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { agentInfo } from "../agents/fixtures.js";
+import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../world/fake-host.js";
 import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
 import { readDeviceValue, seedDeviceValue, seedProject, seedRememberedSessions } from "../../test/runtime/environment-fixture.js";
 
 const CODE = `${PROJECT_CWD}/code.jsonl`;
 const CHAT = "/state/chat/chat.jsonl";
-const BEAM = "/state/beam/beam.jsonl";
+const LEGACY_CHAT = "/state/chat/legacy-beam.jsonl";
 const CHAT_FORK = "/state/chat/chat-fork.jsonl";
 const CHILD = `${PROJECT_CWD}/.worktrees/child/child.jsonl`;
 const CHILD_FORK = `${PROJECT_CWD}/.worktrees/child/child-fork.jsonl`;
@@ -139,7 +140,7 @@ describe("main destination isolation", () => {
     await send("hi");
     const created = calls("session/new");
     expect(created).toHaveLength(1);
-    expect(created[0]!.params).toMatchObject({ cwd: world.snapshot.workspaces.chat, agentName: "chat" });
+    expect(created[0]!.params).toMatchObject({ cwd: world.snapshot.workspaces.chat, sessionKind: "chat" });
     expect(calls("session/prompt")).toHaveLength(1);
     expect(promptPath(calls("session/prompt")[0]!)).toBe(controls.path);
     expect(history[controls.path!]?.[0]).toEqual([{ type: "text", text: "hi" }]);
@@ -193,7 +194,7 @@ describe("main destination isolation", () => {
   });
 
   it("returns a closed Chat conversation to the Chat landing", async () => {
-    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
+    addSession(world, CHAT, "/state/chat", { agent: agentInfo({ kind: "chat" }) });
     seedProject(PROJECT_CWD);
     world.overrides["pi/session/move"] = (() => ({ path: `${PROJECT_CWD}/moved-chat.jsonl` })) as never;
     await mount();
@@ -204,16 +205,18 @@ describe("main destination isolation", () => {
     expect(controls).toMatchObject({ tab: "chat", path: undefined, composerPath: undefined, phase: "ready", chatPath: undefined });
   });
 
-  it("opens Beam in Code without poisoning the remembered project session", async () => {
+  it("opens a pre-M23 Beam record in the Chat tab without poisoning the remembered project session", async () => {
+    // `docs/plain-chat.md` migration: the record still says `beam` and is never
+    // rewritten, so the app has to read it as a Chat conversation.
     addSession(world, CODE, PROJECT_CWD);
-    addSession(world, BEAM, world.snapshot.workspaces.beam!, { agent: { agentName: "beam", kind: "beam" } });
+    addSession(world, LEGACY_CHAT, world.snapshot.workspaces.chat, { agent: agentInfo({ agentName: "beam", kind: "beam" }) });
     seedProject(PROJECT_CWD);
     seedRememberedSessions({ [PROJECT_CWD]: CODE });
     await mount();
     expect(controls).toMatchObject({ tab: "code", path: CODE, codeProject: PROJECT_CWD });
 
-    await act(async () => { await controls.actions.openSession(BEAM); await settle(20); });
-    expect(controls).toMatchObject({ tab: "code", path: BEAM, codeProject: PROJECT_CWD });
+    await act(async () => { await controls.actions.openSession(LEGACY_CHAT); await settle(20); });
+    expect(controls).toMatchObject({ tab: "chat", path: LEGACY_CHAT, codeProject: PROJECT_CWD });
     expect(JSON.parse(readDeviceValue(DEVICE_KEYS.sessionsByProject)!)).toEqual({ [PROJECT_CWD]: CODE });
 
     await act(async () => { await controls.actions.goProject(PROJECT_CWD); await settle(20); });
@@ -230,7 +233,7 @@ describe("main destination isolation", () => {
     world.overrides["session/new"] = (async (params: { cwd: string; agentName?: string }) => {
       await held;
       const path = `${params.cwd}/held-chat.jsonl`;
-      const state = { ...world.states[CODE]!, path, id: path, cwd: params.cwd, messageCount: 0, agent: { agentName: "chat", kind: "chat" as const } };
+      const state = { ...world.states[CODE]!, path, id: path, cwd: params.cwd, messageCount: 0, agent: agentInfo({ kind: "chat" }) };
       world.states[path] = state;
       world.sessions.push({ path, id: path, cwd: params.cwd, messageCount: 0, createdAt: "2026-09-11T00:00:00Z", modifiedAt: "2026-09-11T00:00:00Z", agent: state.agent });
       return { state };
@@ -262,7 +265,7 @@ describe("main destination isolation", () => {
 
   it("refuses a captured old dialog answer in the same turn as a tab switch", async () => {
     addSession(world, CODE, PROJECT_CWD);
-    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
+    addSession(world, CHAT, "/state/chat", { agent: agentInfo({ kind: "chat" }) });
     seedProject(PROJECT_CWD);
     await mount();
     await act(async () => {
@@ -286,7 +289,7 @@ describe("main destination isolation", () => {
 
   it("latest navigation wins when opposite-kind loads settle out of order", async () => {
     addSession(world, CODE, PROJECT_CWD);
-    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
+    addSession(world, CHAT, "/state/chat", { agent: agentInfo({ kind: "chat" }) });
     seedProject(PROJECT_CWD);
     await mount();
 
@@ -320,7 +323,7 @@ describe("main destination isolation", () => {
 
   it("does not surface a stale load failure after a newer destination wins", async () => {
     addSession(world, CODE, PROJECT_CWD);
-    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
+    addSession(world, CHAT, "/state/chat", { agent: agentInfo({ kind: "chat" }) });
     seedProject(PROJECT_CWD);
     await mount();
 
@@ -392,7 +395,7 @@ describe("main destination isolation", () => {
   });
 
   it("does not let the previously mounted thread retake a failed destination", async () => {
-    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
+    addSession(world, CHAT, "/state/chat", { agent: agentInfo({ kind: "chat" }) });
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
     await mount();
     expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "ready", sendBlocked: false });
@@ -413,7 +416,7 @@ describe("main destination isolation", () => {
 
   it("keeps text, first-turn intent and an image with their origin thread", async () => {
     addSession(world, CODE, PROJECT_CWD);
-    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
+    addSession(world, CHAT, "/state/chat", { agent: agentInfo({ kind: "chat" }) });
     seedProject(PROJECT_CWD);
     await mount();
 
@@ -434,7 +437,7 @@ describe("main destination isolation", () => {
 
   it("ignores a stale saved Chat identity and opens a fresh landing", async () => {
     addSession(world, CODE, PROJECT_CWD);
-    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
+    addSession(world, CHAT, "/state/chat", { agent: agentInfo({ kind: "chat" }) });
     delete world.states[CHAT];
     seedProject(PROJECT_CWD);
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
@@ -447,7 +450,7 @@ describe("main destination isolation", () => {
 
   it("restores the saved tab and lets an explicit deep link override it", async () => {
     addSession(world, CODE, PROJECT_CWD);
-    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
+    addSession(world, CHAT, "/state/chat", { agent: agentInfo({ kind: "chat" }) });
     seedProject(PROJECT_CWD);
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
     await mount();
@@ -509,7 +512,7 @@ describe("main destination isolation", () => {
   });
 
   it("keeps a remembered Chat composer live and delivers one queued send after opening", async () => {
-    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
+    addSession(world, CHAT, "/state/chat", { agent: agentInfo({ kind: "chat" }) });
     seedProject(PROJECT_CWD);
     await mount();
 
@@ -533,8 +536,8 @@ describe("main destination isolation", () => {
 
   it("keeps a fork of Chat in Chat and preserves its remembered Code destination", async () => {
     addSession(world, CODE, PROJECT_CWD);
-    addSession(world, CHAT, "/state/chat", { agent: { agentName: "chat", kind: "chat" } });
-    world.states[CHAT] = { ...world.states[CHAT]!, agent: { agentName: "chat", kind: "chat" } };
+    addSession(world, CHAT, "/state/chat", { agent: agentInfo({ kind: "chat" }) });
+    world.states[CHAT] = { ...world.states[CHAT]!, agent: agentInfo({ kind: "chat" }) };
     seedProject(PROJECT_CWD);
     seedRememberedSessions({ [PROJECT_CWD]: CODE });
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
@@ -591,8 +594,8 @@ describe("main destination isolation", () => {
 
   it("pins a failed Chat candidate so a newer catalog row cannot replace it on Retry", async () => {
     const newerChat = "/state/chat/newer.jsonl";
-    addSession(world, CHAT, "/state/chat", { modifiedAt: "2026-09-10T00:00:00.000Z", agent: { agentName: "chat", kind: "chat" } });
-    world.states[CHAT] = { ...world.states[CHAT]!, agent: { agentName: "chat", kind: "chat" } };
+    addSession(world, CHAT, "/state/chat", { modifiedAt: "2026-09-10T00:00:00.000Z", agent: agentInfo({ kind: "chat" }) });
+    world.states[CHAT] = { ...world.states[CHAT]!, agent: agentInfo({ kind: "chat" }) };
     localStorage.setItem(SESSIONS_TAB_STORAGE_KEY, "chat");
     let failures = 0;
     world.overrides["session/load"] = (params: { path: string }) => {
@@ -604,7 +607,7 @@ describe("main destination isolation", () => {
     await mount();
     await act(async () => { await controls.actions.openSession(CHAT); await settle(20); });
     expect(controls).toMatchObject({ tab: "chat", path: undefined, phase: "unavailable" });
-    addSession(world, newerChat, "/state/chat", { modifiedAt: "2026-09-11T00:00:00.000Z", agent: { agentName: "chat", kind: "chat" } });
+    addSession(world, newerChat, "/state/chat", { modifiedAt: "2026-09-11T00:00:00.000Z", agent: agentInfo({ kind: "chat" }) });
     await act(async () => { await controls.actions.retryDestination(); await settle(20); });
     expect(controls).toMatchObject({ tab: "chat", path: CHAT, phase: "ready" });
     expect(calls("session/load").map(promptPath)).toEqual([CHAT, CHAT]);

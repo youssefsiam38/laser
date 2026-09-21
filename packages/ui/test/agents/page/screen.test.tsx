@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PRODUCT_DISPLAY_NAME, PROJECT_AGENTS_DIR, type AgentDefinition, type AgentDefinitionInput, type AgentIssue, type AgentsSnapshot, type NamerState } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, PROJECT_AGENTS_DIR, type AgentDefinition, type AgentDefinitionInput, type AgentIssue, type AgentsSnapshot } from "@lasercode/protocol";
 
 import { initialState, reduce, type AppState } from "../../../src/store.js";
 import { agent, snapshot } from "../fixtures.js";
@@ -51,32 +51,13 @@ const mocks = vi.hoisted(() => {
     engineInstructions: vi.fn(async () => "You are the product's default agent."),
     runs: vi.fn(async () => undefined),
     stopRun: vi.fn(),
-    setBuiltinProfile: vi.fn(async (name: "beam" | "chat" | "namer", profileId: string | null) => {
-      const snap = current();
-      publish({
-        ...snap,
-        revision: snap.revision + 1,
-        agents: snap.agents.map((a) => (a.name === name ? { ...a, profileId } : a)),
-        builtinProfiles: { ...snap.builtinProfiles, [name]: profileId },
-      });
-    }),
-    setBuiltinInstructions: vi.fn(async (name: "beam" | "chat" | "namer", instructions: string | null) => {
-      const snap = current();
-      const shipped = snapshot().agents.find((agent) => agent.name === name)!.instructions;
-      publish({
-        ...snap,
-        revision: snap.revision + 1,
-        builtinInstructions: { ...snap.builtinInstructions, [name]: instructions },
-        agents: snap.agents.map((agent) => (agent.name === name ? { ...agent, instructions: instructions ?? shipped } : agent)),
-      });
-    }),
   };
   const profiles = [
     { id: "mp_balanced0000000000", name: "Balanced", models: [{ provider: "openai", id: "gpt-5" }], origin: "seeded" as const, updatedAt: "" },
     { id: "mp_fast00000000000000", name: "Fast", models: [{ provider: "openai", id: "gpt-5" }], origin: "seeded" as const, updatedAt: "" },
   ];
   const request = vi.fn(async (method: string) => {
-    if (method === "pi/setup/state") return { cwd: "/state/beam" };
+    if (method === "pi/setup/state") return { cwd: "/neutral/settings" };
     if (method === "models/profiles/list")
       return {
         profiles,
@@ -206,13 +187,10 @@ describe("Agents page", () => {
     expect(container.textContent).toContain("Reviews a diff");
     expect(container.textContent).toContain("read these settings");
     expect([...document.querySelectorAll("button")].map((item) => item.textContent).join(" ")).not.toMatch(/Save|Delete|Make default|Create agent/);
-    await click(row("beam"));
-    expect(container.textContent).toContain("Built-in agents cannot be deleted");
-    expect([...container.querySelectorAll("button")].map((item) => item.textContent).join(" ")).not.toMatch(/Save instructions|Choose model|Restore built-in/);
     await click(q('[data-slot="harness-row"]'));
     expect(container.textContent).toContain("Limits for every agent");
     expect(container.querySelector("input")).toBeNull();
-    for (const method of ["save", "remove", "setDefault", "setPolicy", "setBuiltinModel", "setBuiltinInstructions"]) expect((mocks.agents as Record<string, { mock: { calls: unknown[] } }>)[method]?.mock.calls ?? []).toHaveLength(0);
+    for (const method of ["save", "remove", "setDefault", "setPolicy"]) expect((mocks.agents as Record<string, { mock: { calls: unknown[] } }>)[method]?.mock.calls ?? []).toHaveLength(0);
   });
 
   it("keeps Global fully usable with zero registered projects", async () => {
@@ -233,20 +211,40 @@ describe("Agents page", () => {
     expect(container.querySelector('[data-slot="agents-new"]')).toBeNull();
   });
 
-  it("lists your agents first and the built-ins at the bottom, with the default and warning badges", async () => {
+  it("lists only the person's own agents, with the default and warning badges and nothing built in", async () => {
     store = createStateStore(seed(snapshot({ warnings: [{ agentName: "reviewer", field: "skills", target: "deploy", message: "The skill deploy could not be found.", since: "2026-09-08T00:00:00.000Z" }] })));
     mocks.state.store = store;
     await mount();
-    expect(qa('[data-slot="agent-row"]').map((r) => r.dataset.agent)).toEqual(["default", "reviewer", "beam", "chat", "namer"]);
+    expect(qa('[data-slot="agent-row"]').map((r) => r.dataset.agent)).toEqual(["default", "reviewer"]);
     expect(row("default").querySelector('[data-slot="agent-default-badge"]')?.textContent).toBe("Default");
     expect(row("reviewer").querySelector('[data-slot="agent-warning-badge"]')?.textContent).toBe("1");
-    expect(row("beam").querySelector('[data-slot="agent-warning-badge"]')).toBeNull();
-    const builtin = q('[data-slot="agent-group"][aria-label="Built in"]');
-    expect([...builtin.querySelectorAll('[data-slot="agent-row"]')].map((r) => (r as HTMLElement).dataset.agent)).toEqual(["beam", "chat", "namer"]);
+    // D-347: no built-in section, and no badge saying anything is built in.
+    expect(container.querySelector('[data-slot="agent-group"][aria-label="Built in"]')).toBeNull();
+    expect(container.textContent).not.toContain("Built in");
     // The overview stands in for the editor until something is chosen; it names the default and the warning.
     expect(q('[data-slot="agents-overview"]').textContent).toContain("Default agent");
     expect(q('[data-slot="overview-warning"]').textContent).toContain("deploy");
     expect(q('[role="listbox"][aria-label="Agents"]')).toBeTruthy();
+  });
+
+  it("explains how to write the first agent when the person has none of their own", async () => {
+    // D-347: nothing is built in any more, so a page with only the shipped
+    // default must say what an agent is and offer the one verb that makes one
+    // — not sit there as an almost-empty list (`docs/plain-chat.md`).
+    store = createStateStore(seed(snapshot({ agents: [agent({ name: "default" })] })));
+    mocks.state.store = store;
+    await mount();
+    const empty = q('[data-slot="agent-list-empty"]');
+    expect(empty.textContent).toContain("No agents of your own yet");
+    expect(empty.textContent).toContain("instructions");
+    // Its action is the same New agent the header offers, and it opens the
+    // blank editor rather than a placeholder.
+    await click(q('[data-slot="agent-list-empty-new"]'));
+    expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("");
+
+    // One agent of their own, and the explanation gets out of the way.
+    await act(async () => store.dispatch({ type: "agents/updated", snapshot: { ...snapshot(), revision: 2 } }));
+    expect(container.querySelector('[data-slot="agent-list-empty"]')).toBeNull();
   });
 
   it("moves between rows with the arrow keys and selects with Enter", async () => {
@@ -403,7 +401,7 @@ describe("Agents page", () => {
     });
     // The saved agent is now selected and listed among yours.
     expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("code-reviewer");
-    expect(qa('[data-slot="agent-row"]').map((r) => r.dataset.agent)).toEqual(["default", "code-reviewer", "reviewer", "beam", "chat", "namer"]);
+    expect(qa('[data-slot="agent-row"]').map((r) => r.dataset.agent)).toEqual(["default", "code-reviewer", "reviewer"]);
     expect(mocks.stable.actions.toast).toHaveBeenCalledWith("info", "code-reviewer saved.");
   });
 
@@ -453,7 +451,7 @@ describe("Agents page", () => {
     const otherProject = agent({ name: "other-project", scope: "project", projectCwd: "/q", path: `/q/${PROJECT_AGENTS_DIR}/other-project.md` });
     const loadedWarning = { agentName: "reviewer", field: "file" as const, path: projectReviewer.path, target: projectReviewer.path, message: "This file changed while it was open.", since: "2026-09-08T00:00:00.000Z" };
     const brokenWarning = { agentName: "broken", field: "file" as const, path: `/p/${PROJECT_AGENTS_DIR}/broken.md`, target: `/p/${PROJECT_AGENTS_DIR}/broken.md`, message: "The frontmatter could not be read. Fix the file and save it again.", since: "2026-09-08T00:00:01.000Z" };
-    store = createStateStore(seed(snapshot({ agents: [base.agents[0]!, globalReviewer, projectReviewer, projectOnly, otherProject, ...base.agents.slice(1, 4)], warnings: [loadedWarning, brokenWarning] })));
+    store = createStateStore(seed(snapshot({ agents: [base.agents[0]!, globalReviewer, projectReviewer, projectOnly, otherProject], warnings: [loadedWarning, brokenWarning] })));
     mocks.state.store = store;
     await mount({
       scope: { view: "project", projectCwd: "/p" },
@@ -628,7 +626,7 @@ describe("Agents page", () => {
     await click([...dialog.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Delete")!);
     await settle();
     expect(mocks.agents.remove).toHaveBeenCalledWith("default", { scope: "global" });
-    expect(qa('[data-slot="agent-row"]').map((r) => r.dataset.agent)).toEqual(["reviewer", "beam", "chat", "namer"]);
+    expect(qa('[data-slot="agent-row"]').map((r) => r.dataset.agent)).toEqual(["reviewer"]);
     expect(q('[data-slot="agents-overview"]')).toBeTruthy();
   });
 
@@ -646,7 +644,7 @@ describe("Agents page", () => {
   it("opens a deep link at the skills section and focuses the missing skill notice", async () => {
     const warning = { agentName: "reviewer", field: "skills" as const, target: "deploy", message: "The skill deploy could not be found.", since: "2026-09-08T00:00:00.000Z" };
     const reviewer = agent({ name: "reviewer", scopedSkills: true, skills: [{ name: "deploy", path: "/p/skills/deploy/SKILL.md", scope: "project" }] });
-    store = createStateStore(seed(snapshot({ warnings: [warning], agents: [agent({ name: "default" }), reviewer, agent({ name: "beam", kind: "builtin" }), agent({ name: "chat", kind: "builtin" }), agent({ name: "namer", kind: "builtin" })] })));
+    store = createStateStore(seed(snapshot({ warnings: [warning], agents: [agent({ name: "default" }), reviewer] })));
     mocks.state.store = store;
     await mount({ target: { agent: "reviewer", field: "skills" } });
     await settle(50);
@@ -754,24 +752,24 @@ describe("Agents page", () => {
     expect(mocks.stable.actions.toast).not.toHaveBeenCalledWith("info", "reviewer saved.");
   });
 
-  it("does not issue built-in route reads before setup resolves", async () => {
+  it("does not issue Global route reads before setup resolves the neutral directory", async () => {
     const original = mocks.request.getMockImplementation()!;
     let resolveSetup!: (value: { cwd: string }) => void;
     mocks.request.mockImplementation((method: string) => method === "pi/setup/state"
       ? new Promise((resolve) => { resolveSetup = resolve; })
       : original(method));
     try {
-      await mount({ target: { agent: "beam", location: { scope: "global" } } });
+      await mount({ target: { agent: "reviewer", location: { scope: "global" } } });
       expect(mocks.request.mock.calls.some(([method]) => method === "pi/models/catalog" || method === "pi/providers/list")).toBe(false);
-      expect(container.querySelector('[data-slot="agent-card"][data-agent="beam"]')).toBeNull();
+      expect(container.querySelector('[data-slot="agent-editor"]')).toBeNull();
 
       await act(async () => { resolveSetup({ cwd: "/neutral/settings" }); await Promise.resolve(); });
       await settle();
-      expect(q('[data-slot="agent-card"][data-agent="beam"]')).toBeTruthy();
-      await click(button("Choose a profile"));
-      await settle();
+      // The editor and its M22 profile section open on the neutral route, and
+      // on nothing else: a project's directory never answers for Global.
+      expect(q('[data-slot="agent-editor"]').dataset.agent).toBe("reviewer");
       expect(mocks.request).toHaveBeenCalledWith("models/profiles/list", { cwd: "/neutral/settings" });
-      expect(mocks.request.mock.calls.some(([, params]) => JSON.stringify(params).includes("/state/beam"))).toBe(false);
+      expect(mocks.request.mock.calls.some(([, params]) => JSON.stringify(params).includes('"/p"'))).toBe(false);
     } finally {
       mocks.request.mockImplementation(original);
     }
@@ -800,7 +798,7 @@ describe("Agents page", () => {
     expect(editor.querySelector('[data-slot="engine-instructions"]')?.textContent).toContain("You are the product's default agent.");
     expect(editor.querySelector('[data-slot="engine-instructions"] [data-slot="instruction-template-source"]')).not.toBeNull();
     expect(editor.querySelector('[data-slot="engine-instructions"] textarea')).toBeNull();
-    expect(mocks.agents.engineInstructions).toHaveBeenCalledWith("/state/beam");
+    expect(mocks.agents.engineInstructions).toHaveBeenCalledWith("/neutral/settings");
     await click(button("Customize"));
     const instructions = editor.querySelector<HTMLTextAreaElement>('textarea[name="instructions"]')!;
     expect(instructions.value).toBe("You are the product's default agent.");
@@ -899,104 +897,6 @@ describe("Agents page", () => {
     expect(mocks.request).not.toHaveBeenCalledWith("pi/models/catalog", { cwd: "/p", settingsView: expect.any(String) });
   });
 
-  it("lets every built-in run on a profile, chosen through the same picker", async () => {
-    await mount();
-
-    // Beam: nothing chosen is a working state, said as the rule it is.
-    await click(row("beam"));
-    expect(q('[data-slot="agent-card"][data-agent="beam"]').textContent).toContain("Follows the profile new conversations use");
-    await click(button("Choose a profile"));
-    const beamDialog = q('[data-slot="builtin-profile-dialog"][data-agent="beam"]');
-    expect(beamDialog.textContent).toContain("Beam\u2019s profile");
-    await settle();
-    expect([...beamDialog.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use this profile")?.disabled).toBe(true);
-    // Nothing is chosen, so there is nothing to clear.
-    expect([...beamDialog.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Follow the profile new conversations use")).toBe(false);
-    await click([...beamDialog.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Cancel")!);
-    expect(document.body.querySelector('[data-slot="builtin-profile-dialog"]')).toBeNull();
-
-    // Chat: pick a profile, and the card says what it runs on.
-    await click(row("chat"));
-    expect(q('[data-slot="agent-card"][data-agent="chat"]').textContent).toContain("Follows the profile new conversations use");
-    await click(button("Choose a profile"));
-    const chatDialog = q('[data-slot="builtin-profile-dialog"][data-agent="chat"]');
-    expect(chatDialog.textContent).toContain("Chat\u2019s profile");
-    await settle();
-    await click(chatDialog.querySelector<HTMLElement>('[data-slot="profile-picker-trigger"]')!);
-    await settle();
-    await click([...document.body.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')].find((n) => n.textContent?.includes("Fast"))!);
-    await settle();
-    await click([...q('[data-slot="builtin-profile-dialog"][data-agent="chat"]').querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use this profile")!);
-    await settle();
-    expect(mocks.agents.setBuiltinProfile).toHaveBeenCalledWith("chat", "mp_fast00000000000000");
-    expect(document.body.querySelector('[data-slot="builtin-profile-dialog"]')).toBeNull();
-    expect(q('[data-slot="agent-card"][data-agent="chat"]').textContent).toContain("Fast");
-
-    // And back to following the default, from the same dialog.
-    await click(button("Change profile"));
-    await settle();
-    await click([...q('[data-slot="builtin-profile-dialog"][data-agent="chat"]').querySelectorAll("button")].find((b) => b.textContent?.trim() === "Follow the profile new conversations use")!);
-    await settle();
-    expect(mocks.agents.setBuiltinProfile).toHaveBeenLastCalledWith("chat", null);
-    expect(q('[data-slot="agent-card"][data-agent="chat"]').textContent).toContain("Follows the profile new conversations use");
-
-    // Namer: the same choice, no qualification anywhere near it.
-    await click(row("namer"));
-    expect(q('[data-slot="agent-card"][data-agent="namer"]').textContent).not.toContain("qualification");
-    await click(button("Choose a profile"));
-    const namerDialog = q('[data-slot="builtin-profile-dialog"][data-agent="namer"]');
-    expect(namerDialog.textContent).toContain("Namer\u2019s profile");
-    await settle();
-    await click(namerDialog.querySelector<HTMLElement>('[data-slot="profile-picker-trigger"]')!);
-    await settle();
-    await click([...document.body.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')].find((n) => n.textContent?.includes("Fast"))!);
-    await settle();
-    await click([...q('[data-slot="builtin-profile-dialog"][data-agent="namer"]').querySelectorAll("button")].find((b) => b.textContent?.trim() === "Use this profile")!);
-    await settle();
-    expect(mocks.agents.setBuiltinProfile).toHaveBeenLastCalledWith("namer", "mp_fast00000000000000");
-  });
-
-  it("keeps an invalid stored Namer override visible with removed-field guidance and Restore", async () => {
-    const invalid = "Name {{toolName}} from {{namingTask}}.";
-    const base = snapshot();
-    store = createStateStore(seed(snapshot({
-      builtinInstructions: { ...base.builtinInstructions, namer: invalid },
-      agents: base.agents.map((agent) => agent.name === "namer" ? { ...agent, instructions: invalid } : agent),
-    })));
-    mocks.state.store = store;
-    await mount();
-    await click(row("namer"));
-    expect(container.textContent).toContain("“toolName” is not available here");
-    expect(q<HTMLTextAreaElement>('textarea[aria-label="Namer system instructions"]').value).toBe(invalid);
-    expect(button("Restore built-in instructions")).toBeTruthy();
-    expect(button("Save instructions").hasAttribute("disabled")).toBe(true);
-  });
-
-  it("edits and restores every built-in's system instructions", async () => {
-    await mount();
-    for (const name of ["beam", "chat", "namer"] as const) {
-      await click(row(name));
-      let input = q<HTMLTextAreaElement>(`textarea[aria-label="${name === "beam" ? "Beam" : name === "chat" ? "Chat" : "Namer"} system instructions"]`);
-      expect(input.value.length).toBeGreaterThan(0);
-      const original = input.value;
-      await click(button("Highlighted source"));
-      expect(q('[data-slot="instruction-template-source"] code').textContent).toBe(original);
-      await click(button("Edit"));
-      input = q<HTMLTextAreaElement>(`textarea[aria-label="${name === "beam" ? "Beam" : name === "chat" ? "Chat" : "Namer"} system instructions"]`);
-      expect(document.activeElement).toBe(input);
-      await type(input, `Custom ${name} instructions.`);
-      await click(button("Save instructions"));
-      await settle();
-      expect(mocks.agents.setBuiltinInstructions).toHaveBeenLastCalledWith(name, `Custom ${name} instructions.`);
-      expect(q<HTMLTextAreaElement>(`textarea[aria-label="${name === "beam" ? "Beam" : name === "chat" ? "Chat" : "Namer"} system instructions"]`).value).toBe(`Custom ${name} instructions.`);
-      expect(button("Restore built-in instructions")).toBeTruthy();
-      await click(button("Restore built-in instructions"));
-      await settle();
-      expect(mocks.agents.setBuiltinInstructions).toHaveBeenLastCalledWith(name, null);
-      expect(q<HTMLTextAreaElement>(`textarea[aria-label="${name === "beam" ? "Beam" : name === "chat" ? "Chat" : "Namer"} system instructions"]`).value).toBe(snapshot().agents.find((agent) => agent.name === name)!.instructions);
-    }
-  });
-
   it("saves the harness limits when a field is committed, and refuses a value out of range", async () => {
     await mount();
     await click(q('[data-slot="harness-row"]'));
@@ -1036,7 +936,7 @@ describe("Agents page", () => {
   });
 
   it("shows the first-run card when only the default agent exists, and a retryable error when the list failed", async () => {
-    store = createStateStore(seed(snapshot({ agents: [agent({ name: "default" }), agent({ name: "beam", kind: "builtin" }), agent({ name: "chat", kind: "builtin" }), agent({ name: "namer", kind: "builtin" })] })));
+    store = createStateStore(seed(snapshot({ agents: [agent({ name: "default" })] })));
     mocks.state.store = store;
     await mount();
     expect(q('[data-slot="agents-overview"]').dataset.firstRun).toBe("true");

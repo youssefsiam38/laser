@@ -70,15 +70,15 @@ const shell: ShellContextValue = {
   layout: "mobile", sessionsOpen: false, fleetOpen: false, telemetryOpen: false,
   setSessionsOpen: vi.fn(), setFleetOpen: vi.fn(), setTelemetryOpen: vi.fn(), toggleSessions: vi.fn(), toggleFleet: vi.fn(), toggleTelemetry: vi.fn(),
   historyOpen: false, setHistoryOpen: vi.fn(), openHistory: vi.fn(), addProjectOpen: false, setAddProjectOpen: vi.fn(),
-  newSession: vi.fn(), canCreate: true, showChat: vi.fn(), returnToChat: vi.fn(),
+  newSession: vi.fn(), newChat: vi.fn(), canCreate: true, canChat: true, showChat: vi.fn(), returnToChat: vi.fn(),
 };
 const A = "/project/a.jsonl";
 const B = "/project/b.jsonl";
 const C = "/project/c.jsonl";
 const D = "/project/d.jsonl";
-const writer: SessionAgentInfo = { agentName: "writer", kind: "root" };
-const reviewer: SessionAgentInfo = { agentName: "reviewer", kind: "root" };
-const child: SessionAgentInfo = { agentName: "reviewer", kind: "child", subagentName: "reviewer-third-pass", parentPath: A, rootPath: A };
+const writer: SessionAgentInfo = { agentName: "writer", kind: "root", sessionKind: "project" };
+const reviewer: SessionAgentInfo = { agentName: "reviewer", kind: "root", sessionKind: "project" };
+const child: SessionAgentInfo = { agentName: "reviewer", kind: "child", sessionKind: "project", subagentName: "reviewer-third-pass", parentPath: A, rootPath: A };
 const summaries: SessionSummary[] = [
   summary({ path: A, cwd: "/project", name: "A very long session title that must remain meaningful", agent: reviewer }),
   summary({ path: B, cwd: "/project", name: "Catalog attribution", agent: reviewer }),
@@ -145,13 +145,20 @@ describe("session identity renderer", () => {
     expect(detail()).toBeNull();
   });
 
-  it("keeps built-in labels and places the canonical model after the agent", async () => {
-    await renderIdentity("beam", { provider: "openai", id: "gpt-5" });
-    expect(agentLabel()?.textContent).toBe("Beam");
+  it("places the canonical model after the agent", async () => {
+    await renderIdentity("reviewer", { provider: "openai", id: "gpt-5" });
+    expect(agentLabel()?.textContent).toBe("reviewer");
     expect(modelLabel()?.textContent).toBe("gpt-5");
     expect(agentLabel()!.compareDocumentPosition(modelLabel()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    await renderIdentity("chat", null);
-    expect(agentLabel()?.textContent).toBe("Chat");
+    await renderIdentity("default", null);
+    expect(agentLabel()?.textContent).toBe("Default agent");
+  });
+
+  it("names no agent on a Chat conversation", async () => {
+    // A Chat session runs no definition, so the top bar must not name one
+    // (`docs/plain-chat.md`, "What a person sees").
+    await renderIdentity(undefined, { provider: "openai", id: "gpt-5" });
+    expect(agentLabel()).toBeNull();
   });
 
   it("does not invent an identity for unattributed history", async () => {

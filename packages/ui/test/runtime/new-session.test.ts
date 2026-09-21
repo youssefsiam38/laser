@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionState, SessionSummary } from "@lasercode/protocol";
 import { initialState, reduce, type AppState, type SessionView } from "../../src/store.js";
 import { createSessionLauncher, isUnstartedSession } from "../../src/runtime/new-session.js";
-import { snapshot } from "../agents/fixtures.js";
+import { agentInfo, snapshot } from "../agents/fixtures.js";
 
 const session = (path: string, cwd = "/one"): SessionState => ({
   path, id: path, cwd, model: { provider: "stub", id: "stub-1" }, thinkingLevel: "medium",
@@ -97,20 +97,19 @@ describe("New session", () => {
     expect(Object.keys(f.state.open)).toHaveLength(3);
   });
 
-  it("reuses an empty Beam chat the catalog lists without attribution (M13-T47)", async () => {
-    // Pi writes a session file on the first message, so an empty Beam chat is
-    // an *unwritten* row: the catalog has no file to read an agent record from
-    // and lists it with no `agent`. The open view knows better. Before the fix,
-    // the launcher resolved the missing attribution to the default agent, never
-    // matched Beam, and every press of Beam's + made another empty session.
-    const beam = "/state/workspaces/beam";
-    const f = fixture();
+  it("reuses an empty Chat the catalog lists without attribution (M13-T47)", async () => {
+    // Pi writes a session file on the first message, so an empty Chat is an
+    // *unwritten* row: the catalog has no file to read a record from and lists
+    // it with no `agent`. The open view knows better. Before the fix, the
+    // launcher resolved the missing attribution to the default agent, never
+    // matched the Chat, and every press of the Chat `+` made another empty one.
+    const chat = "/state/workspaces/chat";
     let state: AppState = { ...initialState, open: {}, sessions: [] };
-    const empty: SessionState = { ...session("/beam-1", beam), agent: { agentName: "beam", kind: "beam" } };
+    const empty: SessionState = { ...session("/chat-1", chat), agent: agentInfo({ kind: "chat" }) };
     state = reduce(state, { type: "opened", state: empty });
-    state = reduce(state, { type: "hydrate", path: "/beam-1", entries: [] });
-    state = reduce(state, { type: "sessions", sessions: [summary("/beam-1", { cwd: beam })] }); // no `agent`
-    const create = vi.fn(async () => "/beam-2");
+    state = reduce(state, { type: "hydrate", path: "/chat-1", entries: [] });
+    state = reduce(state, { type: "sessions", sessions: [summary("/chat-1", { cwd: chat })] }); // no `agent`
+    const create = vi.fn(async () => "/chat-2");
     const launch = createSessionLauncher({
       state: () => state,
       archived: () => false,
@@ -120,26 +119,23 @@ describe("New session", () => {
       create,
       resolveAgent: (name) => name ?? "default",
     });
-    await expect(launch(beam, { agentName: "beam" })).resolves.toBe("/beam-1");
-    await expect(launch(beam, { agentName: "beam" })).resolves.toBe("/beam-1");
-    await expect(launch(beam, { agentName: "beam" })).resolves.toBe("/beam-1");
+    await expect(launch(chat, { sessionKind: "chat" })).resolves.toBe("/chat-1");
+    await expect(launch(chat, { sessionKind: "chat" })).resolves.toBe("/chat-1");
+    await expect(launch(chat, { sessionKind: "chat" })).resolves.toBe("/chat-1");
     expect(create).not.toHaveBeenCalled();
-    // A project's + wants the default agent, which is what a missing attribution
-    // resolves to — the old behaviour was correct there by accident, and stays.
-    void f;
   });
 
-  it.each(["beam", "chat"] as const)("reuses an attributed private %s workspace from its sidebar root", async (kind) => {
+  it("reuses an attributed private Chat workspace from its sidebar root", async () => {
     const f = fixture(); f.state.agents.snapshot = snapshot();
-    const view = f.add("/private-session", `/state/${kind}/private-session`);
-    view.state.agent = { kind, agentName: kind };
+    const view = f.add("/private-session", "/state/chat/private-session");
+    view.state.agent = agentInfo({ kind: "chat" });
     f.add("/other-project");
-    await expect(f.launch(`/state/${kind}`, { agentName: kind, select: false })).resolves.toBe("/private-session");
+    await expect(f.launch("/state/chat", { sessionKind: "chat", select: false })).resolves.toBe("/private-session");
     expect(f.state.current).toBe("/other-project");
-    await expect(f.launch(`/state/${kind}`, { agentName: kind })).resolves.toBe("/private-session");
+    await expect(f.launch("/state/chat", { sessionKind: "chat" })).resolves.toBe("/private-session");
     expect(f.state.current).toBe("/private-session"); expect(f.create).not.toHaveBeenCalled();
     view.state.messageCount = 1;
-    await expect(f.launch(`/state/${kind}`, { agentName: kind })).resolves.not.toBe("/private-session");
+    await expect(f.launch("/state/chat", { sessionKind: "chat" })).resolves.not.toBe("/private-session");
   });
 
   it("reuses an empty project chat the catalog stamps unread, with the default agent (M13-T47)", async () => {

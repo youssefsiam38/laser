@@ -307,14 +307,12 @@ it("will not delete a referenced profile without a replacement, and moves the re
   assignments = { ...EMPTY_PROFILE_ASSIGNMENTS, defaultProfileId: "mp_a0000000000000000" };
   mocks.agents.snapshot = {
     revision: 1,
-    agents: [],
+    agents: [{ name: "reviewer", profileId: "mp_a0000000000000000" }],
     defaultAgent: "default",
     warnings: [],
     policy: { maxDepth: 3, foregroundCommandSeconds: 30 },
-    builtinProfiles: { beam: "mp_a0000000000000000", chat: null, namer: null },
-    builtinInstructions: {},
     renamedAgents: {},
-    workspaces: { beam: "/beam", chat: "/chat" },
+    workspaces: { chat: "/chat" },
   } as unknown as AgentsSnapshot;
   await render();
   expect(card(0).querySelector('[data-slot="profile-usage"]')!.textContent).toBe("Used by New conversations and 1 agent.");

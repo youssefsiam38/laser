@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
-vi.mock("../../src/client.js", async original => ({ ...await original<typeof import("../../src/client.js")>(), HostClient: (await import("../beam/fake-host.js")).FakeHostClient }));
+vi.mock("../../src/client.js", async original => ({ ...await original<typeof import("../../src/client.js")>(), HostClient: (await import("../world/fake-host.js")).FakeHostClient }));
 vi.mock("../../src/runtime/projection.js", async original => {
   const source = await original<typeof import("../../src/runtime/projection.js")>();
   return { ...source, projectSessionView: vi.fn(source.projectSessionView) };
@@ -10,7 +10,7 @@ vi.mock("../../src/runtime/projection.js", async original => {
 import { LaserProvider, useLaserStable, useLaserState, type LaserActions } from "../../src/runtime/LaserProvider.js";
 import { projectSessionView } from "../../src/runtime/projection.js";
 import type { AppState } from "../../src/store.js";
-import { addSession, createWorld, FakeHostClient, settle, type World } from "../beam/fake-host.js";
+import { addSession, createWorld, FakeHostClient, settle, type World } from "../world/fake-host.js";
 import { seedProject, seedRememberedSessions } from "../../test/runtime/environment-fixture.js";
 const path = "/p/target.jsonl";
 let actions: LaserActions, state: AppState, root: Root, container: HTMLDivElement, world: World;

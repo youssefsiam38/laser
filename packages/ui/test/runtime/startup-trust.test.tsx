@@ -16,12 +16,12 @@ import type { HostNotifications, ProjectInfo } from "@lasercode/protocol";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 
 import { LaserProvider } from "../../src/runtime/LaserProvider.js";
 import { StartupShell } from "../../src/components/shell/Shell.js";
-import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../world/fake-host.js";
 import { seedProject } from "../../test/runtime/environment-fixture.js";
 
 const CODE = `${PROJECT_CWD}/code.jsonl`;

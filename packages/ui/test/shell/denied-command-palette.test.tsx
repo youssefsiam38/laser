@@ -22,7 +22,7 @@ import { testDescriptor } from "../runtime/environment-fixture.js";
 
 let root: Root; let container: HTMLDivElement;
 const shell = { layout: "desktop", sessionsOpen: true, fleetOpen: false, telemetryOpen: false, historyOpen: false, addProjectOpen: false, canCreate: true,
-  setSessionsOpen: vi.fn(), setFleetOpen: vi.fn(), setTelemetryOpen: vi.fn(), setHistoryOpen: vi.fn(), setAddProjectOpen: vi.fn(), toggleSessions: vi.fn(), toggleFleet: vi.fn(), toggleTelemetry: vi.fn(), openHistory: vi.fn(), newSession: vi.fn(), showChat: vi.fn(), returnToChat: vi.fn() } satisfies ShellContextValue;
+  setSessionsOpen: vi.fn(), setFleetOpen: vi.fn(), setTelemetryOpen: vi.fn(), setHistoryOpen: vi.fn(), setAddProjectOpen: vi.fn(), toggleSessions: vi.fn(), toggleFleet: vi.fn(), toggleTelemetry: vi.fn(), openHistory: vi.fn(), newSession: vi.fn(), newChat: vi.fn(), canChat: true, showChat: vi.fn(), returnToChat: vi.fn() } satisfies ShellContextValue;
 beforeEach(() => { globalThis.IS_REACT_ACT_ENVIRONMENT = true; Object.values(stable.actions).forEach(fn => fn.mockClear()); stable.client.request.mockClear(); shell.openHistory.mockClear(); shell.newSession.mockClear(); container = document.createElement("div"); document.body.append(container); root = createRoot(container); });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); document.querySelectorAll('[role="dialog"]').forEach(node => node.remove()); });
 

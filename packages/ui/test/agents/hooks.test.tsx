@@ -11,7 +11,7 @@ import {
 } from "../../src/agents/index.js";
 import { LaserStoreProvider, createStateStore, type StateStore } from "../../src/runtime/LaserProvider.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
-import { event, run, sessionState, snapshot, summary } from "./fixtures.js";
+import { agentInfo, event, run, sessionState, snapshot, summary } from "./fixtures.js";
 
 const ROOT = "/p/root.jsonl";
 let container: HTMLDivElement;
@@ -110,19 +110,20 @@ describe("agent hooks", () => {
       return null;
     }
     await mount(<Probe path={ROOT} />);
-    expect(seen.at(-1)).toEqual({ agentName: "default", kind: "root" });
+    expect(seen.at(-1)).toEqual({ agentName: "default", kind: "root", sessionKind: "project" });
     // The catalog changed but this session's answer did not: no render.
     const renders = seen.length;
-    await dispatch({ type: "sessions", sessions: [summary({ path: ROOT, name: "Root" }), summary({ path: "/p/a.jsonl", agent: { agentName: "reviewer", kind: "child", subagentName: "reviewer-1", parentPath: ROOT, rootPath: ROOT } })] });
+    await dispatch({ type: "sessions", sessions: [summary({ path: ROOT, name: "Root" }), summary({ path: "/p/a.jsonl", agent: agentInfo({ agentName: "reviewer", kind: "child", subagentName: "reviewer-1", parentPath: ROOT, rootPath: ROOT }) })] });
     expect(seen.length).toBe(renders);
     await mount(<Probe path="/p/a.jsonl" />);
-    expect(seen.at(-1)).toEqual({ agentName: "reviewer", kind: "child", subagentName: "reviewer-1", parentPath: ROOT, rootPath: ROOT });
+    expect(seen.at(-1)).toEqual({ agentName: "reviewer", kind: "child", sessionKind: "project", subagentName: "reviewer-1", parentPath: ROOT, rootPath: ROOT });
     await dispatch({ type: "notification", method: "agents/run", params: { run: run({ runId: "r1", sessionPath: "/p/a.jsonl", status: "blocked" }) } });
     expect(seen.at(-1)).toMatchObject({ runId: "r1", runStatus: "blocked" });
-    // A Beam session known only through its open view is placed by its directory.
-    await dispatch({ type: "opened", state: sessionState({ path: "/state/beam/b.jsonl", cwd: "/state/beam" }) });
-    await mount(<Probe path="/state/beam/b.jsonl" />);
-    expect(seen.at(-1)).toEqual({ agentName: "default", kind: "beam" });
+    // A Chat conversation known only through its open view is placed by its
+    // directory, and names no agent at all (`docs/plain-chat.md`).
+    await dispatch({ type: "opened", state: sessionState({ path: "/state/chat/c.jsonl", cwd: "/state/chat" }) });
+    await mount(<Probe path="/state/chat/c.jsonl" />);
+    expect(seen.at(-1)).toEqual({ kind: "chat", sessionKind: "chat" });
     await mount(<Probe path="/nowhere" />);
     expect(seen.at(-1)).toBeUndefined();
   });

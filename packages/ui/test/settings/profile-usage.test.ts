@@ -54,8 +54,7 @@ it("names every surface and agent that points at a profile", () => {
   const usage = profileUsage(
     "mp_a",
     assignments({ defaultProfileId: "mp_a", oracleProfileId: "mp_a", namingProfileId: "mp_b" }),
-    [agent("reviewer", "mp_a"), agent("scout", "mp_b")],
-    { beam: "mp_a", chat: null, namer: "mp_b" },
+    [agent("reviewer", "mp_a"), agent("scout", "mp_b"), agent("writer", "mp_a")],
   );
   expect(usage.labels).toEqual(["New conversations", "Consultation", "2 agents"]);
   expect(usage.referenced).toBe(true);
@@ -63,11 +62,7 @@ it("names every surface and agent that points at a profile", () => {
 });
 
 it("says plainly when nothing points at a profile, and that one deletes without a replacement", () => {
-  const usage = profileUsage("mp_z", assignments({ defaultProfileId: "mp_a" }), [agent("reviewer", "mp_a")], {
-    beam: null,
-    chat: null,
-    namer: null,
-  });
+  const usage = profileUsage("mp_z", assignments({ defaultProfileId: "mp_a" }), [agent("reviewer", "mp_a")]);
   expect(usage.referenced).toBe(false);
   expect(usageSentence(usage)).toBe("Nothing uses this profile yet.");
 });

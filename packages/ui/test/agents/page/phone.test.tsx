@@ -21,11 +21,9 @@ const mocks = vi.hoisted(() => {
     engineInstructions: vi.fn(async () => "engine"),
     runs: vi.fn(),
     stopRun: vi.fn(),
-    setBuiltinProfile: vi.fn(),
-    setBuiltinInstructions: vi.fn(),
   };
   const request = vi.fn(async (method: string) => {
-    if (method === "pi/setup/state") return { cwd: "/state/beam" };
+    if (method === "pi/setup/state") return { cwd: "/state/chat" };
     if (method === "pi/models/catalog") return { models: [], enabledPatterns: null, refreshedAt: "", errors: [] };
     if (method === "feature/list") return { features: [] };
     throw new Error(`unexpected ${method}`);
@@ -116,8 +114,8 @@ describe("Agents page on a phone", () => {
     expect(workbench?.page).toBe("agents");
 
     // The back control does the same.
-    await click(q('[data-slot="agent-row"][data-agent="beam"]'));
-    expect(q('[data-slot="agent-card"][data-agent="beam"]')).not.toBeNull();
+    await click(q('[data-slot="agent-row"][data-agent="default"]'));
+    expect(q('[data-slot="agent-editor"]')?.dataset.agent).toBe("default");
     await click(q('[data-slot="agents-back"]'));
     expect(q('[data-slot="agent-list"]')).not.toBeNull();
 

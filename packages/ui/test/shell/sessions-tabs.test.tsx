@@ -23,7 +23,7 @@ import { LaserStoreProvider, createStateStore, type StateStore } from "../../src
 import { mainTab } from "../../src/runtime/main-destination.js";
 import { toThreadMetadata } from "../../src/runtime/threadList.js";
 import { initialState, reduce, type AppState } from "../../src/store.js";
-import { run, snapshot, summary } from "../agents/fixtures.js";
+import { agentInfo, run, snapshot, summary } from "../agents/fixtures.js";
 import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
 import { activateTestEnvironment, seedDeviceValue, testDescriptor } from "../../test/runtime/environment-fixture.js";
 
@@ -46,13 +46,15 @@ const PARENTLESS = "/one/.worktrees/orphan/orphan.jsonl";
 const sessions: SessionSummary[] = [
   summary({ path: ROOT, cwd: "/one", name: "Ship the release", modifiedAt: "2026-09-08T03:00:00Z", attention: "working" }),
   summary({ path: "/one/older.jsonl", cwd: "/one", name: "Older work", modifiedAt: "2026-09-07T03:00:00Z" }),
-  summary({ path: CHILD, cwd: "/one/.worktrees/explorer", name: "Counting files", modifiedAt: "2026-09-08T03:05:00Z", agent: { agentName: "default", kind: "child", subagentName: "explorer", parentPath: ROOT, rootPath: ROOT, runId: "r1" } }),
-  summary({ path: GRANDCHILD, cwd: "/one/.worktrees/digger", modifiedAt: "2026-09-08T03:06:00Z", agent: { agentName: "reviewer", kind: "child", subagentName: "digger", parentPath: CHILD, rootPath: ROOT, runId: "r2" } }),
-  summary({ path: PARENTLESS, cwd: "/one/.worktrees/orphan", name: "Orphan", modifiedAt: "2026-09-08T02:00:00Z", agent: { agentName: "default", kind: "child", subagentName: "orphan", parentPath: "/one/gone.jsonl", rootPath: "/one/gone.jsonl", runId: "r3" } }),
+  summary({ path: CHILD, cwd: "/one/.worktrees/explorer", name: "Counting files", modifiedAt: "2026-09-08T03:05:00Z", agent: { agentName: "default", kind: "child", sessionKind: "project", subagentName: "explorer", parentPath: ROOT, rootPath: ROOT, runId: "r1" } }),
+  summary({ path: GRANDCHILD, cwd: "/one/.worktrees/digger", modifiedAt: "2026-09-08T03:06:00Z", agent: { agentName: "reviewer", kind: "child", sessionKind: "project", subagentName: "digger", parentPath: CHILD, rootPath: ROOT, runId: "r2" } }),
+  summary({ path: PARENTLESS, cwd: "/one/.worktrees/orphan", name: "Orphan", modifiedAt: "2026-09-08T02:00:00Z", agent: { agentName: "default", kind: "child", sessionKind: "project", subagentName: "orphan", parentPath: "/one/gone.jsonl", rootPath: "/one/gone.jsonl", runId: "r3" } }),
   summary({ path: "/two/plain.jsonl", cwd: "/two", name: "Plain session", modifiedAt: "2026-09-06T03:00:00Z" }),
-  summary({ path: "/state/beam/b1.jsonl", cwd: "/state/beam", name: "Why is the dock empty", modifiedAt: "2026-09-08T01:00:00Z", agent: { agentName: "beam", kind: "beam" } }),
-  summary({ path: "/state/chat/c1.jsonl", cwd: "/state/chat/session-one", name: "Recipe ideas", modifiedAt: "2026-09-08T04:00:00Z", agent: { agentName: "chat", kind: "chat" } }),
-  summary({ path: "/state/chat/c2.jsonl", cwd: "/state/chat/session-two", name: "Older chat", modifiedAt: "2026-09-05T04:00:00Z", agent: { agentName: "chat", kind: "chat" } }),
+  // A conversation recorded before M23: its record still says `beam` and is
+  // never rewritten, so the Chat tab has to place it (`docs/plain-chat.md`).
+  summary({ path: "/state/beam/b1.jsonl", cwd: "/state/beam", name: "Why is the dock empty", modifiedAt: "2026-09-08T01:00:00Z", agent: agentInfo({ agentName: "beam", kind: "beam" }) }),
+  summary({ path: "/state/chat/c1.jsonl", cwd: "/state/chat/session-one", name: "Recipe ideas", modifiedAt: "2026-09-08T04:00:00Z", agent: agentInfo({ kind: "chat" }) }),
+  summary({ path: "/state/chat/c2.jsonl", cwd: "/state/chat/session-two", name: "Older chat", modifiedAt: "2026-09-05T04:00:00Z", agent: agentInfo({ kind: "chat" }) }),
 ];
 const runs = [
   run({ runId: "r1", sessionPath: CHILD, subagentName: "explorer", agentName: "default", projectCwd: "/one", rootSessionPath: ROOT, parent: { sessionPath: ROOT, sessionId: "root" }, status: "running", startedAt: "2026-09-08T03:04:00Z", updatedAt: "2026-09-08T03:04:00Z" }),
@@ -71,7 +73,7 @@ function useEmptyRuntime() { return useExternalStoreRuntime({ convertMessage: (m
 const shell: ShellContextValue = {
   layout: "desktop", sessionsOpen: true, fleetOpen: false, telemetryOpen: false, setSessionsOpen: () => {}, setFleetOpen: () => {}, setTelemetryOpen: () => {}, toggleSessions: () => {}, toggleFleet: () => {}, toggleTelemetry: () => {},
   historyOpen: false, setHistoryOpen: () => {}, openHistory: () => {}, addProjectOpen: false, setAddProjectOpen: () => {},
-  newSession: async () => {}, canCreate: true, showChat: () => {}, returnToChat: () => {},
+  newSession: async () => {}, newChat: vi.fn(async () => {}), canCreate: true, canChat: true, showChat: () => {}, returnToChat: () => {},
 };
 let endRequest: ReturnType<typeof useEndAgentRequest>;
 function EndProbe() { endRequest = useEndAgentRequest(); return null; }
@@ -137,7 +139,7 @@ const mount = async (node: ReactNode = <Fixture store={store} />) => act(async (
  */
 const rememberedCodeSession = (): string | undefined => {
   const code = readDestinationMemory().code;
-  return code.kind === "project-session" || code.kind === "beam-session" ? code.path : undefined;
+  return code.kind === "project-session" ? code.path : undefined;
 };
 
 const completeTab = async (next: "chat" | "code") => {
@@ -177,7 +179,7 @@ describe("sessions panel tabs", () => {
     expect(localStorage.getItem(SESSIONS_TAB_STORAGE_KEY)).toBe("chat");
     expect(container.querySelector('[data-slot="aui_thread-list-root"]')?.getAttribute("data-tab")).toBe("chat");
     // Flat, newest first, no folder header and no project rows.
-    expect(rows().map((row) => row.textContent)).toEqual(["Recipe ideas", "Older chat"]);
+    expect(rows().map((row) => row.textContent)).toEqual(["Recipe ideas", "Why is the dock empty", "Older chat"]);
     expect(container.querySelector('section[data-cwd] button[aria-controls$="-list"]')).toBeNull();
     expect(container.querySelector('[data-slot="new-chat"]')).not.toBeNull();
     expect(container.querySelector('input[type="search"]')?.getAttribute("placeholder")).toBe("Search chats");
@@ -250,22 +252,24 @@ describe("sessions panel tabs", () => {
     expect(tab("chat").getAttribute("aria-label")).toBe("Chat, Waiting for you");
   });
 
-  it("starts a new chat with the Chat agent in the Chat workspace", async () => {
+  it("starts an empty Chat from the tab's + through the one shared verb", async () => {
     await mount();
     await act(async () => { tab("chat").click(); await completeTab("chat"); });
     await act(async () => container.querySelector<HTMLButtonElement>('[data-slot="new-chat"]')!.click());
-    expect(stable.actions.newSession).toHaveBeenCalledWith("/state/chat", { agentName: "chat" });
+    // The panel's `+`, the palette's New chat and Cmd+Shift+N are one verb on
+    // the shell (`docs/plain-chat.md`, "Chat"); it is the shell that asks the
+    // host, with the Chat kind and no agent name.
+    expect(shell.newChat).toHaveBeenCalled();
+    expect(stable.actions.newSession).not.toHaveBeenCalled();
   });
 });
 
-describe("Beam and children in the Code tab", () => {
-  it("keeps session and Beam reads while hiding every local-only lifecycle entry", async () => {
+describe("children in the Code tab", () => {
+  it("keeps session reads while hiding every local-only lifecycle entry", async () => {
     store.dispatch({ type: "environment", environment: testDescriptor({ actor: { class: "local_browser", id: "browser" }, localOnly: ["session/new", "pi/session/rename", "pi/session/delete", "pi/session/move", "agents/runs/stop"] }) });
     await mount();
     expect(rowTitled("Ship the release")).toBeDefined();
-    expect(rowTitled("Why is the dock empty")).toBeDefined();
     expect(container.querySelector('[data-slot="new-session"]')).toBeNull();
-    expect(container.querySelector('[aria-label="New Beam chat"]')).toBeNull();
     const rootRow = rowTitled("Ship the release")!;
     await act(async () => rootRow.querySelector<HTMLElement>('[data-slot="aui_thread-list-item-trigger"]')!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
     expect(rootRow.querySelector("input")).toBeNull();
@@ -280,32 +284,24 @@ describe("Beam and children in the Code tab", () => {
     expect(stable.client.request).not.toHaveBeenCalled();
   });
 
-  it("lists Beam as a spark-marked group after the projects and marks its rows", async () => {
+  it("lists the projects and nothing else, with no workspace group or mark left over", async () => {
     await mount();
     const groups = [...container.querySelectorAll<HTMLElement>("section[data-cwd]")];
-    expect(groups.map((g) => g.dataset["kind"])).toEqual(["project", "project", "beam"]);
-    const beam = groups.at(-1)!;
-    expect(beam.querySelector('[data-slot="beam-mark"]')).not.toBeNull();
-    // Beam's group starts a Beam chat, not a session in a project.
-    expect(beam.querySelector('[aria-label^="New session in"]')).toBeNull();
-    expect(beam.querySelector('[aria-label="New Beam chat"]')).not.toBeNull();
-    // The spark belongs to the group, never to its rows: a Beam chat is a
-    // session like any other once it exists (M13-T47).
-    expect(container.querySelector('[data-slot="beam-row-mark"]')).toBeNull();
-    expect(beam.querySelectorAll('[data-slot="beam-mark"]')).toHaveLength(1);
+    // D-347: the Code tab is projects only. A pre-M23 `beam` record lists in
+    // the Chat tab, so neither its group nor its mark exists here.
+    expect(groups.map((g) => g.dataset["kind"])).toEqual(["project", "project"]);
+    expect(groups.map((g) => g.dataset["cwd"])).toEqual(["/one", "/two"]);
+    // A class-name proxy for "no Beam mark anywhere", as its data-slot was the
+    // only handle the mark ever had.
+    expect(container.querySelector('[data-slot="beam-mark"]')).toBeNull();
+    expect(container.querySelector('[data-slot="beam-session-mark"]')).toBeNull();
+    expect(container.textContent).not.toContain("Beam");
   });
 
-  it("starts a Beam chat in the window from the group, without making the workspace the current project", async () => {
+  it("starts an ordinary session from a project group without adopting the project", async () => {
     await mount();
     stable.actions.newSession.mockClear();
     stable.setCurrentProject.mockClear();
-    const beam = [...container.querySelectorAll<HTMLElement>("section[data-cwd]")].at(-1)!;
-    await act(async () => beam.querySelector<HTMLButtonElement>('[aria-label="New Beam chat"]')!.click());
-    // The Beam agent, in Beam's workspace, selected — the window, not the bubble.
-    expect(stable.actions.newSession).toHaveBeenCalledWith("/state/beam", { agentName: "beam" });
-    expect(stable.setCurrentProject).not.toHaveBeenCalled();
-    // A project group still starts an ordinary session and does adopt the project.
-    stable.actions.newSession.mockClear();
     const project = container.querySelector<HTMLElement>('section[data-cwd="/two"]')!;
     await act(async () => project.querySelector<HTMLButtonElement>('[aria-label^="New session in"]')!.click());
     expect(stable.actions.newSession).toHaveBeenCalledWith("/two");

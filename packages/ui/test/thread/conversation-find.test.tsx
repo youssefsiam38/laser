@@ -101,23 +101,23 @@ it("explains a pressure refusal and never starts the whole-history read", async 
   expect(loadAll).not.toHaveBeenCalled();
 });
 
-it("keeps main and Beam find fields and native highlights independent", async () => {
+it("keeps two mounted find fields and their native highlights independent", async () => {
   const highlights = new Map<string, { ranges: Range[] }>();
   vi.stubGlobal("CSS", { ...CSS, highlights });
   vi.stubGlobal("Highlight", class { constructor(...publicRanges: Range[]) { this.ranges = publicRanges; } ranges: Range[]; });
   try {
-    await act(async () => root.render(<><section data-test="main"><Fixture /></section><section data-slot="beam-bubble" tabIndex={-1}><Fixture /></section></>));
+    // Two conversations on screen at once: each answers the find event with a
+    // field of its own, over its own transcript.
+    await act(async () => root.render(<><section data-test="main"><Fixture /></section><section data-test="second" tabIndex={-1}><Fixture /></section></>));
     await act(async () => openConversationFind("Apple"));
-    const beam = container.querySelector<HTMLElement>('[data-slot="beam-bubble"]')!;
-    expect(beam.querySelector("input")).toBeNull();
-    await act(async () => { beam.focus(); beam.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true })); });
-    const input = beam.querySelector("input")!;
-    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Apple"); input.dispatchEvent(new Event("input", { bubbles: true })); });
+    const second = container.querySelector<HTMLElement>('[data-test="second"]')!;
+    const input = second.querySelector("input")!;
+    expect(container.querySelector<HTMLElement>('[data-test="main"]')!.querySelector("input")).not.toBe(input);
     await act(async () => { await vi.waitFor(() => expect(highlights.get("conversation-matches")?.ranges).toHaveLength(4)); });
     await act(async () => container.querySelector<HTMLButtonElement>('[data-test="main"] [aria-label="Close search"]')!.click());
-    expect(beam.querySelector("input")).toBe(input);
+    expect(second.querySelector("input")).toBe(input);
     expect(highlights.get("conversation-matches")!.ranges).toHaveLength(2);
-    await act(async () => beam.querySelector<HTMLButtonElement>('[aria-label="Close search"]')!.click());
+    await act(async () => second.querySelector<HTMLButtonElement>('[aria-label="Close search"]')!.click());
     expect(highlights.size).toBe(0);
   } finally { vi.unstubAllGlobals(); }
 });

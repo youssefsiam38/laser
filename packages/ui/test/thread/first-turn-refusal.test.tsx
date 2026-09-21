@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 
 vi.mock("../../src/components/shell/shell-context.js", async (original) => ({
@@ -28,17 +28,18 @@ vi.mock("../../src/components/shell/shell-context.js", async (original) => ({
 
 import { useAui, useAuiState } from "@assistant-ui/react";
 import { agentDisplayName } from "../../src/agents/index.js";
-import { beamWorkspace, isBeamSession } from "../../src/components/beam/beam-model.js";
+import { sessionKindFor } from "../../src/agents/model.js";
 import { Composer } from "../../src/components/thread/Composer.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserProvider, LaserThreadScope, useLaserStable, useLaserState } from "../../src/runtime/LaserProvider.js";
 import { firstTurnFromRunConfig, mergeRunConfigCustom } from "../../src/runtime/first-turn.js";
 import type { AppState } from "../../src/store.js";
-import { addSession, BEAM_CWD, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import type { CreationTarget } from "../../src/runtime/threadList.js";
+import { addSession, CHAT_CWD, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../world/fake-host.js";
 
 const A = `${PROJECT_CWD}/a.jsonl`;
 const B = `${PROJECT_CWD}/b.jsonl`;
-const BEAM = `${BEAM_CWD}/beam.jsonl`;
+const SCOPED = `${CHAT_CWD}/one.jsonl`;
 const WORKER_REFUSAL = 'No custom agent is called "reviewer".';
 const DEFAULT_AGENT_LABEL = `Agent: ${agentDisplayName("default")}`;
 
@@ -78,10 +79,16 @@ function Open({ path }: { path: string }) {
   return null;
 }
 
-const filter = (session: { cwd: string; agent?: AppState["sessions"][number]["agent"] }, state: AppState) => isBeamSession(session, state.agents.snapshot);
-const createIn = (state: AppState) => beamWorkspace(state.agents.snapshot);
+// A second mounted composer, in a scope over the Chat workspace: two
+// composers on screen is what the isolation rules below are about.
+const filter = (session: { cwd: string; agent?: AppState["sessions"][number]["agent"] }, state: AppState) =>
+  sessionKindFor(session, state.agents.snapshot) === "chat";
+const createIn = (state: AppState): CreationTarget | undefined => {
+  const cwd = state.agents.snapshot?.workspaces.chat;
+  return cwd ? { cwd, sessionKind: "chat" } : undefined;
+};
 
-function Harness({ withBeam = false }: { withBeam?: boolean }) {
+function Harness({ withScope = false }: { withScope?: boolean }) {
   return (
     <LaserProvider url="ws://test">
       <TooltipProvider>
@@ -90,10 +97,10 @@ function Harness({ withBeam = false }: { withBeam?: boolean }) {
           <Probe id="main" />
           <Composer />
         </div>
-        {withBeam && (
-          <LaserThreadScope path={BEAM} onPathChange={() => {}} filter={filter} createIn={createIn} unavailable="Beam is still connecting.">
-            <div data-tree="beam">
-              <Probe id="beam" />
+        {withScope && (
+          <LaserThreadScope path={SCOPED} onPathChange={() => {}} filter={filter} createIn={createIn} unavailable="Chat is still connecting.">
+            <div data-tree="scoped">
+              <Probe id="scoped" />
               <Composer />
             </div>
           </LaserThreadScope>
@@ -114,7 +121,7 @@ beforeEach(() => {
   world = createWorld();
   pristine(world, A);
   pristine(world, B);
-  addSession(world, BEAM, BEAM_CWD);
+  addSession(world, SCOPED, CHAT_CWD);
   world.snapshot = {
     ...world.snapshot,
     agents: world.snapshot.agents.map((agent) => agent.name === "reviewer"
@@ -133,7 +140,7 @@ afterEach(async () => {
   container.remove();
 });
 
-const mount = async (props: { withBeam?: boolean } = {}) => {
+const mount = async (props: { withScope?: boolean } = {}) => {
   await act(async () => root.render(<Harness {...props} />));
   await act(async () => settle(20));
 };
@@ -408,28 +415,28 @@ describe("a refused first-turn prompt (U1)", () => {
     expect(Number(probe("main").dataset["messages"])).toBeGreaterThanOrEqual(1);
   });
 
-  it("leaves the other mounted composer alone: the session's own and Beam's, each way round", async () => {
-    await mount({ withBeam: true });
-    expect(probe("beam").dataset["current"]).toBe(BEAM);
+  it("leaves the other mounted composer alone: the session's own and a scoped one, each way round", async () => {
+    await mount({ withScope: true });
+    expect(probe("scoped").dataset["current"]).toBe(SCOPED);
     await chooseReviewerHigh();
     await type("main", "main draft");
-    await type("beam", "beam draft");
+    await type("scoped", "scoped draft");
 
     prompt = ({ path }) => (path === A ? refuse() : { accepted: true });
     await pressSend("main");
     expect(prompts(A)).toHaveLength(1);
-    expect(prompts(BEAM)).toHaveLength(0);
+    expect(prompts(SCOPED)).toHaveLength(0);
     expect(input("main").value).toBe("main draft");
-    expect(input("beam").value).toBe("beam draft");
+    expect(input("scoped").value).toBe("scoped draft");
     expect(agentLabel("main")).toBe("Agent: reviewer");
 
-    prompt = ({ path }) => (path === BEAM ? refuse() : { accepted: true });
-    await pressSend("beam");
-    expect(prompts(BEAM)).toHaveLength(1);
-    expect(input("beam").value).toBe("beam draft");
+    prompt = ({ path }) => (path === SCOPED ? refuse() : { accepted: true });
+    await pressSend("scoped");
+    expect(prompts(SCOPED)).toHaveLength(1);
+    expect(input("scoped").value).toBe("scoped draft");
     expect(input("main").value).toBe("main draft");
     expect(firstTurnFromRunConfig(composerState("main").runConfig)).toEqual({ agentName: "reviewer", model: null, thinkingLevel: "high" });
-    expect(firstTurnFromRunConfig(composerState("beam").runConfig)).toBeUndefined();
+    expect(firstTurnFromRunConfig(composerState("scoped").runConfig)).toBeUndefined();
   });
 });
 

@@ -1,5 +1,21 @@
-import type { AgentDefinition, AgentEvent, AgentRun, AgentsSnapshot, SessionState, SessionSummary } from "@lasercode/protocol";
+import { sessionKindOf, type AgentDefinition, type AgentEvent, type AgentRun, type AgentsSnapshot, type SessionAgentInfo, type SessionAgentKind, type SessionState, type SessionSummary } from "@lasercode/protocol";
 import type { SessionView } from "../../src/store.js";
+
+/**
+ * A session's agent record as the host sends it. `sessionKind` follows the
+ * stored kind unless a case states otherwise — including a legacy `"beam"`
+ * record, which is a Chat conversation now (`docs/plain-chat.md`).
+ */
+export const agentInfo = (
+  over: Partial<Omit<SessionAgentInfo, "kind">> & { kind?: SessionAgentKind | "beam" } = {},
+): SessionAgentInfo => {
+  const { kind = "root", sessionKind, ...rest } = over;
+  return {
+    kind: kind === "beam" ? "chat" : kind,
+    sessionKind: sessionKind ?? sessionKindOf(kind),
+    ...rest,
+  };
+};
 
 export const agent = (over: Partial<AgentDefinition> & Pick<AgentDefinition, "name">): AgentDefinition => ({
   kind: "custom",
@@ -23,18 +39,13 @@ export const snapshot = (over: Partial<AgentsSnapshot> = {}): AgentsSnapshot => 
   revision: 1,
   agents: [
     agent({ name: "default", description: "The shipped agent", engineInstructions: true, supportsSubagents: true, allowedAgents: ["default"] }),
-    agent({ name: "beam", kind: "builtin", instructions: "Read the app state before answering." }),
-    agent({ name: "chat", kind: "builtin", instructions: "Answer general questions directly." }),
-    agent({ name: "namer", kind: "builtin", instructions: "Name sessions and running actions clearly." }),
     agent({ name: "reviewer", description: "Reviews a diff" }),
   ],
   defaultAgent: "default",
   warnings: [],
   policy: { maxDepth: 3, foregroundCommandSeconds: 120 },
-  builtinProfiles: { beam: null, chat: null, namer: null },
-  builtinInstructions: { beam: null, chat: null, namer: null },
   renamedAgents: {},
-  workspaces: { beam: "/state/beam", chat: "/state/chat" },
+  workspaces: { chat: "/state/chat" },
   ...over,
 });
 

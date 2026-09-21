@@ -5,12 +5,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 
 import { CapabilityNotice } from "../../src/components/capability-gate.js";
 import { LaserProvider, useCapability, useLaserStable } from "../../src/runtime/LaserProvider.js";
-import { createWorld, FakeHostClient, settle } from "../beam/fake-host.js";
+import { createWorld, FakeHostClient, settle } from "../world/fake-host.js";
 import { testDescriptor } from "./environment-fixture.js";
 
 let root: Root;

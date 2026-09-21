@@ -1,23 +1,24 @@
 /**
- * A host for the Beam tests: `HostClient` replaced by an in-memory JSON-RPC
- * peer over a mutable world (sessions, states, the agents snapshot, the model
- * catalog), so the real `LaserProvider`, its runtimes and the scope run
- * unchanged against handlers a test can inspect and drive.
+ * A host for the provider tests: `HostClient` replaced by an in-memory
+ * JSON-RPC peer over a mutable world (sessions, states, the agents snapshot,
+ * the model catalog), so the real `LaserProvider`, its runtimes and any scope
+ * run unchanged against handlers a test can inspect and drive.
  *
  * Each test file installs it with
  *
  *   vi.mock("../../src/client.js", async (original) => ({
  *     ...(await original<typeof import("../../src/client.js")>()),
- *     HostClient: (await import("./fake-host.js")).FakeHostClient,
+ *     HostClient: (await import("../world/fake-host.js")).FakeHostClient,
  *   }));
  */
 import type { AgentsSnapshot, EnvironmentDescriptor, HostNotificationMethod, HostNotifications, ModelCatalogEntry, ModelProfile, ModelRef, ProfileAssignments, ProviderAuthInfo, SessionState, SessionSummary } from "@lasercode/protocol";
 import type { HostClientOptions } from "../../src/client.js";
 import { createTranscriptHoldLedger, type TranscriptHoldLedger } from "../../src/transcript-hold-ledger.js";
-import { sessionState, snapshot as agentsSnapshot, summary } from "../agents/fixtures.js";
+import { agentInfo, sessionState, snapshot as agentsSnapshot, summary } from "../agents/fixtures.js";
 import { testDescriptor } from "../runtime/environment-fixture.js";
 
-export const BEAM_CWD = "/state/beam";
+/** The Chat workspace this world's host reports (`docs/plain-chat.md`). */
+export const CHAT_CWD = "/state/chat";
 export const PROJECT_CWD = "/p";
 
 export interface World {
@@ -41,7 +42,7 @@ export function createWorld(over: Partial<World> = {}): World {
   return {
     sessions: [],
     states: {},
-    snapshot: agentsSnapshot({ workspaces: { beam: BEAM_CWD, chat: "/state/chat" } }),
+    snapshot: agentsSnapshot({ workspaces: { chat: CHAT_CWD } }),
     profiles: [
       { id: "mp_fast00000000000000", name: "Fast", models: [{ provider: "openai", id: "gpt-fast" }], origin: "seeded", updatedAt: "2026-09-01T00:00:00.000Z" },
       { id: "mp_smart0000000000000", name: "Smart", models: [{ provider: "openai", id: "gpt-big" }, { provider: "openai", id: "gpt-fast" }], origin: "seeded", updatedAt: "2026-09-01T00:00:00.000Z" },
@@ -69,7 +70,7 @@ export function createWorld(over: Partial<World> = {}): World {
 
 /** Add a persisted session to the world: listed by the catalog and loadable. */
 export function addSession(world: World, path: string, cwd: string, extra: Partial<SessionSummary> = {}): void {
-  const agent = cwd === BEAM_CWD ? { agentName: "beam", kind: "beam" as const } : undefined;
+  const agent = cwd === CHAT_CWD ? agentInfo({ kind: "chat" }) : undefined;
   world.sessions.push(summary({ path, cwd, messageCount: 1, ...(agent ? { agent } : {}), ...extra }));
   world.states[path] = sessionState({ path, cwd, messageCount: 1, ...(agent ? { agent } : {}) });
 }
@@ -249,8 +250,13 @@ function handle(world: World, method: string, params: Record<string, unknown>): 
     case "session/new": {
       const cwd = params.path as string | undefined ?? (params.cwd as string);
       const agentName = params.agentName as string | undefined;
+      const sessionKind = params.sessionKind as string | undefined;
       const path = `${cwd}/session-${++created}.jsonl`;
-      const agent = agentName ? { agentName, kind: agentName === "beam" ? ("beam" as const) : ("root" as const) } : undefined;
+      // As the worker does: a Chat session is recorded with its kind and no
+      // definition at all; anything else names the agent it runs.
+      const agent = sessionKind === "chat"
+        ? agentInfo({ kind: "chat" })
+        : agentName ? agentInfo({ kind: "root", agentName }) : undefined;
       const state = sessionState({ path, cwd, ...(agent ? { agent } : {}) });
       world.states[path] = state;
       world.sessions.push(summary({ path, cwd, messageCount: 0, ...(agent ? { agent } : {}) }));
@@ -299,15 +305,6 @@ function handle(world: World, method: string, params: Record<string, unknown>): 
     }
     case "pi/providers/list":
       return { providers: world.providers };
-    case "agents/builtin/set-profile": {
-      const name = params.name as keyof AgentsSnapshot["builtinProfiles"];
-      world.snapshot = {
-        ...world.snapshot,
-        revision: world.snapshot.revision + 1,
-        builtinProfiles: { ...world.snapshot.builtinProfiles, [name]: params.profileId as string | null },
-      };
-      return { snapshot: world.snapshot };
-    }
     default:
       throw new Error(`The fake host has no handler for ${method}.`);
   }

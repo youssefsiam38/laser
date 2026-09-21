@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 vi.mock("../../src/client.js", async original => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("./fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 vi.mock("../../src/components/shell/shell-context.js", async original => ({
   ...(await original<typeof import("../../src/components/shell/shell-context.js")>()),
@@ -33,7 +33,7 @@ import { Composer } from "../../src/components/thread/Composer.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserProvider, useLaserStable } from "../../src/runtime/LaserProvider.js";
 import { readDictationScope } from "../../src/pwa/mobile-dictation.js";
-import { createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "./fake-host.js";
+import { createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../world/fake-host.js";
 
 function PickProject() {
   const { setCurrentProject } = useLaserStable();

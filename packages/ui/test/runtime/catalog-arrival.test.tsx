@@ -29,7 +29,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 
 import { useAui, useAuiState } from "@assistant-ui/react";
@@ -38,7 +38,7 @@ import { EmptyState } from "../../src/components/thread/EmptyState.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { LaserProvider, useLaserStable, useLaserState } from "../../src/runtime/LaserProvider.js";
 import { sessionState, summary } from "../agents/fixtures.js";
-import { createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../world/fake-host.js";
 
 /** What the sessions panel and the transcript header read; the main item is a lookup that throws when the runtime lost it. */
 function Probe() {

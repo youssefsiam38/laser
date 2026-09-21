@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/client.js", async (original) => ({
   ...(await original<typeof import("../../src/client.js")>()),
-  HostClient: (await import("../beam/fake-host.js")).FakeHostClient,
+  HostClient: (await import("../world/fake-host.js")).FakeHostClient,
 }));
 // The rail also carries the Agents page's button (another lane); it is not under test here.
 vi.mock("@/components/agents/page/AgentsButton", () => ({ AgentsButton: () => null }));
@@ -27,7 +27,7 @@ import { WorkbenchProvider, useWorkbench, type Workbench } from "../../src/compo
 import { closeFleetSheet, setFleetSheetOpen, useFleetSheetOpen } from "../../src/fleet/index.js";
 import { LaserProvider, useLaserStable, useLaserState, useLaserView } from "../../src/runtime/LaserProvider.js";
 import { summary } from "../agents/fixtures.js";
-import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../beam/fake-host.js";
+import { addSession, createWorld, FakeHostClient, PROJECT_CWD, settle, type World } from "../world/fake-host.js";
 import { DEVICE_KEYS } from "../../src/runtime/device-storage.js";
 import { clearDeviceValue, seedDeviceValue, seedProject, seedRememberedSessions } from "../../test/runtime/environment-fixture.js";
 

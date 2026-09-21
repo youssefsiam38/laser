@@ -4,7 +4,7 @@
  * and a `session/load` that resends every buffered update after `fromSeq` and
  * reports the floor it could honour together with its current watermark.
  *
- * The Beam fake (`test/beam/fake-host.ts`) answers `session/load` with a
+ * The world fake (`test/world/fake-host.tsx`) answers `session/load` with a
  * constant `{ replayFrom: 0, seq: 0 }`, which is exactly the behaviour that
  * hides a re-open bug. This one replays for real, so a lying `fromSeq` shows up
  * as a doubled transcript here the same way it does in the app.
