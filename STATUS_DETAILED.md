@@ -6310,7 +6310,7 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | M26-T1 | Protocol lint and shapes | done | claude-2026-09-21-leap | `a6ed4028`; `pnpm -F @lasercode/protocol test` (515 passed; `test/tool-contract.test.ts` 49) · `pnpm -F @lasercode/pi-extension test` (`register-tool.test.ts`) | see notes |
 | M26-T2 | Retrofit harness and background tools | done | claude-2026-09-21-leap | `b54e2f06`; `pnpm verify` passed in the worker's tree; merged `a94271f2` | see notes |
 | M26-T3 | Evaluation harness | in-progress | claude-2026-09-21-leap | — | see notes |
-| M26-T4 | UI error and preview rendering | in-progress | claude-2026-09-21-leap | — | see notes |
+| M26-T4 | UI error and preview rendering | done | claude-2026-09-21-leap | `bb8180ca`; `pnpm -F @lasercode/ui test` (3005 passed; `test/thread/tool-contract-rows.test.tsx` 16) | see notes |
 
 #### M26-T1–T2 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap (goal order: M26 alongside M21-T1–T5, after M23): one worker on a branch based on `70d8f4ad`, protocol lint + one registration helper, then the retrofit of the nine harness/background tools; plan in `docs/leap/m26-plan.md`. Runs in parallel with the M23 review-fix worker (disjoint write sets: M26 touches `packages/protocol/src/tool-*`, `packages/pi-extension/src/modules/{subagents,background-work}.ts`, `packages/worker` tool schemas; M23 fixes touch host/ui workspace paths).
@@ -6319,6 +6319,8 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 #### M26-T3–T4 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: T3 evaluation harness (worker) and T4 UI error/preview rendering (ui) to two workers in parallel from `a94271f2`; contracts for both in `docs/leap/m26-plan.md` "What the M26-T3 and M26-T4 owners must know".
+
+- 2026-09-21 T4 done (`bb8180ca`): `elements/tool-error.tsx` `ToolErrorReport` (message headline, committed line in attention/danger-quiet tone, `Next` step, code as a chip), wired through `ToolRow` bodies/peeks and the fallback row; `source-control/change-preview.tsx` extracted from the git dialog and reused by `ToolPreviewRow` (digest, no confirm button); the detected preview shape (`preview: true` + `digest` + `summary` …) published in `docs/leap/m26-plan.md` for M21-T17/M25-T4 producers. Browser acceptance of both themes/widths is the person's (D-342).
 
 #### M26-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/agent-tool-contract.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M26 tasks added; D-350 recorded. Implementation not started.
