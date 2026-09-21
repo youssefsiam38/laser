@@ -5978,8 +5978,8 @@ live work holding its row when a snapshot thins — because both are real hazard
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M21-T0 | Binding product contract and dependency plan | done | codex-2026-09-20-git-revisions | `docs/project-lifecycle-leap.md`; `PLAN.md` M21 index; D-329–D-333, D-345; `git diff --check -- docs/project-lifecycle-leap.md PLAN.md STATUS_DETAILED.md` | see notes |
-| M21-T1 | Protocol domain, revisions and transition rules | in-progress | claude-2026-09-21-leap | — | see notes |
-| M21-T2 | Stable project identity and canonical store | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T1 | Protocol domain, revisions and transition rules | done | claude-2026-09-21-leap | `fca60c23`; `pnpm -F @lasercode/protocol test` (584 passed; `project-work{,-transitions,-methods}.test.ts`) | see notes |
+| M21-T2 | Stable project identity and canonical store | done | claude-2026-09-21-leap | `b8fb9454`; `env -i … pnpm -F @lasercode/host test` (1068 passed; `project-work/{store,migrations,crash,bounds}.test.ts`) | see notes |
 | M21-T3 | Host authority, methods, policy and event stream | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T4 | Bounded bodies, search and derived projections | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T5 | UI client store, reconcile and deep links | todo | — | — | `PLAN.md` M21 |
@@ -6006,6 +6006,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T26 | Research phase: adapters, tools and loop | todo | — | — | `PLAN.md` M21; `docs/research-phase.md` |
 
 #### M21-T1–T4 notes
+- 2026-09-21 T1/T2 done, merged `c37129d5`: `packages/protocol/src/project-work{,-bodies,-methods}.ts` (kinds, keys, refs, states, transitions, stale propagation, bodies for all five kinds incl. Research/Design per their contracts, 16 methods + 2 notifications with schemas/byte limits); `packages/host/src/project-work/{schema,store,blobs,ids,errors}.ts` (`node:sqlite` store: stable projectId with relocation relink, worktree→parent, stable repositoryId, per-kind monotonic keys, immutable revisions, conflict/idempotency, quotas that refuse, event sequence; content-addressed chunked blobs; crash tests through a SIGKILLed child). T1 stopgap: mutations on scope `settings` until `project_write` lands in T3. The first worker session ran out of budget before T3; T3/T4 re-briefed to a new worker with its settled design.
 - 2026-09-21 claimed by claude-2026-09-21-leap under D-358: one backend worker owns the canonical spine (protocol domain → store → host authority → bodies/search/projections) on a branch based on the 0.13.0 candidate; plan in `docs/leap/m21-spine-plan.md`. Store engine: `node:sqlite` as the log store already uses (D-358).
 
 #### M21-T0 notes
