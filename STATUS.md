@@ -38,7 +38,7 @@
 **Active owners:**
 - T10/T13: done; reviewed source merged `b4ed1003` + correction `d408e8ea`. Parent450 focused tests and merged full verify/identity pass.
 - T18/T19: backend/protocol checkpoint `36e163ed` settled; proof consumer `59468295` parent-validated (52 UI tests), ready for review. Runtime `13514908` closes drain/identity/Stop gaps; same-path reload safety and visible diagnostic follow-up is active (`run_2924c270`). First full T19 review remains pending.
-- T2: canonical quota source `40c89aa1` returned; bounded migration, global recovery and historical-reference corrections active (`run_f4e5c207`). First storage review pending.
+- T2: canonical quota corrections `8e69281b` parent-validated (344 host tests); first independent storage review active (`run_3a28ca40`).
 - Integrated: T9/T17 mentions, T14 Foundation, T21 interop, image fixture and transcript continuity repairs. Exact ancestry/owners in `STATUS_DETAILED.md`.
 
 **Gate:** integrated Command/mention/transcript **`pnpm verify && pnpm identity:check` pass** (`t-37896cd3`, 141.7s, source `d408e8ea`; clean graphical environment). Current integration branch, **not final main**; excludes pending capture/verification work. Person-owned browser acceptance remains unclaimed (D-342).
