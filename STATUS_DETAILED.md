@@ -6300,10 +6300,13 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M26-T0 | Binding contract | done | codex-2026-09-21-model-profiles | `docs/agent-tool-contract.md`; `PLAN.md` M26; D-350 | see notes |
-| M26-T1 | Protocol lint and shapes | todo | — | — | `PLAN.md` M26 |
-| M26-T2 | Retrofit harness and background tools | todo | — | — | `PLAN.md` M26 |
+| M26-T1 | Protocol lint and shapes | in-progress | claude-2026-09-21-leap | — | see notes |
+| M26-T2 | Retrofit harness and background tools | in-progress | claude-2026-09-21-leap | — | see notes |
 | M26-T3 | Evaluation harness | todo | — | — | `PLAN.md` M26 |
 | M26-T4 | UI error and preview rendering | todo | — | — | `PLAN.md` M26 |
+
+#### M26-T1–T2 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap (goal order: M26 alongside M21-T1–T5, after M23): one worker on a branch based on `70d8f4ad`, protocol lint + one registration helper, then the retrofit of the nine harness/background tools; plan in `docs/leap/m26-plan.md`. Runs in parallel with the M23 review-fix worker (disjoint write sets: M26 touches `packages/protocol/src/tool-*`, `packages/pi-extension/src/modules/{subagents,background-work}.ts`, `packages/worker` tool schemas; M23 fixes touch host/ui workspace paths).
 
 #### M26-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/agent-tool-contract.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M26 tasks added; D-350 recorded. Implementation not started.
