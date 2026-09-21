@@ -17,7 +17,13 @@ import type { ModelCatalogEntry, ProviderAuthInfo, SettingChange, SettingsScope,
 const mocks = vi.hoisted(() => ({ request: vi.fn(), toast: vi.fn() }));
 vi.mock("../../src/runtime/index.js", () => {
   const stable = { client: { request: mocks.request, subscribe: () => () => {} }, actions: { toast: mocks.toast } };
-  return { useCapability: () => ({ state: "available" }), useLaserStable: () => stable };
+  return {
+    useCapability: () => ({ state: "available" }),
+    useLaserStable: () => stable,
+    // The Model profiles pane is mounted beside this one and reads the agents
+    // snapshot for its "used by" line (M22-T6).
+    useLaserState: (selector: (state: { agents: { snapshot: null } }) => unknown) => selector({ agents: { snapshot: null } }),
+  };
 });
 vi.mock("../../src/components/onboarding/index.js", () => ({ ProviderStep: () => null }));
 vi.mock("../../src/components/settings/WebSearchTab.js", () => ({
