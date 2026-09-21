@@ -2403,6 +2403,10 @@ export class WorkerServer {
           ...(access.profile ? { profileId: access.profile.id } : {}),
         };
       },
+      // The one thing the index cannot report through a row: a settlement
+      // observer that threw, which loses a build's terminal row. Bounded,
+      // content-free, and on the channel every other worker diagnostic uses.
+      log: (line) => console.error(`${PRODUCT_NAME} worker: ${line}`),
       onCommand: (command, owner) => this.designWorkspace().observeCommand(command, owner),
       onProgress: (commandId, progress) => this.designWorkspace().observeProgress(commandId, progress),
       // How a build ended, published as its last row before the index lets go
@@ -3308,6 +3312,21 @@ export class WorkerServer {
       this.namingInFlight.delete(oldPath);
       this.namingInFlight.set(newPath, naming);
     }
+    // An index build is a Command of the conversation that started it, so it
+    // moves with the conversation exactly like a shell command's row does.
+    // Its *owner* is unchanged and is never re-derived here: the same
+    // conversation still owns the same builds, and only the file it lives in
+    // has moved. Without this the workspace would keep publishing under a path
+    // no runtime serves, and the row the task index just moved to the new path
+    // would stay `running` for ever — pinning the moved conversation against
+    // an unload that should have been allowed.
+    //
+    // The fields, deliberately, and not the getters: a conversation that never
+    // asked for anything about design must not acquire an index and a
+    // workspace because its file moved. After `tasks.rekeySession` above, so
+    // the republished row lands in the moved task index rather than under it.
+    this.projectDesignIndex?.rekeySession(oldPath, newPath);
+    this.projectDesignWorkspace?.rekeySession(oldPath, newPath);
   }
 
   /** Re-send accepted updates after `fromSeq`, then any dialogs still waiting. */

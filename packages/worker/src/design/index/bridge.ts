@@ -50,6 +50,14 @@ export interface ProjectDesignIndexOptions {
    * registration order and the index registers first.
    */
   onSettled?: (command: DesignBuildCommand, owner: DesignBuildOwner, outcome: DesignBuildOutcome) => void;
+  /**
+   * One line to the worker's own diagnostic channel (stderr), for the one
+   * thing this class cannot report any other way: a settlement observer that
+   * threw, which means a build's terminal row was lost. Bounded and
+   * content-free by construction — see `settle()`. Absent in narrow tests,
+   * where it defaults to the worker's stderr convention.
+   */
+  log?: (line: string) => void;
   now?: () => number;
 }
 
@@ -118,6 +126,28 @@ export class ProjectDesignIndex {
   /** The session one build belongs to. Read-only: it is fixed at admission. */
   owner(commandId: string): DesignBuildOwner | undefined {
     return this.builds.get(commandId)?.owner;
+  }
+
+  /**
+   * A fork moved the owning conversation's file: the builds it owns follow it.
+   *
+   * This is an **address** change, not an ownership change. The conversation
+   * that was admitted is the same conversation; only the file it lives in has
+   * moved, so the owner recorded at admission would otherwise name a path no
+   * runtime serves — and every later answer about this build (its row, its
+   * pin, `owner()`) would be about a session that no longer exists. Which
+   * build belongs to whom is still decided once, at admission, and never
+   * re-derived from whatever conversation happens to be current.
+   *
+   * The recorded owner is *replaced*, never mutated: the object the admission
+   * was called with belongs to its caller and stays as it was.
+   */
+  rekeySession(oldPath: string, newPath: string): void {
+    if (oldPath === newPath) return;
+    for (const held of this.builds.values()) {
+      if (held.owner.sessionPath !== oldPath) continue;
+      held.owner = { ...held.owner, sessionPath: newPath };
+    }
   }
 
   async startBuild(input: { rebuild: boolean; appRoot?: string; maxFiles?: number; owner: DesignBuildOwner }): Promise<{ commandId: string; title: string; appRoot: string }> {
@@ -189,10 +219,19 @@ export class ProjectDesignIndex {
   private settle(held: HeldBuild, outcome: DesignBuildOutcome): void {
     try {
       this.options.onSettled?.(held.command, held.owner, outcome);
-    } catch {
-      // An observer that threw has lost its row, which is its own problem to
-      // report; it must not leave every finished build in this worker held for
-      // the life of the process, so the sweep below still runs.
+    } catch (error) {
+      // An observer that threw has lost this build's terminal row: the fleet
+      // keeps showing it as running until its session closes. Nothing else
+      // would ever say so, so one bounded line goes to the worker's own
+      // diagnostic channel — the build's id and the error's *kind*, never its
+      // message, its stack or anything the build read, because an index build
+      // walks a person's repository and this channel is not a place for its
+      // contents. It stays a diagnostic: nothing is retried and nothing is
+      // queued, and the sweep below still runs, so an observer bug cannot
+      // hold every finished build in this worker for the life of the process.
+      const kind = error instanceof Error ? error.name.slice(0, 80) : typeof error;
+      const log = this.options.log ?? ((line: string) => console.error(line));
+      log(`an index build's settlement could not be published for ${held.command.id} (${kind}); its final row may be missing`);
     } finally {
       held.finished = true;
       this.release();

@@ -107,7 +107,15 @@ interface Settled {
 interface Tracked {
   command: DesignBuildCommand;
   progress: DesignBuildProgress;
-  /** The session that owns it. Fixed at admission; never re-read or replaced. */
+  /**
+   * Where the owning conversation lives.
+   *
+   * *Who* owns the build is fixed at admission and never re-read from whatever
+   * conversation is current. This is that conversation's **address**, and the
+   * one thing about it that can change: a fork moves a session's file, and
+   * `rekeySession` moves this with it so the row keeps naming the session that
+   * is really there.
+   */
   sessionPath: string;
   startedAt: string;
   /** Absent while it runs; the one coherent outcome once it has ended. */
@@ -132,7 +140,26 @@ function failureSentence(error: unknown): string {
   // A refusal that wrote its own sentence is shown as it is; a raw error
   // message is given one, so a row never reads as a stack trace.
   const sentence = next !== "" || /[.!?]$/.test(message) ? message : `The index build could not finish: ${message}`;
-  return `${sentence}${next}`.slice(0, 500);
+  return boundedSentence(`${sentence}${next}`);
+}
+
+/** The longest failure sentence a fleet row carries. */
+const FAILURE_SENTENCE_MAX = 500;
+
+/**
+ * The same sentence, short enough for a row, cut where a reader would cut it.
+ *
+ * A hard slice can end mid-word, which reads as a rendering bug rather than as
+ * a long message; backing up to the last space keeps it a sentence. The backup
+ * is bounded too — a "word" longer than a quarter of the budget (a path, a
+ * digest) is cut where it is rather than losing most of the sentence.
+ */
+function boundedSentence(sentence: string): string {
+  if (sentence.length <= FAILURE_SENTENCE_MAX) return sentence;
+  const cut = sentence.slice(0, FAILURE_SENTENCE_MAX - 1);
+  const space = cut.lastIndexOf(" ");
+  const kept = space >= FAILURE_SENTENCE_MAX * 0.75 ? cut.slice(0, space) : cut;
+  return `${kept.trimEnd()}\u2026`;
 }
 
 /** How often a running build refreshes its fleet row. A file is not a frame. */
@@ -195,6 +222,32 @@ export class DesignWorkspace {
     this.tracked.set(command.id, held);
     this.publish(command.id, true);
     this.prune();
+  }
+
+  /**
+   * A fork moved the owning conversation's file: the rows follow it.
+   *
+   * The logical owner does not change — the same conversation still owns the
+   * same builds, and nothing here reads the current conversation. What changes
+   * is the *address* the rows are published under, for active and finished
+   * builds alike, so `design/index/get` and the fleet keep agreeing with the
+   * worker's own task index (which the server moves in the same step).
+   *
+   * A build that is still running republishes its row at once: a row is only
+   * ever learned from a publication, so a build that reports nothing for a
+   * while would otherwise be missing from the conversation that now exists
+   * until it ends. Nothing about the row changes but the session it hangs
+   * under.
+   */
+  rekeySession(oldPath: string, newPath: string): void {
+    if (oldPath === newPath) return;
+    const moved: string[] = [];
+    for (const [commandId, held] of this.tracked) {
+      if (held.sessionPath !== oldPath) continue;
+      held.sessionPath = newPath;
+      if (this.isRunning(held)) moved.push(commandId);
+    }
+    for (const commandId of moved) this.publish(commandId, true);
   }
 
   /** One progress report from the engine. Files, never a percentage. */
