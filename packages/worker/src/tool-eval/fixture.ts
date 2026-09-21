@@ -175,7 +175,16 @@ function parseWorld(value: unknown, source: string): ToolEvalWorld {
   if (catalog !== undefined && !Array.isArray(catalog)) fail(source, "world.catalog must be a list of agents.");
   const agents = value["agents"];
   if (agents !== undefined && !Array.isArray(agents)) fail(source, "world.agents must be a list of agents.");
+  const designIndex = value["designIndex"];
+  let design: ToolEvalDesignWorld | undefined;
+  if (designIndex !== undefined) {
+    if (!isRecord(designIndex)) fail(source, "world.designIndex must be an object.");
+    const built = designIndex["built"];
+    if (built !== undefined && typeof built !== "boolean") fail(source, "world.designIndex.built must be true or false.");
+    design = { project: requireString(designIndex["project"], source, "world.designIndex.project"), ...(built !== undefined ? { built } : {}) };
+  }
   return {
+    ...(design !== undefined ? { designIndex: design } : {}),
     ...(role !== undefined ? { role } : {}),
     ...(search !== undefined ? { search } : {}),
     ...(catalog !== undefined
