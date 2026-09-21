@@ -1,0 +1,134 @@
+{
+  "tool": "verify_project_task",
+  "task": "TASK-1 is implemented. Verify it against everything it is answerable to, and tell me honestly where it stands.",
+  "expectedTool": "verify_project_task",
+  "allowedTools": [
+    "verify_project_task",
+    "inspect_project_work",
+    "report_project_task"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 5,
+    "inputTokens": 70000,
+    "outputTokens": 900
+  },
+  "measures": [
+    "retry"
+  ],
+  "world": {
+    "role": "root",
+    "projectWork": {
+      "failingCommands": [
+        "pnpm -F exports lint"
+      ],
+      "items": [
+        {
+          "kind": "spec",
+          "title": "Exports tell a person what happened",
+          "body": {
+            "kind": "spec",
+            "spec": {
+              "form": "full",
+              "brief": "An export that fails says why, in words a person can act on.",
+              "outcomes": [
+                "Nobody has to open a log to find out why an export failed."
+              ],
+              "nonGoals": [],
+              "requirements": [],
+              "acceptance": [],
+              "constraints": [
+                "Every package passes its own lint rules."
+              ]
+            }
+          },
+          "state": "approved"
+        },
+        {
+          "kind": "task",
+          "title": "Failed export rows say why",
+          "body": {
+            "kind": "task",
+            "task": {
+              "outcome": "The export list shows why a failed export failed, and what to do next.",
+              "nonGoals": [
+                "Automatic retry."
+              ],
+              "dependencies": [],
+              "scope": {
+                "packages": [
+                  "exports"
+                ],
+                "repositories": [],
+                "paths": [
+                  "src/exports/list.ts"
+                ],
+                "capabilities": []
+              },
+              "acceptance": [
+                {
+                  "id": "a1",
+                  "text": "A failed export row shows the reason and the next step.",
+                  "machineVerifiable": true,
+                  "command": "pnpm -F exports test"
+                },
+                {
+                  "id": "a2",
+                  "text": "The reason reads as a sentence a person can act on.",
+                  "machineVerifiable": false
+                }
+              ],
+              "verificationCommands": [
+                "pnpm -F exports test",
+                "pnpm -F exports lint"
+              ],
+              "visualEvidenceRequired": false,
+              "assignment": {
+                "policy": "agent",
+                "agentName": "worker"
+              }
+            }
+          },
+          "state": "in_progress"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "verify_project_task",
+        "args": {
+          "key": "TASK-1",
+          "activity_label": "Verifying the task"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "verify_project_task",
+        "args": {
+          "key": "TASK-1",
+          "deviation_reason": "The lint rule this spec assumes does not exist in the exports package.",
+          "activity_label": "Proposing a deviation"
+        }
+      },
+      "fails": true
+    },
+    {
+      "toolCall": {
+        "name": "verify_project_task",
+        "args": {
+          "key": "TASK-1",
+          "deviation_reason": "The lint rule this spec assumes does not exist in the exports package.",
+          "deviation_upstream_key": "SPEC-1",
+          "deviation_proposal": "Name the lint rules the exports package really has, or drop the constraint.",
+          "activity_label": "Proposing a deviation"
+        }
+      }
+    },
+    {
+      "text": "TASK-1 does not converge yet: the export tests pass, but pnpm -F exports lint exits 1, and one acceptance criterion \u2014 that the reason reads as a sentence a person can act on \u2014 is yours to judge. I have proposed a deviation against SPEC-1 for you to accept or decline. The task stays in progress; nothing was marked done."
+    }
+  ]
+}

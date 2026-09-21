@@ -448,3 +448,325 @@ focused protocol/verification/server safety and close/move tests, types and
 identity; parent owns full verification. One full T19 review follows all
 corrections, not separate micro-reviews. Ask only if a genuinely different
 host authority or wire operation becomes necessary.
+
+## What was implemented, and how it was proved (D-364)
+
+Owner: the implementation session for M21-T19's Command lifetime, on
+`agents/implement-verification-command-lifetime-801faae2`, from `9f3e8ca7`
+with the whole proof checkpoint `36e163ed` merged in first (merge commit, no
+cherry-pick, no rewrite, no conflict: the merge was clean). Everything below
+is code in this branch, not a proposal. The approved contract is the **Parent
+disposition (D-364)** section above; the numbering follows it.
+
+### 1 · the row is indexed before it is transported
+
+`server.ts` `verification()`'s `publishTask` now calls `this.tasks.observe(path, message)` **before** `this.notify(...)`, the same two lines and the same
+rule the design workspace carries. A running verification therefore counts in
+`runningTasks` (`server.ts:2758`), takes the `task` pin
+(`session-safety.ts:100`), and is in the array `inspect_fleet` reads
+(`harness.ts:1655` → `host.tasks` → `tasks.tasksOf`).
+
+### 2 · a stop is bounded refusal of further work, never a cancel
+
+- **Protocol first.** `VerificationRunState.stopping?: boolean` with its schema
+  entry, one branch in the shared `verificationRunLine`, and
+  `isVerificationPhaseTerminal` so the run, the registry and the row agree in
+  one place about what "ended" means. No new phase, no new task status, no UI
+  edit: `VerificationPanel` reads `run.line` and keeps polling.
+- **Before dispatch**, `run.stop()` records the reason, aborts, clears the
+  current command and publishes `{ stopping: true }` — no phase change, no
+  `endedAt`. The row stays `running`, so the session stays pinned until the
+  stopped report has landed or failed.
+- **After `verifyReport` has been invoked** (`reportDispatched`), a new stop
+  changes nothing: `stopped: false`, state untouched, the serialized payload
+  untouched (its arguments were built at the call), no second report, no
+  invented rollback, and the row keeps the truthful *Saving what this run
+  proved* line and the pin until the host's own outcome arrives — including a
+  move to `needs_review`.
+- A report write that **fails** after a stop is kept as `problem` and carried
+  into the fleet row's `error`/`terminalReason`, so a run whose record was lost
+  never looks like one that kept it.
+
+### 3 · the runner really drains
+
+`commands.ts` settles only when the child has gone **and** its output is closed
+(`close`), or on a bounded `VERIFICATION_STDIO_GRACE_MS` wait after `exit` when
+a pipe nobody owns is still open — and a record made on that bound says the
+last of the output may be missing. Asking a tree to end no longer records
+anything: `onAbort` and the timeout set the reason and kill, and the record is
+made when the close is witnessed. An already-aborted request starts no process;
+a synchronous spawn failure is `unavailable` (the `timer` it used to touch is
+declared before `finish`); the abort listener is installed after a successful
+spawn and removed once, and settlement is once-only. The kill is the worker's
+existing owned-tree pattern, process group on POSIX and `taskkill /T` on
+Windows (`agents/worktrees.ts`, `project-env.ts`), exported as
+`killVerificationTree`; the child is named to the process inventory (RP-1). If
+the system refuses to end the tree, **no exit is invented**: the run stays
+unsettled — which keeps the pin and the honest row — and one bounded line
+carries the system's code and nothing the command read.
+
+### 4 · one canonical rekey, and a bridge that names its owner
+
+`VerificationRun.rekeySession` replaces the state (never the caller's options
+object); `VerificationService.rekeySession` moves every run of the old path,
+republishes the unsettled ones once, and publishes nothing for a path it holds
+nothing for. The run's own state is the single source of the row's
+`sessionPath`, so the old path cannot be republished. `server.ts`
+`rekeySessionState` calls it through the **field**, after `tasks.rekeySession`.
+`bridgeFor(cwd, sessionPath)` gives each run a bridge whose `execution()` is
+`executionShape(cwd, undefined, sessionPath)` — the admitted owner's current
+canonical address, read at call time, never a global current session and never
+a mutated caller request. No historical record is rewritten.
+
+### 5 · retention at settlement, and bounded observer diagnostics
+
+`Held.settled` is set in the one place that knows — the settlement chain — after
+the terminal row has been published, and `prune()` selects on it: at most 20
+settled runs with no next start, an unsettled run never evicted, and an ending
+never lost to eviction. The settlement chain is floated with `then(fn, fn)` so
+nothing can reject into the worker's rejection guard. A `publishTask` that
+throws is caught: the run still settles, retention still runs, and one bounded
+line carries the run id and the error's `name` only.
+
+### 6 · `pi/session/close` is the host's file-move preparation
+
+Under the existing `firstTurnLock`, close now refuses while this conversation
+has a running command or an unsettled verification run, with the sentence that
+says to stop it and wait; the driver is not disposed first and no old row is
+resurrected. An unexpected `closed` event calls
+`VerificationService.sessionClosed`, which stops that conversation's runs and
+detaches them: nothing further is published under a path no runtime serves,
+while the stopped report, settlement and pruning still complete privately. A
+same-`Live` fork stays the other case entirely — it moves the address and keeps
+the run.
+
+### 7 · `delivered` means this worker holds the id
+
+`stopByTaskId` answers `true` whenever the run is held — already stopping,
+already reporting or terminal — and `false` only for an id this worker never
+had. `stop().stopped` keeps its own meaning: *this stop changed something*.
+
+### Evidence
+
+Commands run in this worktree, at the revision this section was written for:
+
+| Command | Result |
+| --- | --- |
+| `pnpm install --frozen-lockfile` | ok |
+| `pnpm -r build` | all packages built |
+| `pnpm -F @lasercode/worker exec vitest run test/project-work test/session-safety.test.ts test/session-unload.test.ts test/session-retire.test.ts test/server.test.ts test/process-guards.test.ts` | 188 passed (11 files) |
+| `pnpm -F @lasercode/protocol exec vitest run test/project-work-verification.test.ts` | 19 passed, no type errors |
+| `pnpm -F @lasercode/host exec vitest run test/router.move.test.ts test/session-move.test.ts test/session-route-lease.test.ts` | 37 passed |
+| `pnpm -F @lasercode/worker typecheck`, `pnpm -F @lasercode/protocol typecheck`, `pnpm identity:check` | clean |
+
+New tests, all deterministic — deferred barriers the test resolves by hand, an
+inert spawn double, and `setImmediate` turns; no wall-clock sleeps, no retries,
+no skips. `packages/worker/test/project-work/verify-server.test.ts` drives the
+real `WorkerServer` and answers its host requests one at a time:
+
+- the row is published under its conversation and a stop from it is delivered
+  without claiming the run ended (still `running`, no `endedAt`, *Stopping*
+  line, no terminal row until the report lands);
+- the `task` pin holds the session while the run is unsettled: `unload` refuses
+  with it, `pi/worker/retire { mode: "explicit" }` refuses with `pinned`, and
+  both succeed once the report has landed;
+- `pi/session/close` refuses while the run is unsettled and closes after it;
+- a fork carries the run: every later row and `pi/project/verify/state` name
+  the new path, and nothing names the old one.
+
+`packages/worker/test/project-work/verification.test.ts` adds the stop/report
+boundary (both sides), the lost-record wording, the untouched serialized
+payload and single report call after dispatch, fork rekey (including the
+bridge's owner thunk and another conversation left alone), session close,
+retention at settlement, retention under a throwing observer, the bounded
+diagnostic, and eight runner-lifecycle cases: pre-aborted (no spawn),
+synchronous spawn failure, late output before close, stop-then-close,
+timeout-then-close, `ENOENT`, a kill that fails (no record invented, one
+bounded line), and the bounded grace when output never closes.
+
+**Limits, stated honestly.** `inspect_fleet` itself is not driven here: what is
+asserted is that the row is in this worker's `TaskIndex` through the session's
+pins, which is the same `tasks.tasksOf` array the fleet view reads — a proxy,
+named as one. The per-run execution shape is proved at the service seam and by
+reading `server.ts`: `HostProjectWorkBridge` attaches the execution envelope to
+`project/work/create` and `project/work/revise` only, so a verification run's
+own `plan`/`report` calls carry no envelope on the wire today. Browser
+acceptance remains the person's (D-342), and the full verification suite is the
+parent's gate, not this session's.
+
+**One handoff for the UI owner (no UI file touched).** While a run is winding
+up its phase is still non-terminal, so `VerificationPanel`'s Stop button stays
+visible; a second press answers `stopped: false` with the unchanged run and the
+panel already ignores it, so nothing false is shown. If that button should read
+*Stopping…* or be disabled while `run.stopping` is true, that is a one-line UI
+change on the existing field — reported, not taken.
+
+## The parent's correction batch, as implemented
+
+One owner, one batch, on the branch that preserves the whole runtime
+checkpoint `33d3163e` and the whole proof-consumer branch `59468295`. The
+approved contract is
+[`m21-verification-runtime-corrections.md`](m21-verification-runtime-corrections.md);
+what follows is what the source now does and which claims above no longer hold.
+
+**Claims above that are superseded.**
+
+- *"the bounded grace when output never closes"* (the runner-lifecycle list):
+  there is no longer any bound on which a record is made. A timer after the
+  child's `exit` asks the owned tree to be cleaned up once and says, in one
+  bounded line, that this run is waiting — it never settles anything. `close`
+  is the only event that makes a record.
+- *"the panel already ignores it, so nothing false is shown"* (the UI
+  handoff): the button was enabled and a press did send a request that could
+  only answer "nothing changed". It is now disabled while the run is winding
+  up and reads *Stopping…* / *Saving results…*, from the same state.
+- The run id is no longer a module counter. `ver_0001` after a restart was a
+  durable key collision, not a cosmetic detail.
+
+**What changed, by finding.**
+
+1. *Actual drain.* `commands.ts` settles only on the child's `close`. The exit
+   timer sets no status: past `VERIFICATION_STDIO_GRACE_MS` it asks
+   `killTree` for the owned tree once and logs one content-free line. Bytes,
+   digest and tail are finalized once (`BoundedOutput.done` memoizes, and
+   `add` refuses anything after that), and the data listeners are removed with
+   the abort listener when the record is made, so a late chunk can neither be
+   counted into a published total nor rehashed into a published digest. A run
+   whose output never closes stays unsettled — pinned, visible, honest.
+2. *Termination failures are observed.* `killVerificationTree(child, onProblem,
+   seams)` reports Windows `taskkill` failures through `onProblem` (the
+   callback that used to discard them) and still throws for a synchronous
+   POSIX refusal; `ESRCH` is "already gone", not a failure. Either way no exit
+   is invented: the run stays unsettled and one bounded line carries the
+   system's code — never the command, its output, a stack or a path. The
+   `seams` parameter is how the Windows branch is driven in a test without a
+   real process anywhere.
+3. *Restart-unique durable identity.* `ver_<uuid>` (40 characters, inside the
+   protocol's 64 and the store's 80-character idempotency key), minted per run
+   and stable for its row, state, report and key.
+4. *Detached work still protects retirement.* `VerificationService.unsettledWork()`
+   reports what this worker still owes by owning path;
+   `WorkerLifetime.safety()` adds a `task` pin row for any such path no loaded
+   runtime already accounts for, and `retire()` re-reads it **under the fence,
+   after accepted handlers drain**. Nothing is published to say it, so a
+   closed path is never resurrected; a loaded session keeps its own pins
+   exactly as before, and a fork is still the other case entirely.
+5. *Diagnostics cannot own settlement.* The bounded log line goes through a
+   guard of its own, and `settleHeld` marks the run finished and prunes
+   whatever the observer or its diagnostic did. No external delivery is
+   promised when the observer throws — only this worker's own state and bound.
+
+**UI, the smallest truthful projection.** `VerificationPanel`'s Stop is
+disabled while `run.stopping` is true or the phase is `reporting`, and says
+which of the two is happening. No other verification surface is touched.
+
+### Evidence (correction batch)
+
+| Command | Result |
+| --- | --- |
+| `pnpm install --frozen-lockfile`, `pnpm -r build` | ok, all packages built |
+| worker: `vitest run test/project-work test/session-safety.test.ts test/session-unload.test.ts test/session-retire.test.ts test/server.test.ts test/process-guards.test.ts` | 196 passed (11 files) |
+| protocol: `vitest run test/project-work-verification.test.ts` | 19 passed, no type errors |
+| host: `vitest run test/project-work/verification-run-identity.test.ts test/router.move.test.ts test/session-move.test.ts test/session-route-lease.test.ts` | 40 passed |
+| ui: `vitest run test/project-work/verification.test.tsx test/project-work/native-acceptance.test.tsx test/project-work/proof-reader.test.tsx test/project-work/verification-stop.test.tsx` | 56 passed |
+| `typecheck` (worker, ui, host, protocol), `pnpm identity:check` | clean |
+
+Each correction was checked against the unfixed source before it was kept: the
+retirement test fails with the `detachedWork` line removed, the
+publisher-plus-logger test throws out of `settleHeld` without its guards, and
+the Stop test finds an enabled button without the panel change.
+
+**Limits.** The full worker/host/UI/monorepo suites and `pnpm verify` are the
+parent's gate, not this session's. Browser acceptance remains the person's
+(D-342). The durable-identity regression is proved on both sides — the worker
+mints ids that cannot repeat across a restarted module registry, and the host
+test shows what a repeated key really does to the record — but no test starts
+two real worker processes.
+
+## The parent's two follow-up holes, as implemented
+
+The same approved batch, finished by a second owner on a tree that merges the
+whole of `13514908` (and therefore `33d3163e` and `59468295`) into the parent.
+The contract is the *Parent follow-up* section of
+[`m21-verification-runtime-corrections.md`](m21-verification-runtime-corrections.md).
+
+**Claim above that is superseded.** Finding 4's *"any such path no loaded
+runtime already accounts for"* was read as *"any path that is not loaded"*,
+which is not the same sentence. A conversation can be opened again at the
+path an unexpected close just took down; the new runtime's fleet index is
+empty because the detached run publishes nothing into it, so the session's own
+pins said nothing was owed while a report was still being written. Safety is
+now the union of a session's own pins **and** the work owed under its path,
+deduplicated by the exact fleet row identities the index is holding.
+
+1. *Owed work survives a reload.* `unsettledWork()` answers the run
+   **identities** per owning path, not a count — a number cannot be
+   deduplicated. `server.detachedWork()` drops every owed run that this
+   worker's own task index already lists as running under that path, so a live
+   session is pinned once by its own row and never twice.
+   `WorkerLifetime.pinsOf()` is the one place both halves are read, and it is
+   what `safety()`, `unload()`'s first check and `unload()`'s recheck inside
+   the release fence all use; `retire()` still re-reads `safety()` under the
+   retirement fence after accepted handlers drain. Nothing is published,
+   reopened or re-created: a detached run stays detached across a reload, so
+   no row appears under a path its own conversation no longer serves, and a
+   fork is still the other case entirely.
+2. *Command diagnostics cannot own settlement, and the problem is visible.*
+   `commands.ts` now speaks through two guarded sinks: `note` for the bounded
+   log line and `raise` for a new `onProblem` callback. Both are called from
+   an abort listener and from an asynchronous kill callback, where a throw had
+   nobody above it and would have left as a worker-wide unhandled error with
+   the run unrecorded. `COMMAND_STILL_RUNNING_PROBLEM` holds the two sentences
+   — *could not be stopped … still running* and *something it started still
+   has its output open* — each carrying at most the platform's own short code,
+   never the command, its output, a path, a stack or an error's own words.
+   `VerificationRun` publishes that sentence into its existing `problem`
+   field: no phase change, no ending, no report, no release of the pin. It is
+   dropped at settlement unless the ending brought a problem of its own,
+   because "still waiting to close" is not true of a run that closed.
+   `VerificationPanel` shows it while the run is running, with no retry — the
+   run is still going and Verify… is disabled for that reason.
+
+### Evidence (follow-up)
+
+| Command | Result |
+| --- | --- |
+| `pnpm install --frozen-lockfile`, `pnpm -r build` | ok, all packages built |
+| worker: `vitest run test/project-work test/session-safety.test.ts test/session-unload.test.ts test/session-retire.test.ts test/server.test.ts test/process-guards.test.ts` | 203 passed (11 files) |
+| protocol: `vitest run test/project-work-verification.test.ts` | 19 passed, no type errors |
+| ui: `vitest run test/project-work/verification.test.tsx test/project-work/native-acceptance.test.tsx test/project-work/proof-reader.test.tsx test/project-work/verification-stop.test.tsx` | 57 passed |
+| `typecheck` (worker, ui), `pnpm identity:check`, `pnpm direction:check` | clean |
+
+Seven new tests, each seen red against the unfixed source before it was kept:
+
+- `verify-server.test.ts` — crash → `session/load` at the **same path** →
+  `pi/worker/safety` holds one `task` pin for that conversation → `unload`
+  refused → `retire explicit` and `retire automatic` refused → plan and report
+  answered → nothing republished → pin gone → unload and retirement allowed.
+  Red without the merge (`expected [] to have a length of 1`).
+- `verify-server.test.ts` — a run this worker's own index is already pinning is
+  counted exactly once. Red with the deduplication removed (`+ 2`).
+- `verification.test.ts` — a stuck command's sentence reaches the run's
+  visible state while the phase stays `running`, `unsettledWork()` still owes
+  the path, the row is still a running one with no `error`, and the sentence is
+  gone once the run really settles. Red without the `onProblem` wiring.
+- `verification.test.ts` — the ending's own problem is not cleared by the live
+  one.
+- `verification.test.ts` × 3 — a synchronous kill refusal, the asynchronous
+  Windows-shaped one, and the lingering-output timer, each with a log **and** a
+  watcher that record and then throw: no `unhandledRejection` or
+  `uncaughtException` escapes, the run is unsettled, and the record is still
+  made from the real `close`. All three red with the sinks unguarded.
+- `verification-stop.test.tsx` — the live problem is shown with no retry while
+  the run is going, and stops being shown when it settles. Red without the
+  panel change.
+
+**Limits (follow-up).** Same gate boundary: no full suite and no `pnpm verify`
+here. No host, protocol, store or accounting file was touched, so no host test
+was re-run in this session. Termination failures and lingering output are
+driven through the runner's seams with inert doubles — there is still no test
+that ends a real process tree, and the reload case is proved through
+`WorkerServer`'s own dispatch with a fake driver, not a real engine.
+`releaseEphemeralCaches` still reads only a session's own snapshot: it decides
+whether a `git status` memo is dropped, not whether a runtime or this process
+goes away, and it was deliberately left alone.

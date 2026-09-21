@@ -101,6 +101,33 @@ describe("the bridge over that link", () => {
     expect(bridge.lastResearchResult()).toEqual({ staleRefs: [] });
   });
 
+  it("says where a write is being made from, so based_on records the run's own checkout", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const bridge = new HostProjectWorkBridge({
+      link: (_method, params) => {
+        calls.push(params as Record<string, unknown>);
+        return Promise.resolve({ method: "project/work/create", result: {} });
+      },
+      identity: () => ({ label: "Builder" }),
+      execution: async () => ({ workspace: "worktree", checkout: "/tmp/worktrees/run-1" }),
+      projectId: "prj_1",
+    });
+    await bridge.call("project/work/create", {
+      projectId: "prj_1",
+      kind: "spec",
+      title: "From a run",
+      body: { kind: "spec", spec: { form: "brief", brief: "b", outcomes: [], nonGoals: [], requirements: [], acceptance: [], constraints: [] } },
+      idempotencyKey: "k",
+    });
+    expect(calls[0], "a write carries where it was written").toMatchObject({
+      attempt: { workspace: "worktree", checkout: "/tmp/worktrees/run-1" },
+    });
+
+    // A read carries none: provenance about nothing is not provenance.
+    await bridge.call("project/work/list", { projectId: "prj_1", limit: 1 });
+    expect(calls[1]?.["attempt"]).toBeUndefined();
+  });
+
   it("turns a wrong-project refusal into the offer to open a session there", async () => {
     const bridge = new HostProjectWorkBridge({
       link: () =>
