@@ -5986,10 +5986,10 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T6 | Embedded workspace shell | done | claude-2026-09-21-leap | `83f454d3` (merged `f9e50378`); `pnpm -F @lasercode/ui test` (3055 passed, 50 new) | see notes |
 | M21-T7 | Specs and Research experience | done | claude-2026-09-21-leap | `ae5eac62` (merged `cfd92e9f`); `pnpm -F @lasercode/ui test` (3086 passed; 30 new in `test/project-work/`) | see notes |
 | M21-T8 | Comments, reviews and approval gates | in-progress | claude-2026-09-21-leap | — | see notes |
-| M21-T9 | Cross-session and cross-project mentions | todo | — | — | `PLAN.md` M21 |
+| M21-T9 | Cross-session and cross-project mentions | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T10 | Design Index: static facts, synthesis, review, storage | done | claude-2026-09-21-leap | `9306d0fa`; `pnpm -F @lasercode/worker test` (1344 passed; `test/design/*` 70 incl. the parse-only module-graph and side-effect-marker proofs) | see notes |
 | M21-T11 | DesignTree, canvas, primitive kit, prototypes and Sketch | done | claude-2026-09-21-leap | `05e270d7` (merged `66348ae2`); protocol 652 (`design-tree.test.ts` 21), `pnpm -F @lasercode/ui test` 3176 (`test/design/*` 48) | see notes |
-| M21-T12 | Native validation runner and source selection | todo | — | — | `PLAN.md` M21 |
+| M21-T12 | Static host grounding and source selection | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T13 | Design workspace and anchored review | todo | — | — | `PLAN.md` M21 |
 | M21-T14 | Greenfield design foundation | todo | — | — | `PLAN.md` M21 |
 | M21-T15 | Plan DAG and Project Task engine | done | claude-2026-09-21-leap | `2d2b5778` (merged `aa33ffbf`); host 1121 passed (`project-work/task-engine.test.ts` 17 over the wire), protocol 631 (`project-work-plan-graph.test.ts` 12) | see notes |
@@ -6012,6 +6012,12 @@ live work holding its row when a snapshot thins — because both are real hazard
 #### M21-T11 notes
 - 2026-09-21 done (`05e270d7`): `packages/protocol/src/design-tree.ts` (validate/migrate, DTCG → `--design-*` flattener refusing injection-shaped values, nearest-token suggestion, no React fields), `packages/ui/src/design/**` + `components/design/**` (DOM infinite canvas with SVG edges and keyboard/RTL/reduced motion, Shadow DOM `TreeFrame` skinned by index tokens, 16-primitive kit sheet token-only, declarative `PrototypeStage`, `SketchFrame` with `sandbox="allow-scripts"` + CSP asserted, inspectors, Design Index panel), `DesignDetail.tsx` (Prototype/Full screen/phone read-only, revise fenced, conflict banner). Honest pending states until T17 wires the index/ground/implement methods.
 - 2026-09-21 claimed by claude-2026-09-21-leap (row title aligned with `PLAN.md` as amended by D-354): UI worker on `components/design/**` — validated DesignTree editing, DOM infinite canvas, Shadow DOM frames skinned by index tokens, primitive kit, Prototype mode, sandboxed Sketch frame, Sketch→Tree ladder; write set disjoint from T8 (comments/gates) and T17 (backend).
+
+#### M21-T9 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: UI mention adapter (`@spec:` … `@task:` and `@KEY`), typed pinned refs in the stored message, transcript chip, sidebar TASK chip, global search; host-side send-time validation rides on the spine's `get` fences.
+
+#### M21-T12 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap (row title aligned with `PLAN.md` as amended by D-353): worker-side static host grounding (`design/host/**`) — route/template → `HostPage` outline + file list, reference image, `InsertionRegion` with structural path + text hash and orphaning, Conform/Island strategy with reasons; no runner.
 
 #### M21-T10 notes
 - 2026-09-21 done (`9306d0fa`): `packages/worker/src/design/index/` L0 parsers (stack, styles incl. Tailwind config as text, DTCG tokens, components with typed props, templates/routes, assets/i18n), digest-keyed cache, eras with `useForNewWork`, L1 one-shot synthesis on `designIndexProfileId` with citation checks, review actions preserved by stable ids with "changed since review", `<project>/.laser/design/{index,review}.json` writer refusing machine paths, bounded stoppable Command with progress by files; three tools linted and fixture-replayed (engine registration is M21-T17's — deviation 1), no host change (index authority is M21-T13's — deviation 2); no new dependencies. Merge fix by the orchestrator: the strict fixture parser from the M26 batch dropped `world.designIndex`.
