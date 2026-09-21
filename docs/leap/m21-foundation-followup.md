@@ -194,3 +194,15 @@ need a protocol or host change, that stops and is reported rather than taken.
   before the index has answered). All four are implemented as approved.
 - Worker wiring + tests, UI shared row + adapters, Foundation section and the
   greenfield entry, full validation above. Done.
+
+## Review fix (parent diff inspection)
+
+`FoundationStart`'s `absent` copy said "there is no interface code to compose
+from". A missing index proves only that no index has been built here — only an
+index build reads the source — so the sentence now says exactly that and names
+what would answer the question, and the override stays available either way.
+`test/design/detail.test.tsx` gains "never reads an absent index as an absence
+of interface code", named in the test as the **copy proxy** it is: it asserts
+the sentences the offer shows, not source discovery.
+Validated: `pnpm -F @lasercode/ui exec vitest run test/design` → 106 passed;
+`pnpm -F @lasercode/ui exec tsc --noEmit` → clean.

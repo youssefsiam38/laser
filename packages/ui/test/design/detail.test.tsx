@@ -145,6 +145,26 @@ describe("starting a foundation", () => {
     expect(button("Start a foundation")).toBeDefined();
   });
 
+  /**
+   * A **copy proxy**, named as one: this asserts the sentences the offer
+   * shows, not what the worker discovered. "No index" is the absence of a
+   * build in this project, and nothing else — only an index build reads the
+   * source, so the surface must not turn an unindexed project into a claim
+   * that it has no interface code.
+   */
+  it("never reads an absent index as an absence of interface code (copy proxy)", async () => {
+    await renderEmpty({ kind: "absent", detail: "This project has not been indexed yet." });
+    const said = container.querySelector('[data-slot="foundation-start"]')!.textContent ?? "";
+    expect(said).toContain("no design index yet");
+    for (const claim of ["no interface code", "no UI code", "no source", "greenfield", "empty project"]) {
+      expect(said.toLowerCase(), `the offer must not claim “${claim}” from a missing index`).not.toContain(claim);
+    }
+    // It says what would answer the question instead of answering it here.
+    expect(said).toContain("building the index is what answers that");
+    // And the override is offered either way.
+    expect(button("Start a foundation")).toBeDefined();
+  });
+
   it("claims nothing about the project while the index is still being read", async () => {
     await renderEmpty({ kind: "loading" });
     const offer = container.querySelector('[data-slot="foundation-start"]')!;

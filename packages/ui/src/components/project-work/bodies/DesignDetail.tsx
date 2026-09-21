@@ -761,6 +761,12 @@ function FoundationSection({
  * project's own state is said only once the index has actually answered —
  * while it is still being read, or when reading it failed, this offers the
  * action without claiming anything about the project.
+ *
+ * And what "no index" means is exactly that: no index has been built here. It
+ * is **not** evidence that the project has no interface code — only an index
+ * build reads the source. The copy therefore never calls an unindexed project
+ * greenfield; the foundation stays available either way, as the override it
+ * is.
  */
 function FoundationStart({ access, editable, onStart }: { access: DesignIndexAccess; editable: boolean; onStart: () => void }) {
   const state = access.state;
@@ -768,7 +774,7 @@ function FoundationStart({ access, editable, onStart }: { access: DesignIndexAcc
     state.kind === "loading"
       ? "Reading this project's design system…"
       : state.kind === "absent"
-        ? "This project has no design index yet, which is what a foundation is for: there is no interface code to compose from."
+        ? "This project has no design index yet, so there is nothing here to compose from. Whether it has interface code to index is not something this says — building the index is what answers that."
         : state.kind === "ready"
           ? "This project already has a design index, so new work is normally composed from it. A foundation is still yours to start — it proposes a new language rather than reading the one that is there."
           : state.kind === "error"
