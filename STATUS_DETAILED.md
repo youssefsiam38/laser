@@ -6307,16 +6307,26 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M26-T0 | Binding contract | done | codex-2026-09-21-model-profiles | `docs/agent-tool-contract.md`; `PLAN.md` M26; D-350 | see notes |
-| M26-T1 | Protocol lint and shapes | in-progress | claude-2026-09-21-leap | — | see notes |
-| M26-T2 | Retrofit harness and background tools | in-progress | claude-2026-09-21-leap | — | see notes |
-| M26-T3 | Evaluation harness | todo | — | — | `PLAN.md` M26 |
-| M26-T4 | UI error and preview rendering | todo | — | — | `PLAN.md` M26 |
+| M26-T1 | Protocol lint and shapes | done | claude-2026-09-21-leap | `a6ed4028`; `pnpm -F @lasercode/protocol test` (515 passed; `test/tool-contract.test.ts` 49) · `pnpm -F @lasercode/pi-extension test` (`register-tool.test.ts`) | see notes |
+| M26-T2 | Retrofit harness and background tools | done | claude-2026-09-21-leap | `b54e2f06`; `pnpm verify` passed in the worker's tree; merged `a94271f2` | see notes |
+| M26-T3 | Evaluation harness | in-progress | claude-2026-09-21-leap | — | see notes |
+| M26-T4 | UI error and preview rendering | in-progress | claude-2026-09-21-leap | — | see notes |
 
 #### M26-T1–T2 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap (goal order: M26 alongside M21-T1–T5, after M23): one worker on a branch based on `70d8f4ad`, protocol lint + one registration helper, then the retrofit of the nine harness/background tools; plan in `docs/leap/m26-plan.md`. Runs in parallel with the M23 review-fix worker (disjoint write sets: M26 touches `packages/protocol/src/tool-*`, `packages/pi-extension/src/modules/{subagents,background-work}.ts`, `packages/worker` tool schemas; M23 fixes touch host/ui workspace paths).
 
+- 2026-09-21 done (T1 `a6ed4028`, T2 `b54e2f06`): `packages/protocol/src/tool-contract.ts` (`ToolAnnotations` + MCP mapping, `ToolError` + builder/render/parse, `LaserToolSpec`, `toolContract()` lint with eleven rules), `packages/pi-extension/src/register-tool.ts` (`registerLaserTool` lints at registration, strips `activity_label`, converts failures to `ToolError`), `HarnessError.toolError`; ten tools under the lint (seven harness, `task_output`, `task_stop`, `web_search`), `agents.md` §2/§6 annotation columns. Decisions D-359 (a–e) below; surviving deviations (no `expectedRevisionId`/preview on the local tools yet; `send_agent_message` non-idempotent by intent; `start_agent` catalog degrades to the 1200-char budget) in `docs/leap/m26-plan.md`.
+
+#### M26-T3–T4 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: T3 evaluation harness (worker) and T4 UI error/preview rendering (ui) to two workers in parallel from `a94271f2`; contracts for both in `docs/leap/m26-plan.md` "What the M26-T3 and M26-T4 owners must know".
+
 #### M26-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/agent-tool-contract.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M26 tasks added; D-350 recorded. Implementation not started.
+
+### D-359 · 2026-09-21 · How a Laser tool fails, and what the lint governs
+Decision: (a) a failing Laser tool throws its `ToolError`, rendered as three fixed lines (`[code] message`, `Nothing was changed.` | `Some of this was already saved.`, `Next: …`) that `parseToolError()` reads back — the engine discards a thrown error's structured details and a returned result is never an error; (b) `committed` is forced `false` for read-only tools; (c) the `bash` override stays the engine's tool, outside the lint; (d) `web_search` is Laser-owned (the person's provider answers it) and is the one `external` tool; (e) annotations, output schemas and recovery text live in `laserToolRegistry()` because the engine's tool definition has no field for them.
+Why: `docs/agent-tool-contract.md` §2 "Errors are actionable" needs a shape the engine will actually carry to the model and the UI; the engine's loop is the constraint.
+Consequences: M26-T4 renders `message`/`committed`/`next` from `parseToolError`; M26-T3 fixtures read `laserToolRegistry()`; M21-T17/M24/M25 tools register through `registerLaserTool` and add `expectedRevisionId`/preview where the contract asks.
 
 ### D-358 · 2026-09-21 · The leap goal opens M21 implementation; the store uses node:sqlite
 Decision: `docs/goal-project-lifecycle-leap.md` is the person's instruction to deliver M21 now, so M21 implementation starts without a separate M20 sandbox acceptance step; the M20 acceptance stays an open item the person may still perform on 0.12–0.14. The `ProjectWorkStore` is a `node:sqlite` database under the product state root, the same engine the log store uses, with content-addressed blobs beside it.
