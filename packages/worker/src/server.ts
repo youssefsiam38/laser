@@ -80,7 +80,15 @@ import { SourceControlService } from "./source-control/index.js";
 import { excerptFromEntries, GitActionError, GitActionsService, type GitActionsFetcher, type GitProseRuntime, type ProcessRunner } from "./git-actions/index.js";
 import { KeybindingsAdapter } from "./keybindings.js";
 import { ModelsAdapter, PackagesAdapter } from "./packages.js";
-import { SettingsAdapter, readProfileSettings, resolveProfile } from "./settings.js";
+import { SettingsAdapter, readEffectiveProductSettings, readProfileSettings, researchSourcesFrom, resolveProfile } from "./settings.js";
+import { ProjectDesignIndex } from "./design/index/bridge.js";
+import { ProjectResearch } from "./research/bridge.js";
+import { enabledResearchAdapters, type ResearchAdapterId } from "@lasercode/protocol";
+import type { ResearchBridge } from "./research/tools.js";
+import { createProcessRunner } from "./git-actions/index.js";
+import { HostProjectWorkBridge, ProjectWorkSession, type ProjectWorkBridge, type ProjectWorkExecutionShape } from "./project-work/index.js";
+import { bridgeResearchStore } from "./project-work/research-store.js";
+import { projectInstructions } from "./project-work/instructions.js";
 import { migrateModelProfiles } from "./profiles/migrate.js";
 import { WebSearchService } from "./web-search.js";
 import { McpService } from "./mcp/service.js";
@@ -108,6 +116,12 @@ export interface WorkerServerOptions {
   stateDir?: string;
   /** Host-resolved Pi project trust for `cwd`; see `DriverOpenOptions.projectTrusted`. */
   projectTrusted?: boolean;
+  /**
+   * True when this worker's host answers the project-work bridge (M21-T17).
+   * Without it the whole project-work tool surface is absent: a worker with
+   * nobody to ask registers no tool that would have to ask.
+   */
+  projectWork?: boolean;
   /** Per-project isolation default for `start_agent`. */
   agentIsolation?: AgentIsolationDefault;
   /**
@@ -178,6 +192,13 @@ export interface WorkerServerOptions {
   /** Explicit V8 old-space request parsed from this exact process's argv. */
   configuredOldSpaceBytes?: number;
 }
+
+/**
+ * How long a session open waits for the host to say which project it is in
+ * (M21-T17). One local request over a pipe; past this the session opens with
+ * the read-only project-work surface rather than waiting on the app.
+ */
+const PROJECT_WORK_RESOLVE_MS = 2_000;
 
 /** Bytes of replay one worker may hold across every session it serves (RP-4). */
 const REPLAY_BYTES_PER_SESSION = 16 * 1024 * 1024;
@@ -345,6 +366,10 @@ export class WorkerServer {
   /** Requests this worker has asked the host and not yet had answered (M21-T17). */
   private readonly hostPending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private hostRequestSeq = 0;
+  /** This project's design index (M21-T10), built once and read on demand. */
+  private projectDesignIndex: ProjectDesignIndex | undefined;
+  /** This worker's research run, with the adapters the person left on. */
+  private researchSession: { bridge: ResearchBridge; adapters: ResearchAdapterId[] } | undefined;
 
   constructor(private readonly options: WorkerServerOptions) {
     this.environmentId = options.environmentId ?? UNCONFIGURED_ENVIRONMENT;
@@ -2084,6 +2109,119 @@ export class WorkerServer {
    * report at `session_start`) while `open()` is still running. Those events
    * are queued and flushed once the session path is known.
    */
+  /**
+   * This session's project-work surface (M21-T17).
+   *
+   * One per session, because the tools it registers depend on what this
+   * session is: which project it belongs to (the host's answer, not ours),
+   * whether it has a design index, which research adapters the person left
+   * on, and whether it was opened to work on a Task.
+   */
+  private projectWorkSession(live: Live, openOptions: Parameters<SessionDriver["open"]>[0]): ProjectWorkSession | undefined {
+    if (this.options.projectWork !== true) return undefined;
+    const agent = openOptions.agent;
+    const label = agent?.role.subagentName ?? agent?.role.agentName ?? agent?.definition?.name ?? "Agent";
+    const bridge = new HostProjectWorkBridge({
+      link: (method, params) => this.hostRequest(method, params),
+      // Resolved at call time: a new session learns its own id while it
+      // opens, and a run exists only once the harness has started one.
+      identity: () => ({
+        label,
+        ...(live.path ? { sessionId: this.sessionIdOf(live) } : {}),
+        ...(agent?.role.runId !== undefined ? { runId: agent.role.runId } : {}),
+      }),
+      execution: () => this.executionShape(openOptions.cwd),
+    });
+    return new ProjectWorkSession({
+      bridge,
+      cwd: openOptions.cwd,
+      design: this.designIndex(),
+      ...(this.researchRun(bridge, openOptions.cwd) ? { research: this.researchRun(bridge, openOptions.cwd) } : {}),
+      projectInstructions: () => projectInstructions(this.options.cwd),
+      reviewActor: { kind: "agent", label },
+    });
+  }
+
+  /**
+   * What an attempt started in this session would be running in: its shape,
+   * its checkout, the branch it is on and the commit it started from. Read
+   * from git rather than remembered, and never fatal: an attempt in a
+   * directory that is not a repository records its shape and no branch.
+   */
+  private async executionShape(cwd: string): Promise<ProjectWorkExecutionShape> {
+    const shape: ProjectWorkExecutionShape = {
+      // A session whose directory is not the worker's own project directory
+      // is working in a worktree of it (AGENTS.md invariant 5).
+      workspace: cwd === this.options.cwd ? "shared" : "worktree",
+      checkout: cwd,
+    };
+    try {
+      const run = createProcessRunner();
+      const [branch, head] = await Promise.all([
+        run("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, timeoutMs: 5_000 }),
+        run("git", ["rev-parse", "HEAD"], { cwd, timeoutMs: 5_000 }),
+      ]);
+      const branchName = branch.code === 0 ? branch.stdout.trim() : "";
+      const commit = head.code === 0 ? head.stdout.trim() : "";
+      return {
+        ...shape,
+        ...(branchName && branchName !== "HEAD" ? { branch: branchName } : {}),
+        ...(/^[0-9a-f]{7,64}$/.test(commit) ? { baseCommitObjectId: commit } : {}),
+      };
+    } catch {
+      return shape;
+    }
+  }
+
+  /**
+   * Laser's own state directory for this installation: where the design
+   * index's parse cache and the research cache live. The host passes its own;
+   * a worker run by hand derives one beside the agent directory.
+   */
+  private stateDir(): string {
+    return this.options.stateDir ?? join(this.options.agentDir ?? this.options.cwd, "..", "state");
+  }
+
+  /** This project's design index, built once per worker and read on demand. */
+  private designIndex(): ProjectDesignIndex {
+    this.projectDesignIndex ??= new ProjectDesignIndex({
+      projectCwd: this.options.cwd,
+      stateDir: this.stateDir(),
+      projectKey: createHash("sha256").update(this.options.cwd).digest("hex").slice(0, 16),
+    });
+    return this.projectDesignIndex;
+  }
+
+  /**
+   * The research run this session may use, or nothing.
+   *
+   * The adapters come from Settings → Research sources, merged global then
+   * project, so a source the person switched off is not a tool the model can
+   * pick; with every source off, the research tools are simply absent.
+   */
+  private researchRun(bridge: ProjectWorkBridge, cwd: string): { bridge: ResearchBridge; adapters: ResearchAdapterId[] } | undefined {
+    if (this.researchSession) return this.researchSession;
+    let sources;
+    try {
+      sources = researchSourcesFrom(readEffectiveProductSettings(this.options.cwd, this.settings().agentDir, this.options.projectTrusted));
+    } catch {
+      return undefined;
+    }
+    const adapters = enabledResearchAdapters(sources);
+    if (adapters.length === 0) return undefined;
+    const search = new WebSearchService(this.settings().agentDir);
+    const research = new ProjectResearch({
+      projectCwd: cwd,
+      stateDir: this.stateDir(),
+      projectKey: createHash("sha256").update(this.options.cwd).digest("hex").slice(0, 16),
+      sources,
+      store: bridgeResearchStore(bridge),
+      webSearch: (query) => search.search(query),
+    });
+    this.researchSession = { bridge: research, adapters };
+    return this.researchSession;
+  }
+
   private async openAndAttach(openOptions: Parameters<SessionDriver["open"]>[0], handle?: SessionHandle): Promise<Live> {
     // Resolve the project's environment before a session exists to run anything
     // in. Failing here never blocks opening the conversation: the refusal, if
@@ -2093,11 +2231,23 @@ export class WorkerServer {
     const driver = this.options.createDriver();
     const live: Live = { driver, historyEpoch: randomUUID(), revisions: new SessionRevisionTracker(this.environmentId), telemetry: TelemetryFold.create(), seq: 0, touchedAtMs: Date.now(), buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? REPLAY_BYTES_PER_SESSION, this.replayBudget), unsubscribe: () => {}, path: "" };
     driver.setExtensionModelWorkHandler?.((request) => this.admitExtensionModelWork(live, request));
+    // The project this session belongs to is the host's answer, and the tools
+    // it registers depend on it, so it is asked for before the engine starts
+    // collecting tool definitions. Bounded and never fatal: a host that has
+    // no project work for this folder leaves the session with the read-only
+    // surface a projectless chat has.
+    const projectWork = this.projectWorkSession(live, openOptions);
+    if (projectWork) {
+      await Promise.race([
+        projectWork.resolveProject().catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, PROJECT_WORK_RESOLVE_MS)),
+      ]);
+    }
     const queued: DriverEvent[] = [];
     let ready = false;
     live.unsubscribe = driver.subscribe((event) => (ready ? this.onDriverEvent(live, event) : queued.push(event)));
     try {
-      const state = await driver.open(openOptions);
+      const state = await driver.open({ ...openOptions, ...(projectWork ? { projectWork } : {}) });
       const already = this.runtimes.get(state.path);
       if (already && already !== live) {
         // Someone else got there first (a `session/new` that landed on an

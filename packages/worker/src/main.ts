@@ -221,6 +221,9 @@ async function main(): Promise<void> {
   // callers outside the host.
   const stateDir = arg("state-dir");
   const projectTrusted = arg("project-trusted");
+  // Whether this host answers the project-work bridge (M21-T17). Without it
+  // the lifecycle, Design Index and Research tools are not registered at all.
+  const projectWork = arg("project-work") === "yes";
   const agentIsolation = arg("agent-isolation");
   // Which environment the durable revisions this worker mints belong to
   // (RP-9). Never logged, never published: only its derived key is public.
@@ -280,6 +283,7 @@ async function main(): Promise<void> {
     ...(sessionDir ? { sessionDir } : {}),
     ...(stateDir ? { stateDir } : {}),
     ...(projectTrusted !== undefined ? { projectTrusted: projectTrusted === "yes" } : {}),
+    ...(projectWork ? { projectWork } : {}),
     ...(agentIsolation ? { agentIsolation } : {}),
     ...(environmentId ? { environmentId } : {}),
     ...(workerGeneration !== undefined ? { workerGeneration } : {}),

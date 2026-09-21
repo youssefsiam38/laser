@@ -23,7 +23,9 @@
 
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { AgentHarnessBridge, BackgroundWorkOptions } from "./agents-bridge.js";
+import type { ProjectWorkBridge } from "./project-work-bridge.js";
 import type { PromptProvenanceObserver } from "./prompt-provenance.js";
+export type { ProjectWorkBridge, ProjectWorkToolBinding } from "./project-work-bridge.js";
 export { createPromptProvenanceObserver, recordInstructionWrite } from "./prompt-provenance.js";
 // The one door every Laser tool goes through (D-350), exported so a
 // conformance fixture can read a tool's spec without starting a session.
@@ -93,6 +95,8 @@ export interface LaserExtensionOptions {
   backgroundWork?: BackgroundWorkOptions;
   /** MCP status for this session; omit when no MCP server runs here (docs/mcp.md). */
   mcp?: McpModuleOptions;
+  /** This session's project work (M21-T17); omit and none of its tools load. */
+  projectWork?: ProjectWorkBridge;
   /** Delivers messages to the worker (in-process callback). */
   send: (message: OutboundMessage) => void;
   /**
@@ -138,6 +142,7 @@ export function createLaserExtension(options: LaserExtensionOptions): InlineExte
         ...(options.agents ? { agents: options.agents } : {}),
         ...(options.backgroundWork ? { backgroundWork: options.backgroundWork } : {}),
         ...(options.mcp ? { mcp: options.mcp } : {}),
+        ...(options.projectWork ? { projectWork: options.projectWork } : {}),
         ...(options.commands ? { commands: options.commands } : {}),
       };
       const wanted = new Set<ModuleName>(options.only ?? modules.map((m) => m.name));

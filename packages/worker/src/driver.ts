@@ -41,6 +41,7 @@ import type {
   UiFireAndForget,
 } from "@lasercode/protocol";
 import type { AgentHarnessBridge, BackgroundWorkOptions, HarnessSessionRole } from "./agents/bridge.js";
+import type { ProjectWorkBridge as ProjectWorkExtensionBridge } from "@lasercode/pi-extension";
 
 /**
  * Which agent a session runs as (M13). Everything here is product vocabulary:
@@ -93,6 +94,13 @@ export interface DriverOpenOptions {
   projectEnv?: (base: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   /** The agent this session runs as. Absent for ephemeral, catalogue-only opens. */
   agent?: DriverAgentOptions;
+  /**
+   * This session's project work (M21-T17): the lifecycle tools over the typed
+   * host bridge, the Design Index and Research when it has them, and the
+   * context this session's turns are given. Absent leaves the whole surface
+   * unregistered, which is what a worker with no host link is.
+   */
+  projectWork?: ProjectWorkExtensionBridge;
   /**
    * What the companion's provider-capture producer may know about its link to
    * the app (RP-7): how far behind it is, and whether bodies are kept at all.

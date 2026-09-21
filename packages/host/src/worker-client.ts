@@ -292,6 +292,11 @@ export class WorkerClient {
     if (options.stateDir) args.push("--state-dir", options.stateDir);
     if (options.projectTrusted !== undefined) args.push("--project-trusted", options.projectTrusted ? "yes" : "no");
     if (options.agentIsolation) args.push("--agent-isolation", options.agentIsolation);
+    // The worker's model tools reach the host's project-work authority over
+    // this link (M21-T17). Told rather than assumed: a worker whose host does
+    // not answer the bridge registers none of those tools instead of asking
+    // into a pipe nobody is listening on.
+    if (options.onRequest) args.push("--project-work", "yes");
     if (options.environmentId) args.push("--environment-id", options.environmentId);
     if (options.providerPayloads) args.push("--provider-payloads", options.providerPayloads);
     this.workerGeneration = options.workerGeneration;
