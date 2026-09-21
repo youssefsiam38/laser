@@ -11,6 +11,7 @@ import {
   PROJECT_WORK_KEY_PREFIXES,
   executionLinkSchema,
   parseProjectWorkKey,
+  planDependencyCycle,
   projectWorkEntitySchema,
   projectWorkKey,
   projectWorkRefSchema,
@@ -317,7 +318,7 @@ describe("bodies", () => {
     expect(designBodySchema.safeParse({ ...body, sketches: [] }).success).toBe(false);
   });
 
-  it("refuses a plan whose dependencies form a cycle", () => {
+  it("leaves a plan's dependency cycle to the graph validator, which names it (M21-T15)", () => {
     expect(planBodySchema.safeParse(samplePlanBody).success).toBe(true);
     const cyclic = {
       ...samplePlanBody,
@@ -326,7 +327,13 @@ describe("bodies", () => {
         { from: "TASK-2", to: "TASK-1" },
       ],
     };
-    expect(planBodySchema.safeParse(cyclic).success).toBe(false);
+    // The shape is fine; the graph is not. `validatePlanGraph` owns that rule
+    // so one pass can check the cycle *and* the keys against the project, and
+    // so the refusal can name the keys — see `project-work-plan-graph.test.ts`
+    // and the host's `task-engine.test.ts` for the refusal over the wire.
+    expect(planBodySchema.safeParse(cyclic).success).toBe(true);
+    expect(planDependencyCycle(cyclic.dependencies)).toEqual(["TASK-1", "TASK-2", "TASK-1"]);
+    expect(planDependencyCycle(samplePlanBody.dependencies)).toBeUndefined();
   });
 
   it("carries the task assignment policy in both forms", () => {

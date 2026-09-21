@@ -37,8 +37,14 @@ import {
   searchableBodyValues,
   statesForKind,
   taskActionTransition,
+  taskTransition,
   TASK_ACTION_TARGET,
-  unmetTaskDependencies,
+  type PlanGraphReport,
+  type ProjectTaskBody,
+  type RepositoryChangeRef,
+  type RepositoryStateRef,
+  type TaskConflict,
+  type TaskReadiness,
   type ApprovedRevision,
   type ArtifactReviewState,
   type ExecutionLink,
@@ -93,6 +99,7 @@ import {
   type RepositoryIdentityInput,
 } from "./ids.js";
 import { openProjectWorkDatabase, transaction, type ProjectWorkDatabase, type ProjectWorkStatement } from "./schema.js";
+import { TaskEngine, type CascadeIntent, type EngineEntity, type EngineEvidence, type TaskEngineReader } from "./task-engine.js";
 
 /** Per-project durable budget. Canonical work is refused at the cap, never evicted. */
 export const PROJECT_WORK_PROJECT_BYTES_DEFAULT = 512 * 1024 * 1024;
@@ -201,6 +208,12 @@ export interface ProjectWorkDetail {
   evidence: ProjectWorkEvidence[];
   decisions: ProjectWorkDecision[];
   history?: ProjectWorkRevision[];
+  /** Tasks only: derived readiness (M21-T15). */
+  readiness?: TaskReadiness;
+  /** Tasks only: the other active Tasks writing in the same places. */
+  conflicts?: TaskConflict[];
+  /** Plans only: the Task graph, including the Tasks this Plan stopped listing. */
+  planGraph?: PlanGraphReport;
   truncated: string[];
 }
 
@@ -217,6 +230,8 @@ export class ProjectWorkStore {
   private readonly log: (message: string) => void;
   private readonly onEvent: ((event: { projectId: string; seq: number; change: ProjectWorkChange }) => void) | undefined;
   private readonly eventsRetained: number;
+  /** The Plan DAG and Task rules (M21-T15). Reads through this store's rows. */
+  private readonly engine: TaskEngine;
   private closed = false;
   /** Events raised inside the open transaction, published after it commits. */
   private pending: Array<{ projectId: string; seq: number; change: ProjectWorkChange }> = [];
@@ -226,6 +241,7 @@ export class ProjectWorkStore {
     this.log = options.log ?? (() => {});
     this.onEvent = options.onEvent;
     this.db = openProjectWorkDatabase(options.file, this.log);
+    this.engine = new TaskEngine(this.engineReader());
     this.eventsRetained = Math.max(1, Math.trunc(options.eventsRetained ?? PROJECT_WORK_EVENTS_RETAINED));
     this.quota = {
       projectBytes: options.quota?.projectBytes ?? PROJECT_WORK_PROJECT_BYTES_DEFAULT,
@@ -722,9 +738,20 @@ export class ProjectWorkStore {
     title: string;
     body: ProjectWorkBody;
     note?: string | undefined;
-  } & ProjectWorkWriteOrigin): { ref: ProjectWorkRef; entity: ProjectWorkEntity; revision: ProjectWorkRevision; seq: number; replayed?: boolean } {
+  } & ProjectWorkWriteOrigin): {
+    ref: ProjectWorkRef;
+    entity: ProjectWorkEntity;
+    revision: ProjectWorkRevision;
+    seq: number;
+    replayed?: boolean;
+    planGraph?: PlanGraphReport;
+  } {
     return this.once(input.projectId, "project/work/create", input.idempotencyKey, () => {
       const body = this.validateBody(input.kind, input.body);
+      // A plan's task graph is checked before anything is written: nothing
+      // downstream should ever have to decide what a cyclic plan means.
+      const planGraph = this.requirePlanGraph(input.projectId, body);
+      this.requireSharedScopeAuthority(undefined, body, input.origin);
       const { digest, bytes, canonical } = bodyDigest(body);
       this.requireRoom(input.projectId, bytes, 1);
       const now = this.now();
@@ -776,6 +803,7 @@ export class ProjectWorkStore {
         entity: this.toEntity(entityRow),
         revision: this.toRevision(this.revisionRow(input.projectId, revisionId)),
         seq,
+        ...(planGraph ? { planGraph } : {}),
       };
     });
   }
@@ -794,11 +822,23 @@ export class ProjectWorkStore {
     title?: string | undefined;
     body: ProjectWorkBody;
     note?: string | undefined;
-  } & ProjectWorkWriteOrigin): { ref: ProjectWorkRef; entity: ProjectWorkEntity; revision: ProjectWorkRevision; seq: number; replayed?: boolean } {
+  } & ProjectWorkWriteOrigin): {
+    ref: ProjectWorkRef;
+    entity: ProjectWorkEntity;
+    revision: ProjectWorkRevision;
+    seq: number;
+    replayed?: boolean;
+    planGraph?: PlanGraphReport;
+  } {
     return this.once(input.projectId, "project/work/revise", input.idempotencyKey, () => {
       const entity = this.entityRow(input.projectId, input.entityId);
       this.requireCurrent(entity, input.expectedRevisionId);
       const body = this.validateBody(entity.kind as ProjectWorkKind, input.body);
+      // The graph a revision asks for, checked against this project; a task
+      // this plan stopped listing is recorded as an orphan, not refused.
+      const planGraph = this.requirePlanGraph(input.projectId, body, entity.key);
+      const previous = JSON.parse(this.revisionRow(input.projectId, entity.current_revision_id).body) as ProjectWorkBody;
+      this.requireSharedScopeAuthority(previous.kind === "task" ? previous.task : undefined, body, input.origin);
       const { digest, bytes, canonical } = bodyDigest(body);
       this.requireRoom(input.projectId, bytes);
       const now = this.now();
@@ -850,11 +890,19 @@ export class ProjectWorkStore {
       // A material change to an approved artifact stales what depends on it,
       // along the links that exist and no further (D-352).
       this.applyStale(input.projectId, entity.entity_id, priorState, now);
+      // A revision can change what this Task depends on, and an artifact
+      // leaving `approved` can unsatisfy the Tasks that named it.
+      this.applyCascade(
+        input.projectId,
+        entity.kind === "task" ? { entityIds: [entity.entity_id] } : { keys: [entity.key] },
+        now,
+      );
       return {
         ref: this.refOf(updated),
         entity: this.toEntity(updated),
         revision: this.toRevision(this.revisionRow(input.projectId, revisionId)),
         seq,
+        ...(planGraph ? { planGraph } : {}),
       };
     });
   }
@@ -1188,6 +1236,8 @@ export class ProjectWorkStore {
         at: now,
         actorLabel: input.origin.actor.label,
       });
+      // A review that leaves `approved` can unsatisfy the Tasks that named it.
+      this.applyCascade(input.projectId, { keys: [entity.key] }, now);
       return { entity: this.toEntity(updated), seq };
     });
   }
@@ -1259,6 +1309,10 @@ export class ProjectWorkStore {
         at: now,
         actorLabel: input.origin.actor.label,
       });
+      // An approval can satisfy a dependency, and a change request can take
+      // one away: the Tasks that named this artifact are recomputed either
+      // way, after the approval itself is on the stream.
+      this.applyCascade(input.projectId, { keys: [entity.key] }, now);
       return { approval: this.readApproval(input.projectId, approvalId), entity: this.toEntity(updated), seq };
     });
   }
@@ -1400,6 +1454,15 @@ export class ProjectWorkStore {
       } else if (payload.type === "evidence") {
         const revision = this.revisionRow(input.projectId, payload.revisionId);
         if (revision.entity_id !== entity.entity_id) throw new ProjectWorkRefusedError("That revision belongs to another item.");
+        // Acceptance is what a completion rests on, so it says the acceptance
+        // passed. A failed attempt is evidence — supporting evidence — and it
+        // leaves the task actionable rather than accepted (leap, "Revision and
+        // staleness model").
+        if (payload.role === "acceptance" && payload.outcome !== "passed") {
+          throw new ProjectWorkRefusedError(
+            "Acceptance evidence is evidence that passed. Record this as supporting evidence instead — a failed attempt is evidence, not a failed task.",
+          );
+        }
         const evidenceId = mintEvidenceId();
         const evidence: ProjectWorkEvidence = {
           projectId: input.projectId,
@@ -1558,27 +1621,57 @@ export class ProjectWorkStore {
     transition: { from: ProjectTaskState; to: ProjectTaskState };
     seq: number;
     replayed?: boolean;
+    readiness?: TaskReadiness;
+    cascaded?: Array<{ entityId: string; key: string; from: ProjectTaskState; to: ProjectTaskState }>;
   } {
     return this.once(input.projectId, "project/task/action", input.idempotencyKey, () => {
       const entity = this.entityRow(input.projectId, input.entityId);
       this.requireCurrent(entity, input.expectedRevisionId);
       if (entity.kind !== "task") throw new ProjectWorkRefusedError("Only a task has task actions.");
       const from = entity.state as ProjectTaskState;
-      const facts = this.taskFacts(input.projectId, entity, input.evidenceId);
+      const note = input.note?.trim();
+      // A cancellation is a decision about work somebody planned. The record
+      // says why, or it does not happen.
+      if (input.action === "cancel" && !note) {
+        throw new ProjectWorkRefusedError("Say why this task is being cancelled, so the record says what happened to it.");
+      }
+      const facts = this.engine.facts(input.projectId, this.toEngineEntity(entity), input.evidenceId);
       const outcome = taskActionTransition(input.action, {
         from,
         trigger: input.origin.actor.kind,
         unmetDependencies: facts.unmetDependencies,
         hasAcceptanceEvidence: facts.hasAcceptanceEvidence,
+        hasPassingVerification: facts.hasPassingVerification,
         planStale: facts.planStale,
         designStale: facts.designStale,
+        ...(facts.staleUpstream ? { staleUpstream: facts.staleUpstream } : {}),
         blockingComments: Number(entity.blocking_comments),
       });
-      if (!outcome.ok) throw new ProjectWorkRefusedError(outcome.reason);
+      if (!outcome.ok) {
+        throw new ProjectWorkRefusedError(
+          outcome.reason,
+          facts.staleUpstream && (facts.planStale || facts.designStale)
+            ? { refused: "stale_upstream", upstream: facts.staleUpstream }
+            : undefined,
+        );
+      }
       const to = TASK_ACTION_TARGET[input.action];
       const now = this.now();
       this.statement("UPDATE entities SET state = ?, updated_at = ? WHERE entity_id = ?").run(to, now, entity.entity_id);
       this.refreshAttention(entity.entity_id);
+      if (input.action === "cancel" && note) {
+        this.insertEvidence({
+          projectId: input.projectId,
+          entityId: entity.entity_id,
+          revisionId: entity.current_revision_id,
+          kind: "review",
+          role: "deviation",
+          summary: `Cancelled: ${note}`,
+          outcome: "inconclusive",
+          at: now,
+          origin: input.origin,
+        });
+      }
       const updated = this.entityRow(input.projectId, input.entityId);
       const seq = this.raise(input.projectId, {
         change: "state",
@@ -1592,47 +1685,258 @@ export class ProjectWorkStore {
         actorLabel: input.origin.actor.label,
         ...(input.origin.sessionId ? { sessionId: input.origin.sessionId } : {}),
       });
-      return { entity: this.toEntity(updated), transition: { from, to }, seq };
+      // Whatever was waiting on this Task now knows where it stands.
+      const cascaded = this.applyCascade(input.projectId, { keys: [entity.key] }, now);
+      return {
+        entity: this.toEntity(updated),
+        transition: { from, to },
+        seq,
+        readiness: this.engine.readiness(input.projectId, this.toEngineEntity(updated)),
+        ...(cascaded.length > 0 ? { cascaded } : {}),
+      };
     });
   }
 
   /**
-   * What a Task transition needs to know, read from the store rather than
-   * taken from the caller: unmet dependencies, acceptance evidence, and
-   * whether an upstream Plan or Design is stale.
+   * The rows the Plan/Task engine reads (M21-T15).
+   *
+   * Every query is the store's own, so the engine holds no SQL and no schema
+   * knowledge, and the rules it decides can be read in one file.
    */
-  private taskFacts(
-    projectId: string,
-    entity: EntityRow,
-    evidenceId?: string,
-  ): { unmetDependencies: string[]; hasAcceptanceEvidence: boolean; planStale: boolean; designStale: boolean } {
-    const revision = this.revisionRow(projectId, entity.current_revision_id);
-    const body = JSON.parse(revision.body) as ProjectWorkBody;
-    const dependencies = body.kind === "task" ? body.task.dependencies : [];
-    const states = new Map<string, { kind: ProjectWorkKind; state: ProjectWorkState }>();
-    for (const key of dependencies) {
-      const row = this.statement("SELECT kind, state FROM entities WHERE project_id = ? AND key = ?").get(projectId, key) as
-        | { kind: string; state: string }
-        | undefined;
-      if (row) states.set(key, { kind: row.kind as ProjectWorkKind, state: row.state as ProjectWorkState });
-    }
-    const evidenceRows = this.statement(
-      "SELECT evidence_id, role, outcome FROM evidence WHERE project_id = ? AND entity_id = ?",
-    ).all(projectId, entity.entity_id) as Array<{ evidence_id: string; role: string; outcome: string }>;
-    const hasAcceptanceEvidence = evidenceRows.some(
-      (row) => row.role === "acceptance" && row.outcome === "passed" && (evidenceId === undefined || row.evidence_id === evidenceId),
-    );
-    const upstream = this.statement(
-      `SELECT e.kind AS kind, e.state AS state FROM edges
-         JOIN entities e ON e.entity_id = edges.object_entity
-        WHERE edges.project_id = ? AND edges.subject_entity = ?`,
-    ).all(projectId, entity.entity_id) as Array<{ kind: string; state: string }>;
+  private engineReader(): TaskEngineReader {
+    const toEngine = (row: EntityRow): EngineEntity => this.toEngineEntity(row);
     return {
-      unmetDependencies: unmetTaskDependencies(dependencies, states),
-      hasAcceptanceEvidence,
-      planStale: upstream.some((row) => row.kind === "plan" && row.state === "stale"),
-      designStale: upstream.some((row) => row.kind === "design" && row.state === "stale"),
+      entity: (projectId, entityId) => {
+        const row = this.statement("SELECT * FROM entities WHERE project_id = ? AND entity_id = ?").get(projectId, entityId) as
+          | EntityRow
+          | undefined;
+        return row ? toEngine(row) : undefined;
+      },
+      entityByKey: (projectId, key) => {
+        const row = this.statement("SELECT * FROM entities WHERE project_id = ? AND key = ?").get(projectId, key) as EntityRow | undefined;
+        return row ? toEngine(row) : undefined;
+      },
+      allEntities: (projectId) =>
+        (this.statement("SELECT * FROM entities WHERE project_id = ?").all(projectId) as EntityRow[]).map(toEngine),
+      tasks: (projectId, states) => {
+        const rows = states
+          ? (this.statement(
+              `SELECT * FROM entities WHERE project_id = ? AND kind = 'task' AND archived_at IS NULL AND state IN (${states
+                .map(() => "?")
+                .join(",")}) ORDER BY key_number ASC`,
+            ).all(projectId, ...states) as EntityRow[])
+          : (this.statement(
+              "SELECT * FROM entities WHERE project_id = ? AND kind = 'task' AND archived_at IS NULL ORDER BY key_number ASC",
+            ).all(projectId) as EntityRow[]);
+        return rows.map(toEngine);
+      },
+      body: (projectId, entityId) => {
+        const entity = this.statement("SELECT current_revision_id FROM entities WHERE project_id = ? AND entity_id = ?").get(
+          projectId,
+          entityId,
+        ) as { current_revision_id: string } | undefined;
+        if (!entity) return undefined;
+        const revision = this.statement("SELECT body FROM revisions WHERE project_id = ? AND revision_id = ?").get(
+          projectId,
+          entity.current_revision_id,
+        ) as { body: string } | undefined;
+        return revision ? (JSON.parse(revision.body) as ProjectWorkBody) : undefined;
+      },
+      evidence: (projectId, entityId) =>
+        (
+          this.statement("SELECT evidence_id, kind, role, outcome FROM evidence WHERE project_id = ? AND entity_id = ?").all(
+            projectId,
+            entityId,
+          ) as Array<{ evidence_id: string; kind: string; role: string; outcome: string }>
+        ).map((row) => ({
+          evidenceId: row.evidence_id,
+          kind: row.kind as EngineEvidence["kind"],
+          role: row.role as EngineEvidence["role"],
+          outcome: row.outcome as EngineEvidence["outcome"],
+        })),
+      upstream: (projectId, entityId) =>
+        (
+          this.statement(
+            `SELECT e.* FROM edges JOIN entities e ON e.entity_id = edges.object_entity
+              WHERE edges.project_id = ? AND edges.subject_entity = ?`,
+          ).all(projectId, entityId) as EntityRow[]
+        ).map(toEngine),
+      repositoryPaths: (projectId, entityId) => {
+        const rows = this.statement("SELECT target_json FROM repository_links WHERE project_id = ? AND entity_id = ?").all(
+          projectId,
+          entityId,
+        ) as Array<{ target_json: string }>;
+        const paths: string[] = [];
+        for (const row of rows) {
+          const target = JSON.parse(row.target_json) as { state?: RepositoryStateRef; change?: RepositoryChangeRef };
+          for (const ref of [target.state, target.change?.base, target.change?.head]) {
+            if (ref?.path && !paths.includes(ref.path)) paths.push(ref.path);
+          }
+        }
+        return paths;
+      },
     };
+  }
+
+  private toEngineEntity(row: EntityRow): EngineEntity {
+    return {
+      projectId: row.project_id,
+      entityId: row.entity_id,
+      kind: row.kind as ProjectWorkKind,
+      key: row.key,
+      title: row.title,
+      state: row.state as ProjectWorkState,
+      currentRevisionId: row.current_revision_id,
+      blockingComments: Number(row.blocking_comments),
+    };
+  }
+
+  /**
+   * Apply what the dependency graph implies, inside the write that caused it.
+   *
+   * These are `system` transitions and nothing else: a dependency reaching
+   * `done` makes the Tasks waiting on it ready, and reopening one puts them
+   * back to blocked. Each is checked against the same transition rules a
+   * person's move is, so a move the rules refuse simply does not happen.
+   */
+  private applyCascade(projectId: string, changed: { keys?: readonly string[]; entityIds?: readonly string[] }, at: string): CascadeIntent[] {
+    const applied: CascadeIntent[] = [];
+    for (const intent of this.engine.cascade(projectId, changed)) {
+      const row = this.entityRow(projectId, intent.entityId);
+      const facts = this.engine.facts(projectId, this.toEngineEntity(row));
+      const move = taskTransition({
+        from: intent.from,
+        to: intent.to,
+        trigger: "system",
+        unmetDependencies: facts.unmetDependencies,
+      });
+      if (!move.ok) continue;
+      this.statement("UPDATE entities SET state = ?, updated_at = ? WHERE entity_id = ?").run(intent.to, at, intent.entityId);
+      this.refreshAttention(intent.entityId);
+      const updated = this.entityRow(projectId, intent.entityId);
+      this.raise(projectId, {
+        change: "state",
+        entityId: intent.entityId,
+        entityKind: "task",
+        key: intent.key,
+        title: updated.title,
+        state: intent.to,
+        revisionId: updated.current_revision_id,
+        at,
+      });
+      applied.push(intent);
+    }
+    return applied;
+  }
+
+  /**
+   * Write one evidence record the store itself is the author of.
+   *
+   * Two things need it: an attempt that ended, and a cancellation's reason.
+   * Both are the Task's durable record of what happened, and neither is ever
+   * `acceptance` — nothing the store writes by itself can complete a Task.
+   */
+  private insertEvidence(input: {
+    projectId: string;
+    entityId: string;
+    revisionId: string;
+    kind: ProjectWorkEvidence["kind"];
+    role: ProjectWorkEvidence["role"];
+    summary: string;
+    detail?: string | undefined;
+    outcome: ProjectWorkEvidence["outcome"];
+    at: string;
+    origin: ProjectWorkOrigin;
+  }): ProjectWorkEvidence {
+    const evidenceId = mintEvidenceId();
+    this.statement(
+      "INSERT INTO evidence (evidence_id, project_id, entity_id, revision_id, kind, role, summary, detail, blob_id, outcome, at, origin_json, repository_link_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      evidenceId,
+      input.projectId,
+      input.entityId,
+      input.revisionId,
+      input.kind,
+      input.role,
+      input.summary,
+      input.detail ?? null,
+      null,
+      input.outcome,
+      input.at,
+      JSON.stringify(input.origin),
+      null,
+    );
+    return {
+      projectId: input.projectId,
+      evidenceId,
+      entityId: input.entityId,
+      revisionId: input.revisionId,
+      kind: input.kind,
+      role: input.role,
+      summary: input.summary,
+      ...(input.detail ? { detail: input.detail } : {}),
+      outcome: input.outcome,
+      at: input.at,
+      origin: input.origin,
+    };
+  }
+
+  /** The derived readiness of one Task, for a read or a write's answer. */
+  taskReadiness(projectId: string, entityId: string): TaskReadiness | undefined {
+    const row = this.statement("SELECT * FROM entities WHERE project_id = ? AND entity_id = ?").get(projectId, entityId) as EntityRow | undefined;
+    if (!row || row.kind !== "task") return undefined;
+    return this.engine.readiness(projectId, this.toEngineEntity(row));
+  }
+
+  /** The other active Tasks writing where this one does (M21-T15). */
+  taskConflicts(projectId: string, entityId: string): TaskConflict[] {
+    const row = this.statement("SELECT * FROM entities WHERE project_id = ? AND entity_id = ?").get(projectId, entityId) as EntityRow | undefined;
+    if (!row || row.kind !== "task") return [];
+    return this.engine.conflicts(projectId, this.toEngineEntity(row));
+  }
+
+  /** The report a Plan answers with: its graph, its order and its orphans. */
+  planGraph(projectId: string, entityId: string): PlanGraphReport | undefined {
+    const row = this.statement("SELECT * FROM entities WHERE project_id = ? AND entity_id = ?").get(projectId, entityId) as EntityRow | undefined;
+    if (!row || row.kind !== "plan") return undefined;
+    const body = JSON.parse(this.revisionRow(projectId, row.current_revision_id).body) as ProjectWorkBody;
+    if (body.kind !== "plan") return undefined;
+    return this.engine.planGraph(projectId, body.plan, row.key);
+  }
+
+  /**
+   * Refuse a Plan whose Task graph cannot be executed, and hand back the
+   * report the accepted one produces.
+   *
+   * Called inside the write, before the revision is stored: a cycle, a key
+   * this project never minted or a dependency on a Task the Plan stopped
+   * listing is a refusal naming the keys, never a stored graph nothing can
+   * order.
+   */
+  private requirePlanGraph(projectId: string, body: ProjectWorkBody, planKey?: string): PlanGraphReport | undefined {
+    if (body.kind !== "plan") return undefined;
+    const report = this.engine.planGraph(projectId, body.plan, planKey);
+    const problem = report.problems[0];
+    if (problem) throw new ProjectWorkRefusedError(problem.message);
+    return report;
+  }
+
+  /**
+   * Only a person accepts the risk of two Tasks writing the same files.
+   *
+   * `scope.sharedWith` is that acceptance, recorded in a revision so it says
+   * who decided it and when. An agent's revision may keep one a person
+   * already made; it may not add one.
+   */
+  private requireSharedScopeAuthority(previous: ProjectTaskBody | undefined, next: ProjectWorkBody, origin: ProjectWorkOrigin): void {
+    if (next.kind !== "task") return;
+    const added = (next.task.scope.sharedWith ?? []).filter((key) => !(previous?.scope.sharedWith ?? []).includes(key));
+    if (added.length === 0) return;
+    if (origin.actor.kind !== "person") {
+      throw new ProjectWorkRefusedError(
+        `Only you can accept the risk of two tasks writing the same files (${added.join(", ")}).`,
+      );
+    }
   }
 
   /** Join a Task to a session, run, checkpoint, branch or command. */
@@ -1652,7 +1956,14 @@ export class ProjectWorkStore {
       endedAt?: string | undefined;
       outcome?: ExecutionLink["outcome"] | undefined;
     };
-  } & ProjectWorkWriteOrigin): { link: ExecutionLink; entity: ProjectWorkEntity; seq: number; replayed?: boolean } {
+  } & ProjectWorkWriteOrigin): {
+    link: ExecutionLink;
+    entity: ProjectWorkEntity;
+    seq: number;
+    replayed?: boolean;
+    attemptEvidence?: ProjectWorkEvidence;
+    conflicts?: TaskConflict[];
+  } {
     return this.once(input.projectId, "project/task/link-execution", input.idempotencyKey, () => {
       const entity = this.entityRow(input.projectId, input.entityId);
       this.requireCurrent(entity, input.expectedRevisionId);
@@ -1696,6 +2007,24 @@ export class ProjectWorkStore {
         link.outcome ?? null,
         JSON.stringify(input.origin.actor),
       );
+      // An attempt that ended is evidence and nothing else. The Task's state
+      // is untouched here, on purpose: no run, however it finished, completes
+      // a Task (leap, "Plan and Project Task contract").
+      const attemptEvidence =
+        link.outcome !== undefined || link.endedAt !== undefined
+          ? this.insertEvidence({
+              projectId: input.projectId,
+              entityId: entity.entity_id,
+              revisionId: entity.current_revision_id,
+              kind: "command_output",
+              role: "supporting",
+              summary: `Attempt ${attempt} ended: ${link.outcome ?? "finished"}.`,
+              detail: `${link.kind} ${link.targetId}`,
+              outcome: link.outcome === "completed" ? "passed" : link.outcome === "failed" ? "failed" : "inconclusive",
+              at: now,
+              origin: input.origin,
+            })
+          : undefined;
       this.statement("UPDATE entities SET updated_at = ? WHERE entity_id = ?").run(now, entity.entity_id);
       const updated = this.entityRow(input.projectId, input.entityId);
       const seq = this.raise(input.projectId, {
@@ -1709,7 +2038,15 @@ export class ProjectWorkStore {
         actorLabel: input.origin.actor.label,
         ...(input.origin.sessionId ? { sessionId: input.origin.sessionId } : {}),
       });
-      return { link, entity: this.toEntity(updated), seq };
+      // Before another attempt writes: who else is working in these files.
+      const conflicts = this.engine.conflicts(input.projectId, this.toEngineEntity(updated));
+      return {
+        link,
+        entity: this.toEntity(updated),
+        seq,
+        ...(attemptEvidence ? { attemptEvidence } : {}),
+        ...(conflicts.length > 0 ? { conflicts } : {}),
+      };
     });
   }
 
@@ -1936,7 +2273,7 @@ export class ProjectWorkStore {
       linkCounts: { edges: counts.edges, repository: counts.repository, execution: counts.execution },
     };
     if (row.kind === "task") {
-      const facts = this.taskFacts(row.project_id, row);
+      const facts = this.engine.facts(row.project_id, this.toEngineEntity(row));
       return { ...item, unmetDependencies: facts.unmetDependencies };
     }
     return item;
@@ -1972,16 +2309,16 @@ export class ProjectWorkStore {
       kind: row.kind as ProjectWorkKind,
       key: row.key,
       title: row.title,
+      // A blocked Task and a Task paused by a stale Plan are two different
+      // things to a person, so the engine decides a Task's reason (M21-T15).
       reason:
-        Number(row.blocking_comments) > 0
-          ? "blocking_comment"
-          : row.state === "stale"
-            ? "stale"
-            : row.state === "needs_review"
-              ? "gate"
-              : row.state === "blocked"
-                ? "blocked_task"
-                : "gate",
+        row.kind === "task"
+          ? this.engine.taskAttentionReason(projectId, this.toEngineEntity(row))
+          : Number(row.blocking_comments) > 0
+            ? "blocking_comment"
+            : row.state === "stale"
+              ? "stale"
+              : "gate",
       at: row.updated_at,
     }));
     return { needsYou: total, items, truncated: total > items.length };
@@ -2014,11 +2351,23 @@ export class ProjectWorkStore {
     const evidence = include.evidence !== false ? this.readEvidence(query.projectId, entity.entity_id, truncated) : [];
     const decisions = include.evidence !== false ? this.readDecisions(query.projectId, entity.entity_id, truncated) : [];
     const history = include.history === true ? this.readHistory(query.projectId, entity.entity_id) : undefined;
+    // Derived on every read, never stored: readiness follows the dependencies'
+    // states, and a conflict is always on the answer rather than found later
+    // by whoever wrote second (M21-T15).
+    const engineEntity = this.toEngineEntity(entity);
+    const readiness = entity.kind === "task" ? this.engine.readiness(query.projectId, engineEntity) : undefined;
+    const conflicts = entity.kind === "task" ? this.engine.conflicts(query.projectId, engineEntity) : undefined;
+    const planBody = entity.kind === "plan" ? (JSON.parse(revision.body) as ProjectWorkBody) : undefined;
+    const planGraph =
+      planBody?.kind === "plan" ? this.engine.planGraph(query.projectId, planBody.plan, entity.key) : undefined;
     return {
       ref: this.refOf(entity, revision),
       entity: this.toEntity(entity),
       revision: this.toRevision(revision),
       fence: { entityId: entity.entity_id, revisionId: revision.revision_id, digest: revision.digest, seq: this.seq(query.projectId) },
+      ...(readiness ? { readiness } : {}),
+      ...(conflicts && conflicts.length > 0 ? { conflicts } : {}),
+      ...(planGraph ? { planGraph } : {}),
       ...(query.body?.mode === "none" ? {} : { body: this.bodyPage(revision, query.body) }),
       edges,
       repositoryLinks,

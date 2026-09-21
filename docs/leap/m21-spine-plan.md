@@ -1,4 +1,4 @@
-# M21 spine — protocol, store, host authority (T1 → T4)
+# M21 spine — protocol, store, host authority (T1 → T4, T15)
 
 Working notes and checkpoints for the canonical backend spine of the project
 lifecycle leap. The binding contract is
@@ -18,6 +18,7 @@ links optional** (D-331, D-352).
 | M21-T2 Stable project identity and canonical store | done | `env -i … pnpm -F @lasercode/host test` |
 | M21-T3 Host authority, methods, policy and event stream | done | `env -i … pnpm -F @lasercode/host test` |
 | M21-T4 Bounded bodies, search and derived projections | done | `env -i … pnpm -F @lasercode/host test` |
+| M21-T15 Plan DAG and Project Task engine | done | `env -i … pnpm -F @lasercode/host test` (1121; `project-work/task-engine.test.ts` 17), `pnpm -F @lasercode/protocol test` (631) |
 
 ---
 
@@ -318,3 +319,95 @@ carrying a body; a ~900 KB body pages in 256 KiB slices that rejoin exactly; a
 read inlines at most 100 related records and names what it cut; a search page
 is capped and says `truncated`; the attention notification carries at most 50
 items while `needsYou` stays exact.
+
+---
+
+## M21-T15 · Plan DAG and Project Task engine
+
+### What landed
+
+| File | What it owns |
+| --- | --- |
+| `packages/protocol/src/project-work.ts` | `validatePlanGraph` + `planDependencyCycle`/`planCycleMessage`, `PlanGraphReport`, `TaskReadiness`, `TaskConflict`, `overlappingScope`/`scopePathsOverlap`, `StaleUpstreamRef`, the `hasPassingVerification` and `staleUpstream` transition inputs |
+| `packages/protocol/src/project-work-bodies.ts` | `ProjectTaskBody.scope.sharedWith` (the explicit shared-checkout acceptance); the plan body's cycle refinement moved out (decision 1) |
+| `packages/protocol/src/project-work-methods.ts` | `readiness`/`conflicts`/`planGraph` on `project/work/get`, `planGraph` on a write, `readiness`/`cascaded` on a task action, `attemptEvidence`/`conflicts` on an execution link, and their zod result schemas |
+| `packages/host/src/project-work/task-engine.ts` | `TaskEngine`: facts, readiness, the dependency cascade, conflicts, the plan report and a Task's attention reason, all over a `TaskEngineReader` the store implements |
+| `packages/host/src/project-work/store.ts` | the reader, plan validation on create/revise, cascade application, the acceptance-evidence rule, the cancellation reason, the attempt evidence, readiness/conflicts/plan graph on every read |
+| `packages/host/src/project-work/errors.ts` | `ProjectWorkRefusedError` carries optional typed data (`stale_upstream`) |
+| `packages/host/test/project-work/task-engine.test.ts` | 17 tests over the wire through the router harness (zero worker attempts) |
+| `packages/protocol/test/project-work-plan-graph.test.ts` | 12 tests: the graph rules, scope overlap, the stale refusals, agent review |
+
+### Decisions
+
+1. **The cycle rule lives in `validatePlanGraph`, not in `planBodySchema`.** One
+   pass has to check the cycle *and* every key against the project's own
+   entities, and the refusal has to name the keys the cycle goes round (D-355).
+   A `superRefine` inside a param schema can do neither: the wire answers
+   `invalid params for project/work/create` and puts the detail in `data`. The
+   guarantee is unchanged — no cyclic plan can be stored, because the store
+   refuses before it writes — and `project-work.test.ts` now pins the layering
+   rather than the refinement.
+2. **A Plan names Tasks this project already has.** Keys are minted by the
+   store, so a key it never minted is a typo, not a forward reference:
+   `unknown_task`, and `not_a_task` for a `SPEC-…` in a phase. Both ends of a
+   dependency must be listed by the Plan, so a revision that removes a Task and
+   leaves a dependency pointing at it is refused (`dependency_outside_plan`).
+3. **Dropping a Task from a Plan is recorded, not refused.** A Task whose body
+   names this Plan and which the revision no longer lists comes back as
+   `planGraph.orphans[]` on the write *and* on every later read of the Plan.
+   Refusing would stop a person reshaping a Plan; saying nothing would lose the
+   work. (This is the "choose, record" the task allowed — recorded.)
+4. **Readiness is derived on every read and cascaded on every dependency
+   move.** A dependency reaching `done` moves the Tasks waiting on it from
+   `blocked` to `ready`; reopening it puts them back. Only those two states
+   move, only as `system` transitions, and each one is checked against the same
+   `taskTransition` rules a person's move is. `draft`, `in_progress`,
+   `needs_review`, `done` and `cancelled` are never moved by the graph.
+5. **A stale upstream refusal names the upstream.** `PLAN-3 changed after this
+   task was planned. Reconcile it before starting this task.`, with
+   `data: { refused: "stale_upstream", upstream: { entityId, kind, key, revisionId } }`
+   so a client can offer the reconcile without reading the graph again. A
+   running attempt still reaches `needs_review`; nothing reaches `done`.
+6. **A run ending writes evidence and moves nothing.**
+   `project/task/link-execution` with `outcome`/`endedAt` records one
+   `command_output` evidence row, `role: "supporting"` (`completed` → passed,
+   `failed` → failed, `blocked`/`cancelled` → inconclusive) and leaves the Task
+   exactly where it was. Acceptance evidence must be `role: "acceptance"` with
+   `outcome: "passed"`; linking a failed acceptance is refused with the
+   sentence that a failed attempt is evidence, not a failed task.
+7. **A cancellation says why, durably.** `cancel` without a note is refused;
+   with one it writes a `review`/`deviation`/`inconclusive` evidence record
+   `Cancelled: <note>`, so the reason survives the event window rather than
+   living only in the change stream.
+8. **An agent reports before it asks for review.** `submit_for_review` by an
+   agent needs at least one passing evidence record; a person never does.
+   Completion is unchanged: no agent, no run and no system trigger reaches
+   `done` (only a person, or an explicitly approved completion policy).
+9. **Shared-checkout risk is accepted in the body, by a person.**
+   `scope.sharedWith: ["TASK-9"]` is the acceptance, recorded in an immutable
+   revision that says who wrote it and when; the host refuses an agent's
+   revision that *adds* one. There is no new task action, because
+   `PROJECT_TASK_ACTIONS` is a closed set where every action maps to a state,
+   and accepting a risk changes no state.
+10. **Observed scope comes from recorded repository links**, the only place a
+    changed path exists today (`target.state.path`, and a change's base/head
+    paths). When M21-T18 records changed files per attempt, it feeds the same
+    `observed` side of the conflict; nothing else needs to change.
+
+### Wire shapes the Board and the Task detail consume
+
+| Read or write | Shape |
+| --- | --- |
+| `project/work/get` (task) | `readiness: { ready, unmetDependencies[], stalePausedBy?: { entityId, kind, key, revisionId }, hasAcceptanceEvidence, hasPassingVerification, blockingComments }` |
+| `project/work/get` (task) | `conflicts?: [{ entityId, key, title, state, overlap: { packages[], paths[] }, observed, accepted }]` — absent when there are none |
+| `project/work/get` (plan) | `planGraph: { ok, problems[], orphans[], order[] }`; `order` is dependency-first and empty for a cyclic graph |
+| `project/work/list` (task rows) | `unmetDependencies[]` per row, as before |
+| `project/work/create` / `revise` (plan) | `planGraph` on success; a refusal is `InvalidParams` whose message is the problem's own sentence |
+| `project/task/action` | `{ entity, transition, seq, readiness, cascaded?: [{ entityId, key, from, to }] }` |
+| `project/task/action` refusal | message names the unmet keys (`TASK-7, DES-3 must be done first.`) or the stale upstream; `data` carries `stale_upstream` when that is the reason |
+| `project/task/link-execution` | `{ link, entity, seq, attemptEvidence?, conflicts? }` — the Task's state is never changed by it |
+| `project/work/attention` | a Task's `reason` is `blocking_comment`, `blocked_task` (state `blocked`), `stale` (a stale Plan or Design upstream) or `gate` |
+
+`PlanGraphProblem.problem` is one of `cycle`, `unknown_task`, `not_a_task`,
+`self_dependency`, `dependency_outside_plan`; every one carries `keys[]` and a
+sentence written for a person.
