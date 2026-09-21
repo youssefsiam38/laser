@@ -195,9 +195,8 @@ export class TaskRegister {
       // without repeating them.
       const logPath = existing?.logPath ?? held.logPath;
       const logSegments = existing?.logSegments ?? held.logSegments;
-      const winner = existing !== undefined && !(existing.task.status === "running" && held.task.status !== "running")
-        ? existing
-        : held;
+      const terminalBeatsRunning = existing?.task.status === "running" && held.task.status !== "running";
+      const winner = existing === undefined || terminalBeatsRunning ? held : existing;
       if (existing !== undefined) this.bytes -= Buffer.byteLength(existing.serialized, "utf8");
       // One row, at the address that exists: whichever record won says the new
       // path, so a client is never handed a command hanging under a file no

@@ -329,7 +329,11 @@ fleet row while it runs and after Stop. `pnpm -r build && pnpm sandbox`.
 ## The host end of the same move, and a Stop that tells the truth
 
 Continued from the interrupted run `run_f0dc9f86`, whose partial edits were
-preserved as `641288f9` and are the ancestry of everything below. Two
+preserved as `641288f9` and are the ancestry of everything below. At that
+checkpoint the run had failed without its completion tool; three source edits
+were unverified, no new tests had run, and runtime resumption was refused.
+Parent preserved that incomplete state before transferring ownership; the
+validation below belongs to the later completed continuation, not the failed run. Two
 behaviours, both end-to-end, both proven from the seams a person's action
 really travels.
 
@@ -444,8 +448,10 @@ ever said completed).
 
 ### Not proven by tests
 
-Unchanged and pre-existing: the host tests that spawn a real worker fail in a
-worktree on launch identity (see above); none of them is touched here. The
+The earlier checkpoint reported launch-identity failures in its own worktree.
+That does not establish a universal worktree failure or a pre-existing cause;
+the narrow independent review did not reproduce those failures. Fresh merged
+verification is required, without treating this report as a waiver. The
 fleet's own appearance while a forked conversation's command moves is the
 person's acceptance (D-342): `pnpm -r build && pnpm sandbox`, fork a
 conversation with a command running, and check that the row moves rather than
