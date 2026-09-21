@@ -8,6 +8,14 @@ backend owner (branch `agents/model-profiles-backend-819b3a73`); this branch
 compiles against the protocol as it is declared, not as the host has yet
 implemented it.
 
+## Integration with the backend branch
+
+`agents/model-profiles-backend-819b3a73` (through M22-T5) was merged into this
+branch after M22-T9; it merged clean, and every assumption below held. The one
+follow-up the merge needed was the new `models/profiles/migrate` row in the
+UI's policed-method fixture
+(`packages/ui/test/runtime/environment-capabilities.test.ts`).
+
 ## Assumptions about host behaviour (protocol was silent)
 
 - **U-a** Profile CRUD goes through `models/profiles/{list,save,delete}`, never

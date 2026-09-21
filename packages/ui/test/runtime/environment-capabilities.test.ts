@@ -146,6 +146,7 @@ const EXPECTED_METHOD_CAPABILITIES = {
   "models/profiles/list": [],
   "models/profiles/save": [],
   "models/profiles/delete": [],
+  "models/profiles/migrate": [],
   "session/profile/set": [],
   "session/model/pin": [],
   "pi/host/environment": [],
