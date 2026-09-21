@@ -3,13 +3,15 @@
  * The token editor, pointed at a foundation (M21-T14).
  *
  * `docs/design-phase.md` asks for "the same token editor Laser's Settings
- * uses, on a different target". The rows are the Settings editor's rows —
- * swatch, value field that keeps its own draft while it is being typed, and
- * the **contrast readout of the number you typed**, measured with the same
- * `@/theme` functions Appearance measures with. What differs is only the
- * target: Settings edits this app's fixed set of named colour tokens, and
- * this edits a DTCG document whose names belong to the person's product, in
- * the base document and in every mode.
+ * uses, on a different target". The rows are literally the Settings editor's
+ * rows — `components/tokens/TokenEditorRow`, shared by both — with the same
+ * swatch, the same value field that keeps its own draft while it is being
+ * typed, and the same **contrast readout of the number you typed**, measured
+ * with the same `@/theme` functions Appearance measures with. What differs is
+ * only the target, and that is what this file is: Settings edits this app's
+ * fixed set of named colour tokens, and this edits a DTCG document whose
+ * names belong to the person's product, in the base document and in every
+ * mode.
  *
  * A colour is measured against the foundation's own ground and ink — a
  * product's `color.ink` has to clear the product's `color.bg`, not Laser's —
@@ -21,10 +23,10 @@
  * font family is a plain text field, because a swatch beside `16px` would be
  * a lie.
  */
-import { useId, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { DesignFoundation } from "@lasercode/protocol";
 
-import { cn } from "@/lib/utils";
+import { TokenContrastReadout, TokenEditorRow } from "@/components/tokens/TokenEditorRow";
 import { contrastRatio, MIN_CONTRAST, parseColor, toHex } from "@/theme";
 import { foundationTokenRows, resolveTokenValue, setFoundationToken, tokenFamily, type FoundationTokenRow } from "@/design/foundation";
 
@@ -132,82 +134,38 @@ function TokenRow({
   first: boolean;
   onChange?: ((next: DesignFoundation) => void) | undefined;
 }) {
-  const inputId = useId();
-  // The field keeps its own draft while it is being typed: a half-typed hex is
-  // not a colour, and snapping the value back on every keystroke would make
-  // the field unusable. The draft is pushed up as soon as it parses.
-  const [draft, setDraft] = useState<string | undefined>(undefined);
-  const shown = draft ?? row.raw;
-  const resolved = resolveTokenValue(foundation, { ...row, raw: shown, alias: /^\{[^}]+\}$/.test(shown.trim()) });
+  const editable = onChange !== undefined;
+  const isColourFamily = tokenFamily(row.path) === COLOUR_FAMILY;
+  const isAlias = (value: string): boolean => /^\{[^}]+\}$/.test(value.trim());
+  const resolved = resolveTokenValue(foundation, row);
   const colour = parseColor(resolved) !== null;
   const measure = readout(foundation, row, resolved);
-  const fails = measure !== undefined && measure.ratio < measure.target;
-  const editable = onChange !== undefined;
-
-  const commit = (value: string): void => {
-    setDraft(value);
-    if (!editable) return;
-    if (tokenFamily(row.path) !== COLOUR_FAMILY || parseColor(value) !== null || /^\{[^}]+\}$/.test(value.trim())) {
-      onChange(setFoundationToken(foundation, row, value));
-    }
-  };
 
   return (
-    <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1.5 px-2.5 py-2", !first && "hairline-t")}>
-      <label htmlFor={inputId} className="typed w-28 shrink-0 truncate text-ink-2 sm:w-40" title={row.property}>
-        {row.path}
-      </label>
-
-      {colour ? (
-        <span className="relative inline-flex size-6 shrink-0 items-center justify-center">
-          <input
-            id={inputId}
-            type="color"
-            value={toHex(resolved)}
-            disabled={!editable}
-            aria-label={`${row.path} colour`}
-            onChange={(event) => commit(event.target.value)}
-            className={cn(
-              "size-6 cursor-pointer rounded-md border border-line bg-transparent p-0 outline-none disabled:cursor-not-allowed disabled:opacity-60",
-              "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
-              "[&::-webkit-color-swatch]:rounded-sm [&::-webkit-color-swatch]:border-0",
-              "[&::-webkit-color-swatch-wrapper]:p-0.5",
-            )}
-          />
-        </span>
-      ) : null}
-
-      <input
-        type="text"
-        value={shown}
-        spellCheck={false}
-        autoComplete="off"
-        disabled={!editable}
-        aria-label={`${row.path} value`}
-        onChange={(event) => commit(event.target.value)}
-        onBlur={() => setDraft(undefined)}
-        className={cn(
-          "typed h-7 w-32 shrink-0 rounded-md border border-line bg-surface px-2 text-ink outline-none disabled:opacity-60 sm:w-44",
-          "transition-[border-color] duration-(--motion-instant) motion-reduce:transition-none",
-          "focus-visible:border-live focus-visible:ring-2 focus-visible:ring-live/25",
-        )}
-      />
-
-      <span className="flex w-full min-w-0 items-center gap-2 sm:w-auto sm:flex-1">
-        {row.alias ? <span className="shrink-0 text-xs leading-4 text-ink-3">alias</span> : null}
-        {measure ? (
-          <>
-            <span className={cn("typed tnum shrink-0", fails ? "text-danger" : "text-ink-3")} title={`${measure.ratio.toFixed(2)}:1 against ${measure.against}; needs ${String(measure.target)}:1`}>
-              {measure.ratio.toFixed(2)}:1
-            </span>
-            <span className={cn("min-w-0 truncate text-xs leading-4", fails ? "text-danger" : "text-ink-3")}>
-              {fails ? `unreadable on ${measure.against} — needs ${String(measure.target)}:1` : `on ${measure.against}`}
-            </span>
-          </>
-        ) : (
-          <span className="min-w-0 truncate text-xs leading-4 text-ink-3">{row.type ?? "value"}</span>
-        )}
-      </span>
-    </div>
+    <TokenEditorRow
+      name={row.path}
+      title={row.property}
+      value={row.raw}
+      // A dimension, a duration or a font family gets no swatch: a colour
+      // chip beside `16px` would be a lie.
+      {...(colour ? { swatch: toHex(resolved) } : {})}
+      width="path"
+      editable={editable}
+      first={first}
+      // A colour token takes a colour or an alias to one; everything else
+      // takes whatever the person typed, because the document says what it is.
+      accepts={(value) => !isColourFamily || parseColor(value) !== null || isAlias(value)}
+      onCommit={(value) => onChange?.(setFoundationToken(foundation, row, value))}
+      status={
+        <>
+          {row.alias ? <span className="shrink-0 text-xs leading-4 text-ink-3">alias</span> : null}
+          {measure ? (
+            <TokenContrastReadout ratio={measure.ratio} target={measure.target} against={measure.against} />
+          ) : (
+            <span className="min-w-0 truncate text-xs leading-4 text-ink-3">{row.type ?? "value"}</span>
+          )}
+        </>
+      }
+    />
   );
 }

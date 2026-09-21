@@ -29,6 +29,13 @@ export interface SynthesisOptions {
   models: () => Promise<CompletionRuntime>;
   /** The Design-index profile. `null` means synthesis is off for this machine. */
   profile: ModelProfile | null;
+  /**
+   * Why there is nothing to ask, when there is nothing to ask: no profile at
+   * all, or the profile chosen for design work holding no model. It becomes
+   * the gap's first sentence, so a person reads what to do rather than that
+   * something did not happen.
+   */
+  unavailable?: string;
   timeoutMs?: number;
   /** Only these entries are re-described; absent means all of them. */
   onlyEntryIds?: readonly string[];
@@ -280,7 +287,12 @@ export async function synthesise(index: DesignIndex, facts: readonly DesignFact[
   if (!canSynthesise(profile)) {
     return {
       ...EMPTY,
-      gaps: [{ path: ".", reason: "no model profile is assigned to design indexing, so the index holds only what the parse could read. Assign one in Settings to have components, conventions and the philosophy described." }],
+      gaps: [
+        {
+          path: ".",
+          reason: `${options.unavailable ?? "No model profile is connected for design work."} The index holds only what the parse could read; connect or assign a design profile in Settings to have components, conventions and the philosophy described.`,
+        },
+      ],
       ran: false,
     };
   }

@@ -71,6 +71,18 @@ interface Tracked {
 /** How often a running build refreshes its fleet row. A file is not a frame. */
 const ROW_INTERVAL_MS = 250;
 
+/**
+ * How many *finished* builds this worker keeps.
+ *
+ * A build that has ended is history: `design/index/get` shows the recent ones
+ * so a person can see what the last index build did, and a project that
+ * re-indexes all day must not grow a row per build for the life of the
+ * worker. A running build is never counted and never evicted, and a build's
+ * last row is published before it can be pruned, so the fleet never loses the
+ * final state of something it showed as running.
+ */
+const FINISHED_BUILDS_KEPT = 8;
+
 export interface DesignWorkspaceOptions {
   projectCwd: string;
   index: () => ProjectDesignIndex;
@@ -104,6 +116,7 @@ export class DesignWorkspace {
     };
     this.tracked.set(command.id, held);
     this.publish(command.id, true);
+    this.prune();
   }
 
   /** One progress report from the engine. Files, never a percentage. */
@@ -150,7 +163,10 @@ export class DesignWorkspace {
         held.progress = { ...held.progress, phase: "failed" };
       })
       .finally(() => {
+        // The final row first, then the bookkeeping: a person watching the
+        // fleet sees this build end before anything older is forgotten.
         this.publish(started.commandId, true);
+        this.prune();
       });
     return { command: this.commandOf(held) };
   }
@@ -246,6 +262,26 @@ export class DesignWorkspace {
 
   // ----------------------------------------------------------------- inside
 
+  /** True while this build can still do something. Phase, not just the flag. */
+  private isRunning(held: Tracked): boolean {
+    const phase = held.progress.phase;
+    return held.running && phase !== "done" && phase !== "stopped" && phase !== "failed";
+  }
+
+  /**
+   * Forget the oldest finished builds past the retention.
+   *
+   * Insertion order is start order, so the oldest finished build goes first.
+   * Nothing that is still running is a candidate, whatever the retention is,
+   * and a build that is forgotten here has already published its last row.
+   */
+  private prune(): void {
+    const finished = [...this.tracked.entries()].filter(([, held]) => !this.isRunning(held));
+    for (let index = 0; index < finished.length - FINISHED_BUILDS_KEPT; index += 1) {
+      this.tracked.delete(finished[index]![0]);
+    }
+  }
+
   private commandOf(held: Tracked): DesignIndexCommand {
     const progress = held.progress;
     return {
@@ -257,7 +293,7 @@ export class DesignWorkspace {
       filesFromCache: progress.filesFromCache,
       ...(progress.currentPath !== undefined ? { currentPath: progress.currentPath } : {}),
       elapsedMs: Math.max(0, Math.round(progress.elapsedMs)),
-      running: held.running && progress.phase !== "done" && progress.phase !== "stopped" && progress.phase !== "failed",
+      running: this.isRunning(held),
       ...(held.failure !== undefined ? { failure: held.failure } : {}),
       ...(held.sessionPath !== undefined ? { sessionPath: held.sessionPath } : {}),
     };

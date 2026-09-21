@@ -19,6 +19,7 @@
 import {
   flattenDesignTokens,
   foundationCanonicalJson,
+  foundationIsComplete,
   foundationTokenDiff,
   foundationTokenNames,
   type DesignBody,
@@ -29,6 +30,7 @@ import {
   type DesignTokenGroup,
   type FlatDesignToken,
   type FoundationComponentContract,
+  type ProjectWorkApproval,
 } from "@lasercode/protocol";
 
 // ---------------------------------------------------------------------------
@@ -152,6 +154,97 @@ export async function foundationProfileDigest(foundation: DesignFoundation): Pro
 export async function approvedFoundation(foundation: DesignFoundation, at: string): Promise<DesignFoundation> {
   const digest = await foundationProfileDigest(foundation);
   return { ...foundation, status: "approved", profile: { version: 1, digest, approvedAt: at } };
+}
+
+// ---------------------------------------------------------------------------
+// Is this foundation approved?
+// ---------------------------------------------------------------------------
+
+/**
+ * What the surface may say about approval, read from the authority.
+ *
+ * A body's own `status: "approved"` and `profile` are **not** the answer. The
+ * approval has to be recorded on the revision *before* the host can be asked
+ * to approve it — the digest is over the body's content, and a second write
+ * to flip a flag afterwards would invalidate the very approval it recorded —
+ * so those two fields are a *staging* marker written on the way to the
+ * decision, not proof that the decision happened. A refused gate, a host that
+ * answered no, a window closed halfway: all three leave that marker behind.
+ *
+ * The authority is the approval row the host keeps: a `design` decision of
+ * `approved`, not invalidated, covering **this design at exactly the digest
+ * on screen**. The digest is the binding fact, as it is for the host itself:
+ * it invalidates an approval the moment the design is revised with different
+ * bytes and leaves it alone when a save changed nothing
+ * (`invalidateApprovals` — "the digest is the test of material"). So a
+ * reopened or edited foundation stops reading as approved the moment its
+ * bytes differ, and a save that changed nothing does not un-approve what the
+ * person already decided.
+ *
+ * The *latest* decision is what counts, whatever it was. The host appends a
+ * `changes_requested` or an `archived` row beside the approval it overrides
+ * without invalidating it (`store.approve`), exactly as its own gate engine
+ * reads it: take the last decision on this gate that is still standing, then
+ * ask whether it was an approval. Filtering for approvals first would
+ * resurrect a superseded one.
+ */
+export interface FoundationApprovalReading {
+  /** The person approval covering this exact revision, when there is one. */
+  approval: ProjectWorkApproval | undefined;
+  /** True only when this revision's foundation is what a person approved. */
+  approved: boolean;
+  /**
+   * Why the body looks approved while nothing backs it, in a sentence for the
+   * person. Absent when the body makes no such claim.
+   */
+  unbacked?: string;
+}
+
+export function foundationApprovalState(input: {
+  foundation: DesignFoundation | undefined;
+  approvals: readonly ProjectWorkApproval[];
+  entityId: string;
+  /** The digest of the revision on screen. The bytes a decision binds. */
+  digest: string;
+  /** True while the window holds edits that have not been stored. */
+  dirty: boolean;
+}): FoundationApprovalReading {
+  const covers = (approval: ProjectWorkApproval): boolean =>
+    approval.covers.some((covered) => covered.entityId === input.entityId && covered.digest === input.digest);
+  const design = input.approvals.filter((approval) => approval.gate === "design");
+  // The last standing decision on this gate for the bytes on screen — not the
+  // last approval among them.
+  const latest = [...design].reverse().find((candidate) => candidate.invalidatedAt === undefined && covers(candidate));
+  const approval = latest?.decision === "approved" ? latest : undefined;
+  const complete = foundationIsComplete(input.foundation);
+  const approved = approval !== undefined && complete && !input.dirty;
+  const marked = input.foundation?.status === "approved" || input.foundation?.profile !== undefined;
+  if (approved || !marked) return { approval, approved };
+  return { approval, approved, unbacked: unbackedSentence({ dirty: input.dirty, complete, latest, history: design }) };
+}
+
+function unbackedSentence(input: {
+  dirty: boolean;
+  complete: boolean;
+  latest: ProjectWorkApproval | undefined;
+  history: readonly ProjectWorkApproval[];
+}): string {
+  if (input.dirty) {
+    return "This foundation has been edited here since it was approved. Save the revision and approve it again: an approval records the exact bytes it covers.";
+  }
+  if (!input.complete) {
+    return "A step of this foundation was reopened, so it is not a settled foundation any more. Accept every step again, then approve it.";
+  }
+  if (input.latest?.decision === "changes_requested") {
+    return "Changes were asked for on this exact revision after it was approved. Answer them, save the revision and approve it again.";
+  }
+  if (input.latest?.decision === "archived") {
+    return "This design was archived after the foundation was approved, so the approval no longer stands. Restore it and approve it again if it is still the one you want.";
+  }
+  if (input.history.some((approval) => approval.decision === "approved" && approval.invalidatedAt !== undefined)) {
+    return "This foundation changed after it was approved, so that approval no longer covers it. Approve this revision when it is the one you want.";
+  }
+  return "This revision records a Design Profile digest, but no approval covers it: the decision was not recorded. Nothing is lost — approve it again.";
 }
 
 /** What a foundation shows once the built source has been indexed. */

@@ -19,32 +19,34 @@
  * The phone gets the same canvas, read-only: pan, zoom, tap to inspect, and a
  * full-screen prototype. Editing needs a wider window, and it says so.
  */
-import { Copy, Hammer, Layers, Maximize2, MessageSquare, Play, RefreshCw, Save, Send, Undo2, X } from "lucide-react";
+import { Layers, Maximize2, Play, RefreshCw, Save, Undo2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ClientRequests, DesignBody, DesignIndex, DesignIndexEntry, DesignTokenGroup } from "@lasercode/protocol";
+import type { ClientRequests, DesignBody, DesignIndex, DesignIndexEntry, DesignTokenGroup, DesignTreeVocabulary } from "@lasercode/protocol";
 import { designAggregateFidelity, designIsSketchOnly, designTokenDocumentSchema, validateDesignBody } from "@lasercode/protocol";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { selectClass } from "@/components/settings/fields";
 import { DesignCanvas } from "@/components/design/DesignCanvas";
 import { DesignIndexPanel, type DesignIndexAccess } from "@/components/design/DesignIndexPanel";
+import { FlowsPanel } from "@/components/design/FlowsPanel";
+import { FoundationSection } from "@/components/design/FoundationSection";
 import { HostContextPanel, type GroundHostPage } from "@/components/design/HostContextPanel";
+import { ImplementControl } from "@/components/design/ImplementControl";
 import { useDesignAccess } from "@/components/design/use-design-access";
-import { FoundationWizard } from "@/components/design/FoundationWizard";
 import { NodeInspector } from "@/components/design/NodeInspector";
 import { PrototypeStage } from "@/components/design/PrototypeStage";
+import { ReviewPanel } from "@/components/design/ReviewPanel";
 import { ScreenInspector, type GroundSketch } from "@/components/design/ScreenInspector";
 import { FIDELITY_LABEL, FIDELITY_TONE, type SketchBytes } from "@/components/design/ScreenFrame";
 import type { KitIndexEntry, KitRenderContext } from "@/components/design/kit/KitNode";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
+import { readBlob, type BlobRequest } from "@/design/blob-read";
 import { KIT_NAMES } from "@/design/kit";
 import { implementCommandFor, routeFromBrief } from "@/design/host-context";
 import { startPrototype, triggerPrototype, type PrototypeState } from "@/design/prototype";
-import { designDiff, designPins, diffSummary, pinsForScreen, type DesignPin } from "@/design/review";
+import { designPins, pinsForScreen } from "@/design/review";
 import { SKETCH_GATE_REFUSAL } from "@/design/sketch";
 import { frameTokens } from "@/design/tokens";
 import { designIsEmpty, nodeOf, nudgeNode, reorderChild, screenOf, screenOfNode, setNodeText } from "@/design/tree-model";
@@ -53,20 +55,14 @@ import { quoteIntoComposer } from "../quote.js";
 import type { WorkBodyContext } from "./context.js";
 import { EmptyBody, Prose, Section } from "./fields.js";
 
-/** What "Implement…" does, said before it is done. */
-export const IMPLEMENT_SENTENCE =
-  "Hand-off pulls this exact revision — its screens, the index entries it uses, its fixtures and unresolved comments — into the conversation as the implementation context. The command goes into the composer, so you send it when you are ready.";
+// The sections are their own modules (`components/design/*`); this file is
+// the detail's orchestration — the draft, the selection, the wire and which
+// section is open. Their copy is re-exported here because it is this
+// detail's surface, and callers read it from the detail.
+export { FoundationStart, FOUNDATION_PENDING_SENTENCE, FOUNDATION_START_SENTENCE, foundationRequestFor } from "@/components/design/FoundationSection";
+export { IMPLEMENT_SENTENCE } from "@/components/design/ImplementControl";
 
-/** The Foundation section: M21-T14's, and drawn as the slot it is. */
-export const FOUNDATION_PENDING_SENTENCE =
-  "A foundation is what a project with no UI code starts from: principles, then tokens, themes, type, spacing, motion, icons and the core component contracts, each one proposed and edited before anything is built. It is not part of this design yet — start one from the chat with this design open, and it will appear here with everything it proposes.";
-
-interface BlobRequest {
-  request: <M extends "project/work/blob/read">(
-    method: M,
-    params: { projectId: string; blobId: string; offset?: number; limit?: number },
-  ) => Promise<{ data?: string; nextOffset?: number; bytes: number; released?: { detail: string } }>;
-}
+import { FoundationStart, foundationRequestFor as foundationRequest } from "@/components/design/FoundationSection";
 
 export interface DesignDetailProps {
   body: DesignBody;
@@ -91,13 +87,6 @@ const SECTION_LABEL: Readonly<Record<DesignSection, string>> = {
   review: "Review",
 };
 
-function decodeBase64(data: string): Uint8Array {
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
-
 export function DesignDetail({ body, context, index, indexAccess, groundSketch, groundHost }: DesignDetailProps) {
   const { actions, client } = useLaserStable() as { actions: { toast: (kind: "info" | "error", message: string) => void }; client?: BlobRequest };
   // The blob reads below depend on *having* a client, not on its identity: a
@@ -108,6 +97,24 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
   const { copy } = useCopy();
   const compact = context.compact === true;
   const projectId = context.detail.ref.projectId;
+
+  // The wire (M21-T13). Props win, so a test injects what it wants and the
+  // window otherwise reads the project's own worker through the host.
+  const wire = useDesignAccess(indexAccess ? "" : projectId);
+  const access: DesignIndexAccess = indexAccess ?? wire.access;
+  const liveIndex = index ?? wire.index;
+  const groundPage = groundHost ?? wire.ground;
+  const wireGroundSketch = wire.groundSketchDocument;
+
+  // What a node may reference. When this window can read the project's index,
+  // the entry ids are part of the vocabulary: a node pointing at an entry a
+  // review has since merged away is a problem the save gate must see, exactly
+  // as the worker's own grounding validates it. With no index read, the kit
+  // names are all this window can honestly check.
+  const vocabulary = useMemo<DesignTreeVocabulary>(
+    () => ({ primitives: KIT_NAMES, ...(liveIndex ? { entryIds: liveIndex.entries.map((entry) => entry.id) } : {}) }),
+    [liveIndex],
+  );
 
   // -- the draft ------------------------------------------------------------
   const [draft, setDraft] = useState<DesignBody>(body);
@@ -123,7 +130,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
 
   const save = useCallback(async () => {
     if (!context.store) return;
-    const validation = validateDesignBody(draft, { primitives: KIT_NAMES });
+    const validation = validateDesignBody(draft, vocabulary);
     if (!validation.ok) {
       actions.toast("error", validation.issues[0]?.message ?? "This design has a problem that has to be fixed first.");
       return;
@@ -145,7 +152,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
       return;
     }
     actions.toast("error", outcome.failure.message);
-  }, [actions, context, draft]);
+  }, [actions, context, draft, vocabulary]);
 
   // -- selection ------------------------------------------------------------
   const [selectedScreenId, setSelectedScreenId] = useState<string | undefined>(() => body.screens[0]?.id);
@@ -167,16 +174,16 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
     [draft],
   );
 
-  // The wire (M21-T13). Props win, so a test injects what it wants and the
-  // window otherwise reads the project's own worker through the host.
-  const wire = useDesignAccess(indexAccess ? "" : projectId);
-  const access: DesignIndexAccess = indexAccess ?? wire.access;
-  const liveIndex = index ?? wire.index;
-  const groundPage = groundHost ?? wire.ground;
-  const wireGroundSketch = wire.groundSketchDocument;
-
   // -- tokens and entries ---------------------------------------------------
   const [foundationTokens, setFoundationTokens] = useState<DesignTokenGroup | undefined>(undefined);
+  // Case A's own affordance, on any design that has no foundation yet: the
+  // header override of `docs/design-phase.md` ("Start a foundation"), which
+  // exists in an established project too.
+  const startFoundation = useCallback(() => {
+    const request = foundationRequest(context.detail.entity.key);
+    quoteIntoComposer({ text: request, workKey: context.detail.entity.key });
+    actions.toast("info", `${request} is in the composer — send it when you are ready.`);
+  }, [actions, context.detail.entity.key]);
   useEffect(() => {
     const blobId = body.foundation?.tokensBlobId;
     const reader = clientRef.current;
@@ -279,7 +286,9 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
   const ground = groundSketch ?? (wireGroundSketch ? groundFromWire : undefined);
 
   // -- sections, pins and the reference image -------------------------------
-  const [section, setSection] = useState<DesignSection>("screens");
+  // A greenfield design *is* its foundation until it has screens, so that is
+  // the section it opens on; everything else still opens on the canvas.
+  const [section, setSection] = useState<DesignSection>(() => (body.foundation && body.screens.length === 0 ? "foundation" : "screens"));
   const [reference, setReference] = useState<ClientRequests["design/host/ground"]["result"]["referenceImage"] | undefined>(undefined);
   const pins = useMemo(() => designPins(draft, context.detail.comments), [draft, context.detail.comments]);
   const inContext = draft.hostPage !== undefined || routeFromBrief(draft.brief) !== undefined;
@@ -366,52 +375,15 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
   const unresolvedPins = useMemo(() => pins.filter((pin) => !pin.resolved), [pins]);
   const aggregate = designAggregateFidelity(draft);
   const sketchOnly = designIsSketchOnly(draft);
-  const validation = useMemo(() => validateDesignBody(draft, { primitives: KIT_NAMES }), [draft]);
+  const validation = useMemo(() => validateDesignBody(draft, vocabulary), [draft, vocabulary]);
 
-  // The Foundation slot (M21-T14): a greenfield design is its foundation
-  // until it has screens, so the wizard is the body rather than a panel
-  // beside an empty canvas.
+  // The Foundation (M21-T14) lives in its own section, beside the other four
+  // (M21-T13): a greenfield design opens on it, and a design that has both a
+  // foundation and screens can still be read as a design.
   const foundation = draft.foundation;
-  if (foundation) {
-    return (
-      <div data-slot="design-detail" className="flex min-w-0 flex-col gap-5">
-        <Section title="Brief">
-          <Prose text={draft.brief} />
-        </Section>
-        <FoundationWizard
-          body={draft}
-          foundation={foundation}
-          context={context}
-          editable={editable}
-          dirty={dirty}
-          onChange={(next) => setDraft((current) => ({ ...current, foundation: next }))}
-          onSave={save}
-          index={liveIndex}
-        />
-        {dirty && editable ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="ghost" disabled={saving} onClick={() => setDraft(body)}>
-              <Undo2 />
-              Discard
-            </Button>
-            <Button size="sm" disabled={saving} onClick={() => void save()}>
-              <Save />
-              {saving ? "Saving…" : "Save revision"}
-            </Button>
-          </div>
-        ) : null}
-        {conflict ? (
-          <p role="alert" className="text-xs leading-xs text-ink-2">
-            {conflict} Your edits are still here; read the latest revision and apply them again.
-          </p>
-        ) : null}
-        {!designIsEmpty(draft) ? <DesignCanvas body={draft} tokenProperties={tokens.properties} contextFor={editContext} sketchBytes={sketchBytes} className="h-[32rem] min-h-80" /> : null}
-        <DesignIndexPanel access={access} />
-      </div>
-    );
-  }
+  const nothingDrawn = designIsEmpty(draft);
 
-  if (designIsEmpty(draft)) {
+  if (!foundation && nothingDrawn) {
     return (
       <div data-slot="design-detail" className="flex flex-col gap-5">
         <Section title="Brief">
@@ -421,6 +393,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
           what="This design has a brief and nothing drawn yet."
           next="Screens arrive as the model composes them from this project's design index — or as a sketch, when the ask is exploratory. Ask for either in the chat with this design open."
         />
+        <FoundationStart access={access} editable={editable} onStart={startFoundation} />
         {inContext ? (
           <HostContextPanel
             body={draft}
@@ -504,7 +477,9 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
   return (
     <div data-slot="design-detail" className="flex min-w-0 flex-col gap-4" onKeyDown={onDetailKeyDown}>
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-line bg-surface px-3 py-2">
-        <Badge variant={FIDELITY_TONE[aggregate]}>{FIDELITY_LABEL[aggregate]}</Badge>
+        {/* A design with nothing drawn has no fidelity to report; "Mapped"
+            over zero screens would be a claim about nothing. */}
+        {nothingDrawn ? <Badge variant="live">Proposed</Badge> : <Badge variant={FIDELITY_TONE[aggregate]}>{FIDELITY_LABEL[aggregate]}</Badge>}
         {draft.strategy ? <Badge variant="outline">{draft.strategy.kind === "island" ? "Island" : "Conform"}</Badge> : null}
         {draft.hostPage ? <Badge variant="mono">{draft.hostPage.routeOrPath}</Badge> : null}
         <span className="text-xs leading-xs text-ink-3">
@@ -513,7 +488,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
           {tokens.tokens.length > 0 ? ` · ${String(tokens.tokens.length)} tokens` : ""}
         </span>
         <span className="ms-auto flex flex-wrap items-center gap-1.5">
-          {prototype ? (
+          {nothingDrawn ? null : prototype ? (
             <Button size="sm" variant="outline" onClick={() => setPrototype(undefined)}>
               <Layers />
               Design
@@ -531,7 +506,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
               Prototype
             </Button>
           )}
-          {!fullScreen ? (
+          {!fullScreen && !nothingDrawn ? (
             <Button size="sm" variant="ghost" onClick={() => setFullScreen(true)}>
               <Maximize2 />
               Full screen
@@ -639,9 +614,19 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
       {section === "index" ? (
         <DesignIndexPanel access={access} usedEntryIds={usedEntryIds} />
       ) : section === "foundation" ? (
-        <FoundationSection body={draft} />
+        <FoundationSection
+          body={draft}
+          context={context}
+          access={access}
+          editable={editable}
+          dirty={dirty}
+          index={liveIndex}
+          onChange={(next) => setDraft((current) => ({ ...current, foundation: next }))}
+          onSave={save}
+          onStart={startFoundation}
+        />
       ) : section === "review" ? (
-        <ReviewSection
+        <ReviewPanel
           body={draft}
           context={context}
           pins={pins}
@@ -666,8 +651,21 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
                 compact={compact}
               />
             ) : null}
-            {section === "flows" ? <FlowsSection body={draft} onSelectScreen={(screenId) => setSelectedScreenId(screenId)} /> : null}
-            {!fullScreen ? (stage ?? canvas) : <p className="text-xs leading-xs text-ink-3">The canvas is open full screen. Esc brings it back here.</p>}
+            {section === "flows" ? <FlowsPanel body={draft} onSelectScreen={(screenId) => setSelectedScreenId(screenId)} /> : null}
+            {nothingDrawn ? (
+              <div role="status" data-slot="design-nothing-drawn" className="rounded-lg border border-dashed border-line p-3">
+                <p className="text-sm leading-5 font-medium text-ink">Nothing is drawn on this design yet</p>
+                <p className="mt-0.5 text-xs leading-xs text-ink-2">
+                  {foundation
+                    ? "The foundation is in its own section above. Screens come next: ask for one in the chat with this design open, and it is composed from the language the foundation sets."
+                    : "Screens arrive as the model composes them from this project's design index — or as a sketch, when the ask is exploratory. Ask for either in the chat with this design open."}
+                </p>
+              </div>
+            ) : !fullScreen ? (
+              (stage ?? canvas)
+            ) : (
+              <p className="text-xs leading-xs text-ink-3">The canvas is open full screen. Esc brings it back here.</p>
+            )}
             {tokens.tokens.length === 0 ? (
               <p role="status" className="text-xs leading-xs text-ink-3">
                 Drawn in this app's own tokens: this design has no token document to skin the kit with yet.
@@ -685,355 +683,4 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
 
     </div>
   );
-}
-
-/** Case A's slot: designed, honest, and M21-T14's to fill. */
-function FoundationSection({ body }: { body: DesignBody }) {
-  const foundation = body.foundation;
-  if (!foundation) {
-    return (
-      <div role="status" data-slot="design-foundation" className="flex flex-col gap-1.5 rounded-lg border border-dashed border-line p-3">
-        <p className="text-sm font-medium text-ink">This design has no foundation</p>
-        <p className="text-xs leading-xs text-ink-2">{FOUNDATION_PENDING_SENTENCE}</p>
-      </div>
-    );
-  }
-  return (
-    <section data-slot="design-foundation" aria-label="Foundation" className="flex min-w-0 flex-col gap-3">
-      <h3 className="eyebrow">Foundation</h3>
-      {foundation.principles.length > 0 ? (
-        <ul role="list" className="flex flex-col gap-1">
-          {foundation.principles.map((principle) => (
-            <li key={principle} className="text-sm leading-5 text-ink-2">
-              {principle}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {foundation.notes ? <Prose text={foundation.notes} /> : null}
-      <p className="text-xs leading-xs text-ink-3">
-        Everything a foundation proposes stays <Badge variant="live">Proposed</Badge> until it is built: the repository is unchanged before Build.
-      </p>
-    </section>
-  );
-}
-
-/** The flows, read as sentences: what starts them and what they do. */
-function FlowsSection({ body, onSelectScreen }: { body: DesignBody; onSelectScreen: (screenId: string) => void }) {
-  const screenName = (screenId: string): string => body.screens.find((screen) => screen.id === screenId)?.name ?? screenId;
-  if (body.flows.length === 0) {
-    return (
-      <div role="status" data-slot="design-flows" className="rounded-lg border border-dashed border-line p-3 text-xs leading-xs text-ink-2">
-        This design has no flows yet. A flow is one declarative step — a click that opens a screen, a submit that shows the loading state, a tab that switches a variant. The canvas
-        draws them between frames as soon as there are some.
-      </div>
-    );
-  }
-  return (
-    <section data-slot="design-flows" aria-label="Flows" className="flex min-w-0 flex-col gap-1.5">
-      <h3 className="eyebrow">Flows</h3>
-      <ul role="list" className="flex flex-col gap-1">
-        {body.flows.map((flow) => (
-          <li key={flow.id} className="flex min-w-0 flex-wrap items-center gap-1.5 rounded-lg border border-line bg-surface px-2 py-1.5 text-xs leading-xs text-ink-2">
-            <Badge variant="mono">{flow.trigger}</Badge>
-            <button
-              type="button"
-              className="rounded text-ink underline-offset-4 outline-none hover:underline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live"
-              onClick={() => onSelectScreen(flow.fromScreenId)}
-            >
-              {screenName(flow.fromScreenId)}
-            </button>
-            <span aria-hidden="true">→</span>
-            <span>{flowActionLabel(flow.action, screenName)}</span>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function flowActionLabel(action: DesignBody["flows"][number]["action"], screenName: (screenId: string) => string): string {
-  switch (action.type) {
-    case "navigate":
-      return `go to ${screenName(action.screenId)}${action.transition ? ` (${action.transition})` : ""}`;
-    case "overlay":
-      return `open ${screenName(action.screenId)} over it`;
-    case "close":
-      return "close the overlay";
-    case "setState":
-      return `put ${action.nodeId} into its ${action.state} state`;
-    case "setVariant":
-      return `switch ${action.nodeId} to ${action.variant}`;
-    case "switchTheme":
-      return `switch the theme to ${action.theme}`;
-    case "switchViewport":
-      return `switch the viewport to ${action.viewport}`;
-  }
-}
-
-/**
- * Review: the pins as a list, and the before/after of two revisions.
- *
- * Comments are written and answered in the workspace inspector (M21-T8); what
- * belongs *here* is the design's own view of them — where each one is pinned,
- * which ones lost their node, and what actually changed between the revision
- * being read and any earlier one.
- */
-function ReviewSection({
-  body,
-  context,
-  pins,
-  grounded,
-  onSelectNode,
-}: {
-  body: DesignBody;
-  context: WorkBodyContext;
-  pins: readonly DesignPin[];
-  grounded: ClientRequests["design/sketch/ground"]["result"] | undefined;
-  onSelectNode: (nodeId: string) => void;
-}) {
-  const history = context.detail.history ?? [];
-  const earlier = history.filter((revision) => revision.revisionId !== context.detail.revision.revisionId);
-  const [againstId, setAgainstId] = useState<string | undefined>(() => earlier[0]?.revisionId);
-  const [against, setAgainst] = useState<{ revisionId: string; body: DesignBody } | undefined>(undefined);
-  const [reading, setReading] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
-  const store = context.store;
-
-  useEffect(() => {
-    if (!store || againstId === undefined) return;
-    let cancelled = false;
-    setReading(true);
-    setError(undefined);
-    void store.get({ entityId: context.detail.entity.entityId, revisionId: againstId, body: { mode: "full" } }).then((outcome) => {
-      if (cancelled) return;
-      setReading(false);
-      if (!outcome.ok) {
-        setError(outcome.failure.message);
-        return;
-      }
-      const read = outcome.value.body?.body;
-      if (read?.kind !== "design") {
-        setError("That revision's content is no longer stored on this machine, so it cannot be compared.");
-        return;
-      }
-      setAgainst({ revisionId: againstId, body: read.design });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [againstId, context.detail.entity.entityId, store]);
-
-  const diff = useMemo(() => (against ? designDiff(against.body, body) : undefined), [against, body]);
-  const orphaned = pins.filter((pin) => pin.orphaned);
-
-  return (
-    <div data-slot="design-review" className="flex min-w-0 flex-col gap-5">
-      <section aria-label="Pinned comments" className="flex min-w-0 flex-col gap-2">
-        <h3 className="eyebrow">Pinned comments</h3>
-        {pins.length === 0 ? (
-          <p role="status" className="rounded-lg border border-dashed border-line p-3 text-xs leading-xs text-ink-2">
-            Nothing is pinned on this design yet. Comment on a node or a screen from the inspector and the pin appears on the canvas, numbered, where it belongs.
-          </p>
-        ) : (
-          <ul role="list" className="flex flex-col gap-1.5">
-            {pins.map((pin) => (
-              <li
-                key={pin.commentId}
-                data-slot="design-pin"
-                data-orphaned={pin.orphaned ? "true" : undefined}
-                className="flex min-w-0 flex-col gap-1 rounded-lg border border-line bg-surface p-2"
-              >
-                <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-                  <Badge variant={pin.orphaned ? "attention" : pin.blocking ? "danger" : "outline"}>{pin.number}</Badge>
-                  <span className="text-xs leading-xs text-ink-3">{pin.author}</span>
-                  {pin.blocking ? <Badge variant="danger">blocking</Badge> : null}
-                  {pin.resolved ? <Badge variant="ok">resolved</Badge> : null}
-                  {pin.orphaned ? <Badge variant="attention">anchor gone</Badge> : null}
-                  {!pin.orphaned && pin.nodeId ? (
-                    <Button size="xs" variant="ghost" className="ms-auto" onClick={() => onSelectNode(pin.nodeId ?? "")}>
-                      <MessageSquare />
-                      Show it
-                    </Button>
-                  ) : null}
-                </span>
-                <p className="text-xs leading-xs text-ink-2">{pin.text}</p>
-                {pin.orphaned ? (
-                  <p className="text-xs leading-xs text-ink-3">
-                    The node this was written on is not in this revision. The comment is kept exactly as it was written, and nothing was re-pinned for you.
-                  </p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
-        {orphaned.length > 0 ? (
-          <p role="status" className="text-xs leading-xs text-ink-3">
-            {orphaned.length === 1 ? "One comment lost" : `${String(orphaned.length)} comments lost`} the node it was pinned to when this design changed.
-          </p>
-        ) : null}
-      </section>
-
-      {grounded ? (
-        <section aria-label="What grounding could not map" className="flex min-w-0 flex-col gap-2">
-          <h3 className="eyebrow">From the sketch</h3>
-          <p className="text-xs leading-xs text-ink-2">
-            {grounded.unmapped.length === 0
-              ? "Everything in that sketch mapped onto this project's index."
-              : `${String(grounded.unmapped.length)} part${grounded.unmapped.length === 1 ? "" : "s"} of that sketch had nothing in the index to draw ${grounded.unmapped.length === 1 ? "it" : "them"} with, so ${grounded.unmapped.length === 1 ? "it is" : "they are"} proposed:`}
-          </p>
-          <ul role="list" className="flex flex-col gap-1">
-            {grounded.unmapped.slice(0, 20).map((part) => (
-              <li key={`${part.what}:${part.why}`} className="flex min-w-0 flex-wrap items-baseline gap-1.5 text-xs leading-xs text-ink-2">
-                <Badge variant="live">{part.what}</Badge>
-                <span className="min-w-0">{part.why}</span>
-                {part.primitive ? <span className="typed text-ink-3">drawn as {part.primitive}</span> : null}
-              </li>
-            ))}
-          </ul>
-          {grounded.notes.map((note) => (
-            <p key={note} role="status" className="text-xs leading-xs text-ink-3">
-              {note}
-            </p>
-          ))}
-        </section>
-      ) : null}
-
-      <section aria-label="Before and after" className="flex min-w-0 flex-col gap-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <h3 className="eyebrow">Before and after</h3>
-          {earlier.length > 0 ? (
-            <select
-              aria-label="Compare with"
-              className={cn(selectClass, "h-7 w-auto py-0 text-xs")}
-              value={againstId ?? ""}
-              onChange={(event) => setAgainstId(event.target.value === "" ? undefined : event.target.value)}
-            >
-              <option value="">Pick a revision</option>
-              {earlier.map((revision) => (
-                <option key={revision.revisionId} value={revision.revisionId}>
-                  Revision {revision.index}
-                  {revision.note ? ` · ${revision.note}` : ""}
-                </option>
-              ))}
-            </select>
-          ) : null}
-        </div>
-        {earlier.length === 0 ? (
-          <p role="status" className="text-xs leading-xs text-ink-2">
-            This is the first revision of this design, so there is nothing to compare it with yet.
-          </p>
-        ) : reading ? (
-          <p role="status" className="text-xs leading-xs text-ink-3">
-            Reading that revision…
-          </p>
-        ) : error ? (
-          <p role="alert" className="text-xs leading-xs text-danger">
-            {error}
-          </p>
-        ) : diff ? (
-          <div className="flex min-w-0 flex-col gap-1.5">
-            <p className="text-xs leading-xs text-ink-2">{diffSummary(diff)}</p>
-            <ul role="list" className="flex flex-col gap-1">
-              {diff.screens.map((change) => (
-                <li key={`${change.kind}:${change.screenId}`} className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs leading-xs text-ink-2">
-                  <Badge variant={change.kind === "added" ? "ok" : "danger"}>screen {change.kind}</Badge>
-                  <span className="min-w-0 truncate">{change.screenName}</span>
-                </li>
-              ))}
-              {diff.nodes.slice(0, 60).map((change) => (
-                <li
-                  key={`${change.kind}:${change.screenId}:${change.nodeId}`}
-                  data-slot="design-diff-row"
-                  className="flex min-w-0 flex-col gap-0.5 rounded-lg border border-line bg-surface px-2 py-1.5"
-                >
-                  <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs leading-xs">
-                    <Badge variant={change.kind === "added" ? "ok" : change.kind === "removed" ? "danger" : "live"}>{change.kind}</Badge>
-                    <span className="typed min-w-0 truncate text-ink-3">{change.nodeId}</span>
-                    <span className="text-ink-3">in {change.screenName}</span>
-                    {change.fields ? <span className="text-ink-3">· {change.fields.join(", ")}</span> : null}
-                  </span>
-                  {change.before ? (
-                    <span className="min-w-0 truncate text-xs leading-xs text-ink-3">
-                      before: {change.before}
-                    </span>
-                  ) : null}
-                  {change.after ? (
-                    <span className="min-w-0 truncate text-xs leading-xs text-ink-2">
-                      after: {change.after}
-                    </span>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : (
-          <p role="status" className="text-xs leading-xs text-ink-2">
-            Pick a revision to compare this one with, node by node.
-          </p>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function ImplementControl({ workKey, sketchOnly, onCopy, onSend }: { workKey: string; sketchOnly: boolean; onCopy: () => void; onSend: () => void }) {
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button size="sm" variant="ghost" aria-haspopup="dialog">
-          <Hammer />
-          Implement…
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="flex w-80 flex-col gap-2 p-3">
-        {sketchOnly ? (
-          <p data-slot="implement-refusal" className="text-xs leading-xs text-ink-2">
-            {SKETCH_GATE_REFUSAL}
-          </p>
-        ) : (
-          <>
-            <p className="text-xs leading-xs text-ink-2">{IMPLEMENT_SENTENCE}</p>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <Button size="xs" onClick={onSend}>
-                <Send />
-                Send /design implement @{workKey}
-              </Button>
-              <Button size="xs" variant="outline" onClick={onCopy}>
-                <Copy />
-                Copy {workKey}
-              </Button>
-            </div>
-          </>
-        )}
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-async function readBlob(client: BlobRequest, projectId: string, blobId: string): Promise<{ ok: true; text: string } | { ok: false; message: string }> {
-  const chunks: Uint8Array[] = [];
-  let offset = 0;
-  // A sketch is at most `SKETCH_MAX_BYTES`, which is one page; the loop is for
-  // a foundation token document that grew past a page.
-  for (let page = 0; page < 8; page += 1) {
-    try {
-      const result = await client.request("project/work/blob/read", { projectId, blobId, offset });
-      if (result.released) return { ok: false, message: result.released.detail };
-      if (result.data === undefined) return { ok: false, message: "This content is not stored on this machine." };
-      chunks.push(decodeBase64(result.data));
-      if (result.nextOffset === undefined) break;
-      offset = result.nextOffset;
-    } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : "This content could not be read." };
-    }
-  }
-  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const bytes = new Uint8Array(total);
-  let at = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, at);
-    at += chunk.length;
-  }
-  return { ok: true, text: new TextDecoder().decode(bytes) };
 }

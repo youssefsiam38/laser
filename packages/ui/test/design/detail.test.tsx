@@ -15,7 +15,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, type DesignBody } from "@lasercode/protocol";
 
-import { DesignDetail, IMPLEMENT_SENTENCE } from "../../src/components/project-work/bodies/DesignDetail.js";
+import { DesignDetail, IMPLEMENT_SENTENCE, foundationRequestFor } from "../../src/components/project-work/bodies/DesignDetail.js";
+import type { DesignIndexAccess } from "../../src/components/design/DesignIndexPanel.js";
+import { onWorkQuote, type WorkQuoteDetail } from "../../src/components/project-work/quote.js";
 import type { WorkBodyContext } from "../../src/components/project-work/bodies/context.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { SKETCH_GATE_REFUSAL } from "../../src/design/sketch.js";
@@ -104,6 +106,114 @@ const settle = async (): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 };
+
+/**
+ * Case A's entry (M21-T14 follow-up): a design with nothing on it, in a
+ * project that may or may not have an index. What is asserted is that the
+ * offer is honest about this project's own state and that taking it writes
+ * nothing — the steps are the model's to propose.
+ */
+describe("starting a foundation", () => {
+  const emptyDesign = (): DesignBody => ({
+    brief: "A greenfield foundation for a reading app.",
+    screens: [],
+    flows: [],
+    sketches: [],
+    fidelity: "proposed",
+    fixtures: [],
+  });
+
+  const accessWith = (state: DesignIndexAccess["state"]): DesignIndexAccess => ({ state });
+
+  async function renderEmpty(state: DesignIndexAccess["state"], over: Partial<WorkBodyContext> = {}): Promise<void> {
+    const body = emptyDesign();
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <DesignDetail body={body} context={contextFor(body, over)} indexAccess={accessWith(state)} />
+        </TooltipProvider>,
+      ),
+    );
+    await settle();
+  }
+
+  it("offers it, and says this project has no index, once the index has answered", async () => {
+    await renderEmpty({ kind: "absent", detail: "This project has not been indexed yet." });
+    const offer = container.querySelector('[data-slot="foundation-start"]');
+    expect(offer).not.toBeNull();
+    expect(offer!.textContent).toContain("no design index yet");
+    expect(button("Start a foundation")).toBeDefined();
+  });
+
+  /**
+   * A **copy proxy**, named as one: this asserts the sentences the offer
+   * shows, not what the worker discovered. "No index" is the absence of a
+   * build in this project, and nothing else — only an index build reads the
+   * source, so the surface must not turn an unindexed project into a claim
+   * that it has no interface code.
+   */
+  it("never reads an absent index as an absence of interface code (copy proxy)", async () => {
+    await renderEmpty({ kind: "absent", detail: "This project has not been indexed yet." });
+    const said = container.querySelector('[data-slot="foundation-start"]')!.textContent ?? "";
+    expect(said).toContain("no design index yet");
+    for (const claim of ["no interface code", "no UI code", "no source", "greenfield", "empty project"]) {
+      expect(said.toLowerCase(), `the offer must not claim “${claim}” from a missing index`).not.toContain(claim);
+    }
+    // It says what would answer the question instead of answering it here.
+    expect(said).toContain("building the index is what answers that");
+    // And the override is offered either way.
+    expect(button("Start a foundation")).toBeDefined();
+  });
+
+  it("claims nothing about the project while the index is still being read", async () => {
+    await renderEmpty({ kind: "loading" });
+    const offer = container.querySelector('[data-slot="foundation-start"]')!;
+    expect(offer.textContent).toContain("Reading this project's design system");
+    expect(offer.textContent).not.toContain("no design index");
+    // The action is still there: a person may start one without waiting.
+    expect(button("Start a foundation")).toBeDefined();
+  });
+
+  it("says what went wrong rather than reading a failure as an empty project", async () => {
+    await renderEmpty({ kind: "error", message: "The project folder is not trusted." });
+    const offer = container.querySelector('[data-slot="foundation-start"]')!;
+    expect(offer.textContent).toContain("The project folder is not trusted.");
+    expect(offer.textContent).not.toContain("no design index");
+  });
+
+  it("keeps the override in a project that already has an index", async () => {
+    await renderEmpty({ kind: "ready", index: indexFixture() });
+    const offer = container.querySelector('[data-slot="foundation-start"]')!;
+    expect(offer.textContent).toContain("already has a design index");
+    expect(button("Start a foundation")).toBeDefined();
+  });
+
+  it("puts the request in the composer, naming this design, and writes nothing", async () => {
+    const quotes: WorkQuoteDetail[] = [];
+    const stop = onWorkQuote((detail) => quotes.push(detail));
+    try {
+      await renderEmpty({ kind: "absent", detail: "" });
+      await click(button("Start a foundation"));
+      expect(quotes).toHaveLength(1);
+      expect(quotes[0]?.workKey).toBe("DES-3");
+      expect(quotes[0]?.text).toBe(foundationRequestFor("DES-3"));
+      expect(quotes[0]?.text).toContain("@DES-3");
+      expect(quotes[0]?.text).toContain("propose_foundation");
+      // Nothing was sent and nothing was written: no revision, no empty
+      // foundation invented to make a wizard appear.
+      expect(calls).toEqual([]);
+      expect(toast).toHaveBeenCalledWith("info", expect.stringContaining("in the composer"));
+    } finally {
+      stop();
+    }
+  });
+
+  it("does not offer it on a revision this window may not edit", async () => {
+    await renderEmpty({ kind: "absent", detail: "" }, { editable: false, readOnlyReason: "This revision is read-only." });
+    expect(container.querySelector('[data-slot="foundation-start"]')).not.toBeNull();
+    expect(button("Start a foundation")).toBeUndefined();
+  });
+});
 
 describe("DesignDetail", () => {
   it("plays the prototype: a click inside the shadow root navigates, an overlay opens, Back closes it, and it is all said aloud", async () => {
@@ -224,6 +334,52 @@ describe("DesignDetail", () => {
     await click(button("Ground it"));
     expect(groundSketch).toHaveBeenCalledWith("sk_1");
     expect(onChanged).toHaveBeenCalled();
+  });
+
+  /**
+   * The save gate checks what this window can actually check (review F4).
+   *
+   * With the project's index read, a node pointing at an entry that is not in
+   * it — a review merged it away, a re-index dropped it — is a problem the
+   * save must see, the same vocabulary the worker validates a grounded tree
+   * with. Without an index read, the kit names are all there is to check
+   * against, and the window does not invent a refusal it cannot justify.
+   */
+  it("refuses to save a node whose index entry the index no longer has", async () => {
+    const body = designFixture();
+    const index = indexFixture();
+    // The entry `n_help` points at was merged away by a review.
+    const merged = { ...index, entries: index.entries.filter((entry) => entry.id !== "e_help") };
+    const context = contextFor(body);
+    await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={context} index={merged} /></TooltipProvider>));
+    await settle();
+
+    const alert = [...container.querySelectorAll('[role="alert"]')].find((node) => node.textContent?.includes("cannot be saved"));
+    expect(alert?.textContent).toContain("One node has a problem");
+
+    // Make the draft dirty, then take the save: it is refused, in a sentence,
+    // and nothing is written.
+    await click(shadowOf("scr_list").querySelector('[data-node-id="n_pay"]'));
+    await act(async () =>
+      container.querySelector<HTMLElement>('[data-slot="design-detail"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, bubbles: true })),
+    );
+    await click(button("Save revision"));
+    expect(calls.find((call) => call.method === "project/work/revise")).toBeUndefined();
+    expect(toast).toHaveBeenCalledWith("error", expect.stringContaining("index entry the index no longer has"));
+  });
+
+  it("checks the same design against the index that still has the entry, and saves it", async () => {
+    const body = designFixture();
+    const context = contextFor(body);
+    await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={context} index={indexFixture()} /></TooltipProvider>));
+    await settle();
+    expect([...container.querySelectorAll('[role="alert"]')].some((node) => node.textContent?.includes("cannot be saved"))).toBe(false);
+    await click(shadowOf("scr_list").querySelector('[data-node-id="n_pay"]'));
+    await act(async () =>
+      container.querySelector<HTMLElement>('[data-slot="design-detail"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, bubbles: true })),
+    );
+    await click(button("Save revision"));
+    expect(calls.find((call) => call.method === "project/work/revise")).toBeDefined();
   });
 
   it("is read-only on the phone with tap-to-inspect, and plays the prototype full screen", async () => {

@@ -33,12 +33,14 @@ import {
   foundationProgress,
   foundationStepState,
   nextFoundationStep,
+  withFoundationStep,
   type DesignBody,
   type DesignFoundation,
   type DesignIndex,
   type FoundationComponentContract,
   type FoundationScaleStep,
   type FoundationStepId,
+  type ApprovedRevision,
   type FoundationTypeStep,
   type GateStatusReport,
 } from "@lasercode/protocol";
@@ -48,7 +50,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
-import { approvedFoundation, supersededDiff } from "@/design/foundation";
+import { approvedFoundation, foundationApprovalState, supersededDiff } from "@/design/foundation";
 
 import { FoundationCanvas } from "./FoundationCanvas.js";
 import { FoundationTokenEditor } from "./FoundationTokenEditor.js";
@@ -84,7 +86,18 @@ export function FoundationWizard({ body, foundation, context, editable, dirty, o
   const complete = foundationIsComplete(foundation);
   const blocked = foundationBlockedSources(foundation);
   const workKey = context.detail.entity.key;
-  const approved = foundation.status === "approved" || foundation.profile !== undefined;
+  // Approved is what the host recorded, never what this body says about
+  // itself: the `status`/`profile` fields are written *before* the decision
+  // is asked for, because the approval covers the revision that carries the
+  // digest. A refused gate, or any revision since, must not read as approved.
+  const approvalState = foundationApprovalState({
+    foundation,
+    approvals: context.detail.approvals ?? [],
+    entityId: context.detail.entity.entityId,
+    digest: context.detail.revision.digest,
+    dirty,
+  });
+  const approved = approvalState.approved;
 
   // The index supersedes the proposal the moment the built source is indexed:
   // the foundation stops being the authority and says so, with the names that
@@ -93,6 +106,31 @@ export function FoundationWizard({ body, foundation, context, editable, dirty, o
   const diff = useMemo(() => (superseded ? supersededDiff(foundation, index?.tokensDocument) : undefined), [foundation, index?.tokensDocument, superseded]);
 
   const designGate = context.detail.gates?.gates.find((gate: GateStatusReport) => gate.gate === "design");
+
+  /**
+   * Record the person's approval on a design no gate covers.
+   *
+   * Two steps, the same two the gate card takes, because the spine has no
+   * `draft → approved` edge: ask for the decision, then take it. The covers
+   * are this design at the exact revision the host just answered with, so the
+   * host's own digest check is what binds the decision — this window never
+   * assembles a digest of its own.
+   */
+  const recordStandalone = useCallback(
+    async (read: { entity: { entityId: string; key: string; state: string }; revision: { revisionId: string; digest: string } }): Promise<{ ok: true } | { ok: false; message: string }> => {
+      if (!context.store) return { ok: false, message: "This project has not been read yet." };
+      const entityId = read.entity.entityId;
+      const revisionId = read.revision.revisionId;
+      if (read.entity.state === "draft") {
+        const sent = await context.store.review({ entityId, expectedRevisionId: revisionId }, "request_review");
+        if (!sent.ok) return { ok: false, message: sent.failure.message };
+      }
+      const covers: ApprovedRevision[] = [{ entityId, kind: "design", key: read.entity.key, revisionId, digest: read.revision.digest }];
+      const outcome = await context.store.approve({ entityId, expectedRevisionId: revisionId }, { gate: "design", decision: "approved", covers });
+      return outcome.ok ? { ok: true } : { ok: false, message: outcome.failure.message };
+    },
+    [context.store],
+  );
 
   const approve = useCallback(async () => {
     if (!context.store || !complete) return;
@@ -123,9 +161,20 @@ export function FoundationWizard({ body, foundation, context, editable, dirty, o
       }
       const gate = read.value.gates?.gates.find((candidate: GateStatusReport) => candidate.gate === "design");
       if (!gate || gate.covers.length === 0) {
+        // No Spec put this design on the gated path, and that is an ordinary
+        // way to work (D-352, "gates only when chosen"). The approval is still
+        // the person's and still durable: the host records a decision off the
+        // gated path against exact digests, so it is recorded here on this
+        // design's own revision rather than dropped with a note.
+        const standalone = await recordStandalone(read.value);
+        if (!standalone.ok) {
+          actions.toast("error", standalone.message);
+          context.onChanged();
+          return;
+        }
         actions.toast(
           "info",
-          `${workKey} records the foundation, digest ${next.profile?.digest.slice(0, 12) ?? ""}. This project has no design gate to take a decision on — link it to a spec to gate it.`,
+          `Foundation approved on ${workKey} · profile digest ${next.profile?.digest.slice(0, 12) ?? ""}. No spec gates this design, so the approval is recorded on the design itself.`,
         );
         context.onChanged();
         return;
@@ -149,7 +198,7 @@ export function FoundationWizard({ body, foundation, context, editable, dirty, o
     } finally {
       setWorking(undefined);
     }
-  }, [actions, body, complete, context, dirty, foundation, workKey]);
+  }, [actions, body, complete, context, dirty, foundation, recordStandalone, workKey]);
 
   const createPlan = useCallback(async () => {
     if (!context.store) return;
@@ -202,13 +251,22 @@ export function FoundationWizard({ body, foundation, context, editable, dirty, o
         <Badge variant={superseded ? "outline" : approved ? "ok" : "live"}>{superseded ? "Superseded" : approved ? "Approved" : "Proposed"}</Badge>
         <span className="text-xs leading-xs text-ink-3">
           {progress.accepted} of {progress.total} steps accepted
-          {foundation.profile ? ` · profile v${String(foundation.profile.version)} ${foundation.profile.digest.slice(0, 12)}` : ""}
+          {approved && foundation.profile ? ` · profile v${String(foundation.profile.version)} ${foundation.profile.digest.slice(0, 12)}` : ""}
         </span>
       </div>
 
       <p role="note" data-slot="foundation-repository-note" className="text-xs leading-xs text-ink-2">
         {FOUNDATION_REPOSITORY_SENTENCE}
       </p>
+
+      {/* The body can carry a profile digest that no decision backs — it is
+          written on the way to the approval, not by it. When nothing backs it,
+          this says so instead of letting a badge imply otherwise. */}
+      {approvalState.unbacked !== undefined && !superseded ? (
+        <p role="status" data-slot="foundation-unbacked" className="rounded-md border border-line bg-surface-2 px-2 py-1.5 text-xs leading-4 text-ink-2">
+          {approvalState.unbacked}
+        </p>
+      ) : null}
 
       {superseded && diff ? (
         <div data-slot="foundation-superseded" className="flex flex-col gap-1 rounded-lg border border-line bg-surface px-3 py-2">
@@ -326,7 +384,7 @@ export function FoundationWizard({ body, foundation, context, editable, dirty, o
             <>
               <p className="text-xs leading-4 text-ink-2">
                 {complete
-                  ? `Approving records this exact revision as Design Profile v1 and takes the decision on the design gate.${dirty ? ` ${FOUNDATION_UNSAVED_SENTENCE}` : ""}`
+                  ? `Approving records this exact revision as Design Profile v1 and takes the decision — on the design gate when a spec gates this design, on the design itself when none does.${dirty ? ` ${FOUNDATION_UNSAVED_SENTENCE}` : ""}`
                   : `Accept every step first: ${String(progress.total - progress.accepted)} still to go.`}
                 {designGate?.refusal ? ` ${designGate.refusal}` : ""}
               </p>
@@ -382,15 +440,21 @@ function editedStep(foundation: DesignFoundation, id: FoundationStepId): DesignF
   return withStep(foundation, id, (record) => ({ ...record, edited: true, source: "person" }));
 }
 
+/**
+ * Patch the record this wizard is showing, through the protocol's own ordered
+ * replacement. The window's semantics stay the window's — it changes the
+ * record it already has and never invents one for a step nobody proposed —
+ * and where the row lands is the contract's, the same function the worker
+ * writes its proposals through.
+ */
 function withStep(
   foundation: DesignFoundation,
   id: FoundationStepId,
   change: (record: NonNullable<DesignFoundation["steps"]>[number]) => NonNullable<DesignFoundation["steps"]>[number],
 ): DesignFoundation {
-  const steps = foundation.steps ?? [];
-  const existing = steps.find((step) => step.id === id);
+  const existing = foundationStepState(foundation, id);
   if (!existing) return foundation;
-  return { ...foundation, steps: steps.map((step) => (step.id === id ? change(step) : step)) };
+  return withFoundationStep(foundation, change(existing));
 }
 
 // ---------------------------------------------------------------------------

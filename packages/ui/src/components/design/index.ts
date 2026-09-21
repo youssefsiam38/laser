@@ -7,7 +7,18 @@ export { DesignCanvas, type DesignCanvasProps } from "./DesignCanvas.js";
 export { DesignIndexPanel, type DesignIndexAccess, type DesignIndexState, type DesignReindexState, type DesignReviewVerb } from "./DesignIndexPanel.js";
 export { HostContextPanel, HOST_PENDING_SENTENCE, type GroundHostPage, type HostContextPanelProps } from "./HostContextPanel.js";
 export { useDesignAccess, DISCONNECTED_SENTENCE, type DesignWorkspaceAccess } from "./use-design-access.js";
+export { FlowsPanel, flowActionLabel, type FlowsPanelProps } from "./FlowsPanel.js";
 export { FoundationCanvas, type FoundationCanvasProps } from "./FoundationCanvas.js";
+export {
+  FoundationSection,
+  FoundationStart,
+  FOUNDATION_PENDING_SENTENCE,
+  FOUNDATION_START_SENTENCE,
+  foundationRequestFor,
+  type FoundationSectionProps,
+} from "./FoundationSection.js";
+export { ImplementControl, IMPLEMENT_SENTENCE, type ImplementControlProps } from "./ImplementControl.js";
+export { ReviewPanel, type ReviewPanelProps } from "./ReviewPanel.js";
 export { FoundationTokenEditor, type FoundationTokenEditorProps } from "./FoundationTokenEditor.js";
 export { FoundationWizard, FOUNDATION_STEP_PENDING_SENTENCE, FOUNDATION_UNSAVED_SENTENCE, type FoundationWizardProps } from "./FoundationWizard.js";
 export { NodeInspector, TokenField, type NodeInspectorProps } from "./NodeInspector.js";

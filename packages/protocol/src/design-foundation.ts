@@ -191,6 +191,31 @@ export function checkFoundationStepOrder(
   return undefined;
 }
 
+/**
+ * Put one step's record on the foundation, in the contract's order.
+ *
+ * The one place a step record is written, so the worker and the window cannot
+ * drift on where a step lands or what order the list comes back in. What each
+ * side *puts* there stays its own: the worker composes a fresh record for a
+ * proposal it just made, the window patches the record it already has. This
+ * only replaces the row of that id and keeps `steps` sorted, whatever order
+ * they arrived in; a step id that is not one of the contract's is appended
+ * rather than dropped, because losing a record silently is worse than
+ * carrying one the order does not know.
+ */
+export function withFoundationStep(foundation: DesignFoundation, record: FoundationStepRecord): DesignFoundation {
+  const steps = (foundation.steps ?? []).filter((step) => step.id !== record.id);
+  steps.push(record);
+  steps.sort((left, right) => rank(left.id) - rank(right.id));
+  return { ...foundation, steps };
+}
+
+/** Where a record sorts: its place in the fixed order, unknown ids last. */
+function rank(id: string): number {
+  const index = foundationStepIndex(id);
+  return index === -1 ? FOUNDATION_STEP_IDS.length : index;
+}
+
 /** True when every step has been accepted by the person. */
 export function foundationIsComplete(foundation: Pick<DesignFoundation, "steps"> | undefined): boolean {
   return nextFoundationStep(foundation) === undefined;

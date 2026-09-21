@@ -14,6 +14,11 @@
  * the value the compiler derives when they are unset, badged "derived".
  * Editing one pins it; "Use derived" unpins it. A preset that ships a value
  * counts as pinned, because it is.
+ *
+ * The row itself is `components/tokens/TokenEditorRow`, shared with Foundation
+ * mode's editor on a DTCG target (M21-T14). This file is the adapter for *this*
+ * target: which tokens exist, what each is measured against, and what "derived"
+ * means. Nothing about what a person sees here changed when it moved.
  */
 import { useId, useState } from "react";
 import { ORIGINS } from "@lasercode/protocol";
@@ -21,6 +26,7 @@ import { AlertTriangle, ChevronRight, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { TokenContrastReadout, TokenEditorRow } from "@/components/tokens/TokenEditorRow";
 import { cn } from "@/lib/utils";
 import {
   contrastRatio,
@@ -295,102 +301,42 @@ function TokenRow({
   const effective = raw ?? fallback;
   const hex = toHex(parseColor(effective) ? effective : fallback);
   const measure = readout(theme, token);
-  const fails = measure !== undefined && measure.ratio < measure.target;
-  const inputId = useId();
-
-  /**
-   * The text field keeps its own draft while it is being typed. Without it,
-   * a half-typed hex is not a colour, so the store refuses the theme, the
-   * value snaps back, and the field is unusable. The draft is
-   * pushed up only when it parses; anything else is shown as invalid and
-   * changes nothing.
-   */
-  const [draft, setDraft] = useState<string | undefined>(undefined);
-  const shown = draft ?? effective;
-  const valid = parseColor(shown) !== null;
 
   return (
-    <div
-      className={cn(
-        "flex flex-wrap items-center gap-x-3 gap-y-1.5 px-2.5 py-2",
-        !first && "hairline-t",
-      )}
-    >
-      <label htmlFor={inputId} className="typed w-24 shrink-0 truncate text-ink-2 sm:w-32" title={`--${token}`}>
-        {token}
-      </label>
-
-      <span className="relative inline-flex size-6 shrink-0 items-center justify-center">
-        <input
-          id={inputId}
-          type="color"
-          value={hex}
-          onChange={(event) => {
-            setDraft(undefined);
-            onSet(token, event.target.value);
-          }}
-          aria-label={`${token} colour`}
-          className={cn(
-            "size-6 cursor-pointer rounded-md border border-line bg-transparent p-0 outline-none",
-            "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-live",
-            "[&::-webkit-color-swatch]:rounded-sm [&::-webkit-color-swatch]:border-0",
-            "[&::-webkit-color-swatch-wrapper]:p-0.5",
+    <TokenEditorRow
+      name={token}
+      title={`--${token}`}
+      value={effective}
+      swatch={hex}
+      width="name"
+      first={first}
+      // Only a colour is a value this target can take; anything else is shown
+      // as invalid and changes nothing until it parses.
+      accepts={(value) => parseColor(value) !== null}
+      markInvalid
+      onCommit={(value) => onSet(token, value)}
+      status={
+        <>
+          {measure && (
+            <TokenContrastReadout
+              ratio={measure.ratio}
+              target={measure.target}
+              against={measure.against}
+              {...(measure.kind === "line" ? { failed: `too close to ${measure.against} to see` } : {})}
+            />
           )}
-        />
-      </span>
-
-      <input
-        type="text"
-        value={shown}
-        spellCheck={false}
-        autoComplete="off"
-        aria-label={`${token} value`}
-        aria-invalid={!valid}
-        onChange={(event) => {
-          const next = event.target.value;
-          setDraft(next);
-          if (parseColor(next)) onSet(token, next);
-        }}
-        onBlur={() => setDraft(undefined)}
-        className={cn(
-          "typed h-7 w-24 shrink-0 rounded-md border bg-surface px-2 text-ink outline-none sm:w-28",
-          "transition-[border-color] duration-(--motion-instant) motion-reduce:transition-none",
-          "focus-visible:border-live focus-visible:ring-2 focus-visible:ring-live/25",
-          valid ? "border-line" : "border-danger",
-        )}
-      />
-
-      {/* At a phone width the readout takes its own line rather than being
-          squeezed off the end of the row: a measurement nobody can read is
-          the one thing this editor exists to show. */}
-      <span className="flex w-full min-w-0 items-center gap-2 sm:w-auto sm:flex-1">
-        {measure && (
-          <span
-            className={cn("typed tnum shrink-0", fails ? "text-danger" : "text-ink-3")}
-            title={`${measure.ratio.toFixed(2)}:1 against ${measure.against}; needs ${measure.target}:1`}
-          >
-            {measure.ratio.toFixed(2)}:1
-          </span>
-        )}
-        {measure && (
-          <span className={cn("min-w-0 truncate text-xs leading-4", fails ? "text-danger" : "text-ink-3")}>
-            {fails
-              ? measure.kind === "line"
-                ? `too close to ${measure.against} to see`
-                : `unreadable on ${measure.against} — needs ${measure.target}:1`
-              : `on ${measure.against}`}
-          </span>
-        )}
-        {!pinned && <span className="shrink-0 text-xs text-ink-3">derived</span>}
-      </span>
-
-      {pinned && isOptional(token) && (
-        <Button variant="ghost" size="xs" onClick={() => onClear(token)} title="Go back to the derived value">
-          <RotateCcw aria-hidden="true" />
-          Derived
-        </Button>
-      )}
-    </div>
+          {!pinned && <span className="shrink-0 text-xs text-ink-3">derived</span>}
+        </>
+      }
+      action={
+        pinned && isOptional(token) ? (
+          <Button variant="ghost" size="xs" onClick={() => onClear(token)} title="Go back to the derived value">
+            <RotateCcw aria-hidden="true" />
+            Derived
+          </Button>
+        ) : undefined
+      }
+    />
   );
 }
 
