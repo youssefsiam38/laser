@@ -65,7 +65,7 @@ import type {
   SessionDriver,
 } from "./driver.js";
 import { ProjectFilesService } from "./files.js";
-import { RevisionCanonicalisationError, type SessionRevisionHeader } from "@lasercode/protocol";
+import { RevisionCanonicalisationError, type ProjectWorkMentionProjection, type SessionRevisionHeader } from "@lasercode/protocol";
 import { SessionRevisionTracker } from "./history-revision.js";
 import { ChildTelemetryCache, computeLiveTelemetry, liveOverlay, telemetryUpdateKind } from "./telemetry.js";
 import { TelemetryFold } from "@lasercode/protocol";
@@ -90,6 +90,7 @@ import { enabledResearchAdapters, type ResearchAdapterId } from "@lasercode/prot
 import type { ResearchBridge } from "./research/tools.js";
 import { createProcessRunner } from "./git-actions/index.js";
 import { HostProjectWorkBridge, ProjectWorkSession, type ProjectWorkBridge, type ProjectWorkExecutionShape } from "./project-work/index.js";
+import { SessionMentionContext } from "./project-work/mentions.js";
 import { bridgeResearchStore } from "./project-work/research-store.js";
 import { projectInstructions } from "./project-work/instructions.js";
 import { migrateModelProfiles } from "./profiles/migrate.js";
@@ -239,6 +240,13 @@ interface Live {
   historyEpoch: string;
   /** Durable revision fold for this session (RP-9), kept across reads. */
   revisions: SessionRevisionTracker;
+  /**
+   * What this conversation's messages mentioned (M21-T9), for as long as the
+   * engine is still holding those messages. Ephemeral, per session, and given
+   * to every session rather than only to one with project work: a projectless
+   * chat may mention another project's work and must be able to read it.
+   */
+  mentions: SessionMentionContext;
   /** Incremental whole-session telemetry fold (L3). */
   telemetry: TelemetryFold;
   /** True after this session has been asked for `pi/session/telemetry`. */
@@ -644,16 +652,25 @@ export class WorkerServer {
         // transcribed. Doing it here keeps the three send paths identical.
         const live = this.live(req.params.path);
         const content = await this.withDictation(req.params.path, req.params.content);
-        if (this.harness.roleOf(live.path)?.kind === "child") await this.queueIntoChild(live, content, "steer");
-        else await this.firstTurnLock.run(live.path, () => live.driver.steer(content));
-        return {};
+        // A person's mention means the same whichever key they pressed, so the
+        // host's projection reaches the model on this verb too — refused here,
+        // before the engine is told anything, when too many already wait.
+        const projectWork = req.params.projectWork;
+        live.mentions.refuseIfFull(projectWork);
+        const options = projectWork?.length ? { projectWork } : undefined;
+        if (this.harness.roleOf(live.path)?.kind === "child") await this.queueIntoChild(live, content, "steer", options);
+        else await this.firstTurnLock.run(live.path, () => live.driver.steer(content, options));
+        return {} satisfies Result<"pi/session/steer">;
       }
       case "pi/session/follow_up": {
         const live = this.live(req.params.path);
         const content = await this.withDictation(req.params.path, req.params.content);
-        if (this.harness.roleOf(live.path)?.kind === "child") await this.queueIntoChild(live, content, "followUp");
-        else await this.firstTurnLock.run(live.path, () => live.driver.followUp(content));
-        return {};
+        const projectWork = req.params.projectWork;
+        live.mentions.refuseIfFull(projectWork);
+        const options = projectWork?.length ? { projectWork } : undefined;
+        if (this.harness.roleOf(live.path)?.kind === "child") await this.queueIntoChild(live, content, "followUp", options);
+        else await this.firstTurnLock.run(live.path, () => live.driver.followUp(content, options));
+        return {} satisfies Result<"pi/session/follow_up">;
       }
       case "pi/session/clear_queue": {
         // A child's queue is emptied through the harness, which also forgets
@@ -719,11 +736,19 @@ export class WorkerServer {
         // long first-turn preflight, not a frozen preparation-time copy.
         return { messages: this.tray(req.params.path).list() } satisfies Result<"session/pending/list">;
       case "session/pending/add":
+        // The row keeps what the host read for it; it is handed to the engine
+        // with this row's own message when the tray delivers it, and it is
+        // never part of the row a client sees.
         return {
-          message: this.tray(req.params.path).add(await this.withDictation(req.params.path, req.params.content)),
+          message: this.tray(req.params.path).add(
+            await this.withDictation(req.params.path, req.params.content),
+            req.params.projectWork,
+          ),
         } satisfies Result<"session/pending/add">;
       case "session/pending/edit":
-        return { message: this.tray(req.params.path).edit(req.params.id, req.params.content) } satisfies Result<"session/pending/edit">;
+        return {
+          message: this.tray(req.params.path).edit(req.params.id, req.params.content, req.params.projectWork),
+        } satisfies Result<"session/pending/edit">;
       case "session/pending/remove":
         return { message: this.tray(req.params.path).remove(req.params.id) } satisfies Result<"session/pending/remove">;
       case "session/pending/steer":
@@ -2362,7 +2387,7 @@ export class WorkerServer {
     // have used it, where a person can read it.
     await this.ensureProjectEnv().catch(() => {});
     const driver = this.options.createDriver();
-    const live: Live = { driver, historyEpoch: randomUUID(), revisions: new SessionRevisionTracker(this.environmentId), telemetry: TelemetryFold.create(), seq: 0, touchedAtMs: Date.now(), buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? REPLAY_BYTES_PER_SESSION, this.replayBudget), unsubscribe: () => {}, path: "" };
+    const live: Live = { driver, historyEpoch: randomUUID(), revisions: new SessionRevisionTracker(this.environmentId), mentions: new SessionMentionContext(), telemetry: TelemetryFold.create(), seq: 0, touchedAtMs: Date.now(), buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? REPLAY_BYTES_PER_SESSION, this.replayBudget), unsubscribe: () => {}, path: "" };
     driver.setExtensionModelWorkHandler?.((request) => this.admitExtensionModelWork(live, request));
     // The project this session belongs to is the host's answer, and the tools
     // it registers depend on it, so it is asked for before the engine starts
@@ -2380,7 +2405,7 @@ export class WorkerServer {
     let ready = false;
     live.unsubscribe = driver.subscribe((event) => (ready ? this.onDriverEvent(live, event) : queued.push(event)));
     try {
-      const state = await driver.open({ ...openOptions, ...(projectWork ? { projectWork } : {}) });
+      const state = await driver.open({ ...openOptions, mentionContext: live.mentions, ...(projectWork ? { projectWork } : {}) });
       const already = this.runtimes.get(state.path);
       if (already && already !== live) {
         // Someone else got there first (a `session/new` that landed on an
@@ -2745,10 +2770,11 @@ export class WorkerServer {
         // A child's tray row goes through the harness fence like the chat's own
         // steer (M13-T98): during a declared completion it waits on the
         // successor instead of entering a queue the engine is about to drop.
-        steer: (content) => this.harness.roleOf(live.path)?.kind === "child"
-          ? this.queueIntoChild(live, content, "steer")
-          : this.firstTurnLock.run(live.path, () => live.driver.steer(content)),
-        prompt: (content, onAccepted) => this.promptWithFence(live, content, undefined, onAccepted, true),
+        steer: (content, extras) => this.harness.roleOf(live.path)?.kind === "child"
+          ? this.queueIntoChild(live, content, "steer", extras)
+          : this.firstTurnLock.run(live.path, () => live.driver.steer(content, extras)),
+        prompt: (content, onAccepted, extras) =>
+          this.promptWithFence(live, content, undefined, onAccepted, true, extras?.projectWork),
         admitNewWork: () => this.admitNewWork(),
         streaming: () => live.driver.state().isStreaming,
         publish: (pending) => this.onDriverEvent(live, { type: "update", update: { kind: "pending_update", pending } }),
@@ -2819,10 +2845,13 @@ export class WorkerServer {
     params: ClientRequests["session/prompt"]["params"],
   ): Promise<Result<"session/prompt">> {
     const firstTurn = params.firstTurn;
+    // A message that mentions project work is refused before the engine is
+    // asked anything, never accepted with its context quietly dropped.
+    live.mentions.refuseIfFull(params.projectWork);
     if (!firstTurn) {
       // A bare concurrent prompt keeps its refusal semantics. The lease closes
       // the check/use race with a first-turn runtime replacement.
-      return this.promptWithFence(live, params.content, params.streamingBehavior, undefined, false);
+      return this.promptWithFence(live, params.content, params.streamingBehavior, undefined, false, params.projectWork);
     }
     const lease = (await this.firstTurnLock.acquireLease(live.path, true))!;
 
@@ -2886,7 +2915,7 @@ export class WorkerServer {
       if (effectiveModel && !(await this.modelAvailable(effectiveModel))) {
         throw new ProtocolError(ErrorCodes.InvalidParams, modelUnavailableMessage(effectiveModel));
       }
-      const result = await this.promptLive(live, params.content, params.streamingBehavior, () => {
+      const result = await this.promptLive(live, params.content, params.streamingBehavior, params.projectWork, () => {
         accepted = true;
         if (live.preAcceptance === hydration) delete live.preAcceptance;
         previousHandle.discard();
@@ -2923,6 +2952,7 @@ export class WorkerServer {
     streamingBehavior: "steer" | "followUp" | undefined,
     onAccepted: (() => void) | undefined,
     wait: boolean,
+    projectWork?: readonly ProjectWorkMentionProjection[],
   ): Promise<{ accepted: boolean; queued: boolean }> {
     // Preserve the bare concurrent refusal before a fake/alternate driver can
     // turn it into a never-settling call. Stable re-checks under its own slot.
@@ -2931,7 +2961,7 @@ export class WorkerServer {
     if (!lease) return { accepted: false, queued: false };
     const finish = () => lease.release();
     try {
-      return await this.promptLive(live, content, streamingBehavior, () => {
+      return await this.promptLive(live, content, streamingBehavior, projectWork, () => {
         finish();
         onAccepted?.();
       }, lease);
@@ -2959,6 +2989,7 @@ export class WorkerServer {
     live: Live,
     content: ContentBlock[],
     streamingBehavior?: "steer" | "followUp",
+    projectWork?: readonly ProjectWorkMentionProjection[],
     onAccepted?: () => void,
     admissionLease?: SessionAdmissionLease,
   ): Promise<{ accepted: boolean; queued: boolean }> {
@@ -2970,6 +3001,9 @@ export class WorkerServer {
     if (!streamingBehavior && idle) await this.sourceControl().awaitBaseline(live.path);
     return this.harness.promptUser(live.path, content, {
       ...(streamingBehavior ? { streamingBehavior } : {}),
+      // Carried on the options the harness parks and replays, so a message
+      // held for a child's successor reaches the model with what it mentioned.
+      ...(projectWork?.length ? { projectWork } : {}),
       ...(onAccepted ? { onAccepted } : {}),
       ...(admissionLease ? { admissionLease } : {}),
     });
@@ -2989,14 +3023,24 @@ export class WorkerServer {
    * harness's sentence. Root sessions keep the driver's direct verbs: the
    * harness owns no run there.
    */
-  private queueIntoChild(live: Live, content: ContentBlock[], lane: "steer" | "followUp"): Promise<void> {
+  private queueIntoChild(
+    live: Live,
+    content: ContentBlock[],
+    lane: "steer" | "followUp",
+    extras?: { projectWork?: readonly ProjectWorkMentionProjection[] },
+  ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let accepted = false;
       const onAccepted = () => {
         accepted = true;
         resolve();
       };
-      this.harness.promptUser(live.path, content, { streamingBehavior: lane, expandPromptTemplates: true, onAccepted }).then(
+      this.harness.promptUser(live.path, content, {
+        streamingBehavior: lane,
+        expandPromptTemplates: true,
+        ...(extras?.projectWork?.length ? { projectWork: extras.projectWork } : {}),
+        onAccepted,
+      }).then(
         (result) => {
           if (accepted || result.accepted) resolve();
           else reject(new ProtocolError(ErrorCodes.SessionBusy, "The agent's chat could not take this message right now. Try again in a moment."));

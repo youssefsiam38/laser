@@ -20,16 +20,27 @@
  *      block uses (D-140), so the implementation context packet is rebuilt
  *      every turn and a `/design implement @Design` hand-off lands in the
  *      turn that asked for it.
+ *   3. **Put what a message mentioned beside that message**, at `context` —
+ *      the transform the engine applies to the messages it is about to send,
+ *      whose result never returns to the conversation. That is what makes a
+ *      mention's projection *ephemeral*: the model reads it for the turn its
+ *      message is in, and the session file keeps only what the person wrote.
+ *      It is also the only boundary a queued steer or follow-up passes, since
+ *      a queued message never raises `before_agent_start` of its own.
+ *
+ * The two context capabilities are independent: a session with no project work
+ * of its own registers no tools and still shows the model what its messages
+ * mentioned (leap, "Cross-session mentions and context").
  *
  * The worker owns the rest: the typed bridge to the host authority, the
  * Design Index builder, the Research run. Nothing here writes anything.
  */
 import { INSTRUCTION_APP_ORIGIN, PRODUCT_DISPLAY_NAME, type LaserToolSpec } from "@lasercode/protocol";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ContextEvent, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import { recordInstructionWrite } from "../prompt-provenance.js";
 import { registerLaserTool } from "../register-tool.js";
-import type { ProjectWorkBridge, ProjectWorkToolBinding } from "../project-work-bridge.js";
+import type { ProjectMentionContextMessage, ProjectWorkBridge, ProjectWorkToolBinding } from "../project-work-bridge.js";
 import type { LaserModule, ModuleContext } from "./index.js";
 
 /**
@@ -73,6 +84,13 @@ export function registerBinding(pi: ExtensionAPI, binding: ProjectWorkToolBindin
   );
 }
 
+/**
+ * The custom type a mention-context message carries. It exists only inside one
+ * model request: nothing appends it to the conversation, so no session file
+ * ever holds one.
+ */
+export const MENTION_CONTEXT_MESSAGE_TYPE = "lasercode/project-work-mentions";
+
 /** Every tool this session's bridge offers, in the order the docs list them. */
 export function bindingsOf(bridge: ProjectWorkBridge): ProjectWorkToolBinding[] {
   return [...bridge.lifecycleTools(), ...bridge.designTools(), ...bridge.researchTools()];
@@ -81,7 +99,7 @@ export function bindingsOf(bridge: ProjectWorkBridge): ProjectWorkToolBinding[] 
 export const projectWorkModule: LaserModule = {
   name: "project-work",
 
-  detect: (ctx) => Boolean(ctx.projectWork),
+  detect: (ctx) => Boolean(ctx.projectWork ?? ctx.mentionContext),
 
   register(ctx: ModuleContext) {
     const bridge = ctx.projectWork;
@@ -104,8 +122,55 @@ export const projectWorkModule: LaserModule = {
 
   activate(ctx: ModuleContext) {
     const bridge = ctx.projectWork;
-    if (!bridge) return;
+    const mentions = ctx.mentionContext;
+    if (!bridge && !mentions) return;
     let disposed = false;
+
+    // What a message mentioned, beside that message. The engine hands this
+    // hook the messages it is about to send and uses what comes back for that
+    // request only, so nothing here is written, stored or replayed: the
+    // transcript keeps the person's words and the typed reference they sent,
+    // never a copy of the artifact.
+    if (mentions) {
+      ctx.pi.on("context", (event: ContextEvent) => {
+        if (disposed) return undefined;
+        const messages = event.messages as unknown as Array<{ role?: unknown; correlationId?: unknown }>;
+        const seen: ProjectMentionContextMessage[] = messages.map((message) => ({
+          role: typeof message.role === "string" ? message.role : "",
+          ...(typeof message.correlationId === "string" ? { correlationId: message.correlationId } : {}),
+        }));
+        let blocks;
+        try {
+          blocks = mentions.blocks(seen);
+        } catch (error) {
+          ctx.send({
+            type: "lasercode/module/log",
+            module: "project-work",
+            level: "warn",
+            message: `could not build this message's project-work context: ${describe(error)}`,
+          });
+          return undefined;
+        }
+        if (blocks.length === 0) return undefined;
+        const next = [...event.messages];
+        // Descending, so an earlier insertion cannot move a later one's place.
+        for (const block of [...blocks].sort((left, right) => right.afterIndex - left.afterIndex)) {
+          const at = Math.min(Math.max(block.afterIndex + 1, 0), next.length);
+          next.splice(at, 0, {
+            role: "custom",
+            customType: MENTION_CONTEXT_MESSAGE_TYPE,
+            content: [{ type: "text", text: block.text }],
+            timestamp: Date.now(),
+          } as unknown as (typeof next)[number]);
+        }
+        return { messages: next };
+      });
+    }
+    if (!bridge) {
+      return () => {
+        disposed = true;
+      };
+    }
 
     // The model-call boundary. The packet is rebuilt here every turn, so it
     // can never describe a state older than the turn reading it, and it goes

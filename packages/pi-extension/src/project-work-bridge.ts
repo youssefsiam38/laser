@@ -27,6 +27,47 @@ export interface ProjectWorkToolBinding {
   recovery: { code: string; next: string };
 }
 
+/** One message the model is about to read, as the carrier needs to see it. */
+export interface ProjectMentionContextMessage {
+  role: string;
+  /**
+   * The opaque identity the worker minted for a message it admitted, carried
+   * by the engine on the message it created. Absent for every message this
+   * worker did not send with one — a resumed conversation, a fork, anything
+   * older than this session — and such a message contributes nothing.
+   */
+  correlationId?: string | undefined;
+}
+
+/** One block of context, and the message it belongs beside. */
+export interface ProjectMentionContextBlock {
+  /** Index in the list handed to {@link ProjectMentionContext.blocks}. */
+  afterIndex: number;
+  text: string;
+}
+
+/**
+ * The read-only half of project work: what a person's message **mentioned**
+ * (M21-T9).
+ *
+ * Separate from {@link ProjectWorkBridge} on purpose. Reading a mention is not
+ * a project capability — a projectless chat and a session discussing another
+ * project's work both get the host's bounded projection of what they named —
+ * so this object registers no tool, holds no bridge, calls nothing and can
+ * change nothing. It formats what the host already validated, for the message
+ * that carried it.
+ */
+export interface ProjectMentionContext {
+  /**
+   * What to put in front of the model at this call, and where.
+   *
+   * Called before every model call, with the messages the model is about to
+   * read. The worker decides which of them are still owed their context; the
+   * module only places what comes back.
+   */
+  blocks(messages: readonly ProjectMentionContextMessage[]): ProjectMentionContextBlock[];
+}
+
 export interface ProjectWorkBridge {
   /**
    * The lifecycle surface: `inspect_project_work`, `write_project_artifact`,

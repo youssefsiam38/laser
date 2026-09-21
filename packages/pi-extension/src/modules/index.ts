@@ -11,7 +11,7 @@ import { transcribeModule } from "./transcribe.js";
 import { goalModule } from "./goal.js";
 import { mcpModule, type McpModuleOptions } from "./mcp.js";
 import { projectWorkModule } from "./project-work.js";
-import type { ProjectWorkBridge } from "../project-work-bridge.js";
+import type { ProjectMentionContext, ProjectWorkBridge } from "../project-work-bridge.js";
 import { webAccessModule, type WebSearchHandler } from "./web-access.js";
 export type { McpModuleOptions } from "./mcp.js";
 export type { WebSearchHandler } from "./web-access.js";
@@ -74,6 +74,12 @@ export interface ModuleContext {
    * link at all, and the whole surface is then simply not registered.
    */
   projectWork?: ProjectWorkBridge;
+  /**
+   * What this session's messages mentioned (M21-T9), read-only. Present for
+   * every session that can receive a host-validated projection, including one
+   * with no project of its own; it registers nothing and changes nothing.
+   */
+  mentionContext?: ProjectMentionContext;
 }
 
 /**

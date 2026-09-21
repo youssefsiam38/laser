@@ -12,16 +12,27 @@
  * transcript records their message and the reply, and no stop notice.
  */
 import { randomBytes } from "node:crypto";
-import { ErrorCodes, PENDING_MAX, PENDING_TEXT_MAX, ProtocolError, type ContentBlock, type PendingMessage } from "@lasercode/protocol";
+import { ErrorCodes, PENDING_MAX, PENDING_TEXT_MAX, ProtocolError, type ContentBlock, type PendingMessage, type ProjectWorkMentionProjection } from "@lasercode/protocol";
+
+/** What a row carries beside the person's words. */
+export interface PendingSendExtras {
+  /**
+   * The host's bounded projection of what this message mentions (M21-T9),
+   * read when the person sent it. It travels with the row and is handed to the
+   * engine with the row's own message; it is never published to a client and
+   * never becomes transcript content.
+   */
+  projectWork?: readonly ProjectWorkMentionProjection[];
+}
 
 export interface PendingTrayDeps {
   /** Hand one message to the engine's steering queue. */
-  steer(content: ContentBlock[]): Promise<void>;
+  steer(content: ContentBlock[], extras?: PendingSendExtras): Promise<void>;
   /**
    * Start a turn with one message. `onAccepted` is the engine's canonical,
    * per-invocation preflight acknowledgement; it fires before the turn runs.
    */
-  prompt(content: ContentBlock[], onAccepted: () => void): Promise<{ accepted: boolean }>;
+  prompt(content: ContentBlock[], onAccepted: () => void, extras?: PendingSendExtras): Promise<{ accepted: boolean }>;
   /** Same new-root admission seam used by direct prompts and agent work. */
   admitNewWork?(): void;
   /** Whether the agent is working right now. */
@@ -36,6 +47,12 @@ export interface PendingTrayDeps {
 export class PendingTray {
   private messages: PendingMessage[] = [];
   private draining = false;
+  /**
+   * What each waiting row mentioned, by row id. Kept beside the rows rather
+   * than on them: `PendingMessage` is what a client sees, and a projection is
+   * for the model alone.
+   */
+  private readonly mentions = new Map<string, readonly ProjectWorkMentionProjection[]>();
 
   constructor(private readonly deps: PendingTrayDeps) {}
 
@@ -48,7 +65,7 @@ export class PendingTray {
     return this.draining;
   }
 
-  add(content: ContentBlock[]): PendingMessage {
+  add(content: ContentBlock[], projectWork?: readonly ProjectWorkMentionProjection[]): PendingMessage {
     if (content.length === 0) throw new ProtocolError(ErrorCodes.InvalidParams, "There is nothing in that message to queue.");
     if (this.messages.length >= PENDING_MAX) {
       throw new ProtocolError(
@@ -65,11 +82,12 @@ export class PendingTray {
       state: "waiting",
     };
     this.messages = [...this.messages, message];
+    if (projectWork && projectWork.length > 0) this.mentions.set(message.id, [...projectWork]);
     this.publish();
     return clone(message);
   }
 
-  edit(id: string, content: ContentBlock[]): PendingMessage {
+  edit(id: string, content: ContentBlock[], projectWork?: readonly ProjectWorkMentionProjection[]): PendingMessage {
     const current = this.require(id);
     // Rewriting a message the engine is already reading would change what was
     // sent after it was sent. The row stops offering Edit at the same moment.
@@ -85,6 +103,10 @@ export class PendingTray {
     };
     delete next.error;
     this.messages = this.messages.map((message) => (message.id === id ? next : message));
+    // The words changed, so what they mention changed with them: the host read
+    // the edited message and this is that reading, or none.
+    if (projectWork && projectWork.length > 0) this.mentions.set(id, [...projectWork]);
+    else this.mentions.delete(id);
     this.publish();
     return clone(next);
   }
@@ -97,6 +119,7 @@ export class PendingTray {
       throw new ProtocolError(ErrorCodes.InvalidParams, "That message is already on its way to the agent.");
     }
     this.messages = this.messages.filter((message) => message.id !== id);
+    this.mentions.delete(id);
     this.publish();
     return clone(found);
   }
@@ -105,6 +128,7 @@ export class PendingTray {
   clear(): PendingMessage[] {
     const dropped = this.messages.filter((message) => message.state !== "delivering");
     if (dropped.length === 0) return [];
+    for (const message of dropped) this.mentions.delete(message.id);
     this.messages = this.messages.filter((message) => message.state === "delivering");
     this.publish();
     return dropped.map(clone);
@@ -131,11 +155,14 @@ export class PendingTray {
     // Out of the tray first: a steer that succeeded while the row was still
     // drawn would show the same message in both lanes for a frame.
     this.messages = this.messages.filter((message) => message.id !== id);
+    const extras = this.extrasOf(id);
     this.publish();
     try {
-      await this.deps.steer(found.content);
+      await this.deps.steer(found.content, extras);
+      this.mentions.delete(id);
       return true;
     } catch (error) {
+      // The message is back in the tray, so what it mentioned is still its own.
       this.messages = [{ ...found, state: "failed", error: reasonOf(error) }, ...this.messages];
       this.publish();
       throw error;
@@ -167,13 +194,14 @@ export class PendingTray {
           // invocation. Equal messages behind it stay waiting.
           this.accept(head.id);
         };
+        const extras = this.extrasOf(head.id);
         try {
-          const result = await this.deps.prompt(head.content, acknowledge);
+          const result = await this.deps.prompt(head.content, acknowledge, extras);
           // An extension is holding a prompt that was never accepted. Steering
           // it in is what `sendToSession` does for the same refusal. Acceptance
           // is monotonic: a mismatched late `{ accepted: false }` cannot hand an
           // already acknowledged message to the engine a second time.
-          if (!result.accepted && !accepted) await this.deps.steer(head.content);
+          if (!result.accepted && !accepted) await this.deps.steer(head.content, extras);
           // The driver contract calls `acknowledge` during accepted preflight.
           // This also covers a successful refused-prompt fallback steer and a
           // future driver that can only report acceptance with its result.
@@ -193,11 +221,19 @@ export class PendingTray {
     }
   }
 
+  /** What this row mentions, in the shape a send takes. */
+  private extrasOf(id: string): PendingSendExtras | undefined {
+    const projectWork = this.mentions.get(id);
+    return projectWork && projectWork.length > 0 ? { projectWork } : undefined;
+  }
+
   /** Remove exactly the message whose prompt invocation was accepted. */
   private accept(id: string): void {
     const next = this.messages.filter((message) => message.id !== id);
     if (next.length === this.messages.length) return;
     this.messages = next;
+    // The engine owns the message now, and its context went with it.
+    this.mentions.delete(id);
     this.publish();
   }
 
