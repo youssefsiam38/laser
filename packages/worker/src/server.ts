@@ -22,7 +22,7 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, isLiveEdgeWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, WIRE_NAMESPACE, AGENT_ISOLATION_DEFAULT, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type AgentModelChoice, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TelemetryContext, type TelemetrySection, type TypedClientRequest, type WorkerActivationState, type AgentIsolationDefault } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, isLiveEdgeWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, WIRE_NAMESPACE, AGENT_ISOLATION_DEFAULT, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type ModelIdentity, type ModelProfile, type ModelProfileInput, type ProfileAssignments, type SettingChange, validateModelProfiles, MODEL_PROFILES_SETTING, DEFAULT_PROFILE_SETTING, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TelemetryContext, type TelemetrySection, type TypedClientRequest, type WorkerActivationState, type AgentIsolationDefault } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
 import {
   PRESSURE_MAX_REPLAY_DROPS,
@@ -80,7 +80,8 @@ import { SourceControlService } from "./source-control/index.js";
 import { excerptFromEntries, GitActionError, GitActionsService, type GitActionsFetcher, type GitProseRuntime, type ProcessRunner } from "./git-actions/index.js";
 import { KeybindingsAdapter } from "./keybindings.js";
 import { ModelsAdapter, PackagesAdapter } from "./packages.js";
-import { SettingsAdapter } from "./settings.js";
+import { SettingsAdapter, readProfileSettings, resolveProfile } from "./settings.js";
+import { migrateModelProfiles } from "./profiles/migrate.js";
 import { WebSearchService } from "./web-search.js";
 import { McpService } from "./mcp/service.js";
 import { TranscribeService } from "./transcribe.js";
@@ -389,6 +390,7 @@ export class WorkerServer {
       driver: (path) => this.runtimes.get(path)?.driver,
       notify: (method, params) => this.notify(method, params),
       modelAvailable: (model) => this.modelAvailable(model),
+      resolveProfile: (profileId) => this.resolveAgentProfile(profileId),
       tasks: (path) => this.tasks.tasksOf(path),
       taskLogRoot: () => this.taskLogRoot(),
     };
@@ -417,17 +419,15 @@ export class WorkerServer {
     });
     this.namer = new NamerService({
       models: options.namerModels ?? (() => this.modelCatalog().modelRuntime()),
-      model: () => this.definitions.namerModel(),
+      // The profile assigned to session naming, or the built-in's own choice
+      // when a person made one (docs/model-profiles.md, "Assignments").
+      profile: () => this.namingProfile(),
       instructions: () => this.definitions.namerInstructions(),
-      catalog: async () => {
-        const [catalog, providers] = await Promise.all([this.modelCatalog().catalog(false, "effective"), this.modelCatalog().providers()]);
-        return { models: catalog.models, configuredProviders: new Set(providers.providers.filter((p) => p.configured).map((p) => p.id)) };
-      },
     });
     // The host's first `agents/sync` (and every later one) can be what turns
-    // naming on: until it lands the cache answers `namer.model === null`, and
-    // qualification itself finishes seconds after the first prompt. A session
-    // whose first prompt found no model is named the moment one appears.
+    // naming on, and so can a first provider being connected: until then there
+    // is no profile to walk. A session whose first prompt found none is named
+    // the moment one appears.
     this.definitions.onChange(() => this.nameWaitingSessions());
     // This worker answers for its own memory (RP-8): it samples itself, runs
     // the three steps it owns, and tells the host what it found. It takes part
@@ -937,9 +937,23 @@ export class WorkerServer {
         const live = this.live(req.params.path);
         return { models: await this.firstTurnLock.run(live.path, () => live.driver.listModels()) } satisfies Result<"pi/model/list">;
       }
+      // Choosing one model for a session pins it: it leaves its profile and
+      // has nothing standing in for it (docs/model-profiles.md, D-346).
+      // `session/model/pin` is the same act under its own name.
       case "pi/model/set": {
         const live = this.live(req.params.path);
         return this.settingsLane(live, async () => ({ state: await live.driver.setModel(req.params.model) } satisfies Result<"pi/model/set">));
+      }
+      case "session/model/pin": {
+        const live = this.live(req.params.path);
+        return this.settingsLane(live, async () => ({ state: await live.driver.setModel(req.params.model) } satisfies Result<"session/model/pin">));
+      }
+      case "session/profile/set": {
+        const live = this.live(req.params.path);
+        const profileId = req.params.profileId;
+        return this.settingsLane(live, async () => ({
+          state: await live.driver.setProfile(profileId),
+        } satisfies Result<"session/profile/set">));
       }
       case "pi/thinking/set": {
         const live = this.live(req.params.path);
@@ -1172,6 +1186,35 @@ export class WorkerServer {
         await settings.refresh();
         return { snapshot: settings.snapshot() } satisfies Result<"pi/settings/get">;
       }
+      // Model profiles are product-owned settings: one list, one file, one
+      // writer (docs/model-profiles.md, "Bounds and policy").
+      case "models/profiles/list": {
+        await this.settings().refresh();
+        return this.profilesResult() satisfies Result<"models/profiles/list">;
+      }
+      case "models/profiles/save": {
+        await this.saveModelProfile(req.params.profile);
+        return this.profilesResult() satisfies Result<"models/profiles/save">;
+      }
+      case "models/profiles/delete": {
+        await this.deleteModelProfile(req.params.id, req.params.replacementId);
+        return this.profilesResult() satisfies Result<"models/profiles/delete">;
+      }
+      case "models/profiles/migrate": {
+        this.assertCwd(req.params.cwd);
+        const catalog = await this.modelCatalog().catalog(false, "global").catch(() => undefined);
+        const providers = await this.modelCatalog().providers().catch(() => undefined);
+        const report = await migrateModelProfiles(this.settings(), {
+          at: new Date().toISOString(),
+          ...(catalog ? { models: catalog.models } : {}),
+          ...(providers
+            ? { configuredProviders: new Set(providers.providers.filter((provider) => provider.configured).map((provider) => provider.id)) }
+            : {}),
+          modelName: (model) => catalog?.models.find((entry) => entry.provider === model.provider && entry.id === model.id)?.name,
+        });
+        if (report.ran) await this.reloadLiveSettings("global");
+        return { report } satisfies Result<"models/profiles/migrate">;
+      }
       case "pi/settings/set": {
         this.assertCwd(req.params.cwd);
         const snapshot = await this.settings().apply(req.params.scope, req.params.changes);
@@ -1291,9 +1334,6 @@ export class WorkerServer {
       case "agents/engine-instructions":
         this.assertCwd(req.params.cwd);
         return { text: defaultAgentInstructions(this.options.cwd) } satisfies Result<"agents/engine-instructions">;
-      case "agents/namer/qualify":
-        this.assertCwd(req.params.cwd);
-        return (await this.namer.qualify()) satisfies Result<"agents/namer/qualify">;
       case "agents/runs/stop": {
         const reason = req.params.reason?.trim();
         const run = await this.harness.stopRun(req.params.runId, { initiator: "user", ...(reason ? { reason } : {}) });
@@ -1306,7 +1346,7 @@ export class WorkerServer {
       case "agents/set-default":
       case "agents/set-policy":
       case "agents/runs/list":
-      case "agents/builtin/set-model":
+      case "agents/builtin/set-profile":
       case "agents/builtin/set-instructions":
         throw new ProtocolError(ErrorCodes.Unsupported, `${req.method} is answered by the host's agent store, not a worker`);
 
@@ -1608,12 +1648,9 @@ export class WorkerServer {
     if (agentName === "namer") throw new ProtocolError(ErrorCodes.InvalidParams, "Namer names things; it does not run sessions.");
     const definition = this.definitions.definition(agentName);
     if (!definition) throw new ProtocolError(ErrorCodes.InvalidParams, `No agent is called "${agentName}".`);
-    if (definition.model && !(await this.modelAvailable(definition.model))) {
-      throw new ProtocolError(
-        ErrorCodes.InvalidParams,
-        `The model ${definition.model.provider}/${definition.model.id} is not available: connect ${definition.model.provider} in Settings → Providers and models, or choose another model for ${definition.name}.`,
-      );
-    }
+    // A definition naming a profile that is gone opens the session anyway, on
+    // the profile assigned to new sessions; the substitution is a warning on
+    // the definition, not a closed door (docs/model-profiles.md).
     const handle = this.harness.prepareSession({ role: rootRole(agentName), definition, record: rootRecord(agentName), projectCwd: this.options.cwd });
     const live = await this.openAndAttach(
       {
@@ -1812,7 +1849,101 @@ export class WorkerServer {
     return live.driver.state();
   }
 
-  private async modelAvailable(model: AgentModelChoice): Promise<boolean> {
+  /** Every profile and every assignment, as the methods answer with them. */
+  private profilesResult(): { profiles: ModelProfile[]; assignments: ProfileAssignments } {
+    return readProfileSettings(this.settings().agentDir);
+  }
+
+  /**
+   * Create or replace one profile.
+   *
+   * The whole list is validated before anything is written, with the same
+   * function the Settings screen draws its messages from, so a refusal reads
+   * the same in both places. The first profile a person ever saves also
+   * becomes the one new conversations start on: a profile nothing uses is a
+   * list nobody asked for.
+   */
+  private async saveModelProfile(input: ModelProfileInput): Promise<void> {
+    const { profiles, assignments } = readProfileSettings(this.settings().agentDir);
+    const at = new Date().toISOString();
+    const saved: ModelProfile = { ...input, models: input.models.map((model) => ({ ...model })), updatedAt: at };
+    const index = profiles.findIndex((profile) => profile.id === saved.id);
+    const next = index >= 0 ? profiles.map((profile, i) => (i === index ? saved : profile)) : [...profiles, saved];
+    const issue = validateModelProfiles(next)[0];
+    if (issue) throw new ProtocolError(ErrorCodes.InvalidParams, issue.message);
+    const changes: SettingChange[] = [{ path: MODEL_PROFILES_SETTING, op: "set", value: next }];
+    if (!assignments.defaultProfileId) changes.push({ path: DEFAULT_PROFILE_SETTING, op: "set", value: saved.id });
+    await this.settings().apply("global", changes);
+    await this.reloadLiveSettings("global");
+  }
+
+  /**
+   * Delete one profile, moving everything that pointed at it to a replacement.
+   *
+   * A profile something still uses cannot simply disappear: the caller names
+   * what takes its place, and every assignment moves in the same write. There
+   * is no path here that leaves an id pointing at nothing.
+   */
+  private async deleteModelProfile(id: string, replacementId: string | undefined): Promise<void> {
+    const { profiles, assignments } = readProfileSettings(this.settings().agentDir);
+    const target = profiles.find((profile) => profile.id === id);
+    if (!target) throw new ProtocolError(ErrorCodes.InvalidParams, "That profile is already gone.");
+    if (profiles.length === 1) {
+      throw new ProtocolError(
+        ErrorCodes.InvalidParams,
+        `“${target.name}” is your only model profile. Add another one before deleting this one.`,
+      );
+    }
+    const used = (Object.keys(assignments) as Array<keyof ProfileAssignments>).filter((key) => assignments[key] === id);
+    const replacement = replacementId ? profiles.find((profile) => profile.id === replacementId) : undefined;
+    if (replacementId && !replacement) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "The profile chosen to take its place is no longer there.");
+    }
+    if (replacement && replacement.id === id) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "Choose a different profile to take its place.");
+    }
+    if (used.length > 0 && !replacement) {
+      throw new ProtocolError(
+        ErrorCodes.InvalidParams,
+        `“${target.name}” is still in use. Choose the profile that should take its place, then delete it.`,
+      );
+    }
+    const next = profiles.filter((profile) => profile.id !== id);
+    const changes: SettingChange[] = [{ path: MODEL_PROFILES_SETTING, op: "set", value: next }];
+    for (const key of used) changes.push({ path: key, op: "set", value: replacement!.id });
+    await this.settings().apply("global", changes);
+    await this.reloadLiveSettings("global");
+  }
+
+  /**
+   * The profile assigned to session naming: the built-in's own choice when a
+   * person made one, otherwise the profile Settings assigns to naming.
+   */
+  private namingProfile(): ModelProfile | null {
+    const { profiles, assignments } = readProfileSettings(this.settings().agentDir);
+    // Only an explicit assignment turns naming on. Falling through to the
+    // profile new sessions use would spend the person's best model on titles,
+    // which is the opposite of what the naming assignment is for.
+    for (const id of [this.definitions.namerProfileId(), assignments.namingProfileId]) {
+      const named = id ? profiles.find((profile) => profile.id === id) : undefined;
+      if (named) return named;
+    }
+    return null;
+  }
+
+  /**
+   * The profile an agent definition runs on, and whether that is the one it
+   * asked for. An id nothing answers to is substituted, never refused.
+   */
+  private resolveAgentProfile(profileId: string | null): { profileId: string | null; substituted?: { requested: string; used: string | null } } {
+    const { profiles, assignments } = readProfileSettings(this.settings().agentDir);
+    if (profileId && profiles.some((profile) => profile.id === profileId)) return { profileId };
+    const used = resolveProfile(profiles, assignments)?.id ?? null;
+    if (!profileId) return { profileId: used };
+    return { profileId: used, substituted: { requested: profileId, used } };
+  }
+
+  private async modelAvailable(model: ModelIdentity): Promise<boolean> {
     try {
       const runtime = await this.modelCatalog().modelRuntime();
       if (!runtime.getModel(model.provider, model.id)) return false;
@@ -1865,7 +1996,14 @@ export class WorkerServer {
       try {
         const name = await this.namer.nameSession(text);
         const current = this.namingPath(token) ?? path;
-        if (!name || !this.runtimes.has(current) || live.driver.state().name) return;
+        if (!name) {
+          // The whole profile was spent — no credential yet, every model
+          // failing. The words are parked rather than thrown away, so the
+          // conversation gets its title the moment naming can happen.
+          if (!live.driver.state().name) this.waitToName(current, text);
+          return;
+        }
+        if (!this.runtimes.has(current) || live.driver.state().name) return;
         await live.driver.rename(name).catch(() => undefined);
       } finally {
         this.forgetNaming(token);
@@ -1892,7 +2030,7 @@ export class WorkerServer {
     if (path !== undefined) this.namingInFlight.delete(path);
   }
 
-  /** Hold a first prompt until a Namer model exists, oldest dropped past the cap. */
+  /** Hold a first prompt until naming can happen, oldest dropped past the cap. */
   private waitToName(path: string, text: string): void {
     this.unnamed.delete(path);
     this.unnamed.set(path, text);

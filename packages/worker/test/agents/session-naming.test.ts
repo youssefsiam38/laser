@@ -5,7 +5,7 @@
  * "a turn that takes minutes": everything below happens while it is pending.
  */
 import { PRODUCT_NAME, type JsonRpcMessage, type SessionState } from "@lasercode/protocol";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -78,9 +78,31 @@ function fakeNamerRuntime(answer: () => string): NamerModelRuntime & { calls: nu
   return runtime;
 }
 
+/** The snapshot a host sends once naming has a profile, plus the profile itself. */
+const NAMING_PROFILE_ID = "mp_testnaming000000000000";
+
+function writeNamingProfile(): void {
+  mkdirSync(join(base, "agent"), { recursive: true });
+  writeFileSync(
+    join(base, "agent", "settings.json"),
+    JSON.stringify({
+      modelProfiles: [{
+        id: NAMING_PROFILE_ID,
+        name: "Fast",
+        models: [{ provider: "stub", id: "stub-1" }],
+        origin: "seeded",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }],
+      defaultProfileId: NAMING_PROFILE_ID,
+      namingProfileId: NAMING_PROFILE_ID,
+    }),
+  );
+}
+
 function namedSnapshot() {
+  writeNamingProfile();
   const snapshot = fallbackSnapshot();
-  return { ...snapshot, namer: { ...snapshot.namer, status: "ready" as const, model: { provider: "stub", id: "stub-1" } } };
+  return { ...snapshot, builtinProfiles: { ...snapshot.builtinProfiles, namer: NAMING_PROFILE_ID } };
 }
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));

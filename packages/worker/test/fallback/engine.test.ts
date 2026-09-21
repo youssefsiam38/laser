@@ -77,9 +77,13 @@ afterEach(async () => {
   rmSync(base, { recursive: true, force: true });
 });
 
+/** Stable profile ids, so a test can name the profile it wrote. */
+const profileId = (index: number) => `mp_testprofile${index}0000000000`;
+const PROFILE_AT = "2026-01-01T00:00:00.000Z";
+
 function writeStubs(
-  chain: Array<{ provider: string; id: string }> = [MODEL.a, MODEL.b, MODEL.c],
-  extraChains: Array<{ models: Array<{ provider: string; id: string }> }> = [],
+  models: Array<{ provider: string; id: string }> = [MODEL.a, MODEL.b, MODEL.c],
+  extraProfiles: Array<{ models: Array<{ provider: string; id: string }> }> = [],
   defaultModel: { provider: string; id: string } = MODEL.a,
   options: { windows?: Partial<Record<Which, number>>; compaction?: Record<string, unknown> } = {},
 ): void {
@@ -95,9 +99,26 @@ function writeStubs(
       },
     }),
   );
+  const profiles = [
+    ...(models.length > 0 ? [{ id: profileId(0), name: "Balanced", models, origin: "person", updatedAt: PROFILE_AT }] : []),
+    ...extraProfiles.map((profile, index) => ({
+      id: profileId(index + 1),
+      name: `Profile ${index + 1}`,
+      models: profile.models,
+      origin: "person",
+      updatedAt: PROFILE_AT,
+    })),
+  ];
+  let defaultProfileId = profiles.find((profile) => profile.models[0]?.provider === defaultModel.provider && profile.models[0]?.id === defaultModel.id)?.id;
+  if (profiles.length > 0 && !defaultProfileId) {
+    defaultProfileId = profileId(9);
+    profiles.push({ id: defaultProfileId, name: "Default", models: [defaultModel], origin: "person", updatedAt: PROFILE_AT });
+  }
   writeFileSync(
     join(agentDir, "settings.json"),
     JSON.stringify({
+      // The engine's own default, left in place by the migration (D-346). It
+      // is the last resort for a person who has no profiles at all.
       defaultProvider: defaultModel.provider,
       defaultModel: defaultModel.id,
       // The engine's own retry policy, kept short so a test spends
@@ -105,7 +126,7 @@ function writeStubs(
       // loop: `maxRetries` attempts after the first, exponential backoff.
       retry: { enabled: true, maxRetries: 1, baseDelayMs: 5 },
       ...(options.compaction ? { compaction: options.compaction } : {}),
-      ...(chain.length > 0 ? { fallbackChains: [{ models: chain }, ...extraChains] } : {}),
+      ...(profiles.length > 0 ? { modelProfiles: profiles, defaultProfileId } : {}),
     }),
   );
 }
@@ -298,7 +319,7 @@ it("tries an earlier model once when its cooldown has passed, and keeps the rest
   expect(requests("a")).toBe(afterFirst + 1);
   expect(driver.state().fallback).toMatchObject({ position: 0 });
   // The chain is intact: C is still behind B.
-  expect(driver.state().fallback?.chain.map((model) => model.id)).toEqual(["stub-1", "stub-b-1", "stub-c-1"]);
+  expect(driver.state().fallback?.models.map((model) => model.id)).toEqual(["stub-1", "stub-b-1", "stub-c-1"]);
   expect(fallbacks(updates).at(-1)).toMatchObject({ phase: "switched", reason: "provider_down" });
 });
 
@@ -317,7 +338,7 @@ it("skips an earlier model that failed moments ago and advances instead", async 
   expect(fallbacks(updates).map((event) => event.phase)).toEqual(["switching", "attempt_failed", "switched"]);
 });
 
-it("preserves the task with one actionable error when the whole chain is spent", async () => {
+it("preserves the task with one actionable error when the whole profile is spent", async () => {
   script.a = () => down();
   script.b = () => down();
   script.c = () => down();
@@ -336,9 +357,10 @@ it("preserves the task with one actionable error when the whole chain is spent",
   expect(requests("a") + requests("b") + requests("c")).toBe(before);
 });
 
-it("never enters another model's chain, however many chains there are", async () => {
-  // A → B, and B → C as a chain of its own. A session on A that falls back to
-  // B must stop there: B's chain belongs to a session that started on B.
+it("never leaves the session's own profile, however many profiles there are", async () => {
+  // One profile A → B, and another B → C. A session on the first moves to B
+  // and stops there: the second profile is a different intent, not a spare
+  // model (docs/model-profiles.md, "Runtime").
   writeStubs([MODEL.a, MODEL.b], [{ models: [MODEL.b, MODEL.c] }]);
   script.a = () => down();
   script.b = () => down();
@@ -366,7 +388,7 @@ it("asks nothing of a model in the background while the active one works", async
 
 // ------------------------------------------------------ reload and the person
 
-it("keeps the chain, the position and the eligibility across a reload", async () => {
+it("keeps the profile, the position and the eligibility across a reload", async () => {
   writeStubs([MODEL.a, MODEL.b], [{ models: [MODEL.b, MODEL.c] }]);
   script.a = () => down();
   script.b = () => ok("from b");
@@ -377,60 +399,65 @@ it("keeps the chain, the position and the eligibility across a reload", async ()
   await first.driver.dispose();
 
   const again = await open(path);
-  // The chain is the one this conversation activated, at the position it
-  // reached — not the chain the model it is on happens to start.
+  // The profile is the one this conversation activated, at the position it
+  // reached — not one resolved afresh from the model it is on.
   expect(again.driver.state().fallback).toMatchObject({ position: 1 });
-  expect(again.driver.state().fallback?.chain.map((model) => model.id)).toEqual(["stub-1", "stub-b-1"]);
+  expect(again.driver.state().fallback?.models.map((model) => model.id)).toEqual(["stub-1", "stub-b-1"]);
 
   // And the failure history came with it: B failing now finds A still in
-  // cooldown and the chain spent, rather than starting again at the top.
+  // cooldown and the profile spent, rather than starting again at the top.
   script.b = () => down();
   await again.driver.prompt([{ type: "text", text: "again" }]);
   expect(requests("c")).toBe(0);
   expect(fallbacks(again.updates).at(-1)?.phase).toBe("exhausted");
 });
 
-it("gives a person's own model choice a fresh activation, and the last word", async () => {
+it("pins to one model on a person's choice, and re-anchors when they pick a profile", async () => {
   script.a = () => down();
   script.b = () => ok("from b");
   const { driver } = await open();
   await driver.prompt([{ type: "text", text: "hello" }]);
   expect(driver.state().fallback).toMatchObject({ position: 1 });
+  expect(driver.state().profile).toMatchObject({ id: profileId(0), name: "Balanced" });
 
-  // Switching to C by hand: C starts no chain here, so the session simply has
-  // none, and the traversal it was on is gone.
+  // Choosing a model is pinning: the session leaves its profile and has
+  // nothing standing in for C.
   await driver.setModel({ provider: "stub-c", id: "stub-c-1" });
   expect(driver.state().fallback).toBeUndefined();
+  expect(driver.state().profile).toBeNull();
+  expect(driver.state().pinned).toBe(true);
   expect(idOf(driver)).toBe("stub-c-1");
 
-  // Choosing the chain's first model again starts it over: the mark A earned
-  // is cleared, so A is tried and answers.
+  // Choosing the profile again re-anchors to its first model, and the mark A
+  // earned is cleared, so A is tried and answers.
   script.a = () => ok("back on a");
-  await driver.setModel(MODEL.a);
+  await driver.setProfile(profileId(0));
   expect(driver.state().fallback).toMatchObject({ position: 0 });
+  expect(driver.state().pinned).toBeUndefined();
   await driver.prompt([{ type: "text", text: "again" }]);
   expect(idOf(driver)).toBe("stub-1");
 });
 
-it("has no chain at all, and behaves exactly as before, when nothing matches", async () => {
+it("has no profile at all, and behaves exactly as before, when a person has none", async () => {
   writeStubs([]);
   script.a = () => down();
   const { driver, updates } = await open();
   await driver.prompt([{ type: "text", text: "hello" }]);
   expect(driver.state().fallback).toBeUndefined();
+  expect(driver.state().profile).toBeNull();
   expect(fallbacks(updates)).toEqual([]);
   expect(requests("b")).toBe(0);
   expect(idOf(driver)).toBe("stub-1");
 });
 
-it("activates the chain for an agent model accepted with the first turn", async () => {
-  // The session opens on the unrelated global default. Selecting this agent
-  // replaces that pristine runtime before the first prompt; the chain must
-  // follow the model the accepted runtime is actually on.
+it("activates the agent's own profile when its first turn is accepted", async () => {
+  // The session opens on the unrelated default profile. Selecting this agent
+  // replaces that pristine runtime before the first prompt; the activation
+  // must follow the profile the accepted runtime is actually on.
   writeStubs([MODEL.a, MODEL.b], [], MODEL.c);
   script.a = () => down();
   script.b = () => ok("continued on b");
-  const original = { ...fallbackDefaultAgent(), model: null };
+  const original = { ...fallbackDefaultAgent(), profileId: null };
   const originalOptions = {
     definition: original,
     role: rootRole(original.name),
@@ -443,9 +470,11 @@ it("activates the chain for an agent model accepted with the first turn", async 
 
   const { driver, updates } = await open(path, originalOptions);
   expect(idOf(driver)).toBe("stub-c-1");
-  expect(driver.state().fallback).toBeUndefined();
+  // The default profile holds one model, so there is an activation — with
+  // nothing to move to, which is not the same as having no profile.
+  expect(driver.state().fallback).toMatchObject({ profileId: profileId(9), position: 0 });
 
-  const definition = { ...fallbackDefaultAgent(), name: "reviewer", model: MODEL.a };
+  const definition = { ...fallbackDefaultAgent(), name: "reviewer", profileId: profileId(0) };
   await driver.prepareFirstTurn({
     agent: {
       definition,
@@ -464,14 +493,14 @@ it("activates the chain for an agent model accepted with the first turn", async 
 });
 
 it("does the same for a child agent's session, which is a session like any other", async () => {
-  // The chain lives in the driver, and a child agent run is a session with its
-  // own driver (docs/agents.md), so a child gets the behaviour with no harness
-  // code at all. Use an unrelated global default to prove the definition —
-  // not the default — selected the chain's first model.
+  // The profile runtime lives in the driver, and a child agent run is a
+  // session with its own driver (docs/agents.md), so a child gets the
+  // behaviour with no harness code at all. Use an unrelated default profile to
+  // prove the definition — not the default — chose the profile.
   writeStubs([MODEL.a, MODEL.b], [], MODEL.c);
   script.a = () => down();
   script.b = () => ok("from b");
-  const definition = { ...fallbackDefaultAgent(), model: MODEL.a };
+  const definition = { ...fallbackDefaultAgent(), profileId: profileId(0) };
   const parentPath = join(base, "sessions", "parent.jsonl");
   const driver = new StableSdkDriver();
   drivers.push(driver);
@@ -526,7 +555,7 @@ it("falls back on a turn an extension woke, and settles it exactly once", async 
   expect(after.filter((update) => update.kind === "agent_settled")).toHaveLength(1);
 });
 
-it("settles a woken turn whose failure no chain can answer, and drains what was queued", async () => {
+it("settles a woken turn whose failure no profile can answer, and drains what was queued", async () => {
   // The excluded case: the turn fails for a reason that is not model access,
   // so nothing switches — but the settle must still arrive, once.
   script.a = () => ({ status: 400, body: { error: { message: "messages[3].role is not allowed for this endpoint" } } });
@@ -579,10 +608,10 @@ it("keeps the position on the model the session ended on, so the badge is not a 
   const { driver } = await open();
   await driver.prompt([{ type: "text", text: "hello" }]);
   expect(idOf(driver)).toBe("stub-c-1");
-  // The selector draws `chain position+1 / length`; after an exhausted chain
+  // The selector draws `position+1 / length`; after an exhausted profile
   // that has to be 3/3, not 1/3.
   expect(driver.state().fallback).toMatchObject({ position: 2 });
-  expect(driver.state().fallback?.chain[2]?.id).toBe("stub-c-1");
+  expect(driver.state().fallback?.models[2]?.id).toBe("stub-c-1");
 });
 
 it("treats a dropped connection as a reason to fall back", async () => {
@@ -597,7 +626,7 @@ it("treats a dropped connection as a reason to fall back", async () => {
 // ------------------------------------------------------------ races and stops
 
 it("gives a person's choice the last word over a switch already in flight", async () => {
-  // A fails, the chain reaches for B, and B takes its time. The person picks C
+  // A fails, the profile reaches for B, and B takes its time. The person pins C
   // meanwhile: their model is the one that stands, and the stale step neither
   // sets a model nor records anything afterwards.
   script.a = () => down();

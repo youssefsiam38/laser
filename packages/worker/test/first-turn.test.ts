@@ -4,7 +4,7 @@ import {
   SESSION_AGENT_ENTRY_TYPE,
   SESSION_FALLBACK_ENTRY_TYPE,
   SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE,
-  type FallbackModelRef,
+  type ModelIdentity,
   type SessionFallbackEntry,
   type SessionState,
 } from "@lasercode/protocol";
@@ -15,6 +15,7 @@ const state = (over: Partial<SessionState> = {}): SessionState => ({
   id: "s",
   cwd: "/p",
   model: null,
+  profile: null,
   thinkingLevel: "medium",
   isStreaming: false,
   isCompacting: false,
@@ -37,12 +38,13 @@ const admission = (over: Partial<FirstTurnAdmission> = {}): FirstTurnAdmission =
   ...over,
 });
 
-const A: FallbackModelRef = { provider: "stub", id: "a" };
-const B: FallbackModelRef = { provider: "stub", id: "b" };
+const A: ModelIdentity = { provider: "stub", id: "a" };
+const B: ModelIdentity = { provider: "stub", id: "b" };
 const AT = "2026-09-18T08:00:00.000Z";
+const PROFILE_ID = "mp_testfirstturn00000000";
 const activation = {
   id: "activation",
-  chainKey: modelKey(A),
+  profileId: PROFILE_ID,
   models: [A, B],
   position: 0,
   startedAt: AT,
@@ -95,10 +97,10 @@ describe("first-turn admission", () => {
     ["model memory on activation", activatedSetup({ models: { [modelKey(A)]: { cooldownUntil: AT } } })],
     ["prior model on activation", activatedSetup({ from: B })],
     ["moved activation", activatedSetup({ activation: { ...activation, position: 1 } })],
-    ["one-model non-chain", activatedSetup({ activation: { ...activation, models: [A] } })],
-    ["duplicate-model chain", activatedSetup({ activation: { ...activation, models: [A, A] } })],
+    ["duplicate-model profile", activatedSetup({ activation: { ...activation, models: [A, A] } })],
     ["mismatched first model", activatedSetup({ activation: { ...activation, models: [B, A] } })],
-    ["mismatched chain key", activatedSetup({ activation: { ...activation, chainKey: modelKey(B) } })],
+    ["profile id nothing generated", activatedSetup({ activation: { ...activation, profileId: "balanced" } })],
+    ["a traversal written before profiles", activatedSetup({ activation: { id: "old", chainKey: modelKey(A), models: [A, B], position: 0, startedAt: AT } })],
     ["mismatched target", activatedSetup({ to: B })],
     ["missing activation", activatedSetup({ activation: null })],
     ["activation on clear", clearedSetup({ activation })],

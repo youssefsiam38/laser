@@ -71,6 +71,8 @@ import type {
   SessionRevisionHeader,
   ImageContent,
   MessageSpeaker,
+  ModelIdentity,
+  ModelProfile,
   ModelRef,
   PiExtensionCommand,
   PromptInfo,
@@ -90,7 +92,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { supportedThinkingLevels } from "../packages.js";
 import { HistorySnapshotAccumulator } from "../history-snapshot.js";
-import { disabledModelRefs, engineSettingsOnly, modelSwitchedOff, readEffectiveProductSettings, readFallbackChains, readLaserProjectSettings } from "../settings.js";
+import { disabledModelRefs, engineSettingsOnly, modelSwitchedOff, readEffectiveProductSettings, readProfileSettings, resolveProfile, readLaserProjectSettings } from "../settings.js";
 import { applyDurableOverrides, type EngineSettingsOverrides } from "../settings-overrides.js";
 import { WebSearchService } from "../web-search.js";
 import { MCP_ENGINE_COMMANDS, mcpPromptServer, mcpSessionSetup, type McpSessionSetup } from "../mcp/session.js";
@@ -160,9 +162,28 @@ export class StableSdkDriver implements SessionDriver {
   private runtimeNormalizeThinking = false;
   /** A model intent resets stale pristine thinking to the selected agent/model default. */
   private runtimeResetThinking = false;
+  /**
+   * The first turn said "follow the agent" (`model: null`). A pin from before
+   * that choice is not a reason to refuse it: the runtime being built is the
+   * agent's profile, and acceptance clears the pin durably.
+   */
+  private runtimeFollowsAgentProfile = false;
   /** Person-selected values, distinct from Pi's automatic initial entries. */
   private explicitModelOverride: ModelRef | undefined;
   private explicitThinkingOverride: ThinkingLevel | undefined;
+  /**
+   * What this session is anchored to: a profile id a person chose, `null` when
+   * they pinned it to one model, `undefined` when it follows the profile
+   * assigned to new sessions (`docs/model-profiles.md`).
+   */
+  private explicitProfileId: string | null | undefined;
+  /**
+   * The profile the live runtime was built on — the agent definition's, or the
+   * one assigned to new sessions. It is what a session with no choice of its
+   * own is running, so the activation must be resolved from it and not from
+   * the assignment a second time (an agent's profile is not the default).
+   */
+  private openingProfileId: string | undefined;
   /** One discriminated owner for every correlated speculative first-turn field. */
   private readonly firstTurn = new FirstTurnAttempt<FirstTurnPrevious, FirstTurnPrepared>();
   private unsubscribe: (() => void) | undefined;
@@ -176,7 +197,7 @@ export class StableSdkDriver implements SessionDriver {
   private toolLabelParams: Readonly<Record<string, string>> = {};
   /** A settings reload asked for mid-turn, owed once the session is idle (M13-T55). */
   private settingsReloadWanted = false;
-  /** This session's fallback chain, when the product has any (M15-T3). */
+  /** This session's profile, and where inside it the session stands. */
   private fallback: FallbackController | undefined;
   /** The model invocation currently able to be aborted, retained outside AsyncLocalStorage. */
   private activeInvocation: { ref: DriverInvocationRef; origin: "agent" | "user" } | undefined;
@@ -406,23 +427,31 @@ export class StableSdkDriver implements SessionDriver {
         },
       });
       requestProvenance.setResourceLoader(services.resourceLoader);
+      // The profile this session opens on, and the model it prefers. A pinned
+      // session (`modelOverride`) is the one path that names a raw model; an
+      // agent names a profile, and everything else follows the profile assigned
+      // to new sessions (`docs/model-profiles.md`, "Assignments").
+      const openingProfile = modelOverride ? undefined : this.openingProfile(agent);
+      this.openingProfileId = openingProfile?.id;
+      const preferred = openingProfile?.models[0];
       const selected = modelOverride
         ? services.modelRuntime.getModels().find((model) => model.provider === modelOverride.provider && model.id === modelOverride.id)
-        : agent ? await resolveAgentModel(services.modelRuntime, agent) : undefined;
+        : preferred
+          ? services.modelRuntime.getModel(preferred.provider, preferred.id)
+          : undefined;
       if (modelOverride && !selected) {
         throw new DriverUnavailableError(this.kind, `unknown model ${modelOverride.provider}/${modelOverride.id}`);
       }
-      const defaultProvider = settingsManager.getDefaultProvider();
-      const defaultModel = settingsManager.getDefaultModel();
-      const effectiveModel = selected ?? (defaultProvider && defaultModel
-        ? services.modelRuntime.getModel(defaultProvider, defaultModel)
-        : undefined);
-      const modelThinking = effectiveModel
-        ? settingsManager.getModelThinkingLevel(effectiveModel.provider, effectiveModel.id)
+      const effectiveModel = selected;
+      // A profile entry's own thinking level, then whatever the model defaults
+      // to. Nothing reads the engine's per-model thinking map any more.
+      const modelThinking = effectiveModel && openingProfile
+        ? openingProfile.models.find((entry: { provider: string; id: string }) => entry.provider === effectiveModel.provider && entry.id === effectiveModel.id)?.thinking
         : undefined;
       const requestedThinking = thinkingOverride
         ?? agent?.definition.thinkingLevel
-        ?? (resetThinking ? modelThinking ?? settingsManager.getDefaultThinkingLevel() : undefined);
+        ?? (resetThinking ? modelThinking : undefined)
+        ?? modelThinking;
       const supportedThinking = effectiveModel
         ? supportedThinkingLevels(effectiveModel.reasoning, effectiveModel.thinkingLevelMap)
         : undefined;
@@ -430,7 +459,6 @@ export class StableSdkDriver implements SessionDriver {
         ? [
             agent?.definition.thinkingLevel,
             modelThinking,
-            settingsManager.getDefaultThinkingLevel(),
             "off" as const,
             supportedThinking[0],
           ].find((level): level is ThinkingLevel => level !== null && level !== undefined && supportedThinking.includes(level))
@@ -499,6 +527,14 @@ export class StableSdkDriver implements SessionDriver {
     const overrides = savedOverrides && typeof savedOverrides === "object" ? savedOverrides as SessionFirstTurnOverrides : undefined;
     this.explicitModelOverride = overrides?.model;
     this.explicitThinkingOverride = overrides?.thinkingLevel;
+    // A record written before profiles existed has no `profileId` at all, and
+    // a session that carries a model but no profile is a pinned session: its
+    // model is what the person chose, and nothing stands in for it.
+    this.explicitProfileId = overrides && "profileId" in overrides
+      ? overrides.profileId
+      : overrides?.model
+        ? null
+        : undefined;
     // A saved session (including a durable empty) is not another invocation
     // of the selected agent's defaults. Restore its active branch's tuple,
     // including the current fallback model rather than the opening model.
@@ -615,6 +651,7 @@ export class StableSdkDriver implements SessionDriver {
     normalizeThinking = false,
     resetThinking = false,
     restoreOnFailure = true,
+    followsAgentProfile = false,
   ): Promise<void> {
     const current = this.runtime;
     const factory = this.runtimeFactory;
@@ -627,6 +664,7 @@ export class StableSdkDriver implements SessionDriver {
       thinkingOverride: effective.thinkingLevel,
       normalizeThinking: this.runtimeNormalizeThinking,
       resetThinking: this.runtimeResetThinking,
+      followsAgentProfile: this.runtimeFollowsAgentProfile,
     };
     const previousSessionFile = manager.getSessionFile();
     const create = () => createAgentSessionRuntime(factory, {
@@ -651,6 +689,7 @@ export class StableSdkDriver implements SessionDriver {
     this.runtimeThinkingOverride = thinkingOverride;
     this.runtimeNormalizeThinking = normalizeThinking;
     this.runtimeResetThinking = resetThinking;
+    this.runtimeFollowsAgentProfile = followsAgentProfile;
     let replacement: AgentSessionRuntime | undefined;
     try {
       replacement = await create();
@@ -668,6 +707,7 @@ export class StableSdkDriver implements SessionDriver {
       this.runtimeThinkingOverride = previous.thinkingOverride;
       this.runtimeNormalizeThinking = previous.normalizeThinking;
       this.runtimeResetThinking = previous.resetThinking;
+      this.runtimeFollowsAgentProfile = previous.followsAgentProfile;
       try {
         this.runtime = await create();
         await this.applySession();
@@ -709,6 +749,7 @@ export class StableSdkDriver implements SessionDriver {
     this.runtimeThinkingOverride = attempt.previous.thinkingOverride;
     this.runtimeNormalizeThinking = false;
     this.runtimeResetThinking = false;
+    this.runtimeFollowsAgentProfile = false;
     const restoration = attempt.manager.beginAppendTransaction();
     const previousSessionFile = attempt.manager.getSessionFile();
     try {
@@ -760,6 +801,7 @@ export class StableSdkDriver implements SessionDriver {
         true,
         hasModelIntent,
         false,
+        hasModelIntent && !options.model,
       );
       // The await above may have outlived disposal or another attempt. Check
       // this exact owner before reading cancellation or installing provenance.
@@ -814,13 +856,19 @@ export class StableSdkDriver implements SessionDriver {
         attempt.manager.appendThinkingLevelChange(accepted.thinkingLevel);
       }
       attempt.manager.appendCustomEntry(SESSION_AGENT_ENTRY_TYPE, record);
-      if (modelIntent !== undefined) this.explicitModelOverride = modelIntent ?? undefined;
+      if (modelIntent !== undefined) {
+        this.explicitModelOverride = modelIntent ?? undefined;
+        // A named model is a pin; `null` is "follow the agent", which is the
+        // absence of a per-session choice rather than another one.
+        this.explicitProfileId = modelIntent ? null : undefined;
+      }
       if (thinkingIntent !== undefined) {
         this.explicitThinkingOverride = thinkingIntent ?? undefined;
         this.runtimeThinkingOverride = thinkingIntent ?? undefined;
       }
       this.runtimeNormalizeThinking = false;
       this.runtimeResetThinking = false;
+      this.runtimeFollowsAgentProfile = false;
       if (modelIntent !== undefined || thinkingIntent !== undefined) this.persistExplicitOverrides();
       attempt.transaction.commit();
     } finally {
@@ -885,6 +933,11 @@ export class StableSdkDriver implements SessionDriver {
       ...(session.sessionName !== undefined ? { name: session.sessionName } : {}),
       // With no configured auth Pi substitutes an "unknown/unknown" placeholder; report it as no model.
       model: session.model && session.model.provider !== "unknown" ? toModelRef(session.model) : null,
+      // Intent beside evidence: the profile the session runs on, and the model
+      // that is actually answering. A session with no profile is pinned — by a
+      // person's own choice, or because it predates profiles entirely.
+      profile: this.activeProfile(),
+      ...(this.fallback && this.fallback.activeProfileId() === null ? { pinned: true } : {}),
       thinkingLevel: session.thinkingLevel as ThinkingLevel,
       // A failover runs between the engine's own runs: the session is working
       // even while the engine is idle, and nothing may enter that gap.
@@ -1285,6 +1338,14 @@ export class StableSdkDriver implements SessionDriver {
     return disabled.size === 0 ? offered : offered.filter((model) => !modelSwitchedOff(model, disabled));
   }
 
+  /**
+   * Pin this session to one model (`docs/model-profiles.md`, "Per-session
+   * override").
+   *
+   * Choosing a model *is* pinning: the session leaves its profile and has
+   * nothing to move to when this model stops answering. It creates no profile
+   * and changes nobody else's session. `session/profile/set` is the way back.
+   */
   async setModel(model: ModelRef): Promise<SessionState> {
     const session = this.session();
     const match = session.modelRuntime
@@ -1293,11 +1354,81 @@ export class StableSdkDriver implements SessionDriver {
     if (!match) throw new DriverUnavailableError(this.kind, `unknown model ${model.provider}/${model.id}`);
     await session.setModel(match);
     this.explicitModelOverride = { ...model };
+    this.explicitProfileId = null;
     this.persistExplicitOverrides();
-    // A person's choice wins over anything in flight and starts a fresh
-    // activation from the chain that model starts, if it starts one (M15-T3).
-    this.fallback?.onManualSelection({ provider: model.provider, id: model.id });
+    // A person's choice wins over anything in flight, and a pin leaves nothing
+    // behind it: the activation goes with the profile.
+    this.fallback?.onPin({ provider: model.provider, id: model.id });
     return this.state();
+  }
+
+  /**
+   * Re-anchor this session to a profile: it continues on the first model of
+   * that profile that can be used, and moves within it from then on.
+   */
+  async setProfile(profileId: string): Promise<SessionState> {
+    const profile = readProfileSettings(this.agentDir).profiles.find((entry) => entry.id === profileId);
+    if (!profile) {
+      throw new DriverUnavailableError(this.kind, "That profile is no longer there. Choose another one in Providers and models.");
+    }
+    this.explicitProfileId = profile.id;
+    const activation = this.fallback?.onProfileChosen(profile) ?? null;
+    const wanted = activation?.models[activation.position];
+    if (wanted) {
+      const session = this.session();
+      const match = session.modelRuntime.getModels().find((m) => m.provider === wanted.provider && m.id === wanted.id);
+      // A profile whose preferred model this machine cannot reach is not a
+      // refusal: the start-time walk below moves to the first one it can.
+      if (match) await session.setModel(match);
+      if (wanted.thinking) session.setThinkingLevel(wanted.thinking);
+    }
+    await this.walkProfileStart();
+    this.explicitModelOverride = undefined;
+    this.persistExplicitOverrides();
+    return this.state();
+  }
+
+  /**
+   * Start this session on the first model of its profile that can be used, and
+   * record every model the walk passed over.
+   */
+  private async walkProfileStart(): Promise<void> {
+    const moved = await this.fallback?.startWalk();
+    if (!moved) return;
+    const session = this.session();
+    const match = session.modelRuntime.getModels().find((m) => m.provider === moved.provider && m.id === moved.id);
+    if (!match) return;
+    await session.setModel(match);
+    if (moved.thinking) session.setThinkingLevel(moved.thinking);
+  }
+
+  /**
+   * The profile a session opens on: the one it was anchored to, else the
+   * agent's own, else the profile assigned to new sessions.
+   *
+   * An agent that names a profile nothing answers to runs on the default and
+   * the substitution is visible; that is a warning on the definition, never a
+   * refusal to open the conversation (`docs/model-profiles.md`).
+   */
+  private openingProfile(agent: DriverAgentOptions | undefined): ModelProfile | undefined {
+    const pinned = this.explicitProfileId === null && !this.runtimeFollowsAgentProfile;
+    if (pinned) return undefined;
+    const { profiles, assignments } = readProfileSettings(this.agentDir);
+    const chosen = this.runtimeFollowsAgentProfile ? undefined : this.explicitProfileId;
+    const wanted = chosen ?? agent?.definition.profileId ?? undefined;
+    if (wanted) {
+      const named = profiles.find((profile) => profile.id === wanted);
+      if (named) return named;
+    }
+    return resolveProfile(profiles, assignments);
+  }
+
+  /** The profile this session is running on, named from the person's own list. */
+  private activeProfile(): { id: string; name: string } | null {
+    const id = this.fallback?.activeProfileId();
+    if (!id) return null;
+    const profile = readProfileSettings(this.agentDir).profiles.find((entry) => entry.id === id);
+    return profile ? { id: profile.id, name: profile.name } : null;
   }
 
   async setThinkingLevel(level: ThinkingLevel): Promise<SessionState> {
@@ -1312,6 +1443,7 @@ export class StableSdkDriver implements SessionDriver {
     const data: SessionFirstTurnOverrides = {
       ...(this.explicitModelOverride ? { model: this.explicitModelOverride } : {}),
       ...(this.explicitThinkingOverride ? { thinkingLevel: this.explicitThinkingOverride } : {}),
+      ...(this.explicitProfileId !== undefined ? { profileId: this.explicitProfileId } : {}),
     };
     this.session().sessionManager.appendCustomEntry(SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE, data);
   }
@@ -1638,6 +1770,7 @@ export class StableSdkDriver implements SessionDriver {
   private fallbackEngine(): FallbackEngine {
     return createFallbackEnginePort({
       session: () => this.session(),
+      profileId: () => (this.explicitProfileId !== undefined ? this.explicitProfileId : this.openingProfileId),
       explicitThinkingLevel: () => this.explicitThinkingOverride,
       agentDir: this.agentDir,
       cwd: this.cwd,
@@ -1936,28 +2069,6 @@ function activateEveryTool(session: AgentSession): void {
   const active = new Set(session.getActiveToolNames());
   for (const name of ENGINE_BUILTIN_TOOLS) active.add(name);
   session.setActiveToolsByName([...active]);
-}
-
-/**
- * The definition's model, resolved against the engine's catalogue, or a
- * refusal a person can act on. `null` on the definition follows the
- * configured default, which the engine picks itself.
- */
-async function resolveAgentModel(runtime: ModelRuntime, agent: DriverAgentOptions): Promise<PiModel | undefined> {
-  const choice = agent.definition.model;
-  if (!choice) return undefined;
-  const model = runtime.getModel(choice.provider, choice.id);
-  if (!model) throw new DriverUnavailableError("stable-sdk", modelUnavailableMessage(choice));
-  let authorized = runtime.hasConfiguredAuth(choice.provider);
-  if (!authorized) {
-    try {
-      authorized = (await runtime.checkAuth(choice.provider)) !== undefined;
-    } catch {
-      authorized = false;
-    }
-  }
-  if (!authorized) throw new DriverUnavailableError("stable-sdk", modelUnavailableMessage(choice));
-  return model;
 }
 
 // -------------------------------------------------------- pending tool calls

@@ -14,7 +14,6 @@ import {
   instructionTemplateToken,
   type AgentDefinition,
   type BuiltinInstructionOverrides,
-  type AgentModelChoice,
 } from "@lasercode/protocol";
 
 /** The editable standard agent, as it is seeded on first run. */
@@ -27,7 +26,7 @@ export function seedDefaultAgent(at: string): AgentDefinition {
     instructions: "",
     engineInstructions: true,
     excludeCoreInstructions: false,
-    model: null,
+    profileId: null,
     thinkingLevel: null,
     supportsSubagents: true,
     allowedAgents: [DEFAULT_AGENT_NAME],
@@ -41,9 +40,10 @@ export function seedDefaultAgent(at: string): AgentDefinition {
 export interface BuiltinContext {
   agentDir: string;
   stateDir: string;
-  beamModel: AgentModelChoice | null;
-  chatModel: AgentModelChoice | null;
-  namerModel: AgentModelChoice | null;
+  /** The Model Profile each built-in runs on; `null` follows the default. */
+  beamProfileId: string | null;
+  chatProfileId: string | null;
+  namerProfileId: string | null;
   instructions: BuiltinInstructionOverrides;
   /** Stamped on every built-in as both `createdAt` and `updatedAt`. */
   at: string;
@@ -94,7 +94,7 @@ export function builtinAgents(context: BuiltinContext): AgentDefinition[] {
       instructions: context.instructions.beam ?? beamInstructions(context),
       engineInstructions: false,
       excludeCoreInstructions: false,
-      model: context.beamModel,
+      profileId: context.beamProfileId,
       thinkingLevel: null,
       supportsSubagents: false,
       allowedAgents: [],
@@ -111,7 +111,7 @@ export function builtinAgents(context: BuiltinContext): AgentDefinition[] {
       instructions: context.instructions.chat ?? BUILTIN_DEFAULT_INSTRUCTIONS.chat,
       engineInstructions: false,
       excludeCoreInstructions: false,
-      model: context.chatModel,
+      profileId: context.chatProfileId,
       thinkingLevel: null,
       supportsSubagents: false,
       allowedAgents: [],
@@ -124,11 +124,11 @@ export function builtinAgents(context: BuiltinContext): AgentDefinition[] {
       name: "namer",
       kind: "builtin",
       scope: "global",
-      description: "Names sessions with a fast, inexpensive model.",
+      description: "Names sessions on the profile chosen for session names.",
       instructions: context.instructions.namer ?? BUILTIN_DEFAULT_INSTRUCTIONS.namer,
       engineInstructions: false,
       excludeCoreInstructions: false,
-      model: context.namerModel,
+      profileId: context.namerProfileId,
       thinkingLevel: null,
       supportsSubagents: false,
       allowedAgents: [],

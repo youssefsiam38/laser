@@ -25,14 +25,9 @@ export {
 } from "./harness.js";
 export { WorktreeManager, assertSafeWorktreePath, worktreeSlug, type CreateWorktreeInput, type Worktree } from "./worktrees.js";
 export {
-  NAMER_COST_CEILING,
-  NAMER_MAX_CANDIDATES,
   NAMER_TIMEOUT_MS,
   NamerService,
-  QUALIFY_SAMPLE,
   cleanSessionName,
-  listCost,
-  selectNamerCandidates,
   sessionNamePrompt,
   validSessionName,
   type NamerCompletion,

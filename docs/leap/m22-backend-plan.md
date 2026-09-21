@@ -106,3 +106,116 @@ Changed: `protocol/src/{fallback,messages,agents,schemas,method-policy,transport
 Green: `pnpm -F @lasercode/protocol build` and `test` (464 tests, 0 type errors),
 `pnpm identity:check`.
 Left for T2–T5: every downstream package is red until the worker and host move.
+
+### M22-T2 checkpoint — done
+
+Changed: `protocol/src/fallback.ts` (seeding rule, migration record,
+`models/profiles/migrate`), `protocol/src/{schemas,method-policy}.ts`,
+`worker/src/settings.ts` (`readModelProfiles`, `readProfileSettings`,
+`readProfileAssignments`, `resolveProfile`, descriptors, validation),
+`worker/src/profiles/{migrate,seeds}.ts`, `worker/src/packages.ts` (catalogue
+carries profiles and assignments; per-model thinking comes from profile
+entries), plus the mechanical rename the package needs to compile
+(`fallback/*`, `drivers/*`, `driver.ts`, `agents/*`, `server.ts`) and every
+test that named a chain, a default model or a Namer model.
+
+Surprise, recorded as a decision: the whole worker had to move in this commit,
+because `AgentDefinition.model` and `FallbackChain` are gone from the protocol
+and the package does not compile without it. T3 and T4 carry the behaviour
+that is genuinely theirs (start-time walk, pin, `setProfile` seam, agent
+inheritance, one-shot naming) and their own tests.
+
+Two more decisions the contract was silent on:
+
+- **D-e** Profiles named after a saved list are `"<Model> profile"`, not the
+  `"Sonnet chain"` example in the contract: the same document forbids the word
+  "chain" on a person-facing surface, and a profile name is one.
+- **D-f** Naming runs only on an explicit `namingProfileId` (or the built-in's
+  own choice). Falling through to the profile new sessions use would spend the
+  person's best model on titles, which is the opposite of the assignment's
+  purpose. The migration and the seeds always set it.
+
+Green: `pnpm -F @lasercode/worker test` (1208 passed, 4 skipped),
+`pnpm -F @lasercode/protocol test`, `pnpm identity:check`.
+
+### M22-T3 checkpoint — done
+
+The runtime moved with T2 (the package would not compile otherwise); this
+commit carries the parts that are T3's own and the tests that prove them:
+
+- `SessionDriver.setProfile` is on the seam, and the Chord stub fails closed on
+  both model paths (`test/seam.test.ts`).
+- The start-time walk records every model it passed over, moves the position,
+  writes one `activated` record and emits one update whose copy never says
+  "chain" (`test/fallback/activation.test.ts`).
+- Editing a profile does not disturb a running conversation: the activation
+  snapshot is never re-read, and the edit lands at the next activation.
+- A pin clears the activation and writes `cleared`; a profile choice writes
+  `activated`; a pre-M22 `chainKey` activation reads back as history and never
+  re-activates.
+
+Re-run of the M15-T3/T8 verification list (`STATUS_DETAILED.md` M15-T3 notes,
+"Verification"): `test/fallback/{policy,activation,compact,engine}.test.ts`
+130 passed together with the seam, thinking-level and first-turn suites;
+whole worker suite 1211 passed / 4 skipped. Live browser verification belongs
+to the person (AGENTS.md) and is not claimed here.
+
+### M22-T4 checkpoint — done
+
+- Agent definition files carry `profile:` (an opaque profile id) instead of
+  `model:`; `model:` is now an unknown frontmatter field, which is how a person
+  learns the format changed.
+- `null` and an absent field both mean "inherit the profile new conversations
+  use". An id that is not one this app generated is a save-time issue on the
+  `profile` field; an id that *was* generated but no longer answers to anything
+  is a **warning** on the same field, raised by the periodic check, and the
+  agent keeps working on the default.
+- `start_agent` no longer refuses a child whose profile is gone: the run starts
+  on the default and carries `substitutedProfile` so the fleet row can say so.
+  `AgentRun` also carries `profileId` beside the model that answered.
+- Built-ins hold profile ids (`builtinProfiles` on the snapshot, persisted);
+  `replaceBuiltinProfile` moves every reference in one write.
+- Naming is a one-shot walk of the naming profile: one request per model, in
+  order, first usable title wins, no benchmark and no qualification. When the
+  whole profile is spent the words are parked, so the conversation is named the
+  moment naming becomes possible.
+
+Green (clean environment — see the note below):
+`pnpm -F @lasercode/host test` 1012 passed, `pnpm -F @lasercode/worker test`
+1211 passed / 4 skipped.
+
+**Environment note.** The host suite spawns child workers, and this agent
+session runs inside Laser, so `LASERCODE_FEATURE_GENERATION_ID` and
+`LASERCODE_RUNTIME_*` are in the environment; `WorkerClient` reads them and
+faults every spawn with "could not verify the project runtime". It is not a
+product defect and not caused by M22 — the host tests must be run with those
+variables unset (`env -i PATH=… HOME=… pnpm -F @lasercode/host test`).
+
+### M22-T5 checkpoint — done
+
+- `models/profiles/{list,save,delete}` are answered by the host, which picks a
+  worker (the only writer of the global settings file) and owns the two
+  decisions a worker cannot make: which definitions point at a profile, and
+  what happens to them when one is deleted.
+- **Delete-with-replacement is enforced server-side.** A profile an agent
+  definition or a built-in still uses is refused without a `replacementId`, and
+  nothing is asked of the worker in that case, so nothing is written. With a
+  replacement, the worker moves the assignments first and the host then moves
+  the built-ins and the definitions; no path leaves a dangling id.
+- The one-way migration runs once per host run behind the first real worker
+  (`models/profiles/migrate`, host → worker, `native` reach), writes the
+  preview record to `<stateDir>/model-profiles-migration.json`, and gives each
+  built-in that has made no choice the matching assignment.
+- The first-provider prompt is now `models/profiles/seeded`, carrying the
+  seeded profiles for review; `agents/beam/choose-model` is gone.
+- Catalog rows expose the intent and the evidence without opening a session:
+  `SessionSummary.profileId` from the last activation record and
+  `SessionSummary.model` from the last `model_change`, both read by the scan
+  the catalog already runs.
+
+### Decisions needed / left open
+
+- **D-g** "Session projection exposes profile + effective model" is satisfied
+  by the catalog scan above and by `SessionState.profile` / `AgentRun.profileId`.
+  `session-projection.ts` plans history pages and carries no model attribution
+  at all, so there was nothing there to extend.

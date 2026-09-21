@@ -39,4 +39,15 @@ describe("driver seam", () => {
     expect(driver.kind).toBe("chord");
     await expect(driver.open({ cwd: "/tmp" })).rejects.toBeInstanceOf(DriverUnavailableError);
   });
+
+  it("both model paths are on the interface, and the stub fails closed on both", async () => {
+    // A session either runs on a profile or is pinned to one model
+    // (`docs/model-profiles.md`). Both are driver-level acts, so both are on
+    // the seam and the stub answers to both.
+    const driver: SessionDriver = new ChordDriver();
+    expect(typeof driver.setProfile).toBe("function");
+    expect(typeof driver.setModel).toBe("function");
+    await expect(driver.setProfile("mp_testseam00000000000000")).rejects.toBeInstanceOf(DriverUnavailableError);
+    await expect(driver.setModel({ provider: "stub", id: "stub-1" })).rejects.toBeInstanceOf(DriverUnavailableError);
+  });
 });

@@ -20,7 +20,7 @@
 
 import { WIRE_NAMESPACE } from "./identity.js";
 import type { ProviderFailureClass } from "./provider-failure.js";
-import type { ModelRef, SessionState, ThinkingLevel } from "./messages.js";
+import type { ModelCatalogEntry, ModelRef, SessionState, ThinkingLevel } from "./messages.js";
 
 // --------------------------------------------------------------- the domain
 
@@ -305,6 +305,142 @@ export function validateModelProfiles(value: unknown): ModelProfileIssue[] {
   return issues;
 }
 
+// ------------------------------------------------------------- seeding
+
+/**
+ * The rule Laser uses to fill the three seeded profiles from what a person has
+ * just connected — the same rule onboarding has always used to propose a model
+ * (it began as the Beam suggestion), kept in one place so the seeds, the
+ * migration and onboarding cannot disagree.
+ *
+ * It is deliberately coarse: price is the only comparable signal every
+ * provider's catalogue carries, and a model id that names the fast tier of its
+ * family is the only other one. Nothing here is a benchmark, and none of it is
+ * applied silently — a person reviews the seeds and edits them.
+ */
+
+/** Model ids that name the fast tier of their family. `gpt-5*` counts unless it is a `pro` variant. */
+const FAST_TIER = /luna|sonnet|flash|mini|o4-mini|gpt-5(?!.*pro)/i;
+/** Combined list price (input + output, per million tokens) of the mid-to-low band. */
+const BAND_MIN = 0.2;
+const BAND_MAX = 6;
+/** A seeded profile is a starting point, not an inventory. */
+export const SEEDED_PROFILE_MODELS_MAX = 4;
+
+export interface ProfileSeedOptions {
+  /**
+   * Providers a credential is configured for. When given, only their models
+   * qualify: a catalogue lists every model the engine knows, including ones
+   * nobody has signed in to.
+   */
+  configuredProviders?: ReadonlySet<string>;
+}
+
+function combinedCost(entry: ModelCatalogEntry): number | undefined {
+  const input = entry.cost?.input;
+  const output = entry.cost?.output;
+  if (typeof input !== "number" || typeof output !== "number") return undefined;
+  if (!Number.isFinite(input) || !Number.isFinite(output)) return undefined;
+  return input + output;
+}
+
+const byName = (a: ModelCatalogEntry, b: ModelCatalogEntry) =>
+  a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id);
+
+function usableModels(entries: readonly ModelCatalogEntry[], options: ProfileSeedOptions): ModelCatalogEntry[] {
+  return entries.filter(
+    (entry) => entry.enabled && (options.configuredProviders === undefined || options.configuredProviders.has(entry.provider)),
+  );
+}
+
+function identity(entry: ModelCatalogEntry): ModelIdentity {
+  return { provider: entry.provider, id: entry.id };
+}
+
+/**
+ * The model a balanced, everyday profile should prefer: a fast-tier model in
+ * the mid-to-low price band (the priciest of them, so the most capable of the
+ * fast tier), else the median-priced usable model, else nothing.
+ */
+export function suggestBalancedModel(
+  entries: readonly ModelCatalogEntry[],
+  options: ProfileSeedOptions = {},
+): ModelIdentity | null {
+  const usable = usableModels(entries, options);
+  if (usable.length === 0) return null;
+  const priced = usable
+    .map((entry) => ({ entry, cost: combinedCost(entry) }))
+    .filter((item): item is { entry: ModelCatalogEntry; cost: number } => item.cost !== undefined)
+    .sort((a, b) => a.cost - b.cost || byName(a.entry, b.entry));
+  const fast = priced.filter(({ entry, cost }) => FAST_TIER.test(entry.id) && cost >= BAND_MIN && cost <= BAND_MAX);
+  const pick = fast.length > 0
+    ? fast[fast.length - 1]!.entry
+    : priced.length > 0
+      ? priced[Math.floor((priced.length - 1) / 2)]!.entry
+      : [...usable].sort(byName)[0]!;
+  return identity(pick);
+}
+
+/**
+ * The ordered model list each seeded profile starts with. Empty lists when
+ * nothing is connected: seeds are never invented from models a person cannot
+ * reach.
+ */
+export function suggestSeededProfileModels(
+  entries: readonly ModelCatalogEntry[],
+  options: ProfileSeedOptions = {},
+): Record<SeededProfileName, ModelIdentity[]> {
+  const usable = usableModels(entries, options);
+  if (usable.length === 0) return { Smart: [], Balanced: [], Fast: [] };
+
+  const costOf = new Map(usable.map((entry) => [modelKey(entry), combinedCost(entry)] as const));
+  const cost = (entry: ModelCatalogEntry): number | undefined => costOf.get(modelKey(entry));
+
+  // Most capable first. Price is the proxy every catalogue carries; a model
+  // that reasons wins a tie, and a model with no price sorts last because
+  // nothing can be said about it.
+  const smart = [...usable].sort((a, b) => {
+    const ac = cost(a);
+    const bc = cost(b);
+    if (ac === undefined && bc === undefined) return byName(a, b);
+    if (ac === undefined) return 1;
+    if (bc === undefined) return -1;
+    return bc - ac || Number(b.reasoning ?? false) - Number(a.reasoning ?? false) || byName(a, b);
+  });
+
+  // Cheapest first, with the fast tier ahead of anything priced the same.
+  const fast = [...usable].sort((a, b) => {
+    const ac = cost(a);
+    const bc = cost(b);
+    const fa = FAST_TIER.test(a.id) ? 0 : 1;
+    const fb = FAST_TIER.test(b.id) ? 0 : 1;
+    if (ac === undefined && bc === undefined) return fa - fb || byName(a, b);
+    if (ac === undefined) return 1;
+    if (bc === undefined) return -1;
+    return fa - fb || ac - bc || byName(a, b);
+  });
+
+  const balancedPrimary = suggestBalancedModel(entries, options);
+  const primaryKey = balancedPrimary ? modelKey(balancedPrimary) : undefined;
+  const primaryCost = usable.find((entry) => modelKey(entry) === primaryKey);
+  const anchor = primaryCost ? cost(primaryCost) : undefined;
+  // Around the balanced pick: the models whose price is nearest to it.
+  const balanced = [...usable].sort((a, b) => {
+    if (modelKey(a) === primaryKey) return -1;
+    if (modelKey(b) === primaryKey) return 1;
+    const ac = cost(a);
+    const bc = cost(b);
+    if (anchor === undefined || (ac === undefined && bc === undefined)) return byName(a, b);
+    if (ac === undefined) return 1;
+    if (bc === undefined) return -1;
+    return Math.abs(ac - anchor) - Math.abs(bc - anchor) || byName(a, b);
+  });
+
+  const take = (list: readonly ModelCatalogEntry[]): ModelIdentity[] =>
+    list.slice(0, SEEDED_PROFILE_MODELS_MAX).map(identity);
+  return { Smart: take(smart), Balanced: take(balanced), Fast: take(fast) };
+}
+
 // -------------------------------------------------------------- the live state
 
 /**
@@ -416,6 +552,36 @@ export const SESSION_FALLBACK_ENTRY_TYPE = `${WIRE_NAMESPACE}/fallback`;
 /** Laser's own cooldown for a transient failure, when the provider stated nothing. */
 export const FALLBACK_DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
 
+// ---------------------------------------------------------------- migration
+
+/** The file the one-way migration writes its preview under, in the state directory. */
+export const MODEL_PROFILE_MIGRATION_RECORD = "model-profiles-migration.json";
+
+/** The settings half of the migration: what the worker wrote, and why. */
+export interface ModelProfileMigrationReport {
+  /**
+   * False when profiles already existed. The migration is one-way and
+   * idempotent: it reads the old keys, writes the new ones once, and leaves
+   * the old keys in place for one release (D-346).
+   */
+  ran: boolean;
+  profiles: ModelProfile[];
+  assignments: ProfileAssignments;
+  /** One sentence per thing it did, for the preview a person reads. */
+  notes: string[];
+}
+
+/** The whole preview record, written once by the authority that owns the state directory. */
+export interface ModelProfileMigrationRecord {
+  version: 1;
+  at: string;
+  settings: ModelProfileMigrationReport;
+  /** Built-in agents whose model choice became a profile id. */
+  builtins?: Array<{ name: string; from: string | null; to: string | null }>;
+  /** Definition files whose `model:` became `profile:`. */
+  agentFiles?: Array<{ path: string; from: string | null; to: string | null; note?: string }>;
+}
+
 // ------------------------------------------------------------------ methods
 
 declare module "./messages.js" {
@@ -445,6 +611,15 @@ declare module "./messages.js" {
       params: { cwd?: string; id: string; replacementId?: string };
       result: { profiles: ModelProfile[]; assignments: ProfileAssignments };
     };
+    /**
+     * Run the one-way settings migration and answer with what it did.
+     *
+     * Host → worker only: profiles are written to the global settings file
+     * through `SettingsManager`, which lives in the worker, and the record a
+     * person reviews is written by the authority that owns the state
+     * directory. Idempotent — a second call reports `ran: false`.
+     */
+    "models/profiles/migrate": { params: { cwd: string }; result: { report: ModelProfileMigrationReport } };
     /** Re-anchor one session to a profile: it continues on that profile's first model. */
     "session/profile/set": { params: { path: string; profileId: string }; result: { state: SessionState } };
     /**

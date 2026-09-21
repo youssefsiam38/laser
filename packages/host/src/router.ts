@@ -24,7 +24,7 @@
  *   pi/ui/response       every live worker (the worker that owns the dialog id
  *                        answers; the others ignore it)
  */
-import { AGENT_ISOLATION_DEFAULTS, ENVIRONMENT_DESCRIBE_METHOD, ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isCheckpointRetention, isTerminalRunStatus, parseClientRequest, type AgentIsolationDefault, type AgentRun, type AgentWorktreeStatus, type CheckpointRetention, type JsonRpcError, type JsonRpcResponse, type NamerState, type ProjectEnvStatus, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
+import { AGENT_ISOLATION_DEFAULTS, ENVIRONMENT_DESCRIBE_METHOD, ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isCheckpointRetention, isTerminalRunStatus, parseClientRequest, type AgentIsolationDefault, type AgentRun, type AgentWorktreeStatus, type CheckpointRetention, type JsonRpcError, type JsonRpcResponse, type ProjectEnvStatus, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { HOST_ENVIRONMENT_METHOD, applyHostEnvironment } from "./environment.js";
@@ -213,7 +213,6 @@ const CWD_ROUTED = new Set([
   // the Namer benchmark needs a provider. All three name the answering cwd.
   "agents/skills",
   "agents/engine-instructions",
-  "agents/namer/qualify",
 ]);
 
 /** Dictation methods that carry only an upload id, routed by `uploads`. */
@@ -1081,9 +1080,18 @@ export class Router {
         store.setPolicy(req.params.policy);
         return { snapshot: store.snapshot() };
       }
-      case "agents/builtin/set-model": {
+      // Model profiles live in the global settings file, which only a worker
+      // may write (`SettingsManager`). The host picks the worker, and owns the
+      // two decisions a worker cannot make on its own: which definitions point
+      // at a profile, and what happens to them when it is deleted.
+      case "models/profiles/list":
+      case "models/profiles/save":
+        return this.onProfiles(req.method, req.params);
+      case "models/profiles/delete":
+        return this.deleteProfile(req.params);
+      case "agents/builtin/set-profile": {
         const store = this.agents();
-        store.setBuiltinModel(req.params.name, req.params.model);
+        store.setBuiltinProfile(req.params.name, req.params.profileId);
         return { snapshot: store.snapshot() };
       }
       case "agents/builtin/set-instructions": {
@@ -1431,11 +1439,6 @@ export class Router {
           this.uploads.set(id, { cwd, at: this.now() });
         }
       }
-      // The benchmark's verdict is the host's to keep: every client and every
-      // worker hears it through the store's own change notification.
-      if (req.method === "agents/namer/qualify" && this.deps.agents && isNamerState(result)) {
-        this.deps.agents.setNamerState(result);
-      }
       return result;
     }
 
@@ -1508,6 +1511,66 @@ export class Router {
   }
 
   /** The agent store, or an error a person can act on. */
+  /**
+   * A worker that can write the global settings file. Any of them can: the
+   * file is one person's, not one project's. `cwd` picks a specific one when
+   * the caller named one, otherwise the first project this host knows.
+   */
+  private async settingsWorker(cwd: string | undefined): Promise<{ worker: WorkerClient; cwd: string }> {
+    const chosen = cwd ?? this.deps.projects.list()[0]?.cwd ?? this.agents().workspaces.chat;
+    const root = projectRootOf(chosen);
+    return { worker: await this.pool.get(root), cwd: root };
+  }
+
+  private async onProfiles(
+    method: "models/profiles/list" | "models/profiles/save",
+    params: { cwd?: string } & Record<string, unknown>,
+  ): Promise<unknown> {
+    const { worker, cwd } = await this.settingsWorker(params.cwd);
+    return worker.request(method, { ...params, cwd });
+  }
+
+  /**
+   * Deleting a profile, with nothing left pointing at it.
+   *
+   * The host owns the definitions, so it is the one place that can see every
+   * reference: agent files and the built-ins, beside the assignments the
+   * worker holds. A profile something still uses is refused unless the caller
+   * names what takes its place, and then every reference moves in this call
+   * before the profile itself goes (`docs/model-profiles.md`, "Assignments").
+   */
+  private async deleteProfile(params: { cwd?: string; id: string; replacementId?: string }): Promise<unknown> {
+    const store = this.agents();
+    const snapshot = store.snapshot();
+    const definitions = snapshot.agents.filter((agent) => agent.kind === "custom" && agent.profileId === params.id);
+    const builtins = (Object.entries(store.builtinProfileIds) as Array<[string, string | null]>)
+      .filter(([, id]) => id === params.id)
+      .map(([name]) => name);
+    if ((definitions.length > 0 || builtins.length > 0) && !params.replacementId) {
+      const used = [...definitions.map((agent) => agent.name), ...builtins.map(labelOf)];
+      throw new ProtocolError(
+        ErrorCodes.InvalidParams,
+        `This profile is still used by ${used.join(", ")}. Choose the profile that should take its place, then delete it.`,
+      );
+    }
+    const { worker, cwd } = await this.settingsWorker(params.cwd);
+    // The worker validates the replacement and moves the assignments; do that
+    // first, so a refusal leaves every definition exactly as it was.
+    const result = await worker.request("models/profiles/delete", { ...params, cwd });
+    if (params.replacementId) {
+      store.replaceBuiltinProfile(params.id, params.replacementId);
+      for (const agent of definitions) {
+        try {
+          store.save({ ...agent, profileId: params.replacementId }, agent.name);
+        } catch {
+          // A definition that refuses the change keeps its own id; the next
+          // validation pass flags it rather than losing the delete.
+        }
+      }
+    }
+    return result;
+  }
+
   private agents(): AgentStore {
     if (!this.deps.agents) {
       throw new ProtocolError(ErrorCodes.Unsupported, "This host is running without agent definitions, so agents cannot be listed or changed.");
@@ -1694,11 +1757,6 @@ function retryableLifetimeRefusal(error: unknown): boolean {
 
 function labelOf(name: string): string {
   return name === "beam" ? "Beam" : name === "chat" ? "Chat" : name === "namer" ? "Namer" : name;
-}
-
-function isNamerState(value: unknown): value is NamerState {
-  const state = value as Partial<NamerState> | null;
-  return !!state && typeof state === "object" && typeof state.status === "string" && Array.isArray(state.candidates);
 }
 
 function toRpcError(error: unknown): JsonRpcError {

@@ -169,7 +169,7 @@ class FakeDriver implements SessionDriver {
   async dispose() {}
 }
 function stateFor(path: string, id: string, cwd: string): SessionState {
-  return { path, id, cwd, model: { provider: "stub", id: "stub-1" }, thinkingLevel: "medium", isStreaming: false, isCompacting: false, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", autoCompactionEnabled: true, messageCount: 0, pendingMessageCount: 0 };
+  return { path, id, cwd, model: { provider: "stub", id: "stub-1" }, profile: { id: "mp_testprofile00000000000", name: "Balanced" }, thinkingLevel: "medium", isStreaming: false, isCompacting: false, steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", autoCompactionEnabled: true, messageCount: 0, pendingMessageCount: 0 };
 }
 
 interface Notification { method: string; params: unknown }
@@ -239,6 +239,9 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true, isolationDefault
     driver: (path) => drivers.get(path),
     notify: (method, params) => notifications.push({ method, params }),
     modelAvailable: async () => !unavailable,
+    resolveProfile: (profileId: string | null) => (unavailable && profileId
+      ? { profileId: "mp_testprofile10000000000", substituted: { requested: profileId, used: "mp_testprofile10000000000" } }
+      : { profileId }),
     tasks: (path) => tasks.get(path) ?? [],
     // The private root a command log must be inside to be read (RP-6). The
     // tests write their scratch logs under the system temp directory, which is
@@ -275,7 +278,7 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true, isolationDefault
 
 const PARENT = definition("lead", { supportsSubagents: true, allowedAgents: ["worker", "reviewer"] });
 const WORKER = definition("worker", { supportsSubagents: true, allowedAgents: ["worker"] });
-const REVIEWER = definition("reviewer", { model: { provider: "stub", id: "stub-1" }, runTimeoutMinutes: 5 });
+const REVIEWER = definition("reviewer", { profileId: "mp_testprofile00000000000", runTimeoutMinutes: 5 });
 
 async function flushLifecycle(): Promise<void> {
   for (let i = 0; i < 6; i += 1) await Promise.resolve();
@@ -433,11 +436,17 @@ describe("AgentHarness", () => {
     expect(world.worktrees.created).toHaveLength(0);
   });
 
-  it("refuses a model without a connected provider before touching a worktree", async () => {
+  it("runs a child whose profile is gone on the default, and says so on the run", async () => {
+    // An agent naming a profile nothing answers to is a warning on the
+    // definition, never a closed door: the work starts on the profile assigned
+    // to new sessions and the substitution is on the run for every reader
+    // (docs/model-profiles.md, "Assignments").
     const root = world.openRoot("lead");
     world.setUnavailable(true);
-    await expect(root.handle.bridge.startAgent({ agentName: "reviewer", subagentName: "review", task: "t" })).rejects.toThrow(/stub\/stub-1 is not available: connect stub in Settings → Providers and models/);
-    expect(world.worktrees.created).toHaveLength(0);
+    const started = await root.handle.bridge.startAgent({ agentName: "reviewer", subagentName: "review", task: "t" });
+    expect(started.status).toBe("running");
+    const run = world.runsNotified().find((entry) => entry.runId === started.runId)!;
+    expect(run.substitutedProfile).toEqual({ requested: "mp_testprofile00000000000", used: "mp_testprofile10000000000" });
   });
 
   it("humanises a legacy slug once while preserving its worktree identity", async () => {

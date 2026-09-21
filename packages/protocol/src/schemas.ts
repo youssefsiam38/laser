@@ -1243,6 +1243,7 @@ export const clientParamsSchemas = {
   "models/profiles/delete": z
     .object({ cwd: cwd.optional(), id: modelProfileIdSchema, replacementId: modelProfileIdSchema.optional() })
     .strict(),
+  "models/profiles/migrate": z.object({ cwd }).strict(),
   "session/profile/set": z.object({ path: sessionPath, profileId: modelProfileIdSchema }).strict(),
   // The pin path, under its own name. `pi/model/set` means the same thing.
   "session/model/pin": z.object({ path: sessionPath, model: modelRefSchema }).strict(),

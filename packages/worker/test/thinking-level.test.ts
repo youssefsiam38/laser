@@ -20,6 +20,8 @@ const models = [{ provider: "stub", id: "stub-1" }, { provider: "stub-b", id: "s
 const definition = { ...fallbackDefaultAgent(), model: models[0]!, thinkingLevel: "medium" as const };
 const promptContent = [{ type: "text" as const, text: "Continue." }];
 
+const PROFILE_ID = "mp_testthinking0000000000";
+
 beforeEach(async () => {
   base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-thinking-`));
   for (const dir of ["project", "agent", "sessions", "state"]) mkdirSync(join(base, dir));
@@ -31,8 +33,17 @@ beforeEach(async () => {
     models: [{ id: model.id, reasoning: true, contextWindow: 8000, maxTokens: 1000 }],
   }])) }));
   writeFileSync(join(base, "agent", "settings.json"), JSON.stringify({
-    defaultProvider: models[0]!.provider, defaultModel: models[0]!.id,
-    defaultThinkingLevel: "low", retry: { enabled: false }, fallbackChains: [{ models }],
+    retry: { enabled: false },
+    // One profile, with the level a new session starts at written on its
+    // preferred model (docs/model-profiles.md: thinking comes from the entry).
+    modelProfiles: [{
+      id: PROFILE_ID,
+      name: "Balanced",
+      models: models.map((model, index) => (index === 0 ? { ...model, thinking: "low" } : { ...model })),
+      origin: "seeded",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    }],
+    defaultProfileId: PROFILE_ID,
   }));
   startWorker();
   await syncDefinitions();

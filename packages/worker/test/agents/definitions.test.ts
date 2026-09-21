@@ -23,11 +23,11 @@ describe("DefinitionsCache", () => {
     expect(cache.definition("chat")).toMatchObject({ kind: "builtin" });
     expect(cache.definition("namer")).toMatchObject({ kind: "builtin" });
     expect(cache.policy()).toEqual({ maxDepth: 3, foregroundCommandSeconds: 120 });
-    expect(cache.namerModel()).toBeNull();
-    expect(cache.beamModel()).toBeNull();
-    // Chat follows the default model until a person chooses one.
-    expect(cache.chatModel()).toBeNull();
-    expect(cache.definition("chat")?.model).toBeNull();
+    expect(cache.namerProfileId()).toBeNull();
+    expect(cache.beamProfileId()).toBeNull();
+    // Chat follows the profile assigned to new sessions until a person chooses one.
+    expect(cache.chatProfileId()).toBeNull();
+    expect(cache.definition("chat")?.profileId).toBeNull();
     for (const name of ["beam", "chat", "namer"]) expect(isStartable(cache.definition(name)!)).toBe(false);
     expect(isStartable(fallback)).toBe(true);
   });
@@ -64,13 +64,20 @@ describe("DefinitionsCache", () => {
     const off = cache.onChange((snapshot) => seen.push(snapshot.revision));
     const base = fallbackSnapshot();
     const custom = { ...base.agents[0]!, name: "lead", supportsSubagents: true, allowedAgents: ["default"] };
-    cache.sync({ ...base, revision: 7, agents: [base.agents[0]!, custom], defaultAgent: "lead", policy: { maxDepth: 2, foregroundCommandSeconds: 30 }, beam: { model: { provider: "p", id: "m" }, suggested: null, needsChoice: false }, chat: { model: { provider: "p", id: "c" } }, namer: { status: "ready", model: { provider: "p", id: "n" }, candidates: [] } });
+    cache.sync({
+      ...base,
+      revision: 7,
+      agents: [base.agents[0]!, custom],
+      defaultAgent: "lead",
+      policy: { maxDepth: 2, foregroundCommandSeconds: 30 },
+      builtinProfiles: { beam: "mp_testbeam0000000000000", chat: "mp_testchat0000000000000", namer: "mp_testnamer000000000000" },
+    });
     expect(cache.isSynced).toBe(true);
     expect(cache.defaultAgent().name).toBe("lead");
-    expect(cache.definition("beam")?.model).toEqual({ provider: "p", id: "m" });
+    expect(cache.definition("beam")?.profileId).toBe("mp_testbeam0000000000000");
     expect(cache.definition("chat")).toBeDefined();
-    expect(cache.chatModel()).toEqual({ provider: "p", id: "c" });
-    expect(cache.namerModel()).toEqual({ provider: "p", id: "n" });
+    expect(cache.chatProfileId()).toBe("mp_testchat0000000000000");
+    expect(cache.namerProfileId()).toBe("mp_testnamer000000000000");
     expect(cache.policy()).toEqual({ maxDepth: 2, foregroundCommandSeconds: 30 });
     expect(seen).toEqual([7]);
     cache.sync({ ...base, revision: 8, agents: [custom], defaultAgent: "lead", renamedAgents: { worker: "lead" } });
@@ -79,11 +86,11 @@ describe("DefinitionsCache", () => {
     cache.sync({ ...base, revision: 9 });
     expect(seen).toEqual([7, 8]);
     // A host that has not seeded the Chat definition still serves the person's
-    // choice: the re-seeded fallback takes the model from the snapshot's state.
+    // choice: the re-seeded fallback takes the profile from the snapshot.
     const seedless = new DefinitionsCache();
-    seedless.sync({ ...base, revision: 10, agents: [base.agents[0]!], chat: { model: { provider: "p", id: "c2" } } });
-    expect(seedless.definition("chat")?.model).toEqual({ provider: "p", id: "c2" });
-    expect(seedless.chatModel()).toEqual({ provider: "p", id: "c2" });
+    seedless.sync({ ...base, revision: 10, agents: [base.agents[0]!], builtinProfiles: { beam: null, chat: "mp_testchat2000000000000", namer: null } });
+    expect(seedless.definition("chat")?.profileId).toBe("mp_testchat2000000000000");
+    expect(seedless.chatProfileId()).toBe("mp_testchat2000000000000");
 
     // An unknown default falls back to the shipped default rather than nothing.
     cache.sync({ ...base, revision: 10, defaultAgent: "gone" });

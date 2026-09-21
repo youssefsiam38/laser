@@ -534,6 +534,15 @@ export const SESSION_FIRST_TURN_OVERRIDE_ENTRY_TYPE = "lasercode/first-turn-over
 export interface SessionFirstTurnOverrides {
   model?: ModelRef | undefined;
   thinkingLevel?: ThinkingLevel | undefined;
+  /**
+   * What this session is anchored to (`docs/model-profiles.md`).
+   *
+   * A profile id when a person chose a profile, `null` when they pinned it to
+   * `model` with nothing standing in for it, and absent when it follows the
+   * profile assigned to new sessions. A session written before profiles
+   * existed has none of this and reads as pinned to the model it was on.
+   */
+  profileId?: string | null | undefined;
 }
 /** The custom entry type run lifecycle moments are written under in the child session. */
 export const SESSION_RUN_ENTRY_TYPE = "lasercode/agent-run";

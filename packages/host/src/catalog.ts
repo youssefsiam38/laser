@@ -19,8 +19,8 @@
 import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { defaultAgentDir, projectRootOf } from "./paths.js";
-import type { SessionAgentInfo, SessionAgentRecord, SessionSummary } from "@lasercode/protocol";
-import { SESSION_AGENT_ENTRY_TYPE, goalPromptId, toolOutputText } from "@lasercode/protocol";
+import type { ModelRef, SessionAgentInfo, SessionAgentRecord, SessionSummary } from "@lasercode/protocol";
+import { SESSION_AGENT_ENTRY_TYPE, SESSION_FALLBACK_ENTRY_TYPE, goalPromptId, toolOutputText } from "@lasercode/protocol";
 
 export interface CatalogEntry extends SessionSummary {
   size: number;
@@ -36,6 +36,14 @@ interface Scan {
   pendingGoal?: { id: string; text: string } | undefined;
   /** From the session's agent record, when the worker wrote one (docs/agents-leap). */
   agent?: SessionAgentInfo | undefined;
+  /**
+   * Intent and evidence for a row that never opens the session: the profile it
+   * is running on, and the model that last answered in it
+   * (`docs/model-profiles.md`). Both come from records the session already
+   * writes, so nothing extra is read.
+   */
+  profileId?: string | undefined;
+  model?: ModelRef | undefined;
 }
 
 interface CacheEntry {
@@ -51,6 +59,8 @@ const CHUNK = 256 * 1024;
 const FIRST_MESSAGE_MAX = 200;
 /** The substring that marks the agent record, so the line is parsed only when it is one. */
 const AGENT_RECORD_MARK = `"customType":${JSON.stringify(SESSION_AGENT_ENTRY_TYPE)}`;
+/** The same trick for the profile record: parse the line only when it is one. */
+const PROFILE_RECORD_MARK = `"customType":${JSON.stringify(SESSION_FALLBACK_ENTRY_TYPE)}`;
 
 export function defaultSessionDir(agentDir = defaultAgentDir()): string {
   return join(agentDir, "sessions");
@@ -172,6 +182,8 @@ export class SessionCatalog {
       ...(scan.name ? { name: scan.name } : {}),
       ...(scan.firstMessage ? { firstMessage: scan.firstMessage } : {}),
       ...(scan.agent ? { agent: scan.agent } : {}),
+      ...(scan.profileId ? { profileId: scan.profileId } : {}),
+      ...(scan.model ? { model: scan.model } : {}),
     };
     this.cache.set(path, { size: st.size, mtimeMs: st.mtimeMs, entry, scan });
     return entry;
@@ -310,6 +322,31 @@ function applyLine(line: string, scan: Scan): void {
       const goal = entry.type === "custom" ? entry.data?.goal : undefined;
       scan.pendingGoal = goal && typeof goal.id === "string" && typeof goal.text === "string" ? { id: goal.id, text: goal.text } : undefined;
     } catch { /* torn line */ }
+    return;
+  }
+  // The last activation wins: a session that moved inside its profile, or was
+  // pinned, says so in its most recent record.
+  if (line.includes(PROFILE_RECORD_MARK)) {
+    try {
+      const entry = JSON.parse(line) as { type?: string; customType?: string; data?: { activation?: { profileId?: unknown } | null } };
+      if (entry.type === "custom" && entry.customType === SESSION_FALLBACK_ENTRY_TYPE) {
+        const profileId = entry.data?.activation?.profileId;
+        scan.profileId = typeof profileId === "string" ? profileId : undefined;
+      }
+    } catch {
+      /* torn line */
+    }
+    return;
+  }
+  if (line.includes('"type":"model_change"')) {
+    try {
+      const entry = JSON.parse(line) as { type?: string; provider?: unknown; modelId?: unknown };
+      if (entry.type === "model_change" && typeof entry.provider === "string" && typeof entry.modelId === "string") {
+        scan.model = { provider: entry.provider, id: entry.modelId };
+      }
+    } catch {
+      /* torn line */
+    }
     return;
   }
   if (line.includes('"type":"session_info"')) {

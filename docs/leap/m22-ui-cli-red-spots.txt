@@ -1,0 +1,75 @@
+packages/ui/src/agents/actions.ts(22,3): error TS2305: Module '"@lasercode/protocol"' has no exported member 'AgentModelChoice'.
+packages/ui/src/agents/actions.ts(28,3): error TS2305: Module '"@lasercode/protocol"' has no exported member 'NamerState'.
+packages/ui/src/agents/actions.ts(163,17): error TS2339: Property 'snapshot' does not exist on type '{} | AgentsSnapshot | ProjectFileContent | { entries: unknown[]; leafId?: string | null; window?: HistoryWindow; } | { state: SessionState; replayFrom: number; seq: number; revision?: string; environmentKey?: string; } | ... 144 more ... | { ...; }'.
+packages/ui/src/agents/actions.ts(163,51): error TS2345: Argument of type '"agents/builtin/set-model"' is not assignable to parameter of type 'keyof ClientRequests'.
+packages/ui/src/agents/actions.ts(171,43): error TS2345: Argument of type '"agents/namer/qualify"' is not assignable to parameter of type 'keyof ClientRequests'.
+packages/ui/src/agents/model.ts(239,5): error TS2353: Object literal may only specify known properties, and 'model' does not exist in type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/AgentEditor.tsx(301,50): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/AgentEditor.tsx(301,79): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/AgentEditor.tsx(301,108): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/AgentEditor.tsx(301,136): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/AgentEditor.tsx(450,32): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/AgentEditor.tsx(492,26): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/AgentEditor.tsx(497,42): error TS2353: Object literal may only specify known properties, and 'model' does not exist in type 'Partial<AgentDefinitionInput>'.
+packages/ui/src/components/agents/page/AgentEditor.tsx(508,86): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/AgentEditorFields.tsx(34,31): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/AgentEditorFields.tsx(39,40): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/AgentEditorResources.tsx(59,26): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/BuiltinPanel.tsx(7,87): error TS2305: Module '"@lasercode/protocol"' has no exported member 'AgentModelChoice'.
+packages/ui/src/components/agents/page/BuiltinPanel.tsx(7,154): error TS2305: Module '"@lasercode/protocol"' has no exported member 'NamerCandidate'.
+packages/ui/src/components/agents/page/BuiltinPanel.tsx(7,175): error TS2305: Module '"@lasercode/protocol"' has no exported member 'NamerState'.
+packages/ui/src/components/agents/page/BuiltinPanel.tsx(40,181): error TS2339: Property 'model' does not exist on type 'AgentDefinition'.
+packages/ui/src/components/agents/page/BuiltinPanel.tsx(40,226): error TS2339: Property 'model' does not exist on type 'AgentDefinition'.
+packages/ui/src/components/agents/page/BuiltinPanel.tsx(120,29): error TS2339: Property 'model' does not exist on type 'AgentDefinition'.
+packages/ui/src/components/agents/page/BuiltinPanel.tsx(227,26): error TS2339: Property 'beam' does not exist on type 'AgentsSnapshot'.
+packages/ui/src/components/agents/page/BuiltinPanel.tsx(228,28): error TS2339: Property 'beam' does not exist on type 'AgentsSnapshot'.
+packages/ui/src/components/agents/page/BuiltinPanel.tsx(228,98): error TS2339: Property 'beam' does not exist on type 'AgentsSnapshot'.
+packages/ui/src/components/agents/page/BuiltinPanel.tsx(256,26): error TS2339: Property 'chat' does not exist on type 'AgentsSnapshot'.
+packages/ui/src/components/agents/page/BuiltinPanel.tsx(326,63): error TS2339: Property 'namer' does not exist on type 'AgentsSnapshot'.
+packages/ui/src/components/agents/page/BuiltinPanel.tsx(326,115): error TS2339: Property 'namer' does not exist on type 'AgentsSnapshot'.
+packages/ui/src/components/agents/page/dialogs.tsx(7,15): error TS2305: Module '"@lasercode/protocol"' has no exported member 'AgentModelChoice'.
+packages/ui/src/components/agents/page/instruction-template-model.ts(5,8): error TS2305: Module '"@lasercode/protocol"' has no exported member 'AgentModelChoice'.
+packages/ui/src/components/agents/page/model.ts(20,8): error TS2305: Module '"@lasercode/protocol"' has no exported member 'AgentModelChoice'.
+packages/ui/src/components/agents/page/model.ts(28,8): error TS2305: Module '"@lasercode/protocol"' has no exported member 'NamerState'.
+packages/ui/src/components/agents/page/model.ts(361,50): error TS2366: Function lacks ending return statement and return type does not include 'undefined'.
+packages/ui/src/components/agents/page/model.ts(368,45): error TS7006: Parameter 'candidate' implicitly has an 'any' type.
+packages/ui/src/components/agents/page/model.ts(412,8): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/model.ts(412,40): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/model.ts(413,8): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/agents/page/model.ts(413,34): error TS2339: Property 'model' does not exist on type 'AgentDefinitionInput'.
+packages/ui/src/components/assistant-ui/elements/model-selector.tsx(1063,17): error TS2339: Property 'defaultProvider' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/assistant-ui/elements/model-selector.tsx(1063,34): error TS2339: Property 'defaultModel' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/assistant-ui/elements/model-selector.tsx(1121,29): error TS2339: Property 'chain' does not exist on type 'SessionFallbackSummary'.
+packages/ui/src/components/assistant-ui/elements/model-selector.tsx(1123,58): error TS2339: Property 'chain' does not exist on type 'SessionFallbackSummary'.
+packages/ui/src/components/assistant-ui/elements/model-selector.tsx(1137,87): error TS2339: Property 'model' does not exist on type 'AgentDefinition'.
+packages/ui/src/components/assistant-ui/elements/model-selector.tsx(1141,81): error TS2339: Property 'model' does not exist on type 'AgentDefinition'.
+packages/ui/src/components/assistant-ui/elements/model-selector.tsx(1251,35): error TS2339: Property 'chain' does not exist on type 'SessionFallbackSummary'.
+packages/ui/src/components/assistant-ui/elements/model-selector.tsx(1261,96): error TS2339: Property 'chain' does not exist on type 'SessionFallbackSummary'.
+packages/ui/src/components/assistant-ui/elements/reasoning-effort.tsx(226,86): error TS2339: Property 'model' does not exist on type 'AgentDefinition'.
+packages/ui/src/components/beam/BeamEmptyState.tsx(28,26): error TS2339: Property 'beam' does not exist on type 'AgentsSnapshot'.
+packages/ui/src/components/beam/BeamModelDialog.tsx(1,15): error TS2305: Module '"@lasercode/protocol"' has no exported member 'AgentModelChoice'.
+packages/ui/src/components/beam/BeamModelDialog.tsx(37,77): error TS2339: Property 'beam' does not exist on type 'AgentsSnapshot'.
+packages/ui/src/components/onboarding/FirstRunFlow.tsx(151,29): error TS2339: Property 'defaultProvider' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/onboarding/FirstRunFlow.tsx(151,56): error TS2339: Property 'defaultModel' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/onboarding/FirstRunFlow.tsx(151,82): error TS2339: Property 'defaultProvider' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/onboarding/FirstRunFlow.tsx(151,109): error TS2339: Property 'defaultModel' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/onboarding/ModelStep.tsx(50,27): error TS2339: Property 'defaultProvider' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/onboarding/ModelStep.tsx(50,54): error TS2339: Property 'defaultModel' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/onboarding/ModelStep.tsx(50,80): error TS2339: Property 'defaultProvider' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/onboarding/ModelStep.tsx(50,107): error TS2339: Property 'defaultModel' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/settings/SettingsForm.tsx(63,20): error TS2339: Property 'defaultProvider' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/settings/SettingsForm.tsx(63,64): error TS2339: Property 'defaultProvider' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/settings/SettingsForm.tsx(64,20): error TS2339: Property 'defaultModel' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/settings/SettingsForm.tsx(64,58): error TS2339: Property 'defaultModel' does not exist on type '{ models: ModelCatalogEntry[]; enabledPatterns: string[] | null; disabledModels?: string[]; profiles?: ModelProfile[]; assignments?: ProfileAssignments; refreshedAt: string; errors: string[]; }'.
+packages/ui/src/components/settings/fallback/FallbackChainsTab.tsx(20,3): error TS2305: Module '"@lasercode/protocol"' has no exported member 'FALLBACK_CHAINS_SETTING'.
+packages/ui/src/components/settings/fallback/FallbackChainsTab.tsx(22,3): error TS2305: Module '"@lasercode/protocol"' has no exported member 'readFallbackChainsValue'.
+packages/ui/src/components/settings/fallback/FallbackChainsTab.tsx(23,3): error TS2305: Module '"@lasercode/protocol"' has no exported member 'validateFallbackChains'.
+packages/ui/src/components/settings/fallback/FallbackChainsTab.tsx(24,8): error TS2305: Module '"@lasercode/protocol"' has no exported member 'FallbackChain'.
+packages/ui/src/components/settings/fallback/FallbackChainsTab.tsx(25,8): error TS2305: Module '"@lasercode/protocol"' has no exported member 'FallbackChainIssue'.
+packages/ui/src/components/settings/fallback/FallbackChainsTab.tsx(26,8): error TS2305: Module '"@lasercode/protocol"' has no exported member 'FallbackModelRef'.
+packages/ui/src/components/settings/fallback/FallbackChainsTab.tsx(109,61): error TS7006: Parameter 'issue' implicitly has an 'any' type.
+packages/ui/src/runtime/provisional-paint.ts(158,3): error TS2741: Property 'profile' is missing in type '{ agent?: SessionAgentInfo; model: null; thinkingLevel: "off"; isStreaming: false; isCompacting: false; steeringMode: "all"; followUpMode: "all"; autoCompactionEnabled: false; ... 5 more ...; cwd: string; }' but required in type 'SessionState'.
+packages/ui/src/store.ts(16,3): error TS2305: Module '"@lasercode/protocol"' has no exported member 'AgentModelChoice'.
+packages/ui/src/store.ts(1118,10): error TS2678: Type '"agents/beam/choose-model"' is not comparable to type 'keyof HostNotifications'.
+packages/ui/src/store.ts(1119,104): error TS2339: Property 'agents/beam/choose-model' does not exist on type 'HostNotifications'.
+packages/ui/src/store.ts(2191,40): error TS2339: Property 'chain' does not exist on type 'SessionFallbackSummary'.

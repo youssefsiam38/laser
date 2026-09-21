@@ -346,7 +346,7 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(system).toContain("beta-skill");
     expect(system).not.toContain("alpha-skill");
 
-    const beam = fallbackBeamAgent({ model });
+    const beam = fallbackBeamAgent({ profileId: null });
     const driver = new StableSdkDriver();
     drivers.push(driver);
     const settled = new Promise<void>((resolve) => driver.subscribe((e: DriverEvent) => { if (e.type === "update" && e.update.kind === "agent_settled") resolve(); }));
@@ -359,15 +359,23 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(system.startsWith("You are Beam")).toBe(true);
   }, 90_000);
 
-  it("refuses a definition whose model has no connected provider, naming the model", async () => {
+  it("opens a definition whose profile is gone on the default instead of refusing", async () => {
+    // An agent naming a profile nothing answers to is a warning on the
+    // definition, never a closed conversation (docs/model-profiles.md).
+    writeFileSync(join(base, "agent", "settings.json"), JSON.stringify({
+      modelProfiles: [{ id: "mp_testdefault0000000000", name: "Balanced", models: [{ provider: "stub", id: "stub-1" }], origin: "seeded", updatedAt: "2026-01-01T00:00:00.000Z" }],
+      defaultProfileId: "mp_testdefault0000000000",
+    }));
     const driver = new StableSdkDriver();
     drivers.push(driver);
-    const definition: AgentDefinition = { ...fallbackDefaultAgent(), model: { provider: "anthropic", id: "claude-sonnet-4-5" } };
-    await expect(driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), agent: agentOptions(definition) })).rejects.toThrow(/anthropic\/claude-sonnet-4-5 is not available: connect anthropic in Settings → Providers and models/);
+    const definition: AgentDefinition = { ...fallbackDefaultAgent(), profileId: "mp_testmissing0000000000" };
+    const state = await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), agent: agentOptions(definition) });
+    expect(state.profile).toEqual({ id: "mp_testdefault0000000000", name: "Balanced" });
+    expect(state.model).toMatchObject({ provider: "stub", id: "stub-1" });
   }, 60_000);
 
   it("reopens a Beam session whose workspace folder vanished by recreating the folder", async () => {
-    const beam = fallbackBeamAgent({ model: null });
+    const beam = fallbackBeamAgent({ profileId: null });
     const workspace = join(base, "state", "workspaces", "beam");
     mkdirSync(workspace, { recursive: true });
     const driver = new StableSdkDriver();
@@ -508,7 +516,20 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(lines.filter((line) => line.customType === SESSION_AGENT_ENTRY_TYPE)).toHaveLength(2);
   }, 60_000);
 
-  it("keeps real activated and cleared fallback setup records pristine across reload and agent binding", async () => {
+  const PROFILE_ONE = "mp_testprofileone0000000";
+  const PROFILE_TWO = "mp_testprofiletwo0000000";
+  /** The profile new sessions start on, and the one the reviewer agent names. */
+  const PROFILE_DEFAULT = "mp_testdefault0000000000";
+  const PROFILE_REVIEWER = "mp_testreviewer000000000";
+  const twoModelProfiles = JSON.stringify({
+    modelProfiles: [
+      { id: PROFILE_DEFAULT, name: "Balanced", models: [{ provider: "stub", id: "stub-1", thinking: "medium" }], origin: "seeded", updatedAt: "2026-01-01T00:00:00.000Z" },
+      { id: PROFILE_REVIEWER, name: "Deep", models: [{ provider: "stub", id: "stub-2" }], origin: "person", updatedAt: "2026-01-01T00:00:00.000Z" },
+    ],
+    defaultProfileId: PROFILE_DEFAULT,
+  });
+
+  it("keeps real activated and cleared profile setup records pristine across reload and agent binding", async () => {
     writeFileSync(join(base, "agent", "models.json"), JSON.stringify({
       providers: {
         stub: {
@@ -524,13 +545,11 @@ describe("StableSdkDriver with an agent definition", () => {
       },
     }));
     writeFileSync(join(base, "agent", "settings.json"), JSON.stringify({
-      defaultProvider: "stub",
-      defaultModel: "stub-1",
-      defaultThinkingLevel: "medium",
-      fallbackChains: [
-        { models: [{ provider: "stub", id: "stub-1" }, { provider: "stub", id: "stub-2" }] },
-        { models: [{ provider: "stub", id: "stub-2" }, { provider: "stub", id: "stub-1" }] },
+      modelProfiles: [
+        { id: PROFILE_ONE, name: "One", models: [{ provider: "stub", id: "stub-1" }, { provider: "stub", id: "stub-2" }], origin: "seeded", updatedAt: "2026-01-01T00:00:00.000Z" },
+        { id: PROFILE_TWO, name: "Two", models: [{ provider: "stub", id: "stub-2" }, { provider: "stub", id: "stub-1" }], origin: "person", updatedAt: "2026-01-01T00:00:00.000Z" },
       ],
+      defaultProfileId: PROFILE_ONE,
     }));
     const reviewer: AgentDefinition = {
       ...fallbackDefaultAgent(),
@@ -565,7 +584,11 @@ describe("StableSdkDriver with an agent definition", () => {
     const exercise = async (selectedId: "stub-2" | "stub-3", expectedEvent: "activated" | "cleared") => {
       const created = await call("session/new", { cwd: join(base, "project") });
       const initial = (created.result as { state: SessionState }).state;
-      expect((await call("pi/model/set", { path: initial.path, model: { provider: "stub", id: selectedId } })).error).toBeUndefined();
+      // Choosing a profile re-anchors; choosing a model pins. Both are setup,
+      // and both leave exactly one record on a still-pristine session.
+      expect((expectedEvent === "activated"
+        ? await call("session/profile/set", { path: initial.path, profileId: PROFILE_TWO })
+        : await call("pi/model/set", { path: initial.path, model: { provider: "stub", id: selectedId } })).error).toBeUndefined();
       expect((await call("pi/thinking/set", { path: initial.path, level: "high" })).error).toBeUndefined();
       expect((await call("pi/session/rename", { path: initial.path, name: `${expectedEvent} setup` })).error).toBeUndefined();
 
@@ -580,7 +603,7 @@ describe("StableSdkDriver with an agent definition", () => {
         to: { provider: "stub", id: selectedId },
         activation: expectedEvent === "activated"
           ? {
-              chainKey: modelKey({ provider: "stub", id: selectedId }),
+              profileId: PROFILE_TWO,
               models: [{ provider: "stub", id: "stub-2" }, { provider: "stub", id: "stub-1" }],
               position: 0,
             }
@@ -602,8 +625,8 @@ describe("StableSdkDriver with an agent definition", () => {
         model: { provider: "stub", id: selectedId },
         thinkingLevel: "high",
         ...(expectedEvent === "activated"
-          ? { fallback: { position: 0, chain: [{ id: "stub-2" }, { id: "stub-1" }] } }
-          : {}),
+          ? { fallback: { position: 0, profileId: PROFILE_TWO, models: [{ id: "stub-2" }, { id: "stub-1" }] } }
+          : { pinned: true }),
       });
       if (expectedEvent === "cleared") expect((reloaded.result as { state: SessionState }).state.fallback).toBeUndefined();
 
@@ -656,11 +679,7 @@ describe("StableSdkDriver with an agent definition", () => {
         },
       },
     }));
-    writeFileSync(join(base, "agent", "settings.json"), JSON.stringify({
-      defaultProvider: "stub",
-      defaultModel: "stub-1",
-      defaultThinkingLevel: "medium",
-    }));
+    writeFileSync(join(base, "agent", "settings.json"), twoModelProfiles);
     const selected: AgentDefinition = {
       ...fallbackDefaultAgent(),
       name: "reviewer",
@@ -668,10 +687,10 @@ describe("StableSdkDriver with an agent definition", () => {
       instructions: "SERVER SELECTED AGENT",
       scopedSkills: true,
       skills: [{ name: "selected-skill", path: join(base, "agent", "skills", "selected-skill", "SKILL.md"), scope: "global" }],
-      model: { provider: "stub", id: "stub-2" },
+      profileId: PROFILE_REVIEWER,
       thinkingLevel: "high",
     };
-    const followsDefault: AgentDefinition = { ...selected, name: "follower", model: null, thinkingLevel: null };
+    const followsDefault: AgentDefinition = { ...selected, name: "follower", profileId: null, thinkingLevel: null };
     const messages: JsonRpcMessage[] = [];
     const server = new WorkerServer({
       cwd: join(base, "project"),
@@ -870,8 +889,10 @@ describe("StableSdkDriver with an agent definition", () => {
         },
       },
     }));
-    const original = { ...fallbackDefaultAgent(), model: { provider: "stub", id: "stub-2" } } satisfies AgentDefinition;
-    const selected = { ...original, name: "reviewer", model: { provider: "stub", id: "stub-1" }, thinkingLevel: "high" as const } satisfies AgentDefinition;
+    writeFileSync(join(base, "agent", "settings.json"), twoModelProfiles);
+    // PROFILE_DEFAULT prefers stub-1 (no reasoning here), PROFILE_REVIEWER stub-2.
+    const original = { ...fallbackDefaultAgent(), profileId: PROFILE_REVIEWER } satisfies AgentDefinition;
+    const selected = { ...original, name: "reviewer", profileId: PROFILE_DEFAULT, thinkingLevel: "high" as const } satisfies AgentDefinition;
     const driver = new StableSdkDriver();
     drivers.push(driver);
     await driver.open({
@@ -1138,13 +1159,14 @@ describe("StableSdkDriver with an agent definition", () => {
         },
       },
     }));
+    writeFileSync(join(base, "agent", "settings.json"), twoModelProfiles);
     const original: AgentDefinition = {
       ...fallbackDefaultAgent(), name: "default", engineInstructions: false,
-      instructions: "ORIGINAL AFTER ROLLBACK", model: { provider: "stub", id: "stub-1" }, thinkingLevel: "low",
+      instructions: "ORIGINAL AFTER ROLLBACK", profileId: PROFILE_DEFAULT, thinkingLevel: "low",
     };
     const selected: AgentDefinition = {
       ...fallbackDefaultAgent(), name: "reviewer", engineInstructions: false,
-      instructions: "SHOULD NOT RUN", model: { provider: "stub", id: "stub-1" },
+      instructions: "SHOULD NOT RUN", profileId: PROFILE_DEFAULT,
     };
     const driver = new StableSdkDriver();
     drivers.push(driver);
@@ -1154,9 +1176,10 @@ describe("StableSdkDriver with an agent definition", () => {
       await driver.setThinkingLevel("high");
     } else {
       // Factory failure happens after the old runtime has been disposed, but
-      // must leave the original effective session served and retryable.
-      await expect(driver.prepareFirstTurn({ agent: agentOptions({ ...selected, model: { provider: "missing", id: "unavailable" } }) }))
-        .rejects.toThrow(/not available/);
+      // must leave the original effective session served and retryable. A pin
+      // to a model this machine cannot reach is the one refusal left.
+      await expect(driver.prepareFirstTurn({ agent: agentOptions(selected), model: { provider: "missing", id: "unavailable" } }))
+        .rejects.toThrow(/unknown model missing\/unavailable/);
       expect(driver.state()).toMatchObject({ path: before.path, id: before.id, model: before.model, thinkingLevel: before.thinkingLevel });
       expect(stub.requests).toHaveLength(0);
     }
