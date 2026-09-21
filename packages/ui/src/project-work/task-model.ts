@@ -124,6 +124,7 @@ export const EVIDENCE_KIND_LABEL: Readonly<Record<EvidenceKind, string>> = {
   review: "Review",
   person_acceptance: "You accepted it",
   command_output: "Command output",
+  verification: "Verification report",
 };
 
 export const EVIDENCE_ROLE_LABEL = {

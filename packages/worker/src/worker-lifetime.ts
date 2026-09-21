@@ -71,6 +71,20 @@ export interface WorkerLifetimeDeps<Live extends LifetimeSession> {
   safetySnapshot(live: Live, releasing?: boolean): SessionSafetySnapshot;
   /** The prompt-preflight lease: a release must hold it, like every other move. */
   withFirstTurnLease<T>(path: string, work: () => Promise<T>): Promise<T>;
+  /**
+   * Work this worker still owes that no loaded runtime accounts for.
+   *
+   * A runtime table is a table of *conversations that are open*, and there is
+   * work that outlives one: a verification run whose driver closed
+   * unexpectedly keeps draining its commands and writing its report, and it
+   * was deliberately detached from publishing so it cannot resurrect a path
+   * nobody serves any more. Detached from the fleet is not finished, so it is
+   * reported here instead — as pins, in the same vocabulary, so the one
+   * predicate that decides retirement sees it exactly as it sees a running
+   * command of a live session. Nothing here publishes, reopens or re-creates
+   * anything; it is read.
+   */
+  detachedWork?: () => SessionSafety[];
 }
 
 export class WorkerLifetime<Live extends LifetimeSession> {
@@ -109,6 +123,14 @@ export class WorkerLifetime<Live extends LifetimeSession> {
         add({ path, pins: [{ kind: "opening", detail: "a release has not finished yet" }] });
         listed.add(path);
       }
+    }
+    // Last, and only for what the loop above did not already account for: a
+    // conversation that is still loaded reports its work through its own pins,
+    // and one row per path is what a diagnostic can read.
+    for (const row of this.deps.detachedWork?.() ?? []) {
+      if (listed.has(row.path) || row.pins.length === 0) continue;
+      add(row);
+      listed.add(row.path);
     }
     return { sessions: out, complete };
   }
@@ -237,6 +259,11 @@ export class WorkerLifetime<Live extends LifetimeSession> {
       return { retiring: false, pins, reason };
     };
     if (!drained) return refuse("arrived");
+    // Re-read **here**, under the fence and after the accepted handlers have
+    // drained: a handler that was already running when the fence closed can
+    // have closed a driver and left its private work behind between the
+    // caller's check and this line, and that work is exactly what must not be
+    // ended by the process going away.
     const safety = this.safety();
     if (!safety.complete) return refuse("incomplete", safety.sessions);
     const blocking = safety.sessions
