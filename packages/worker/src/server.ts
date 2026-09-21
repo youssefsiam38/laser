@@ -2130,7 +2130,10 @@ export class WorkerServer {
         ...(live.path ? { sessionId: this.sessionIdOf(live) } : {}),
         ...(agent?.role.runId !== undefined ? { runId: agent.role.runId } : {}),
       }),
-      execution: () => this.executionShape(openOptions.cwd),
+      // The attempt records the Model Profile as *intent* (leap, "Execution
+      // and convergence"): an agent run started for a Task runs on the
+      // session's own profile, and the link says which one, never a model.
+      execution: () => this.executionShape(openOptions.cwd, () => live.driver.state().profile?.id),
     });
     return new ProjectWorkSession({
       bridge,
@@ -2148,12 +2151,21 @@ export class WorkerServer {
    * from git rather than remembered, and never fatal: an attempt in a
    * directory that is not a repository records its shape and no branch.
    */
-  private async executionShape(cwd: string): Promise<ProjectWorkExecutionShape> {
+  private async executionShape(cwd: string, profileId?: () => string | undefined): Promise<ProjectWorkExecutionShape> {
+    let profile: string | undefined;
+    try {
+      profile = profileId?.();
+    } catch {
+      // A session that is not open yet has no profile; the attempt records none
+      // rather than a guess.
+      profile = undefined;
+    }
     const shape: ProjectWorkExecutionShape = {
       // A session whose directory is not the worker's own project directory
       // is working in a worktree of it (AGENTS.md invariant 5).
       workspace: cwd === this.options.cwd ? "shared" : "worktree",
       checkout: cwd,
+      ...(profile !== undefined ? { profileId: profile } : {}),
     };
     try {
       const run = createProcessRunner();
