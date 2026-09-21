@@ -256,6 +256,7 @@ const VOCABULARY_EXEMPT_LINES = new Set([
   // naming carry reads once.
   "packages/ui/src/runtime/device-storage.ts:beam-session",
   "packages/host/src/agents/store.ts:namer",
+  "packages/worker/src/profiles/migrate.ts:builtin:namer",
   "packages/worker/src/agents/session-config.ts:beam",
 ]);
 const FORBIDDEN_VOCABULARY = [
