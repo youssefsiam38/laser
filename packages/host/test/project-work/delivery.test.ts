@@ -24,13 +24,13 @@ import {
   type RepositoryChangeRef,
 } from "@lasercode/protocol";
 import { checkpointSessionKey } from "@lasercode/protocol/checkpoint-key";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { failed, ok, projectWorkHarness, type ProjectWorkHarness } from "./harness.js";
 import { specBody, taskBody } from "./fixtures.js";
+import { checkpoint, git, haveGit, head, initRepo, prune, write } from "./git-fixtures.js";
 
 /** A Task body that declares the paths it means to write in. */
 function taskBodyWith(paths: string[]): ReturnType<typeof taskBody> {
@@ -38,15 +38,6 @@ function taskBodyWith(paths: string[]): ReturnType<typeof taskBody> {
   if (body.kind !== "task") throw new Error("unreachable");
   return { kind: "task", task: { ...body.task, scope: { packages: [], repositories: [], paths, capabilities: [] } } };
 }
-
-const haveGit = (() => {
-  try {
-    execFileSync("git", ["--version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
 
 let h: ProjectWorkHarness;
 const dirs: string[] = [];
@@ -59,75 +50,6 @@ afterEach(() => {
 const ACTOR = { class: "local_app" as const, id: "worker:alpha" };
 const AGENT = { label: "Builder", sessionId: "ses_1", runId: "run_1" };
 const SESSION = "/sessions/ses_1.jsonl";
-
-// ------------------------------------------------------------------ git
-
-function git(cwd: string, args: string[]): string {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@x",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@x",
-  };
-  delete env.GIT_INDEX_FILE;
-  return execFileSync("git", args, { cwd, env }).toString();
-}
-
-function initRepo(dir: string, contents: Record<string, string>): void {
-  mkdirSync(dir, { recursive: true });
-  git(dir, ["init", "-q", "-b", "main"]);
-  git(dir, ["config", "user.email", "t@x"]);
-  git(dir, ["config", "user.name", "t"]);
-  git(dir, ["config", "commit.gpgsign", "false"]);
-  write(dir, contents);
-  git(dir, ["add", "-A"]);
-  git(dir, ["commit", "-q", "-m", "init"]);
-}
-
-function write(dir: string, contents: Record<string, string>): void {
-  for (const [name, body] of Object.entries(contents)) {
-    mkdirSync(join(dir, name, ".."), { recursive: true });
-    writeFileSync(join(dir, name), body);
-  }
-}
-
-/**
- * One checkpoint, exactly as the worker writes one: a commit object built
- * through an isolated index and published under
- * `refs/<product>/checkpoints/<session>/<turn>`, touching nothing a person
- * can see (`docs/source-control-leap.md` §E.1).
- */
-function checkpoint(repo: string, sessionPath: string, turn: number): string {
-  const indexFile = join(repo, `.git/${PRODUCT_NAME}-test-index-${String(turn)}`);
-  const env = {
-    ...process.env,
-    GIT_INDEX_FILE: indexFile,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@x",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@x",
-  };
-  execFileSync("git", ["add", "-A"], { cwd: repo, env });
-  const tree = execFileSync("git", ["write-tree"], { cwd: repo, env }).toString().trim();
-  const commit = execFileSync("git", ["commit-tree", tree, "-m", `checkpoint turn=${String(turn)}`], { cwd: repo, env })
-    .toString()
-    .trim();
-  rmSync(indexFile, { force: true });
-  git(repo, ["update-ref", checkpointRef(checkpointSessionKey(sessionPath), turn), commit]);
-  return commit;
-}
-
-function head(repo: string): string {
-  return git(repo, ["rev-parse", "HEAD"]).trim();
-}
-
-/** Make an object unreachable for real: drop every ref to it, then prune. */
-function prune(repo: string, refs: string[]): void {
-  for (const ref of refs) git(repo, ["update-ref", "-d", ref]);
-  git(repo, ["reflog", "expire", "--expire=now", "--all"]);
-  git(repo, ["gc", "--prune=now", "--quiet"]);
-}
 
 // -------------------------------------------------------------- harness
 
@@ -188,6 +110,44 @@ async function endAttempt(task: ProjectWorkWriteResult, targetId = "run_1"): Pro
       idempotencyKey: `end-${targetId}`,
     }),
   );
+}
+
+/**
+ * One whole attempt, as the product records one: it starts, it writes a
+ * checkpoint while it runs, and it closes — which is when the host re-reads
+ * git and the attempt's record carries that checkpoint.
+ *
+ * What comes back is the identity a person's review reports: the attempt row,
+ * the repository the host identified, the base it recorded, and the checkpoint
+ * ref and commit.
+ */
+async function attemptWith(
+  task: ProjectWorkWriteResult,
+  repo: string,
+  turn: number,
+  options: { name?: string; targetId?: string } = {},
+): Promise<{
+  attempt: { taskEntityId: string; executionLinkId: string };
+  executionLinkId: string;
+  repositoryId: string;
+  base: string;
+  commit: string;
+  ref: string;
+}> {
+  const targetId = options.targetId ?? "run_1";
+  await startAttempt(task, targetId);
+  const commit = checkpoint(repo, SESSION, turn);
+  const ended = await endAttempt(task, targetId);
+  const record = ended.link.repositories?.find((row) => row.name === (options.name ?? "app"));
+  if (!record) throw new Error("the attempt recorded no repository");
+  return {
+    attempt: { taskEntityId: task.entity.entityId, executionLinkId: ended.link.linkId },
+    executionLinkId: ended.link.linkId,
+    repositoryId: record.repositoryId,
+    base: record.base.commitObjectId,
+    commit,
+    ref: checkpointRef(checkpointSessionKey(SESSION), turn),
+  };
 }
 
 async function detail(entityId: string, repositoryStatus = false): Promise<ProjectWorkGetResult> {
@@ -613,6 +573,60 @@ describe.runIf(haveGit)("a link never retargets, and never resolves to HEAD", ()
     expect(stored.sources[0]?.text).toBe("two\n");
   });
 
+it("refuses an agent's removal of an accepted delivery, and a person's once a decision names it", async () => {
+  const { task } = await acceptedDelivery();
+  const link = (await detail(task.entity.entityId)).repositoryLinks.find((row) => row.relation === "implemented_by")!;
+
+  const byAgent = await (async () => {
+    try {
+      await bridge({
+        method: "project/work/unlink",
+        params: {
+          projectId: h.projectId,
+          entityId: task.entity.entityId,
+          expectedRevisionId: task.revision.revisionId,
+          linkId: link.linkId,
+          idempotencyKey: "agent-unlink",
+        },
+      });
+    } catch (error) {
+      return error as Error;
+    }
+    throw new Error("an agent should not be able to remove accepted provenance");
+  })();
+  expect(byAgent.message).toMatch(/Only a person removes what a decision was made on/);
+
+  // And once evidence names it, even a person supersedes rather than erases.
+  ok(
+    await h.call("project/work/link", {
+      projectId: h.projectId,
+      expectedRevisionId: task.revision.revisionId,
+      link: {
+        type: "evidence",
+        entityId: task.entity.entityId,
+        revisionId: task.revision.revisionId,
+        kind: "review",
+        role: "supporting",
+        summary: "Read against that delivery.",
+        outcome: "passed",
+        repositoryLinkId: link.linkId,
+      },
+      idempotencyKey: "names-the-link",
+    }),
+  );
+  const byPerson = failed(
+    await h.call("project/work/unlink", {
+      projectId: h.projectId,
+      entityId: task.entity.entityId,
+      expectedRevisionId: task.revision.revisionId,
+      linkId: link.linkId,
+      idempotencyKey: "person-unlink",
+    }),
+  );
+  expect(byPerson.message).toMatch(/superseded, never erased/);
+  expect((await detail(task.entity.entityId)).repositoryLinks.some((row) => row.linkId === link.linkId)).toBe(true);
+});
+
   it("appends a superseding link and keeps the one it corrects", async () => {
     const { app, task } = await acceptedDelivery();
     const first = (await detail(task.entity.entityId)).repositoryLinks[0]!;
@@ -654,14 +668,16 @@ describe.runIf(haveGit)("a link never retargets, and never resolves to HEAD", ()
 });
 
 describe.runIf(haveGit)("a decision keeps what it rests on readable", () => {
-  it("refuses to complete a task whose evidence is gone and was never captured", async () => {
+  it("keeps a verification's state readable after its checkpoint is pruned, and still completes the task", async () => {
     const { app } = workspace();
     const task = await seedTask();
     // A verification recorded against an exact state, the ordinary way.
     const verified = checkpoint(app, SESSION, 1);
     const repositoryId = (await startAttempt(task)).link.repositories?.find((row) => row.name === "app")!.repositoryId;
     // The verification names the state it ran against, and the `verified_at`
-    // link is written from that record rather than claimed beside it.
+    // link is written from that record rather than claimed beside it. Under
+    // D-361 the host captures that state **before** the link exists, so the
+    // evidence outlives the checkpoint it was taken from.
     const recorded = ok<ProjectWorkLinkResult>(
       await h.call("project/work/link", {
         projectId: h.projectId,
@@ -684,24 +700,21 @@ describe.runIf(haveGit)("a decision keeps what it rests on readable", () => {
     const verifiedLink = (await detail(task.entity.entityId)).repositoryLinks.find((link) => link.linkId === verifiedLinkId);
     expect(verifiedLink?.relation).toBe("verified_at");
     expect(verifiedLink?.target).toEqual({ state: { vcs: "git", objectFormat: "sha1", commitObjectId: verified } });
-    await h.call("project/task/action", {
-      projectId: h.projectId,
-      entityId: task.entity.entityId,
-      expectedRevisionId: task.revision.revisionId,
-      action: "mark_ready",
-      idempotencyKey: "ready",
-    });
-    await h.call("project/task/action", {
-      projectId: h.projectId,
-      entityId: task.entity.entityId,
-      expectedRevisionId: task.revision.revisionId,
-      action: "start",
-      idempotencyKey: "start",
-    });
+    expect(verifiedLink?.captureBlobId, "the state was captured before the link was written").toBeDefined();
+    for (const action of ["mark_ready", "start"] as const) {
+      await h.call("project/task/action", {
+        projectId: h.projectId,
+        entityId: task.entity.entityId,
+        expectedRevisionId: task.revision.revisionId,
+        action,
+        idempotencyKey: action,
+      });
+    }
 
+    // Routine retention takes the ref, and gc takes the parentless commit.
     prune(app, [checkpointRef(checkpointSessionKey(SESSION), 1)]);
 
-    const error = failed(
+    ok(
       await h.call("project/task/action", {
         projectId: h.projectId,
         entityId: task.entity.entityId,
@@ -710,8 +723,276 @@ describe.runIf(haveGit)("a decision keeps what it rests on readable", () => {
         idempotencyKey: "complete",
       }),
     );
-    expect(error.message).toMatch(/Marking this task done rests on a state/);
-    expect((await detail(task.entity.entityId)).entity.state, "nothing moved").toBe("in_progress");
+    expect((await detail(task.entity.entityId)).entity.state).toBe("done");
+
+    // And what the completion rests on is still readable: git cannot answer,
+    // the capture can, and the record says both.
+    const after = ok<ProjectWorkGetResult>(
+      await h.call("project/work/get", {
+        projectId: h.projectId,
+        entityId: task.entity.entityId,
+        body: { mode: "none" },
+        include: { repositoryStatus: true },
+      }),
+    );
+    const status = after.repositoryStatus?.find((row) => row.linkId === verifiedLinkId);
+    expect(status?.sourceAvailable, "the checkpoint really is gone").toBe(false);
+    expect(status?.captureAvailable, "and the evidence is still there").toBe(true);
+    const blobId = after.repositoryLinks.find((link) => link.linkId === verifiedLinkId)?.captureBlobId;
+    const page = ok<{ data?: string }>(await h.call("project/work/blob/read", { projectId: h.projectId, blobId }));
+    const capture = JSON.parse(Buffer.from(page.data!, "base64").toString("utf8")) as {
+      state?: { commitObjectId: string };
+      files: Array<{ path: string; blobObjectId?: string; mode?: string }>;
+    };
+    expect(capture.state?.commitObjectId, "the capture is of the state that was accepted").toBe(verified);
+    expect(capture.files.length, "a parentless checkpoint is captured as its tree").toBeGreaterThan(0);
+    expect(capture.files[0]!.blobObjectId, "with the identity that survives gc").toBeDefined();
+    expect(capture.files[0]!.mode).toBeDefined();
+  });
+
+  it("refuses to record a state git no longer has, rather than storing a link that looks like proof", async () => {
+    const { app } = workspace();
+    const task = await seedTask();
+    const gone = checkpoint(app, SESSION, 1);
+    const repositoryId = (await startAttempt(task)).link.repositories?.find((row) => row.name === "app")!.repositoryId;
+    prune(app, [checkpointRef(checkpointSessionKey(SESSION), 1)]);
+    const error = failed(
+      await h.call("project/work/link", {
+        projectId: h.projectId,
+        expectedRevisionId: task.revision.revisionId,
+        link: {
+          type: "evidence",
+          entityId: task.entity.entityId,
+          revisionId: task.revision.revisionId,
+          kind: "test",
+          role: "acceptance",
+          summary: "The suite passed.",
+          outcome: "passed",
+          verifiedAt: { repositoryId: repositoryId!, state: { vcs: "git", objectFormat: "sha1", commitObjectId: gone } },
+        },
+        idempotencyKey: "acceptance-gone",
+      }),
+    );
+    expect(error.message).toMatch(/could not be read out of the repository/);
+    expect((await detail(task.entity.entityId)).repositoryLinks.some((link) => link.relation === "verified_at")).toBe(false);
+  });
+});
+
+describe.runIf(haveGit)("two attempts on one task stay two attempts", () => {
+  const OTHER = "/sessions/ses_2.jsonl";
+
+  async function open(task: ProjectWorkWriteResult, targetId: string, sessionPath: string): Promise<ProjectTaskLinkExecutionResult> {
+    return ok<ProjectTaskLinkExecutionResult>(
+      await h.call("project/task/link-execution", {
+        projectId: h.projectId,
+        entityId: task.entity.entityId,
+        expectedRevisionId: task.revision.revisionId,
+        execution: { kind: "agent_run", targetId, sessionPath },
+        idempotencyKey: `open-${targetId}`,
+      }),
+    );
+  }
+
+  async function close(task: ProjectWorkWriteResult, targetId: string, sessionPath: string) {
+    return h.call("project/task/link-execution", {
+      projectId: h.projectId,
+      entityId: task.entity.entityId,
+      expectedRevisionId: task.revision.revisionId,
+      execution: { kind: "agent_run", targetId, outcome: "completed", sessionPath },
+      idempotencyKey: `close-${targetId}`,
+    });
+  }
+
+  it("closes each run's own row, and never the other's, when two runs are open at once", async () => {
+    workspace();
+    const task = await seedTask();
+    const first = await open(task, "run_a", SESSION);
+    const second = await open(task, "run_b", OTHER);
+    expect(first.link.linkId, "two runs are two rows").not.toBe(second.link.linkId);
+
+    ok(await close(task, "run_a", SESSION));
+    const links = (await detail(task.entity.entityId)).executionLinks;
+    const a = links.find((link) => link.targetId === "run_a")!;
+    const b = links.find((link) => link.targetId === "run_b")!;
+    expect(a.endedAt, "the one that said it was ending").toBeDefined();
+    expect(b.endedAt, "and only that one").toBeUndefined();
+  });
+
+  it("refuses a closing call from a conversation that has no attempt open here", async () => {
+    workspace();
+    const task = await seedTask();
+    await open(task, "run_a", SESSION);
+    // Same target, a different conversation: recency would have closed the
+    // row anyway, and recency is not identity (review F2).
+    const error = failed(await close(task, "run_a", OTHER));
+    expect(error.message).toMatch(/No attempt this conversation started is open/);
+    const link = (await detail(task.entity.entityId)).executionLinks.find((row) => row.targetId === "run_a")!;
+    expect(link.endedAt, "nothing was closed").toBeUndefined();
+  });
+});
+
+describe.runIf(haveGit)("accepting a checkpoint preview as native visual evidence", () => {
+  /** The acceptance a person sends: the one evidence-link door, asking for it. */
+  async function accept(
+    task: ProjectWorkWriteResult,
+    repositoryId: string,
+    state: { commitObjectId: string; checkpointId?: string },
+    over: { revisionId?: string; key?: string; attempt?: { taskEntityId: string; executionLinkId: string } } = {},
+    attempt?: { taskEntityId: string; executionLinkId: string },
+  ) {
+    const named = over.attempt ?? attempt;
+    return h.call("project/work/link", {
+      projectId: h.projectId,
+      expectedRevisionId: task.revision.revisionId,
+      link: {
+        type: "evidence",
+        entityId: task.entity.entityId,
+        revisionId: over.revisionId ?? task.revision.revisionId,
+        kind: "person_acceptance",
+        role: "acceptance",
+        summary: "I looked at the preview and it matches.",
+        outcome: "passed",
+        verifiedAt: {
+          repositoryId,
+          state: { vcs: "git", objectFormat: "sha1", ...state },
+          acceptance: { kind: "checkpoint_preview" },
+          ...(named ? { attempt: named } : {}),
+        },
+      },
+      idempotencyKey: over.key ?? "accept-preview",
+    });
+  }
+
+  it("records what the host proved, and keeps the state readable after the checkpoint is pruned", async () => {
+    const { app } = workspace();
+    const task = await seedTask();
+    write(app, { "src/a.ts": "two\n" });
+    const run = await attemptWith(task, app, 1);
+    const { repositoryId, commit, ref } = run;
+
+    const written = ok<ProjectWorkLinkResult>(
+      await accept(task, repositoryId, { commitObjectId: commit, checkpointId: ref }, {}, run.attempt),
+    );
+    if (written.link.type !== "evidence") throw new Error("unreachable");
+    const linkId = written.link.evidence.repositoryLinkId!;
+    const link = (await detail(task.entity.entityId)).repositoryLinks.find((row) => row.linkId === linkId)!;
+    expect(link.acceptance?.kind).toBe("checkpoint_preview");
+    expect(link.acceptance?.checkpointRef, "the ref the host really found").toBe(ref);
+    expect(link.acceptance?.commitObjectId, "and the commit that ref really pointed at").toBe(commit);
+    expect(link.acceptance?.subjectDigest).toBe(task.revision.digest);
+    expect(link.acceptance?.acceptedBy.kind).toBe("person");
+    expect(link.captureBlobId, "captured before the acceptance was written").toBeDefined();
+    expect(link.executionLinkId, "the attempt the host tied it to").toBe(run.attempt.executionLinkId);
+
+    prune(app, [ref]);
+    const after = await detail(task.entity.entityId, true);
+    const status = after.repositoryStatus?.find((row) => row.linkId === linkId);
+    expect(status?.sourceAvailable).toBe(false);
+    expect(status?.captureAvailable, "the acceptance outlives the checkpoint it was taken from").toBe(true);
+  });
+
+  it("refuses a checkpoint id that is not a ref this repository has", async () => {
+    const { app } = workspace();
+    const task = await seedTask();
+    write(app, { "src/a.ts": "two\n" });
+    const run = await attemptWith(task, app, 1);
+    const error = failed(
+      await accept(
+        task,
+        run.repositoryId,
+        { commitObjectId: run.commit, checkpointId: `${checkpointRef(checkpointSessionKey(SESSION), 99)}` },
+        {},
+        run.attempt,
+      ),
+    );
+    expect(error.message).toMatch(/not one this repository has/);
+    expect((await detail(task.entity.entityId)).repositoryLinks.some((row) => row.relation === "verified_at")).toBe(false);
+  });
+
+  it("refuses a checkpoint that points somewhere else than the state being recorded", async () => {
+    const { app } = workspace();
+    const task = await seedTask();
+    write(app, { "src/a.ts": "two\n" });
+    const run = await attemptWith(task, app, 1);
+    // A commit that exists in this repository, but is not the one that ref
+    // names: existence alone is never the test.
+    const error = failed(await accept(task, run.repositoryId, { commitObjectId: head(app), checkpointId: run.ref }, {}, run.attempt));
+    expect(error.message).toMatch(/no longer points at the state/);
+  });
+
+  it("refuses an agent, and refuses a revision the work has moved past", async () => {
+    const { app } = workspace();
+    const task = await seedTask();
+    write(app, { "src/a.ts": "two\n" });
+    const run = await attemptWith(task, app, 1);
+    const { repositoryId, commit, ref } = run;
+
+    const byAgent = await (async () => {
+      try {
+        await bridge({
+        method: "project/work/link",
+        params: {
+          projectId: h.projectId,
+          expectedRevisionId: task.revision.revisionId,
+          link: {
+            type: "evidence",
+            entityId: task.entity.entityId,
+            revisionId: task.revision.revisionId,
+            kind: "person_acceptance",
+            role: "acceptance",
+            summary: "I looked at it.",
+            outcome: "passed",
+            verifiedAt: {
+              repositoryId,
+              state: { vcs: "git", objectFormat: "sha1", commitObjectId: commit, checkpointId: ref },
+              acceptance: { kind: "checkpoint_preview" },
+              attempt: run.attempt,
+            },
+          },
+          idempotencyKey: "agent-accepts",
+        },
+      });
+      } catch (error) {
+        return error as Error;
+      }
+      throw new Error("an agent's acceptance should have been refused");
+    })();
+    expect(byAgent.message).toMatch(/Only a person accepts a checkpoint preview/);
+
+    // The Task moves on; a preview accepted against the revision nobody looked
+    // at any more is refused rather than inherited.
+    const revised = ok<ProjectWorkWriteResult>(
+      await h.call("project/work/revise", {
+        projectId: h.projectId,
+        entityId: task.entity.entityId,
+        expectedRevisionId: task.revision.revisionId,
+        body: taskBody("A different outcome."),
+        idempotencyKey: "move-on",
+      }),
+    );
+    const stale = failed(
+      await h.call("project/work/link", {
+        projectId: h.projectId,
+        expectedRevisionId: revised.revision.revisionId,
+        link: {
+          type: "evidence",
+          entityId: task.entity.entityId,
+          revisionId: task.revision.revisionId,
+          kind: "person_acceptance",
+          role: "acceptance",
+          summary: "I looked at the old one.",
+          outcome: "passed",
+          verifiedAt: {
+            repositoryId,
+            state: { vcs: "git", objectFormat: "sha1", commitObjectId: commit, checkpointId: ref },
+            acceptance: { kind: "checkpoint_preview" },
+            attempt: run.attempt,
+          },
+        },
+        idempotencyKey: "accept-stale",
+      }),
+    );
+    expect(stale.message).toMatch(/has moved on since that preview was made/);
   });
 });
 
@@ -741,5 +1022,63 @@ describe.runIf(haveGit)("a revision written from a session with a checkout says 
       }),
     );
     expect(byPerson.basedOn).toBeUndefined();
+  });
+
+  it("names bytes that are not text as what they are, with their true size", async () => {
+    const { app } = workspace();
+    const task = await seedTask();
+    const repositoryId = (await startAttempt(task)).link.repositories?.find((row) => row.name === "app")!.repositoryId;
+    // A file whose bytes are not valid UTF-8 and carry no NUL: decoding it
+    // would produce mojibake that weighs a different number of bytes than the
+    // file does (review F9).
+    writeFileSync(join(app, "logo.bin"), Buffer.from([0xff, 0xfe, 0x41, 0x42, 0xc3, 0x28]));
+    const commit = checkpoint(app, SESSION, 1);
+    const ref = checkpointRef(checkpointSessionKey(SESSION), 1);
+    const written = ok<ProjectWorkLinkResult>(
+      await h.call("project/work/link", {
+        projectId: h.projectId,
+        expectedRevisionId: task.revision.revisionId,
+        link: {
+          type: "evidence",
+          entityId: task.entity.entityId,
+          revisionId: task.revision.revisionId,
+          kind: "test",
+          role: "supporting",
+          summary: "Ran against this state.",
+          outcome: "passed",
+          verifiedAt: { repositoryId: repositoryId!, state: { vcs: "git", objectFormat: "sha1", commitObjectId: commit, checkpointId: ref } },
+        },
+        idempotencyKey: "binary-capture",
+      }),
+    );
+    if (written.link.type !== "evidence") throw new Error("unreachable");
+    const linkId = written.link.evidence.repositoryLinkId!;
+    const blobId = (await detail(task.entity.entityId)).repositoryLinks.find((row) => row.linkId === linkId)!.captureBlobId!;
+    const page = ok<{ data?: string }>(await h.call("project/work/blob/read", { projectId: h.projectId, blobId }));
+    const capture = JSON.parse(Buffer.from(page.data!, "base64").toString("utf8")) as RepositoryCapture;
+    const binary = capture.files.find((file) => file.path === "logo.bin")!;
+    expect(binary.omitted, "not captured as text").toBe("binary");
+    expect(binary.bytes, "the file's own size, not the decoded one").toBe(6);
+    expect(binary.blobObjectId, "its identity is kept").toBeDefined();
+    expect(capture.sources.some((source) => source.path === "logo.bin"), "and its bytes are not").toBe(false);
+  });
+
+  it("records the run's own worktree, not the directory the worker was spawned for", async () => {
+    const { app } = workspace();
+    // A run working somewhere else, with a HEAD of its own.
+    const run = join(h.projectRoot, "run");
+    initRepo(run, { "src/c.ts": "run\n" });
+
+    const created = (await bridge(
+      {
+        method: "project/work/create",
+        params: { projectId: h.projectId, kind: "spec", title: "From a worktree", body: specBody("In a worktree."), idempotencyKey: "from-worktree" },
+      },
+      { attempt: { workspace: "worktree", checkout: run } },
+    )) as ProjectWorkBridgeResult;
+    const basedOn = (created.result as ProjectWorkWriteResult).basedOn ?? [];
+    const commits = basedOn.map((link) => ("state" in link.target ? link.target.state.commitObjectId : ""));
+    expect(commits, "the commit the run was really on").toEqual([head(run)]);
+    expect(commits).not.toContain(head(app));
   });
 });

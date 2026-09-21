@@ -86,6 +86,9 @@ import {
   type PlanGraphReport,
   repositoryLinkContextSchema,
   type AttemptRepositoryRecord,
+  type RepositoryCaptureHistoryPage,
+  type RepositoryCaptureHistoryQuery,
+  repositoryCaptureHistoryQuerySchema,
   type RepositoryChangeRef,
   type RepositoryLink,
   type RepositoryLinkAvailability,
@@ -140,7 +143,15 @@ export interface ProjectWorkConflict {
   expectedRevisionId: string;
 }
 
-/** The data a refused durable write carries at a quota cap. */
+/**
+ * The data a refused durable write carries at a quota cap.
+ *
+ * `usedBytes` and `limitBytes` are always bytes and only ever bytes. A store
+ * also refuses at a **count** ceiling — canonical records kept, or items in a
+ * project — and says so through `measure` with its own `usedCount`/
+ * `limitCount` pair, so a client never has to read a number of rows as a
+ * number of bytes (M21-T2, D-365).
+ */
 export interface ProjectWorkQuotaRefusal {
   refused: "quota";
   scope: "project" | "global";
@@ -148,6 +159,11 @@ export interface ProjectWorkQuotaRefusal {
   recovery: string;
   usedBytes: number;
   limitBytes: number;
+  /** Which ceiling was reached. Absent means the byte one, as it always did. */
+  measure?: "bytes" | "records" | "entities";
+  /** The count that was reached, when `measure` is not `bytes`. Never bytes. */
+  usedCount?: number;
+  limitCount?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +315,16 @@ export interface ProjectWorkGetParams {
      * itself still says exactly what it always said.
      */
     repositoryStatus?: boolean;
+    /**
+     * One bounded page of immutable capture history behind this read (D-363).
+     *
+     * Off by default, and a **selection** rather than a flag: which link's
+     * associations, or which decision's proof bindings, with a cursor for the
+     * rest. Never a substitute for a link's own current pointer — it says
+     * which proof was current when, and which proof a decision consumed, so a
+     * decision can be read against the capture it actually rested on.
+     */
+    captureHistory?: RepositoryCaptureHistoryQuery;
   };
 }
 
@@ -337,6 +363,12 @@ export interface ProjectWorkGetResult {
    * says what is gone and whether the canonical capture still answers.
    */
   repositoryStatus?: RepositoryLinkAvailability[];
+  /**
+   * One page of capture history, bounded by
+   * {@link REPOSITORY_CAPTURE_HISTORY_MAX} rows in total and carrying the
+   * cursor for the next one, when `include.captureHistory` asked (D-363).
+   */
+  captureHistory?: RepositoryCaptureHistoryPage;
   /**
    * The three hard gates of the Spec this entity belongs to, and where each
    * one stands (M21-T8).
@@ -624,7 +656,42 @@ export type ProjectWorkLinkInput =
        * about nothing in particular, and a `verified_at` link with no evidence
        * behind it is a claim.
        */
-      verifiedAt?: { repositoryId: string; state: RepositoryStateRef };
+      verifiedAt?: {
+        repositoryId: string;
+        state: RepositoryStateRef;
+        /**
+         * Ask the host to record this state as native visual evidence a
+         * person accepted (M21-T19, D-361).
+         *
+         * It is a **request for an action**, not the proof of one. The host
+         * validates it — person caller, the exact subject revision and digest,
+         * a checkpoint ref git really holds resolving to the named commit, and
+         * a bounded canonical capture stored before anything is accepted — and
+         * writes its own `RepositoryLink.acceptance` record. A caller cannot
+         * mint that record by sending this field, and a write without this
+         * field is a plain `verified_at` link: still validated, still
+         * captured, but not native visual evidence.
+         */
+        acceptance?: { kind: "checkpoint_preview" };
+        /**
+         * Which attempt this state came out of (M21-T19).
+         *
+         * **Required whenever `acceptance` is present**, because the sources a
+         * decision rests on are the difference between what that attempt
+         * started from and the exact state being accepted — and there is no
+         * honest way to find the attempt from the subject: a Design-backed
+         * visual criterion is accepted on the *Design*, and attempts are on
+         * the *Task*.
+         *
+         * It is identity the caller **reports**, never authority it carries:
+         * the host re-derives every part of it — that the execution link is
+         * this project's, that it belongs to that task, that the task is the
+         * subject or currently pins it, and that the attempt really recorded
+         * this repository's checkpoint at this commit — and refuses when any
+         * of it disagrees.
+         */
+        attempt?: { taskEntityId: string; executionLinkId: string };
+      };
     }
   | {
       type: "decision";
@@ -890,7 +957,18 @@ const linkInputSchema = z.discriminatedUnion("type", [
       blobId: projectWorkIdSchema.optional(),
       outcome: z.enum(["passed", "failed", "inconclusive"]),
       repositoryLinkId: projectWorkIdSchema.optional(),
-      verifiedAt: z.object({ repositoryId: projectWorkIdSchema, state: repositoryStateRefSchema }).strict().optional(),
+      verifiedAt: z
+        .object({
+          repositoryId: projectWorkIdSchema,
+          state: repositoryStateRefSchema,
+          acceptance: z.object({ kind: z.literal("checkpoint_preview") }).strict().optional(),
+          attempt: z
+            .object({ taskEntityId: projectWorkIdSchema, executionLinkId: projectWorkIdSchema })
+            .strict()
+            .optional(),
+        })
+        .strict()
+        .optional(),
     })
     .strict(),
   z
@@ -953,6 +1031,7 @@ export const projectWorkParamsSchemas = {
           links: z.boolean().optional(),
           history: z.boolean().optional(),
           repositoryStatus: z.boolean().optional(),
+          captureHistory: repositoryCaptureHistoryQuerySchema.optional(),
         })
         .strict()
         .optional(),
