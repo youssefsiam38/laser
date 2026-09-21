@@ -15,10 +15,14 @@
  *   process to end is not the same as it ending, and the last thing a failing
  *   command prints is usually the line that says why. So the record is made
  *   when the child has exited *and* its output is closed — never at the
- *   moment a signal was sent — and it is made exactly once. If the process
- *   tree could not be ended at all, no record is invented for it: the run
- *   stays unsettled, which is what keeps its session pinned and its row
- *   honest, and one bounded line says why.
+ *   moment a signal was sent, and never on a timer — and it is made exactly
+ *   once. No clock can stand in for that close: a grandchild that inherited
+ *   the pipe is still this command's output, and a record made while it is
+ *   still writing would release the session's pin under live work and then
+ *   have its own byte count and digest changed behind it. If the process tree
+ *   could not be ended at all, or its output stays open, no record is
+ *   invented: the run stays unsettled, which is what keeps its session pinned
+ *   and its row honest, and one bounded line says why.
  * - **Exit codes are facts.** A command that is not there is `unavailable`
  *   with the sentence that says so; a command that ran is its exit code and
  *   nothing more. Nothing here decides what an exit code *means*: that is the
@@ -37,13 +41,17 @@ import {
 import { noteWorkerProcess } from "../../process-registry.js";
 
 /**
- * How long the record waits for a command's output to close after the process
- * itself has gone.
+ * How long after a command's process has gone this waits quietly for its
+ * output to close before doing something about it.
  *
- * A grandchild that inherited the pipe and outlived its parent can hold it
- * open for ever, and a verification run that waits for ever is a session that
- * can never be released. So the wait is bounded, and a record made on that
- * bound says its output may be short rather than pretending it is whole.
+ * It is **not** a deadline for the record: nothing is settled on this timer.
+ * A pipe still open after a child exited belongs to something that child
+ * started and left behind, so what the timer does is ask for the owned tree
+ * to be cleaned up once — the group signal closes the descendants that are
+ * holding it — and say, in one bounded line, that this run is waiting. If the
+ * output never closes, the run never settles, its row keeps saying there is
+ * work here and its conversation stays pinned. That is the truth, and a
+ * fabricated ending would not be.
  */
 export const VERIFICATION_STDIO_GRACE_MS = 2_000;
 
@@ -69,7 +77,13 @@ export interface RunCommandOptions {
    * on the machine running the tests. Production passes neither.
    */
   spawnProcess?: (command: string, options: SpawnOptions) => ChildProcess;
-  killTree?: (child: ChildProcess) => void;
+  /**
+   * End the process tree. `onProblem` is how a refusal that only shows up
+   * later is reported: on Windows the kill is another process, so its failure
+   * arrives after this function has returned, and a callback that dropped it
+   * would turn "the app could not end this" into silence.
+   */
+  killTree?: (child: ChildProcess, onProblem: (code: string) => void) => void;
   /** One bounded diagnostic line. Never the command, never its output. */
   log?: (line: string) => void;
 }
@@ -83,8 +97,19 @@ class BoundedOutput {
   private kept = 0;
   private total = 0;
   private readonly hash = createHash("sha256");
+  /**
+   * The count, the digest and the tail, fixed at the one moment the record is
+   * made.
+   *
+   * Computed once and kept: a digest is a claim about exactly the bytes it
+   * covers, so a second call must answer the same thing rather than hashing
+   * again, and a chunk that somehow arrives after the record exists may not
+   * quietly change what that record says.
+   */
+  private finalized: { bytes: number; digest: string; tail: string; truncated: boolean } | undefined;
 
   add(chunk: Buffer): void {
+    if (this.finalized !== undefined) return;
     this.total += chunk.byteLength;
     this.hash.update(chunk);
     this.chunks.push(chunk);
@@ -97,15 +122,45 @@ class BoundedOutput {
   }
 
   done(): { bytes: number; digest: string; tail: string; truncated: boolean } {
+    if (this.finalized !== undefined) return this.finalized;
     const buffer = Buffer.concat(this.chunks);
     const tail = buffer.subarray(Math.max(0, buffer.byteLength - VERIFICATION_COMMAND_TAIL_BYTES)).toString("utf8");
-    return {
+    this.finalized = {
       bytes: this.total,
       digest: this.hash.digest("hex"),
       tail,
       truncated: this.total > Buffer.byteLength(tail, "utf8"),
     };
+    return this.finalized;
   }
+}
+
+/**
+ * What one refusal to end a process tree is allowed to say.
+ *
+ * A system's own code (`EPERM`, `ESRCH`, an exit status) and nothing else: the
+ * error's message can name the command, a path or a machine's user, and this
+ * line travels to a log. Bounded, because a code is short and anything long
+ * is not a code.
+ */
+function terminationCode(error: unknown): string {
+  const known = error as (NodeJS.ErrnoException & { status?: unknown }) | undefined;
+  // A killer that ran and refused reports an exit status rather than an errno.
+  const status = typeof known?.status === "number" ? `exit ${String(known.status)}` : undefined;
+  const code = known?.code ?? status ?? (error instanceof Error ? error.name : undefined);
+  return String(code ?? "an error").slice(0, 40);
+}
+
+/**
+ * The parts of the platform this kill uses, so a test can drive the Windows
+ * path on any machine without a real process anywhere near it.
+ *
+ * Production passes none of them.
+ */
+export interface KillTreeSeams {
+  platform?: NodeJS.Platform;
+  runTaskkill?: (arguments_: string[], done: (error: unknown) => void) => void;
+  kill?: (pid: number, signal: NodeJS.Signals) => void;
 }
 
 /**
@@ -114,18 +169,37 @@ class BoundedOutput {
  * `taskkill /T` on Windows, where there is no group to signal and killing the
  * shell alone would leave the test runner it started behind.
  *
- * It throws when the system refused, and that refusal matters: a caller may
- * not record an exit it did not see.
+ * Both halves of a refusal reach the caller, because a caller may not record
+ * an exit it did not see. On POSIX the system answers immediately and this
+ * throws. On Windows the kill is *another process*, so its refusal arrives
+ * later — through `onProblem`, which is the same news by the only route it
+ * can take. Dropping it would leave a tree this app could not end looking
+ * exactly like one it ended.
  */
-export function killVerificationTree(child: ChildProcess): void {
+export function killVerificationTree(child: ChildProcess, onProblem?: (code: string) => void, seams: KillTreeSeams = {}): void {
   if (child.pid === undefined) return;
-  if (process.platform === "win32") {
-    execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], () => undefined);
+  const platform = seams.platform ?? process.platform;
+  if (platform === "win32") {
+    const run =
+      seams.runTaskkill ??
+      ((arguments_: string[], done: (error: unknown) => void) => {
+        execFile("taskkill", arguments_, (error) => done(error));
+      });
+    // A synchronous throw here is the caller's to handle, exactly like the
+    // POSIX branch's: it is the same refusal, arriving sooner.
+    run(["/pid", String(child.pid), "/T", "/F"], (error) => {
+      if (error === null || error === undefined) return;
+      // The process is gone already: `taskkill` says so with its own status,
+      // and "already ended" is not a failure to end it.
+      const code = terminationCode(error);
+      if (code === "ESRCH") return;
+      onProblem?.(code);
+    });
     return;
   }
   try {
     // Negative pid: the whole group, so a grandchild dies with its parent.
-    process.kill(-child.pid, "SIGKILL");
+    (seams.kill ?? ((pid: number, signal: NodeJS.Signals) => process.kill(pid, signal)))(-child.pid, "SIGKILL");
   } catch (error) {
     // Already gone is not a failure to end it.
     if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
@@ -174,7 +248,7 @@ export const runVerificationCommand: VerificationCommandRunner = async (options)
     // Declared before anything can reach them: a spawn that throws
     // synchronously must not touch a binding that does not exist yet.
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let grace: ReturnType<typeof setTimeout> | undefined;
+    let waiting: ReturnType<typeof setTimeout> | undefined;
     let child: ChildProcess | undefined;
     /** Why this command was asked to end, if it was. */
     let ending: { status: VerificationCommandRun["status"]; detail: string } | undefined;
@@ -182,30 +256,46 @@ export const runVerificationCommand: VerificationCommandRunner = async (options)
     let spawnProblem: string | undefined;
     /** The system refused to end the tree. No exit may be claimed after this. */
     let terminationProblem: string | undefined;
+    /** The process had gone and its output was still open past the wait. */
+    let lingered = false;
     let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
 
+    /**
+     * Everything this command is still attached to, let go of at once.
+     *
+     * The output listeners go with the rest: past the record, a late chunk
+     * would be counted into a byte total and a digest that have already been
+     * published as facts. (`BoundedOutput` refuses it too — two locks on the
+     * same door, because this one is the one a future edit can forget.)
+     */
     const detach = (): void => {
       options.signal?.removeEventListener("abort", onAbort);
+      child?.stdout?.removeAllListeners("data");
+      child?.stderr?.removeAllListeners("data");
     };
     const finish = (status: VerificationCommandRun["status"], exitCode?: number, detail?: string): void => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
-      if (grace !== undefined) clearTimeout(grace);
+      if (waiting !== undefined) clearTimeout(waiting);
       detach();
       resolve(record(status, exitCode, detail));
     };
 
     /**
-     * The process has gone and its output is closed (or the bounded wait for
-     * that close ran out). This is the only place a record is made from a
-     * process that really ran.
+     * The process has gone **and** its output is closed. This is the only
+     * place a record is made from a process that really ran, and `close` is
+     * the only event that reaches it.
      */
-    const settleFrom = (code: number | null, signal: NodeJS.Signals | null, onGrace: boolean): void => {
+    const settleFrom = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (settled) return;
-      const cut = onGrace ? " Its output was still open when it ended, so the last of it may be missing." : "";
+      // It took asking twice, or waiting past the point where this run said so
+      // out loud. The bytes are all here — that is what the waiting was for —
+      // so the record says what happened rather than hedging about its own
+      // completeness.
+      const late = lingered ? " Its output stayed open after it ended, and this record waited for it." : "";
       if (ending !== undefined) {
-        finish(ending.status, undefined, `${ending.detail}${cut}`);
+        finish(ending.status, undefined, `${ending.detail}${late}`);
         return;
       }
       if (spawnProblem !== undefined) {
@@ -213,11 +303,11 @@ export const runVerificationCommand: VerificationCommandRunner = async (options)
         return;
       }
       if (signal !== null) {
-        finish("stopped", undefined, `The command ended on ${signal}.${cut}`);
+        finish("stopped", undefined, `The command ended on ${signal}.${late}`);
         return;
       }
       const exitCode = code ?? 1;
-      finish(exitCode === 0 ? "passed" : "failed", exitCode, cut === "" ? undefined : cut.trim());
+      finish(exitCode === 0 ? "passed" : "failed", exitCode, late === "" ? undefined : late.trim());
     };
 
     /**
@@ -225,23 +315,35 @@ export const runVerificationCommand: VerificationCommandRunner = async (options)
      * a signal sent is not a process gone, and a record written here would be
      * a confirmation nobody witnessed.
      */
+    /**
+     * The tree would not end — now, or later, because on Windows the answer
+     * comes back from another process long after the call returned.
+     *
+     * No record is made either way: the run stays unsettled, so its row keeps
+     * saying there is work here and its conversation stays pinned — which is
+     * the truth. One bounded line, with the system's code and nothing the
+     * command read, says why that is. Said once: a second attempt on the same
+     * tree is the same refusal, not news.
+     */
+    const cannotEnd = (error: unknown): void => {
+      if (settled || terminationProblem !== undefined) return;
+      terminationProblem = terminationCode(error);
+      log(`a verification command's process tree could not be ended (${terminationProblem}); the run stays unsettled until it closes`);
+    };
+
+    const kill = (): void => {
+      if (child === undefined) return;
+      try {
+        (options.killTree ?? killVerificationTree)(child, (code) => cannotEnd({ code }));
+      } catch (error) {
+        cannotEnd(error);
+      }
+    };
+
     const end = (status: VerificationCommandRun["status"], detail: string): void => {
       if (settled || child === undefined) return;
       ending ??= { status, detail };
-      try {
-        (options.killTree ?? killVerificationTree)(child);
-      } catch (error) {
-        if (terminationProblem !== undefined) return;
-        const code = (error as NodeJS.ErrnoException).code ?? (error instanceof Error ? error.name : "an error");
-        terminationProblem = String(code).slice(0, 40);
-        // No record is made: the run stays unsettled, so its row keeps saying
-        // there is work here and its conversation stays pinned — which is the
-        // truth. One bounded line, with the system's code and nothing the
-        // command read, says why that is.
-        log(
-          `a verification command's process tree could not be ended (${terminationProblem}); the run stays unsettled until it closes`,
-        );
-      }
+      kill();
     };
 
     const onAbort = (): void => end("stopped", STOPPED_DETAIL);
@@ -278,15 +380,25 @@ export const runVerificationCommand: VerificationCommandRunner = async (options)
     });
     child.on("exit", (code, signal) => {
       exit = { code, signal };
-      if (settled || grace !== undefined) return;
-      // The process has gone but its last writes may still be in flight, and
-      // a pipe a grandchild inherited may never close. Bounded, so a run can
-      // always settle and its session can always be released.
-      grace = setTimeout(() => settleFrom(code, signal, true), graceMs);
-      grace.unref?.();
+      if (settled || waiting !== undefined) return;
+      // The process has gone; its output has not closed yet. Whatever is still
+      // holding that pipe is something this command started, so after a short
+      // wait the owned tree is asked to go — once — and this run says out loud
+      // that it is waiting. It does **not** settle here: a record written now
+      // would release this session's pin while a descendant is still writing
+      // into the very bytes that record counts.
+      waiting = setTimeout(() => {
+        if (settled) return;
+        lingered = true;
+        kill();
+        log(
+          `a verification command's output was still open ${String(graceMs)}ms after it ended; the run stays unsettled until it closes`,
+        );
+      }, graceMs);
+      waiting.unref?.();
     });
     child.on("close", (code, signal) => {
-      settleFrom(code ?? exit?.code ?? null, signal ?? exit?.signal ?? null, false);
+      settleFrom(code ?? exit?.code ?? null, signal ?? exit?.signal ?? null);
     });
 
     timer = setTimeout(() => {

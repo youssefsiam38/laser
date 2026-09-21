@@ -600,3 +600,85 @@ visible; a second press answers `stopped: false` with the unchanged run and the
 panel already ignores it, so nothing false is shown. If that button should read
 *Stopping…* or be disabled while `run.stopping` is true, that is a one-line UI
 change on the existing field — reported, not taken.
+
+## The parent's correction batch, as implemented
+
+One owner, one batch, on the branch that preserves the whole runtime
+checkpoint `33d3163e` and the whole proof-consumer branch `59468295`. The
+approved contract is
+[`m21-verification-runtime-corrections.md`](m21-verification-runtime-corrections.md);
+what follows is what the source now does and which claims above no longer hold.
+
+**Claims above that are superseded.**
+
+- *"the bounded grace when output never closes"* (the runner-lifecycle list):
+  there is no longer any bound on which a record is made. A timer after the
+  child's `exit` asks the owned tree to be cleaned up once and says, in one
+  bounded line, that this run is waiting — it never settles anything. `close`
+  is the only event that makes a record.
+- *"the panel already ignores it, so nothing false is shown"* (the UI
+  handoff): the button was enabled and a press did send a request that could
+  only answer "nothing changed". It is now disabled while the run is winding
+  up and reads *Stopping…* / *Saving results…*, from the same state.
+- The run id is no longer a module counter. `ver_0001` after a restart was a
+  durable key collision, not a cosmetic detail.
+
+**What changed, by finding.**
+
+1. *Actual drain.* `commands.ts` settles only on the child's `close`. The exit
+   timer sets no status: past `VERIFICATION_STDIO_GRACE_MS` it asks
+   `killTree` for the owned tree once and logs one content-free line. Bytes,
+   digest and tail are finalized once (`BoundedOutput.done` memoizes, and
+   `add` refuses anything after that), and the data listeners are removed with
+   the abort listener when the record is made, so a late chunk can neither be
+   counted into a published total nor rehashed into a published digest. A run
+   whose output never closes stays unsettled — pinned, visible, honest.
+2. *Termination failures are observed.* `killVerificationTree(child, onProblem,
+   seams)` reports Windows `taskkill` failures through `onProblem` (the
+   callback that used to discard them) and still throws for a synchronous
+   POSIX refusal; `ESRCH` is "already gone", not a failure. Either way no exit
+   is invented: the run stays unsettled and one bounded line carries the
+   system's code — never the command, its output, a stack or a path. The
+   `seams` parameter is how the Windows branch is driven in a test without a
+   real process anywhere.
+3. *Restart-unique durable identity.* `ver_<uuid>` (40 characters, inside the
+   protocol's 64 and the store's 80-character idempotency key), minted per run
+   and stable for its row, state, report and key.
+4. *Detached work still protects retirement.* `VerificationService.unsettledWork()`
+   reports what this worker still owes by owning path;
+   `WorkerLifetime.safety()` adds a `task` pin row for any such path no loaded
+   runtime already accounts for, and `retire()` re-reads it **under the fence,
+   after accepted handlers drain**. Nothing is published to say it, so a
+   closed path is never resurrected; a loaded session keeps its own pins
+   exactly as before, and a fork is still the other case entirely.
+5. *Diagnostics cannot own settlement.* The bounded log line goes through a
+   guard of its own, and `settleHeld` marks the run finished and prunes
+   whatever the observer or its diagnostic did. No external delivery is
+   promised when the observer throws — only this worker's own state and bound.
+
+**UI, the smallest truthful projection.** `VerificationPanel`'s Stop is
+disabled while `run.stopping` is true or the phase is `reporting`, and says
+which of the two is happening. No other verification surface is touched.
+
+### Evidence (correction batch)
+
+| Command | Result |
+| --- | --- |
+| `pnpm install --frozen-lockfile`, `pnpm -r build` | ok, all packages built |
+| worker: `vitest run test/project-work test/session-safety.test.ts test/session-unload.test.ts test/session-retire.test.ts test/server.test.ts test/process-guards.test.ts` | 196 passed (11 files) |
+| protocol: `vitest run test/project-work-verification.test.ts` | 19 passed, no type errors |
+| host: `vitest run test/project-work/verification-run-identity.test.ts test/router.move.test.ts test/session-move.test.ts test/session-route-lease.test.ts` | 40 passed |
+| ui: `vitest run test/project-work/verification.test.tsx test/project-work/native-acceptance.test.tsx test/project-work/proof-reader.test.tsx test/project-work/verification-stop.test.tsx` | 56 passed |
+| `typecheck` (worker, ui, host, protocol), `pnpm identity:check` | clean |
+
+Each correction was checked against the unfixed source before it was kept: the
+retirement test fails with the `detachedWork` line removed, the
+publisher-plus-logger test throws out of `settleHeld` without its guards, and
+the Stop test finds an enabled button without the panel change.
+
+**Limits.** The full worker/host/UI/monorepo suites and `pnpm verify` are the
+parent's gate, not this session's. Browser acceptance remains the person's
+(D-342). The durable-identity regression is proved on both sides — the worker
+mints ids that cannot repeat across a restarted module registry, and the host
+test shows what a repeated key really does to the record — but no test starts
+two real worker processes.

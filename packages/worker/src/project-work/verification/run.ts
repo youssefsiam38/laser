@@ -17,6 +17,7 @@
  *
  * It never decides a criterion, never writes a link, and never moves a Task.
  */
+import { randomUUID } from "node:crypto";
 import {
   isVerificationPhaseTerminal,
   verificationFleetTaskId,
@@ -50,7 +51,25 @@ export interface VerificationRunOptions {
   onProgress?: (state: VerificationRunState) => void;
 }
 
-let counter = 0;
+/**
+ * The id this run is known by, here and in the project's durable record.
+ *
+ * It has to be unique across **restarts**, not merely within one process: the
+ * report is written under `verify-<runId>` as a project-wide idempotency key,
+ * and a host answers a key it has already seen by replaying the first result
+ * for ever. A counter that starts again at one whenever this worker is
+ * restarted — a crash, an update, a person stopping the project's worker —
+ * would hand the host a key a previous run already spent, and the new run's
+ * evidence would silently become the old run's receipt. A random id cannot
+ * collide with one minted before this process existed, and it is stable for
+ * this run: the same id in the row, the state, the report and the key.
+ *
+ * `ver_` + a UUID is 40 characters, inside the protocol's 64 and inside the
+ * host's 80-character key.
+ */
+function mintRunId(): string {
+  return `ver_${randomUUID()}`;
+}
 
 /** One run: its progress while it lasts, its report when it ends. */
 export class VerificationRun {
@@ -72,8 +91,7 @@ export class VerificationRun {
   private running: Promise<VerificationRunState> | undefined;
 
   constructor(private readonly options: VerificationRunOptions) {
-    counter += 1;
-    this.id = `ver_${String(counter).padStart(4, "0")}`;
+    this.id = mintRunId();
     const startedAt = (this.options.now ?? (() => new Date()))().toISOString();
     this.state = {
       runId: this.id,

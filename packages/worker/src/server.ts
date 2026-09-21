@@ -409,6 +409,7 @@ export class WorkerServer {
       runtimes: this.runtimes,
       safetySnapshot: (live, releasing) => this.safetySnapshot(live, releasing),
       withFirstTurnLease: (path, work) => this.firstTurnLock.run(path, work),
+      detachedWork: () => this.detachedWork(),
     });
     // Configured by the host, machine-local and non-secret: the executable, its
     // arguments, and whether a person approved exactly that pair.
@@ -2778,6 +2779,27 @@ export class WorkerServer {
       evictions: this.replayBudget.evictions,
       floorAdvances: this.replayBudget.floorAdvances,
     };
+  }
+
+  /**
+   * Work this worker still owes under a conversation it no longer holds
+   * (M21-T19, RP-4).
+   *
+   * A driver that closed unexpectedly takes its runtime out of every
+   * per-session table here, and a verification run it owned is detached so
+   * nothing republishes a path nobody serves. The run itself does not stop
+   * existing: its command is still draining and the report it owes may be
+   * mid-flight to the host. Ending this process there would cut a project's
+   * own record in half, so the lifetime hears about it as a pin, in the one
+   * vocabulary that decides both release and retirement. Nothing is published,
+   * reopened or re-created to say it: the registry is read, and a run whose
+   * conversation is still loaded is left to that session's own pins.
+   */
+  private detachedWork(): SessionSafety[] {
+    return (this.verificationRuns?.unsettledWork() ?? []).map((owed) => ({
+      path: owed.sessionPath,
+      pins: [{ kind: "task" as const, detail: `${String(owed.runs)} verification run(s) still settling` }],
+    }));
   }
 
   /**

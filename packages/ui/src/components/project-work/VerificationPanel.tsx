@@ -217,6 +217,17 @@ export function VerificationPanel({
   };
 
   const running = run !== undefined && !TERMINAL.has(run.phase);
+  /**
+   * The run is already winding up, so there is nothing left for Stop to do.
+   *
+   * A stop was accepted and the commands are ending, or the report is with
+   * the host and cannot be recalled. Offering the button anyway would offer a
+   * cancellation this app cannot perform: the request comes back "nothing
+   * changed", and a person is left thinking they stopped something twice. So
+   * the act is shown, disabled, saying what is actually happening — the same
+   * words the run's own line uses, from the same state.
+   */
+  const settling = running && (run.stopping === true || run.phase === "reporting");
 
   return (
     <Section title="Verification">
@@ -226,9 +237,9 @@ export function VerificationPanel({
           {report ? "Verify again" : "Verify…"}
         </Button>
         {running ? (
-          <Button size="sm" variant="ghost" disabled={busy} onClick={() => void stop()}>
+          <Button size="sm" variant="ghost" disabled={busy || settling} onClick={() => void stop()}>
             <Square />
-            Stop
+            {settling ? (run.phase === "reporting" ? "Saving results…" : "Stopping…") : "Stop"}
           </Button>
         ) : null}
         <NativeAcceptanceButton disabled={acceptanceBlocked !== undefined || reportPending || !store} onClick={() => setAccepting(true)} />

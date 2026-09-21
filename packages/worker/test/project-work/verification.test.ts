@@ -27,7 +27,7 @@ import { isVerificationFleetTaskId, type BackgroundTask } from "@lasercode/proto
 import type { ProjectWorkBridge, ProjectWorkExecutionShape, ProjectWorkSessionIdentity } from "../../src/project-work/bridge.js";
 import { ProjectWorkToolFailure } from "../../src/project-work/bridge.js";
 import { VerificationRefused } from "../../src/project-work/verification/service.js";
-import { runVerificationCommand } from "../../src/project-work/verification/commands.js";
+import { killVerificationTree, runVerificationCommand } from "../../src/project-work/verification/commands.js";
 import { VERIFICATION_RUNS_KEPT } from "../../src/project-work/verification/service.js";
 import { VerificationService } from "../../src/project-work/verification/service.js";
 import { verifyProjectTask } from "../../src/project-work/verification/tools.js";
@@ -780,6 +780,48 @@ describe("what this worker keeps", () => {
       expect(line).not.toContain("pnpm test");
     }
   });
+
+  it("settles and bounds itself when the row observer and its own diagnostic both throw", async () => {
+    const host = new ScriptedHost([]);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const service = new VerificationService({
+        bridgeFor: () => host,
+        holdsSession: () => true,
+        publishTask: () => {
+          throw new Error("the fleet row carried /home/someone/secret");
+        },
+        // The diagnostic that was only reached because the row failed — and
+        // it fails too. A settlement that a *log line* could reject would
+        // leave a finished run marked unfinished for ever: never pruned,
+        // never released, and the rejection surfacing as a worker-wide error
+        // carrying whatever a project's command printed.
+        log: () => {
+          throw new Error("this logger is broken and says /home/someone/secret too");
+        },
+      });
+      const cwd = repository();
+      const runs = Array.from({ length: VERIFICATION_RUNS_KEPT + 3 }, () => service.start({ cwd, key: "TASK-1", sessionPath: SESSION }));
+      await until(
+        "every run reached its ending anyway",
+        () => runs.every((run) => service.state({ cwd, runId: run.runId }).length === 0 || service.state({ cwd, runId: run.runId })[0]?.phase === "done"),
+      );
+      // Two turns past the last settlement: an unhandled rejection is reported
+      // after the microtask queue drains, so this is where one would appear.
+      await turn();
+      await turn();
+
+      expect(service.state({ cwd }), "retention still bounds what this worker keeps").toHaveLength(VERIFICATION_RUNS_KEPT);
+      expect(service.state({ cwd, runId: runs.at(-1)!.runId })[0]?.report, "and the last run still kept what it proved").toBeDefined();
+      expect(unhandled, "nothing was left for the worker's rejection guard to print").toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -962,21 +1004,209 @@ describe("when a verification command really ends", () => {
     expect(run.status).toBe("stopped");
   });
 
-  it("settles on a bounded wait when output nobody owns is holding the pipe open", async () => {
+  it("never settles on a timer while output a grandchild holds is still open, and keeps what it writes", async () => {
     vi.useFakeTimers();
     try {
       const { child, as } = inert();
-      const running = runVerificationCommand({ command: "pnpm test", cwd: "/tmp", stdioGraceMs: 500, spawnProcess: () => as });
+      const killed: number[] = [];
+      const logged: string[] = [];
+      let settled = false;
+      const running = runVerificationCommand({
+        command: "pnpm test",
+        cwd: "/tmp",
+        stdioGraceMs: 500,
+        spawnProcess: () => as,
+        killTree: (process_) => killed.push(process_.pid ?? 0),
+        log: (line) => logged.push(line),
+      }).then((run) => {
+        settled = true;
+        return run;
+      });
       await vi.advanceTimersByTimeAsync(0);
+      child.say("before it exited\n");
       child.emit("exit", 0, null);
-      await vi.advanceTimersByTimeAsync(501);
+
+      // Well past the wait: the process has gone, something it started still
+      // has the pipe, and no clock may turn that into a passed command.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(settled, "no record is made from a timer: the run is still working, and still pinned").toBe(false);
+      expect(killed, "the wait asks for the owned tree to be cleaned up, once").toEqual([4242]);
+      expect(logged, "and says out loud that this run is waiting").toHaveLength(1);
+      expect(logged[0]).toContain("still open");
+      expect(logged[0], "with nothing the command read in it").not.toContain("pnpm test");
+
+      // The late bytes are this command's output, and they are in the record
+      // the close finally makes — counted and digested with everything else,
+      // exactly once.
+      child.say("the line that says why\n");
+      child.emit("close", 0, null);
+      await vi.advanceTimersByTimeAsync(0);
       const run = await running;
       expect(run.status).toBe("passed");
-      expect(run.detail, "and says the last of the output may be missing rather than pretending it is whole").toContain(
-        "may be missing",
+      expect(run.exitCode).toBe(0);
+      expect(run.tail).toContain("the line that says why");
+      expect(run.outputBytes, "every byte, including the ones that came after the exit").toBe(
+        Buffer.byteLength("before it exited\nthe line that says why\n"),
       );
+      expect(run.outputDigest, "digested over exactly those bytes").toBe(
+        createHash("sha256").update("before it exited\nthe line that says why\n").digest("hex"),
+      );
+      expect(run.detail, "and the record says it waited rather than pretending nothing happened").toContain("stayed open");
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("lets go of the output once the record exists, so nothing can change what it says", async () => {
+    const { child, as } = inert();
+    const running = runVerificationCommand({ command: "pnpm test", cwd: "/tmp", spawnProcess: () => as });
+    await turn();
+    child.say("all of it\n");
+    child.close(0, null);
+    const run = await running;
+    expect(run.outputBytes).toBe(Buffer.byteLength("all of it\n"));
+
+    // A chunk after the close — a stream this worker no longer listens to, or
+    // a double-emitting double — cannot be counted into a published total or
+    // hashed into a digest that has already been reported as a fact.
+    child.say("and something afterwards\n");
+    await turn();
+    expect(run.outputBytes, "the record is the bytes it was made from").toBe(Buffer.byteLength("all of it\n"));
+    expect(run.outputDigest).toBe(createHash("sha256").update("all of it\n").digest("hex"));
+  });
+});
+
+describe("ending a process tree this worker owns", () => {
+  /** A child with a pid and nothing else: the kill is what is under test. */
+  const target = (): ChildProcess => ({ pid: 4242 }) as unknown as ChildProcess;
+
+  it("reports a Windows kill that failed after it returned, rather than dropping it", () => {
+    const problems: string[] = [];
+    let asked: string[] | undefined;
+    killVerificationTree(target(), (code) => problems.push(code), {
+      platform: "win32",
+      runTaskkill: (arguments_, done) => {
+        asked = arguments_;
+        const error: NodeJS.ErrnoException = new Error("taskkill: access is denied for /home/someone/app");
+        error.code = "EPERM";
+        // Later, from another process: the whole point of the callback.
+        done(error);
+      },
+    });
+    expect(asked, "the whole tree is what is ended, not the shell alone").toEqual(["/pid", "4242", "/T", "/F"]);
+    expect(problems, "the refusal reaches the caller").toEqual(["EPERM"]);
+  });
+
+  it("says nothing when the Windows kill found the tree already gone", () => {
+    const problems: string[] = [];
+    killVerificationTree(target(), (code) => problems.push(code), {
+      platform: "win32",
+      runTaskkill: (_arguments, done) => {
+        const error: NodeJS.ErrnoException = new Error("no such process");
+        error.code = "ESRCH";
+        done(error);
+      },
+    });
+    expect(problems, "already ended is not a failure to end it").toEqual([]);
+  });
+
+  it("keeps a command unsettled when the platform refuses the kill later, and records nothing it did not see", async () => {
+    const { child, as } = inert();
+    const controller = new AbortController();
+    const logged: string[] = [];
+    let settled = false;
+    const running = runVerificationCommand({
+      command: "pnpm test",
+      cwd: "/tmp",
+      signal: controller.signal,
+      spawnProcess: () => as,
+      // The Windows shape, through the runner's own seam: the call returns,
+      // and the refusal arrives afterwards.
+      killTree: (_child, onProblem) => {
+        void Promise.resolve().then(() => onProblem("EPERM"));
+      },
+      log: (line) => logged.push(line),
+    }).then((run) => {
+      settled = true;
+      return run;
+    });
+    await turn();
+    controller.abort();
+    await turn();
+    await turn();
+    expect(settled, "a kill that failed is not an exit, whenever its failure arrives").toBe(false);
+    expect(logged, "one bounded line says why this run is still pinned").toHaveLength(1);
+    expect(logged[0]).toContain("EPERM");
+    expect(logged[0], "and carries nothing the command read").not.toContain("pnpm test");
+
+    child.close(null, "SIGKILL");
+    const run = await running;
+    expect(run.status, "and the record is still made if the tree does go").toBe("stopped");
+  });
+});
+
+describe("the id a run is recorded under", () => {
+  /**
+   * A worker that was restarted: a fresh module registry, so every module
+   * counter in the process starts again exactly as it does after a crash, an
+   * update or a person stopping this project's worker.
+   */
+  async function restartedWorker(): Promise<typeof import("../../src/project-work/verification/service.js")> {
+    vi.resetModules();
+    return import("../../src/project-work/verification/service.js");
+  }
+
+  it("cannot hand the host a durable key a run from a previous worker already spent", async () => {
+    /**
+     * The host's side of the contract, as it really is: `verify-<runId>` is a
+     * project-wide idempotency key, and a key it has already seen answers
+     * with the first result for ever — across worker restarts, because the
+     * record is the project's and not this process's.
+     */
+    type Answer = Awaited<ReturnType<ScriptedHost["verifyReport"]>>;
+    const receipts = new Map<string, Answer>();
+    const hostOf = (commands: string[]): ScriptedHost => {
+      const host = new ScriptedHost(commands);
+      const write = host.verifyReport.bind(host);
+      host.verifyReport = async (params, envelope) => {
+        const key = String(params.idempotencyKey);
+        const replay = receipts.get(key);
+        // A key this project has already seen answers with the first result,
+        // for ever. That is the durable behaviour a colliding run id turns
+        // into a lost record.
+        if (replay) return replay;
+        const answer = await write(params, envelope);
+        const stored: Answer = { ...answer, verify: { ...answer.verify, evidenceId: `evd_${String(receipts.size + 1)}` } };
+        receipts.set(key, stored);
+        return stored;
+      };
+      return host;
+    };
+
+    const cwd = repository();
+    const keys: string[] = [];
+    const evidence: Array<string | undefined> = [];
+    const recorded: Array<string | undefined> = [];
+    for (let restart = 0; restart < 2; restart += 1) {
+      const module_ = await restartedWorker();
+      const host = hostOf([]);
+      const service = new module_.VerificationService({ bridgeFor: () => host, holdsSession: () => true });
+      const state = await service.run({ cwd, key: "TASK-1", sessionPath: SESSION });
+      keys.push(`verify-${state.runId}`);
+      evidence.push(state.evidenceId);
+      recorded.push(state.report?.runId);
+      expect(state.phase, "each restarted worker's run reported").toBe("done");
+      expect(state.report?.runId, "and got back the record of its own run").toBe(state.runId);
+    }
+
+    expect(keys[0], "a restarted worker cannot mint the key its predecessor already used").not.toBe(keys[1]);
+    expect(receipts.size, "so the host wrote two receipts, not one replay of the first").toBe(2);
+    expect(evidence[0], "and the second run's evidence is its own").not.toBe(evidence[1]);
+    expect(recorded[0], "as is the record it points at").not.toBe(recorded[1]);
+    for (const key of keys) {
+      expect(key.length, "inside the host's key limit").toBeLessThanOrEqual(80);
+      expect(key.slice("verify-".length).length, "and inside the protocol's run id limit").toBeLessThanOrEqual(64);
+      expect(key).toMatch(/^[A-Za-z0-9_.:-]+$/);
     }
   });
 });

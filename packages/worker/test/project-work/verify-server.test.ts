@@ -33,7 +33,17 @@ const CWD = "/tmp/verify-seam";
  * prompts, so everything past `open`/`state`/`fork`/`dispose` is never
  * reached.
  */
-function fakeDriver(): SessionDriver {
+/** A driver whose runtime can be ended the way a crash ends one. */
+type FakeDriver = SessionDriver & {
+  /**
+   * The engine's own runtime went away: the driver says `closed` without
+   * anybody having asked it to. Nothing is disposed and nothing is cleaned
+   * up first — that is the case under test.
+   */
+  crash: () => void;
+};
+
+function fakeDriver(): FakeDriver {
   let state: SessionState = {
     path: `${CWD}/s1.jsonl`,
     id: "s1",
@@ -79,7 +89,10 @@ function fakeDriver(): SessionDriver {
     async dispose() {
       for (const listener of listeners) listener({ type: "closed" });
     },
-  } as unknown as SessionDriver;
+    crash() {
+      for (const listener of [...listeners]) listener({ type: "closed" });
+    },
+  } as unknown as FakeDriver;
 }
 
 interface RowMessage {
@@ -100,9 +113,14 @@ interface BridgeRequest {
 
 function harness() {
   const out: JsonRpcMessage[] = [];
+  const drivers: FakeDriver[] = [];
   const server = new WorkerServer({
     cwd: CWD,
-    createDriver: () => fakeDriver(),
+    createDriver: () => {
+      const driver = fakeDriver();
+      drivers.push(driver);
+      return driver;
+    },
     send: (message) => out.push(message),
   });
   const call = async (id: number, method: string, params?: unknown) => {
@@ -143,7 +161,7 @@ function harness() {
     server.hostResponse({ jsonrpc: "2.0", id: request.id, result });
     await turn();
   };
-  return { server, out, call, rows, asked, answer, until };
+  return { server, out, call, rows, asked, answer, until, drivers };
 }
 
 /** A plan with no commands: this file is about the Command's lifetime, not shells. */
@@ -319,5 +337,62 @@ describe("a verification run, as the worker dispatches it", () => {
     await h.answer(REPORT_ANSWER);
     expect(h.rows().slice(before).every((row) => row.params.path === moved)).toBe(true);
     expect(h.rows().at(-1)!.params.message.task.status).toBe("completed");
+  });
+
+  it("keeps this worker alive while a run whose conversation closed unexpectedly is still settling", async () => {
+    const h = harness();
+    const { path } = await startedRun(h);
+    const rowsBefore = h.rows().length;
+
+    // The runtime goes on its own: no unload, no close, nothing prepared. The
+    // session leaves every per-session table here, and the run it owned keeps
+    // draining and still owes the host its report.
+    h.drivers[0]!.crash();
+
+    const safety = (await h.call(3, "pi/worker/safety")).result as {
+      sessions: Array<{ path: string; pins: Array<{ kind: string; detail?: string }> }>;
+    };
+    const owed = safety.sessions.find((entry) => entry.path === path);
+    expect(owed, "work this worker still owes is not invisible because a driver closed").toBeDefined();
+    expect(owed!.pins.map((pin) => pin.kind)).toContain("task");
+
+    const refused = (await h.call(4, "pi/worker/retire", { mode: "explicit" })).result as { retiring: boolean; reason?: string };
+    expect(refused.retiring, "the process may not end in the middle of writing a project's record").toBe(false);
+    expect(refused.reason).toBe("pinned");
+    const automatic = (await h.call(5, "pi/worker/retire", { mode: "automatic" })).result as { retiring: boolean; reason?: string };
+    expect(automatic.retiring, "and the idle sweep is no less careful").toBe(false);
+
+    // The stopped run still writes what it proved — that is the contract — and
+    // settles privately.
+    await h.answer(PLAN_ANSWER);
+    await h.answer(REPORT_ANSWER);
+
+    expect(
+      h.rows().slice(rowsBefore),
+      "nothing is published under a path no runtime serves, not even its ending",
+    ).toHaveLength(0);
+
+    const after = (await h.call(6, "pi/worker/safety")).result as { sessions: Array<{ path: string }> };
+    expect(after.sessions.some((entry) => entry.path === path), "and once it has settled, nothing is held").toBe(false);
+    const retire = (await h.call(7, "pi/worker/retire", { mode: "explicit" })).result as { retiring: boolean };
+    expect(retire.retiring, "the worker retires once the work it owed is really done").toBe(true);
+  });
+
+  it("tells a moved conversation apart from a closed one: a fork keeps its own pins and adds none", async () => {
+    const h = harness();
+    const { path } = await startedRun(h);
+    const forked = (await h.call(3, "pi/session/fork", { path, entryId: "e1" })).result as { state: { path: string } };
+    const moved = forked.state.path;
+
+    const safety = (await h.call(4, "pi/worker/safety")).result as {
+      sessions: Array<{ path: string; pins: Array<{ kind: string }> }>;
+    };
+    expect(safety.sessions.map((entry) => entry.path), "one conversation, at its new address").toEqual([moved]);
+    expect(safety.sessions[0]!.pins.map((pin) => pin.kind), "pinned by its own running command, as any session is").toContain("task");
+
+    await h.answer(PLAN_ANSWER);
+    await h.answer(REPORT_ANSWER);
+    const after = (await h.call(5, "pi/worker/safety")).result as { sessions: Array<{ path: string; pins: Array<{ kind: string }> }> };
+    expect(after.sessions[0]!.pins.map((pin) => pin.kind), "and released when it settles, like any other").not.toContain("task");
   });
 });

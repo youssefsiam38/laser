@@ -49,3 +49,35 @@ write failures, held-versus-cancelled distinction, source ancestry and current
 passing tests. No longer claim timer-based completion is actual drain. One
 first full independent T19 review follows this batch plus the settled proof
 consumer and quota repair; no second runtime planning round is required.
+
+## Implemented
+
+Both branches were merged whole into one parent-based tree first (`33d3163e`,
+then `59468295`); no cherry-pick, rewrite or deletion, and no file of the proof
+consumer, the quota owner or the parent's uncommitted work was touched.
+
+| # | What the source does now | Where |
+| --- | --- | --- |
+| 1 | A record is made on the child's `close` and nowhere else. The post-`exit` timer asks the owned tree to be cleaned up once and logs one content-free waiting line; it settles nothing, so a run whose output never closes stays unsettled and pinned. Bytes/digest/tail are finalized once and the output and abort listeners are detached with the record, so late bytes are kept before it and cannot change it after | `worker/src/project-work/verification/commands.ts` |
+| 2 | `killVerificationTree(child, onProblem, seams)` reports the Windows `taskkill` failure its callback used to discard, and still throws on a synchronous POSIX refusal; `ESRCH` stays "already gone". A failed kill invents no exit: unsettled state, live problem, one bounded line carrying a system code only | same file |
+| 3 | `ver_<uuid>` per run — restart-unique, stable for the row, state, report and `verify-<runId>` key, inside the 64/80-character limits | `worker/src/project-work/verification/run.ts` |
+| 4 | `VerificationService.unsettledWork()` → `WorkerLifetime.detachedWork` → a `task` pin row for any owed path no loaded runtime accounts for, re-read **under the retirement fence after accepted handlers drain**. Nothing is published to say it; a loaded session's own pins and the fork path are unchanged | `verification/service.ts`, `worker/src/worker-lifetime.ts`, `worker/src/server.ts` |
+| 5 | The bounded diagnostic is itself guarded, and `settleHeld` marks the run finished and prunes whatever the row observer or its logger did. No external delivery is promised when an observer throws | `verification/service.ts` |
+| UI | Stop is disabled while `run.stopping` or the `reporting` phase holds, reading *Stopping…* / *Saving results…* from the same state, so no cancellation is offered that cannot happen | `ui/src/components/project-work/VerificationPanel.tsx` |
+
+Tests: `worker/test/project-work/verification.test.ts` (drain without a timer,
+finalize-once, Windows kill failure through both seams, restart-unique ids
+against a receipt-keeping host double, publisher + logger both throwing with no
+unhandled rejection and retention still at 20),
+`worker/test/project-work/verify-server.test.ts` (unexpected driver close →
+retirement refuses while the drain/report is held → settles privately with no
+row under the dead path → retirement allowed; fork stays the other case),
+`host/test/project-work/verification-run-identity.test.ts` (new file: a spent
+key answers with the first run's receipt and the second run's record is never
+written), `ui/test/project-work/verification-stop.test.tsx` (new file). Every
+one was seen to fail against the unfixed source.
+
+Evidence and the honest limits are in
+[`m21-verification-command-plan.md`](m21-verification-command-plan.md) § *The
+parent's correction batch, as implemented*. The first full independent T19
+review is still unused.

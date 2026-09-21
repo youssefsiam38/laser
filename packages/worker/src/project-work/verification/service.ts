@@ -264,6 +264,27 @@ export class VerificationService {
   }
 
   /**
+   * Work this worker still owes, by the conversation that owns it (M21-T19).
+   *
+   * Unsettled means what it means everywhere here: the commands, the drain
+   * and the report the run owes have not finished. A run whose conversation
+   * closed unexpectedly is still in this list — detaching it stopped the
+   * *publishing*, not the work — and that is the point. Without it, closing a
+   * driver would make a live host write invisible to the one predicate that
+   * decides whether this whole worker may retire, and the process could end
+   * in the middle of writing a project's record.
+   */
+  unsettledWork(): Array<{ sessionPath: string; runs: number }> {
+    const byPath = new Map<string, number>();
+    for (const held of this.runs.values()) {
+      if (held.settled === true) continue;
+      const path = held.run.snapshot().sessionPath;
+      byPath.set(path, (byPath.get(path) ?? 0) + 1);
+    }
+    return [...byPath].map(([sessionPath, runs]) => ({ sessionPath, runs }));
+  }
+
+  /**
    * The conversation that owned these runs is gone.
    *
    * Its runtime closed — expectedly or not — so nothing can watch or stop
@@ -335,8 +356,28 @@ export class VerificationService {
       // run's id and the error's *kind*, never its message, its stack, the
       // command that was run or a byte of what that command printed.
       const kind = error instanceof Error ? error.name.slice(0, 80) : typeof error;
-      const log = this.options.log ?? ((line: string) => console.error(line));
-      log(`a verification run's row could not be published for ${runId} (${kind}); its fleet row may be missing`);
+      this.note(`a verification run's row could not be published for ${runId} (${kind}); its fleet row may be missing`);
+    }
+  }
+
+  /**
+   * One bounded diagnostic line, through an observer that is not trusted
+   * either.
+   *
+   * The logger is somebody else's code exactly as the row observer is, and
+   * the line is only ever reached because that one already failed. If saying
+   * *"a row went missing"* could itself throw, a settlement would be rejected
+   * by its own diagnostic: the run would never be marked finished, retention
+   * would never run, and the rejection would surface as a worker-wide
+   * unhandled error carrying whatever a project's own command printed. A
+   * diagnostic never decides whether work settles.
+   */
+  private note(line: string): void {
+    try {
+      (this.options.log ?? ((text: string) => console.error(text)))(line);
+    } catch {
+      // Nothing left to say it with, and nothing here depends on having said
+      // it. The run's own state is unaffected.
     }
   }
 
@@ -351,7 +392,15 @@ export class VerificationService {
   private settleHeld(runId: string): void {
     const held = this.runs.get(runId);
     if (!held) return;
-    this.publish(runId, true);
+    try {
+      this.publish(runId, true);
+    } catch {
+      // Publication is somebody else's code twice over — the observer and its
+      // diagnostic — and both are guarded above. This is the last lock on the
+      // same door: whatever happens out there, a run that has ended is marked
+      // finished here and retention still runs, because nobody else is
+      // waiting on this chain to notice.
+    }
     held.settled = true;
     this.prune();
   }
