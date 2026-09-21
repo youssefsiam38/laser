@@ -399,7 +399,12 @@ nodes, token references, assets and, for a design in context, the host page
 outline, insertion region and Conform/Island strategy. Loading, empty,
 error, permission, offline, focus, keyboard, touch and reduced-motion states are
 included where applicable or skipped with a reason. The model cannot submit raw
-HTML, executable JavaScript, free-form CSS, event handlers or unvalidated URLs.
+HTML, executable JavaScript, free-form CSS, event handlers or unvalidated URLs
+into a Tree. The one exception is a **Sketch** (D-354): a bounded,
+self-contained HTML/JS document rendered only inside a sandboxed frame, never
+by the Laser renderer, exploratory by definition, unable to pass a gate or be
+handed off, and convertible to a Tree with "Ground it". Artifacts climb
+Sketch → Tree → Native; see [`design-phase.md`](design-phase.md).
 
 For a greenfield project, Design first proposes a foundation: principles,
 primitive and semantic tokens, modes, typography, icon and asset sources,
@@ -607,7 +612,9 @@ extension panel bus and the fleet's closed work model.
 
 Laser-owned slash commands `/spec`, `/research`, `/design` and `/plan` create
 or open the corresponding workspace destination; they do not become engine
-commands. All four work from a projectless Chat: the command opens the project
+commands. `/design` also hands off: `/design implement @Design` pulls the exact
+revision into the session as the implementation context packet, and
+`/design from <route>` grounds an existing page (D-354). All four work from a projectless Chat: the command opens the project
 picker first, then continues in the same chat ([Flexibility](#flexibility),
 D-352). Command-palette and pointer
 paths perform the same action.
@@ -626,6 +633,9 @@ an agent run as a design operation or make the resulting entity session-owned.
   source-control leap's trust and sandbox rules.
 - Project output is untrusted text/data. No raw HTML, JSX, script, CSS or SVG
   reaches the Laser renderer; URLs, assets and component props are validated.
+  A Sketch renders only in a `srcdoc` frame with `sandbox="allow-scripts"`,
+  no network, storage or parent access and a CSP forbidding external loads
+  (D-354).
 - The React composition engine is a lazy chunk; index builds are bounded fleet
   Commands the person can stop. Closing the workspace leaves no hidden
   permanent fleet work.
@@ -673,7 +683,7 @@ with the decisions already taken.
 | Plain Chat and built-in agent removal | [`plain-chat.md`](plain-chat.md) | binding (M23, D-347) | Beam, Chat and Namer stop being `AgentDefinition`s; Chat is a `sessionKind: "chat"` session on `defaultProfileId` whose whole instruction template is `{{availableTools}}`, `{{toolGuidelines}}`, `{{availableSkills}}`; naming is a one-shot request on `namingProfileId`; Beam and its spark are removed |
 | Ask Oracle | [`ask-oracle.md`](ask-oracle.md) | binding (M24, D-348) | `ask_oracle` is a one-shot, tool-less consultation on `oracleProfileId` with the caller's agent instructions and trust policy, explicit bounded `text`/`work`/`repo` context only, no history, no session, no fleet row, no model switch; usage and logs attribute it as a consultation |
 | External work links (Jira) | [`external-work-links.md`](external-work-links.md) | binding (M25, D-349) | `ExternalWorkLink` records the exact revision exported to a Jira issue; creation, update and transition are explicit and previewed, never automatic sync; Jira never approves, completes or mutates Laser work; issue property carries Laser identity, remote link points back; least-privilege OAuth in the keychain, host-only calls |
-| Design | [`design-phase.md`](design-phase.md) | binding (M21-T10–T14 as amended, D-353) | Design never runs the project; two-layer Design Index (static facts, Smart synthesis) reviewed by the person and stored in `.laser/design/`; eras with `useForNewWork`; Foundation mode for greenfield; design in context with static host grounding, insertion region and explicit Conform/Island strategy; fidelity `Mapped`/`Proposed` only, `Native` is Build evidence |
+| Design | [`design-phase.md`](design-phase.md) | binding (M21-T10–T14 as amended, D-353) | Design never runs the project; two-layer Design Index (static facts, Smart synthesis) reviewed by the person and stored in `.laser/design/`; eras with `useForNewWork`; Foundation mode for greenfield; design in context with static host grounding, insertion region and explicit Conform/Island strategy; Sketch → Tree → Native ladder with sandboxed Sketch frames (D-354); declarative prototypes; `/design implement @Design` hand-off; fidelity `Sketch`/`Mapped`/`Proposed` in Design, `Native` is Build evidence |
 | Research | [`research-phase.md`](research-phase.md) | binding (M21-T7, M21-T26, D-351, D-352) | standalone `/research` from any chat, no Spec required, project picker when projectless; Research body as a question tree resolved by cited findings; `SourceRef` with digest, licence and trust; confidence assigned by rule (`declared`/`observed`/`inferred`/`proposed`); one adapter per source kind (`web`, `project`, `repository`, `package`, `document`, then `scholarly`, `tracker`), no undocumented endpoints; `search_sources`/`read_source`/`record_finding`/`resolve_question` under the tool contract; the agent ranks itself and never delegates retrieval; visible budgets; no free-text research document |
 | Agent-facing tool contract | [`agent-tool-contract.md`](agent-tool-contract.md) | binding (M26, D-350) | one standard for every Laser-owned tool: intent-named, single-purpose, closed schemas, opaque ids, exact revisions with digests, annotations, reads separated from mutations, `expectedRevisionId` and idempotency keys, previews for external or destructive writes, host-side authorization, summary-by-default with pagination and references, actionable errors; `toolContract()` lint and an evaluation harness across every configured profile |
 

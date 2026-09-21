@@ -6012,6 +6012,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-20 correction claimed: move the binding contract into its own document and reduce `PLAN.md` M21 to the repository's dependency index.
 - 2026-09-20 correction done: `docs/project-lifecycle-leap.md` is the binding contract; `PLAN.md` retains only the stable milestone summary and dependency-ordered task index.
 - 2026-09-20 correction claimed by codex-2026-09-20-git-revisions: make artifact-revision ↔ repository-state provenance a typed, exact, many-to-many contract rather than leaving commits and diffs as generic evidence.
+- 2026-09-21 ladder bound (D-354): Sketch (sandboxed HTML/JS) → Tree → Native, DOM canvas + Shadow DOM frames + primitive kit + declarative prototypes, `/design implement`/`from` forms; leap rules and M21-T11/T17 amended.
 - 2026-09-21 design bound (D-353): `docs/design-phase.md` — parse-only Design Index (L0/L1), review, `.laser/design/` storage, re-index, Foundation mode, design in context with static host grounding and Conform/Island; native runner dropped; leap Design contract, fidelity and M21-T10/T12/T13/T19 amended.
 - 2026-09-21 loosened (D-352, corrected after the person's review): every artifact kind alone, any order, links optional in every direction, gates only when chosen, `/plan <text>` with the text as the brief; projectless Chat uses the project picker — the "personal workspace" owner from the first draft is withdrawn. Leap "Flexibility" section, Design/Plan/commands text and `docs/research-phase.md` updated.
 - 2026-09-21 addition by codex-2026-09-21-model-profiles: `docs/research-phase.md` binds the Research phase (body, sources/adapters, tools, loop, budgets, entry points, surfaces, security); indexed in the leap document and its Research contract; M21-T7 acceptance extended and M21-T26 added; D-351 recorded. OpenResearch reviewed and rejected as a base (peer Rust product for ML experiments); its retrieval-ranker and evidence-in-logs ideas are adopted.
@@ -6273,6 +6274,34 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 #### M26-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/agent-tool-contract.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M26 tasks added; D-350 recorded. Implementation not started.
+
+### D-354 · 2026-09-21 · Sketch → Tree → Native; `/design` hands off
+
+Decision: Design artifacts climb one ladder. A **Sketch** is a bounded,
+self-contained HTML/JS document the model writes, stored on the revision and
+rendered only in an `srcdoc` frame with `sandbox="allow-scripts"`, no network,
+storage or parent access and a CSP forbidding external loads; it is
+exploratory, not anchorable, cannot pass a gate or be handed off, and
+converts to a Tree with "Ground it". A **Tree** is the grounded design:
+Laser-owned renderer in Shadow DOM frames on a DOM infinite canvas, Laser's
+primitive kit skinned by the index tokens, fixtures, and declarative
+prototypes (navigate, overlay, set state/variant, switch theme/viewport) with
+no model script. **Native** remains Build evidence. The model chooses Sketch
+or Tree first and says so; the person can flip. Project-framework code is not
+a Design artifact. `/design` gains `implement @Design` (hand-off packet into
+the current session) and `from <route>` (ground an existing page).
+
+Why: full-JS prototypes win on speed and expressiveness; trees win on
+grounding, anchored review, diffs and hand-off. Claude Design and OpenDesign
+render model-written HTML in sandboxed frames and are faster to a first pixel
+for it; Laser keeps that speed for exploration without giving up the
+reviewable, index-grounded artifact the lifecycle needs. Framework code as a
+design artifact would need the project to run, which D-353 forbids.
+
+Consequences: the leap's "no raw HTML" rule gains the sandboxed-Sketch
+exception and the security rules name the frame's constraints; M21-T11
+absorbs canvas, kit, prototypes and Sketch; M21-T17 carries the hand-off
+packet; the primitive kit is held to Laser's own UI bar.
 
 ### D-353 · 2026-09-21 · Design never runs the project; the Design Index is reviewed and parse-only
 

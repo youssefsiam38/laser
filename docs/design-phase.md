@@ -22,6 +22,9 @@ strategies, Conform or Island. **The Design phase never runs the project**
 (D-353): no dev server, no preview runner, no browser automation, no
 serve-time tagging. Everything is parse-only and finishes in seconds to
 minutes; real rendering proof belongs to Build through M20 checkpoints.
+Artifacts climb one ladder — **Sketch → Tree → Native** (D-354): a Sketch is
+model-written HTML/JS in a sandboxed frame for speed and exploration; a Tree
+is the grounded, reviewable, hand-off-able design; Native is Build evidence.
 
 ## Three cases, one workspace
 
@@ -178,10 +181,104 @@ That is **Mapped** at best. **Native** evidence exists only at Build: an M20
 checkpoint whose preview the person accepts is linked `verified_at` to the
 Design revision. The Design gate cannot require Native.
 
+## How a design is displayed
+
+**Canvas.** A DOM infinite canvas: one transformed layer with pointer, wheel
+and pinch pan-zoom; screens laid out as frames; flow edges drawn as SVG
+between frames. No WebGL, no raster canvas: nodes stay real DOM so comments
+anchor to node ids, text is selectable, accessibility works and the phone
+gets the same bundle. Pan-zoom and edge routing may use Laser-owned adapters
+over open-source libraries; none becomes protocol.
+
+**Tree frames.** Each screen mounts its `DesignTree` with the Laser-owned
+renderer inside a Shadow DOM root. The project's tokens (DTCG from the index)
+are injected as CSS custom properties on that root, so they never collide
+with Laser's theme. Because Design never executes project code (D-353), the
+renderer draws **Laser's primitive kit skinned by the project**: index tokens
+plus each component's recorded contract (variants, slots, sizes, density).
+That facsimile is what `Mapped` means. The kit is a first-class deliverable
+held to Laser's own UI bar; its density, radius, shadow and motion come from
+the index tokens, never from static values.
+
+**Fixtures.** Lists, text and images bind to fixture data — parsed examples
+from the index or generated — so screens show realistic content.
+
+**Interactivity: declarative prototypes.** A Tree carries flows and states,
+played in Prototype mode:
+
+| Trigger | Action | Example |
+| --- | --- | --- |
+| click/tap, submit, hover, key | `navigate(screen, transition)` | button → next screen |
+| | `overlay(screen)` / `close` | open a dialog frame |
+| | `setState(node, state)` | list → loading → loaded |
+| | `setVariant(node, variant)` | tab active |
+| | `switchTheme` / `switchViewport` | dark, phone |
+
+Click-through flows, dialogs, tabs, empty/loading/error toggles and
+theme/viewport switches need no script from the model. Logic — live
+filtering, arithmetic, drag-sort — is not a Tree's job; that is what a Sketch
+is for.
+
+**Editing** is two-way: direct manipulation on the canvas (select a node, edit
+props/variants/tokens in the inspector, inline text, drag-reorder inside
+layout containers) and chat through `compose_design`. Both produce the same
+revision. **Export**: static HTML bundle (navigation only), PNG per screen,
+read-only share over the relay.
+
+## Sketch
+
+A Sketch is a single self-contained HTML document with inline CSS and JS,
+written by the model, stored as a blob on the Design revision and rendered in
+an `<iframe srcdoc sandbox="allow-scripts">` with no network, no parent
+access, no storage and a content-security policy that forbids external
+loads. It is the fastest path to a pixel and the only place logic demos
+(filtering, sorting, calculations) live.
+
+| Rule | Meaning |
+| --- | --- |
+| Fidelity `Sketch` | exploratory; not grounded; may ignore the index |
+| Not anchorable | comments attach to the Sketch as a whole, not to elements |
+| Cannot pass a gate | a Design whose screens are Sketches cannot be approved or handed off |
+| Never reaches the Laser renderer | the sandboxed frame is the only place Sketch bytes render; the parent sees an opaque frame with a bounded title |
+| Bounded | size limit per Sketch; fixed count per revision; no external assets |
+| Phone/relay | rendered in the same sandboxed frame; nothing else |
+
+**Ground it.** One action converts a Sketch to a Tree: the model rebuilds it
+from index entries, records what did not map as `Proposed`, and lists the
+logic that became fixtures/states. The Sketch stays on the revision as
+provenance.
+
+**Which starts first.** The model chooses and says so in a chip the person
+can flip: **Sketch** when the ask is exploratory, logic-heavy or the project
+has no reviewed index; **Tree** when the ask is a screen of this product and
+the index is reviewed.
+
+## The artifact ladder
+
+```text
+Sketch (HTML/JS, sandboxed)  ─ Ground it ─▶  Tree (Mapped/Proposed)  ─ Build ─▶  Native (M20 checkpoint)
+explore, feel, logic demos                   review, comment, gate, hand off      proof, linked verified_at
+```
+
+Project-framework code (a real React/Vue/Blade component) is **not** a
+Design artifact: it cannot be seen without running the project, which Design
+never does. It is Build's output, linked back to the Design revision.
+
+## `/design` — three forms
+
+| Form | Effect |
+| --- | --- |
+| `/design <text>` | create a Design in the current project (project picker in a projectless Chat) and start composing, Sketch or Tree per the rule above |
+| `/design implement @Design` (or `/design @Design`) | hand-off: pull the exact revision into this session as the implementation context packet — tree, index entries used, strategy, host region, fixtures, unresolved comments — and start implementing in this project's checkout; a Plan/Task is created only if the person asks; the accepted M20 checkpoint is linked `verified_at` |
+| `/design from <route or file>` | ground an existing page (Case C) and open it in context before anything is composed |
+
+The same three actions exist as buttons on the Design and in the palette.
+
 ## Fidelity, revised
 
 | Label | Meaning | Where it appears |
 | --- | --- | --- |
+| **Sketch** | model-written HTML/JS in a sandboxed frame; exploratory, ungrounded | Design phase; never gated or handed off |
 | **Mapped** | composed from reviewed index entries, or a host outline parsed from real templates | Design phase |
 | **Proposed** | new token/component/foundation, or a person-supplied image | Design phase |
 | **Native** | rendered by the project's real build at an M20 checkpoint | Build evidence only, linked back to the Design |
@@ -210,9 +307,12 @@ Foundation mode.
 | `compose_design` | create/revise a `DesignTree` referencing index ids; refuses free values; returns validation issues |
 | `propose_foundation` | Foundation mode proposals in the fixed order |
 | `ground_host_page` | resolve a route/template to a `HostPage` outline and file list; attach a person-supplied image |
+| `write_sketch` | store one bounded self-contained HTML document as a `Sketch` on the revision; the only tool that accepts markup, and its output renders only in the sandboxed frame |
+| `ground_sketch` | convert a Sketch into a Tree from the index; returns unmapped parts as `Proposed` and the states derived from its logic |
 | `inspect_project_work`, `request_project_review` | leap tools, reused |
 
-There is no free-form HTML/CSS/JS tool; the model composes trees.
+Apart from `write_sketch`, no tool accepts HTML/CSS/JS; the model composes
+trees.
 
 ## What a person sees
 
@@ -220,6 +320,8 @@ There is no free-form HTML/CSS/JS tool; the model composes trees.
   Re-index, gaps), **Foundation** (Case A wizard/canvas), **Screens** and
   **Flows** (canvas, inspector, states, viewports, themes), **Review**
   (anchored comments, before/after).
+- Screens: a Sketch/Tree chip per screen the person can flip; Prototype
+  mode toggle; Ground it on any Sketch with the unmapped list afterwards.
 - In context: host outline on the left, region highlighted, new subtree
   composed inside; reference image toggle; strategy chip (Conform/Island)
   with the reasons.
@@ -231,6 +333,11 @@ There is no free-form HTML/CSS/JS tool; the model composes trees.
 
 - Parse-only: no execution of project code, no server, no browser, no
   network except the Research `web` adapter for person-given reference URLs.
+- Sketch bytes render only inside `srcdoc` + `sandbox="allow-scripts"` with
+  no network, storage or parent access and a CSP that forbids external
+  loads; the frame's title is sanitised; nothing from a Sketch is read back
+  into Laser except through `ground_sketch`, which treats it as untrusted
+  text.
 - Screenshots are untrusted images, bounded in size, never OCR-trusted as
   instructions.
 - Index build is a bounded fleet Command (files, bytes, time); large
@@ -242,10 +349,10 @@ There is no free-form HTML/CSS/JS tool; the model composes trees.
 
 | Layer | Change |
 | --- | --- |
-| Protocol | `DesignIndex` schema (eras, tokens as DTCG, components, conventions, provenance, review), `HostPage`/`InsertionRegion` nodes and `strategy` on `DesignTree`, fidelity enum without `Native` in Design records, `designIndexProfileId`, tool schemas |
+| Protocol | `Sketch` blob record and bounds, fidelity `Sketch`, flow/state actions on `DesignTree`, `write_sketch`/`ground_sketch` schemas, `/design` command forms; `DesignIndex` schema (eras, tokens as DTCG, components, conventions, provenance, review), `HostPage`/`InsertionRegion` nodes and `strategy` on `DesignTree`, fidelity enum without `Native` in Design records, `designIndexProfileId`, tool schemas |
 | Worker | `design/index/{l0-*,l1-synthesis}.ts` parsers (manifests, CSS family, Tailwind config as text, CSS-in-JS, docgen family, stories as text, templates), digest cache, fleet Command wrapper, tools |
 | Host | index authority and review writes, `.laser/design/*` project-config writer, stale propagation from index changes |
-| UI | Design tab sections above, token editor reuse, in-context canvas, strategy chip, review chips |
+| UI | infinite canvas with frames and SVG edges, Shadow DOM tree frames, primitive kit skinned by index tokens, Prototype mode, sandboxed Sketch frame, Sketch/Tree chip, Ground it; Design tab sections above, token editor reuse, in-context canvas, strategy chip, review chips |
 | Plan | M21-T10 becomes the Design Index (L0/L1, storage, review, re-index); M21-T12 loses the runner and becomes static host grounding and source selection; M21-T13/T14 as amended; M21-T19 verification uses Build-time Native evidence only |
 | Docs | leap Design contract and fidelity text amended; `agents.md` tool tables |
-| Tests | parse-only guarantee (no `child_process`, no network in index code); confidence rules; review preservation across re-index; free-value refusal; orphaned anchors; strategy recorded; fidelity never `Native` in Design records |
+| Tests | Sketch frame sandbox attributes and CSP asserted; Sketch cannot pass a gate or hand off; `ground_sketch` output references only index ids; prototype actions are declarative only; parse-only guarantee (no `child_process`, no network in index code); confidence rules; review preservation across re-index; free-value refusal; orphaned anchors; strategy recorded; fidelity never `Native` in Design records |
