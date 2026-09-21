@@ -5984,7 +5984,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T4 | Bounded bodies, search and derived projections | done | claude-2026-09-21-leap | `ed23525f`; `project-work/bodies.test.ts` 16 over the wire | see notes |
 | M21-T5 | UI client store, reconcile and deep links | done | claude-2026-09-21-leap | `edac5b5c`; `pnpm -F @lasercode/ui test` (`test/project-work/*`) | see notes |
 | M21-T6 | Embedded workspace shell | done | claude-2026-09-21-leap | `83f454d3` (merged `f9e50378`); `pnpm -F @lasercode/ui test` (3055 passed, 50 new) | see notes |
-| M21-T7 | Specs and Research experience | todo | — | — | `PLAN.md` M21 |
+| M21-T7 | Specs and Research experience | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T8 | Comments, reviews and approval gates | todo | — | — | `PLAN.md` M21 |
 | M21-T9 | Cross-session and cross-project mentions | todo | — | — | `PLAN.md` M21 |
 | M21-T10 | Design Index: static facts, synthesis, review, storage | done | claude-2026-09-21-leap | `9306d0fa`; `pnpm -F @lasercode/worker test` (1344 passed; `test/design/*` 70 incl. the parse-only module-graph and side-effect-marker proofs) | see notes |
@@ -6012,6 +6012,9 @@ live work holding its row when a snapshot thins — because both are real hazard
 #### M21-T10 notes
 - 2026-09-21 done (`9306d0fa`): `packages/worker/src/design/index/` L0 parsers (stack, styles incl. Tailwind config as text, DTCG tokens, components with typed props, templates/routes, assets/i18n), digest-keyed cache, eras with `useForNewWork`, L1 one-shot synthesis on `designIndexProfileId` with citation checks, review actions preserved by stable ids with "changed since review", `<project>/.laser/design/{index,review}.json` writer refusing machine paths, bounded stoppable Command with progress by files; three tools linted and fixture-replayed (engine registration is M21-T17's — deviation 1), no host change (index authority is M21-T13's — deviation 2); no new dependencies. Merge fix by the orchestrator: the strict fixture parser from the M26 batch dropped `world.designIndex`.
 - 2026-09-21 claimed by claude-2026-09-21-leap (row title aligned with `PLAN.md` as amended by D-353): worker-side Design Index (L0 parsers, L1 synthesis on `designIndexProfileId`, storage, review, digest cache, bounded Command) in parallel with the UI; plan in `docs/leap/m21-design-index-plan.md`.
+
+#### M21-T7 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: UI worker over the T6 slots (Spec/Research create/edit/revise/archive, brief vs full spec, Research question tree + findings + source panel, provenance UI, cross-links, search, Markdown editing) — host stays as the spine provides; T8's UI pieces follow in the same session once T15's host changes are merged.
 
 #### M21-T15 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: host engine over the spine store (DAG validation, readiness, transitions, stale, assignments, conflicts, evidence rules); gate semantics from T8 are consumed through the store's approval records already present since T1/T2.
