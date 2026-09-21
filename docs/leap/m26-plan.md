@@ -411,3 +411,83 @@ themes/widths are the person's (D-342).
   JSON; `pnpm tool-eval --live --profile <name>` is the person's own run.
   §4 of the contract now defines each measure exactly and documents the live
   command.
+
+## Review fixes (M26 review, `docs/leap/m26-review.md`)
+
+Owner: worker "Fix tool contract review findings", branch
+`agents/fix-tool-contract-review-findings-509ca715`, base `223b4449`. One
+batch: the blocking finding, the six should-fixes and the seven nits.
+
+| Finding | What changed |
+| --- | --- |
+| F-B1 lint soundness | `packages/protocol/src/tool-contract.ts` — one walker (`checkValue`) for every value: `allOf` (each member closed and described), `anyOf` **and** `oneOf` together, `prefixItems` and tuple-shaped `items`, `type` written as a list, unions inside `items`. A branch that is not a schema, a type the lint does not know, a node that declares nothing, and seventeen keywords it cannot read (`$ref`, `patternProperties`, `if`/`then`/`else`, `not`, `dependentSchemas`, `unevaluatedProperties`, `additionalItems`, …) are issues, not silence — the same policy `tool-eval/schema-check.ts` already states. 20 new negative tests, one per probe in the review and one per keyword. The lint was re-run over every registered tool by the real registration path (`pnpm -F @lasercode/worker test`, which registers all ten through `registerLaserTool`): no tool needed a schema change |
+| F-S1 fixture pin | `packages/worker/test/tool-eval/fixtures.test.ts` — after the matrix, `laserToolRegistry()` keys are asserted equal to `TOOLS` (both directions), and `LASER_TOOL_NAMES` to the same set |
+| F-S2 preview detection | `packages/ui/src/components/thread/tool-preview.ts` — `toolPreview(result, toolName?)`: `details` and the result object are read for every row as before; JSON in the result *text* is read only for a tool in `LASER_TOOL_NAMES`. `ToolRow.tsx` passes its `toolName`. A `bash`, `read`, `edit` or MCP result carrying `{preview:true,digest,summary}` draws no card |
+| F-S3 `committed` honesty | `packages/worker/src/agents/harness.ts` — `HarnessErrorRecovery` now has production call sites (it is wired, not deleted): `start_agent` reports `committed: true` when its cleanup leaves the worktree behind (`undoWorktree` believes the directory, not the best-effort remover) and when a failure after `openChild` leaves a child session; `remove_agent_worktree` reports a half-removal as committed; `stop_agent`/`stopRun` distinguishes "not signalled" (uncommitted, retry) from "signalled" (committed, go and look); `send_agent_message` names its own not-found, closed-session and undelivered codes |
+| F-S4 truncation | `packages/worker/src/tool-eval/measures.ts` — every truncated call is judged, the first violation is what the report says, the unreachable tail is gone, and `NARROWING_MARKERS` holds sentences the tools really print instead of the bare word `omitted` |
+| F-S5 output schemas | D-350.i below; `checkOutput` now walks the whole result shape |
+| F-S6 error round trip | `toolError()` folds `next` onto one line; `RENDERED` escapes the two sentences and matches the message greedily, so the split falls on the last state line. A message quoting "Nothing was changed." or "Next: " round-trips unchanged |
+| N1 | `tool-eval/run.ts` estimates prompt tokens from the byte count (`CHARACTERS_PER_TOKEN`) instead of allocating `"x".repeat(bytes)` |
+| N2 | `isRecord` is exported from `@lasercode/protocol` and used by `tool-contract.ts`, `schema-check.ts`, `run.ts`, `fixture.ts`, `tool-preview.ts` |
+| N3 | `tool-eval/fixture.ts` parses `world` field by field (`parseWorld`/`parseWorldAgent`); a bad `role`, `search`, `status` or a missing id names itself |
+| N5 | `PAGE_SIZE_NAMES` gains `take`, `bytes`, `window`; `agent-tool-contract.md` §1 says how the list grows |
+| N6 | `report.ts` counts fixtures by source, so two fixtures for one tool are two; the table says "fixtures" |
+| N7 | the `.` in both state sentences is escaped (part of F-S6) |
+
+N4 (`itemsLabel: ""` in `source-control/change-preview.tsx`) was left alone:
+that file is outside this batch's write set.
+
+### Decisions
+
+- **D-350.i — bounds and closure govern inputs; an output is described.**
+  §1's "Bounds in the schema" row said "nothing unbounded" without saying of
+  what, and `checkOutput` only looked at top-level descriptions. The rule is
+  now explicit in both directions. An **input** is what a model fills in: a
+  closed, bounded schema turns an invented field into a refusal and a
+  runaway page into a declared maximum, and the evaluation harness validates
+  every call against it. An **output** is produced by the tool itself; it is
+  never sent to the model as a schema (the engine's `ToolDefinition` has
+  nowhere to put one — D-350.e is why it lives in the registry at all) and
+  nothing validates a result against it at runtime. So
+  `additionalProperties: false` there would enforce nothing while looking
+  like enforcement, and `maxLength` would restate the truncation the tool
+  already does in code and is measured on. What the declared output is *for*
+  — telling a reader, a fixture and the docs what comes back — is what the
+  lint now checks, at every level: an object, at least one field, every
+  property described however deeply nested, and no construct the lint cannot
+  read. When a result is validated (an M21 lifecycle tool's payload against
+  its declared output), this rule grows with that validator, and the tools'
+  outputs gain closure in the same task.
+- **D-350.j — the transcript reads a preview out of result *text* only for a
+  tool Laser registered.** The strict paths (a declared output's `details`,
+  the result object itself) are a producer saying "this is a preview" in a
+  place only it writes. Text is not: a `bash` command, a `read` of a JSON
+  file or an MCP server can all print `{"preview":true,…}` without ever
+  having promised this shape, and drawing the "nothing has happened yet" card
+  over work that already happened is a lie about the transcript. So the text
+  path is gated on `LASER_TOOL_NAMES` (`@lasercode/protocol`), the list the
+  UI may read without importing the engine, pinned to `laserToolRegistry()`
+  by the tool-evaluation suite. `tool-fallback.aui.tsx` calls
+  `toolPreview(result)` without a name and therefore keeps only the strict
+  paths; the producers M21-T17 and M25-T4 are told to put previews in
+  `details`, and the day one needs the text path there, that call site passes
+  its `toolName` — one argument, outside this batch's write set.
+
+### What was not done, and why
+
+- The `bash` result row's "no preview card" is proven at the detection
+  function (`toolPreview`), which is the single place the decision is made and
+  what `ToolRow.tsx:167` calls with its tool name. A rendered `ToolRow` under
+  a `bash` result is not asserted: that row needs the runtime providers a
+  transcript gives it, and a class-name assertion would be a proxy, not proof.
+- `pnpm verify` stops in `packages/ui`'s `test:types` on a failure this batch
+  did not cause and may not fix: `test/runtime/environment-capabilities.test.ts`
+  does not list the sixteen `project/work/*` methods M21-T2 added to
+  `ClientRequests`. Reproduced on the clean base tree (`223b4449`, changes
+  stashed) before and after; every other package's suite, `pnpm -r build`,
+  `pnpm -r typecheck`, `pnpm identity:check` and `pnpm tool-eval` are green.
+- `remove_agent_worktree` cannot tell a surviving *branch* from a surviving
+  directory: `WorktreeManager.removeAt` swallows each git failure and the
+  harness owns no git of its own. It reports what it can prove (the directory)
+  and says the branch may already be gone. Making the manager report per-step
+  outcomes is a task of its own.

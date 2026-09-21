@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  LASER_TOOL_NAMES,
   TOOL_DESCRIPTION_MAX,
   TOOL_ERROR_COMMITTED_SENTENCE,
   TOOL_ERROR_MESSAGE_MAX,
@@ -7,6 +8,7 @@ import {
   TOOL_ERROR_UNCOMMITTED_SENTENCE,
   assertToolContract,
   carriedToolError,
+  isLaserToolName,
   isPageSizeProperty,
   mcpToolAnnotations,
   parseToolError,
@@ -17,6 +19,7 @@ import {
   type LaserToolSpec,
   type ToolContractRule,
 } from "../src/tool-contract.js";
+import { isToolLabelExempt } from "../src/tool-label.js";
 
 /** A tool that obeys every rule; each test bends exactly one thing. */
 function conforming(overrides: Partial<LaserToolSpec> = {}): LaserToolSpec {
@@ -222,6 +225,13 @@ describe("toolContract", () => {
       expect(isPageSizeProperty("offset")).toBe(false);
       expect(isPageSizeProperty("timeout")).toBe(false);
     });
+    // N5: the list grows by name, one review at a time.
+    it("knows the page sizes written under another name", () => {
+      expect(isPageSizeProperty("take")).toBe(true);
+      expect(isPageSizeProperty("bytes")).toBe(true);
+      expect(isPageSizeProperty("window")).toBe(true);
+      expect(isPageSizeProperty("maxBytes")).toBe(false);
+    });
     it("refuses a page size with no ceiling", () => {
       const spec = conforming({
         input: { type: "object", additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, description: "How many rows." } } },
@@ -302,6 +312,161 @@ describe("toolContract", () => {
     });
   });
 
+  // F-B1: the four constructs that walked straight past the lint, and the
+  // ones a schema could grow into next. Each is a probe from the M26 review,
+  // written as the negative test it should have had.
+  describe("constructs that used to bypass the walk", () => {
+    /** What `Type.Intersect` emits: the real shape is inside `allOf`. */
+    const intersect = (member: Record<string, unknown>): LaserToolSpec =>
+      conforming({
+        input: {
+          type: "object",
+          additionalProperties: false,
+          properties: { filter: { description: "How to narrow the fleet.", allOf: [member] } },
+        },
+      });
+
+    it("walks allOf: an open, undescribed, unbounded object inside one is caught", () => {
+      const spec = intersect({ type: "object", properties: { needle: { type: "string" } } });
+      expect(new Set(rules(spec))).toEqual(new Set(["input-closed", "property-described", "string-bounds"]));
+    });
+
+    it("requires every allOf member to be closed and described, not just the first", () => {
+      const spec = conforming({
+        input: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            filter: {
+              description: "How to narrow the fleet.",
+              allOf: [
+                { type: "object", additionalProperties: false, properties: { kind: { type: "string", maxLength: 20, description: "Which kind." } } },
+                { type: "object", properties: { since: { type: "string", maxLength: 40, description: "From when." } } },
+              ],
+            },
+          },
+        },
+      });
+      const issues = toolContract(spec);
+      expect(issues.map((issue) => issue.rule)).toEqual(["input-closed"]);
+      expect(issues[0]!.path).toBe("input.properties.filter.allOf[1]");
+    });
+
+    it("bounds a string written as a type list", () => {
+      const spec = conforming({
+        input: {
+          type: "object",
+          additionalProperties: false,
+          properties: { reason: { type: ["string", "null"], description: "Why, or nothing." } },
+        },
+      });
+      expect(rules(spec)).toContain("string-bounds");
+    });
+
+    it("walks oneOf even when anyOf is there too", () => {
+      const spec = conforming({
+        input: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            worktree: {
+              description: "Whether to isolate the agent.",
+              anyOf: [{ type: "boolean" }],
+              oneOf: [{ type: "string" }],
+            },
+          },
+        },
+      });
+      const issues = toolContract(spec);
+      expect(issues.map((issue) => issue.rule)).toEqual(["string-bounds"]);
+      expect(issues[0]!.path).toBe("input.properties.worktree.oneOf[0]");
+    });
+
+    it("refuses a union branch that is not a schema at all", () => {
+      const spec = conforming({
+        input: {
+          type: "object",
+          additionalProperties: false,
+          properties: { worktree: { description: "Whether to isolate.", anyOf: [42, { type: "boolean" }] } },
+        },
+      });
+      const issues = toolContract(spec);
+      expect(issues.map((issue) => issue.rule)).toEqual(["input-closed"]);
+      expect(issues[0]!.message).toContain("42");
+    });
+
+    it("walks prefixItems and a tuple-shaped items", () => {
+      const spec = conforming({
+        input: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            span: { type: "array", maxItems: 2, prefixItems: [{ type: "string" }], items: { type: "string", maxLength: 8 }, description: "From and to." },
+            pair: { type: "array", maxItems: 2, items: [{ type: "string" }], description: "A pair." },
+          },
+        },
+      });
+      expect(toolContract(spec).map((issue) => issue.path)).toEqual(["input.properties.span.prefixItems[0]", "input.properties.pair.items[0]"]);
+    });
+
+    it("walks the branches of a union inside an array's items", () => {
+      const spec = conforming({
+        input: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ids: { type: "array", maxItems: 10, items: { anyOf: [{ type: "string" }, { type: "integer" }] }, description: "The ids to read." },
+          },
+        },
+      });
+      expect(rules(spec)).toContain("string-bounds");
+    });
+
+    it("refuses an array that never says what is in it", () => {
+      const spec = conforming({
+        input: { type: "object", additionalProperties: false, properties: { ids: { type: "array", maxItems: 10, description: "The ids to read." } } },
+      });
+      expect(rules(spec)).toContain("array-bounds");
+    });
+
+    it("refuses a property that declares nothing at all", () => {
+      const spec = conforming({
+        input: { type: "object", additionalProperties: false, properties: { anything: { description: "Whatever you like." } } },
+      });
+      expect(rules(spec)).toContain("input-closed");
+      expect(toolContract(spec)[0]!.message).toContain("declares no type");
+    });
+
+    it("refuses a type it does not know, rather than skipping the value", () => {
+      const spec = conforming({
+        input: { type: "object", additionalProperties: false, properties: { span: { type: "tuple", description: "From and to." } } },
+      });
+      expect(rules(spec)).toContain("input-closed");
+      expect(toolContract(spec)[0]!.message).toContain("\"tuple\"");
+    });
+
+    // The harness's validator calls these unvalidatable; the lint may not call
+    // them fine. A schema that grows one fails here first.
+    const unsupported: Array<[string, Record<string, unknown>]> = [
+      ["$ref", { $ref: "#/$defs/filter" }],
+      ["patternProperties", { type: "object", additionalProperties: false, patternProperties: { "^x-": { type: "string" } } }],
+      ["if/then", { type: "boolean", if: { const: true }, then: { const: true } }],
+      ["not", { type: "string", maxLength: 10, not: { const: "no" } }],
+      ["dependentSchemas", { type: "object", additionalProperties: false, dependentSchemas: { a: { type: "object" } } }],
+      ["unevaluatedProperties", { type: "object", additionalProperties: false, unevaluatedProperties: false }],
+      ["additionalItems", { type: "array", maxItems: 2, items: { type: "string", maxLength: 4 }, additionalItems: true }],
+    ];
+    for (const [label, node] of unsupported) {
+      it(`reports ${label} instead of walking past it`, () => {
+        const spec = conforming({
+          input: { type: "object", additionalProperties: false, properties: { filter: { description: "How to narrow the fleet.", ...node } } },
+        });
+        const issues = toolContract(spec);
+        expect(issues.some((issue) => issue.rule === "input-closed" && issue.message.includes("outside the schema subset"))).toBe(true);
+      });
+    }
+  });
+
   describe("output-schema", () => {
     it("refuses a missing output shape", () => {
       expect(rules(conforming({ output: {} }))).toContain("output-schema");
@@ -311,6 +476,40 @@ describe("toolContract", () => {
     });
     it("refuses an undescribed result field", () => {
       expect(rules(conforming({ output: { type: "object", properties: { status: { type: "string" } } } }))).toContain("output-schema");
+    });
+    // D-350.i: an output is described at every level, and nothing more.
+    it("refuses an undescribed field nested inside the result", () => {
+      const spec = conforming({
+        output: {
+          type: "object",
+          properties: {
+            agents: {
+              type: "array",
+              description: "The agents under you.",
+              items: { type: "object", properties: { runId: { type: "string" } } },
+            },
+          },
+        },
+      });
+      const issues = toolContract(spec);
+      expect(issues.map((issue) => issue.rule)).toEqual(["output-schema"]);
+      expect(issues[0]!.path).toBe("output.properties.agents.items.properties.runId");
+    });
+    it("does not ask a result to be closed or bounded (D-350.i)", () => {
+      const spec = conforming({
+        output: {
+          type: "object",
+          properties: {
+            messages: { type: "array", description: "The agent's last messages.", items: { type: "string", description: "One message." } },
+            note: { type: "string", description: "What was left out, and how to ask for less." },
+          },
+        },
+      });
+      expect(rules(spec)).toEqual([]);
+    });
+    it("refuses a construct it cannot read, in a result as in an argument", () => {
+      const spec = conforming({ output: { type: "object", properties: { status: { $ref: "#/$defs/status", description: "How it went." } } } });
+      expect(rules(spec)).toContain("output-schema");
     });
   });
 
@@ -331,6 +530,20 @@ describe("toolContract", () => {
     it("throws naming the tool, the rule and the contract", () => {
       expect(() => assertToolContract(conforming({ name: "inspect" }))).toThrow(/inspect.*tool contract.*docs\/agent-tool-contract\.md/s);
     });
+  });
+});
+
+describe("the product's own tool names", () => {
+  it("names the tools under this contract and nothing else", () => {
+    expect(isLaserToolName("inspect_agent")).toBe(true);
+    expect(isLaserToolName("web_search")).toBe(true);
+    expect(isLaserToolName("bash")).toBe(false);
+    expect(isLaserToolName("read")).toBe(false);
+    expect(isLaserToolName("mcp__server__tool")).toBe(false);
+    expect(isLaserToolName(undefined)).toBe(false);
+  });
+  it("is a list of contract-shaped names", () => {
+    for (const name of LASER_TOOL_NAMES) expect(rules(conforming({ name, label: isToolLabelExempt(name) ? "exempt" : "injected" }))).toEqual([]);
   });
 });
 
@@ -386,6 +599,39 @@ describe("ToolError", () => {
   it("round-trips a multi-line message", () => {
     const multiline = toolError({ ...error, message: "The branch still holds work your checkout does not have.\nMerge it first." });
     expect(parseToolError(renderToolError(multiline))).toEqual(multiline);
+  });
+
+  // F-S6: the rendering's own sentences are the ones a harness refusal is
+  // most likely to quote. Quoting them may not move the fields around.
+  it("round-trips a message that quotes the state sentence and the next line", () => {
+    const quoting = toolError({
+      ...error,
+      message: 'The last attempt said "Nothing was changed." and then "Next: call inspect_fleet", which was not true.',
+      committed: true,
+    });
+    expect(parseToolError(renderToolError(quoting))).toEqual(quoting);
+  });
+
+  it("round-trips a message whose own lines are the rendering's three", () => {
+    const impostor = toolError({
+      ...error,
+      message: `A tool answered with this:\n${TOOL_ERROR_UNCOMMITTED_SENTENCE}\nNext: call stop_agent`,
+      committed: true,
+    });
+    const parsed = parseToolError(renderToolError(impostor));
+    expect(parsed).toEqual(impostor);
+    expect(parsed?.committed).toBe(true);
+    expect(parsed?.next).toBe(error.next);
+  });
+
+  it("keeps next on one line, so the split has one candidate", () => {
+    const folded = toolError({ ...error, next: `merge the branch first\n${TOOL_ERROR_COMMITTED_SENTENCE}\nNext: nothing` });
+    expect(folded.next).not.toContain("\n");
+    expect(parseToolError(renderToolError(folded))).toEqual(folded);
+  });
+
+  it("does not read a sentence that only looks like one of the two", () => {
+    expect(parseToolError("[no_such_run] Gone.\nNothing was changedX\nNext: call inspect_fleet")).toBeUndefined();
   });
 
   it("does not claim an engine error as its own", () => {

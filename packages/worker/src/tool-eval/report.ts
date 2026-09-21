@@ -17,6 +17,11 @@ export interface ToolEvalReport {
   /** Every profile the matrix ran, in the order the settings file lists them. */
   profiles: Array<{ id: string; name: string }>;
   results: FixtureEvaluation[];
+  /**
+   * `fixtures` counts fixtures, not tools: a tool with two fixtures is two,
+   * and a number that silently collapsed them would be pinned by a test while
+   * meaning something else.
+   */
   totals: { fixtures: number; runs: number; failed: number };
   pass: boolean;
 }
@@ -31,7 +36,7 @@ export function buildReport(mode: "recorded" | "live", results: FixtureEvaluatio
     mode,
     profiles,
     results,
-    totals: { fixtures: new Set(results.map((result) => result.tool)).size, runs: results.length, failed },
+    totals: { fixtures: new Set(results.map((result) => result.source ?? `${result.tool}:${result.task}`)).size, runs: results.length, failed },
     pass: failed === 0,
   };
 }
@@ -76,7 +81,7 @@ export function reportTable(report: ToolEvalReport): string {
   const count = (many: number, one: string, more: string): string => `${String(many)} ${many === 1 ? one : more}`;
   lines.push(
     report.pass
-      ? `All ${String(report.totals.runs)} runs passed: ${count(report.totals.fixtures, "tool", "tools")} across ${count(report.profiles.length, "profile", "profiles")}.`
+      ? `All ${String(report.totals.runs)} runs passed: ${count(report.totals.fixtures, "fixture", "fixtures")} across ${count(report.profiles.length, "profile", "profiles")}.`
       : `${String(report.totals.failed)} of ${String(report.totals.runs)} runs failed.`,
   );
   return lines.join("\n");

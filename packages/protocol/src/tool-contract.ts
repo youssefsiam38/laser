@@ -96,19 +96,38 @@ export type ToolError = z.infer<typeof toolErrorSchema>;
  * refused — an error is the worst moment to throw a second error — but a
  * missing message, a missing next call or a malformed code is a bug in the
  * tool and throws here, where a test sees it.
+ *
+ * `next` is forced onto **one line**. That is not tidiness: it is what makes
+ * {@link renderToolError} and {@link parseToolError} a round trip. The
+ * rendering separates the message from the state sentence with a newline, so
+ * a `next` that could itself contain a newline could contain the separator
+ * too, and the parse would have two places to split. One line in `next`
+ * leaves exactly one candidate — the last one — whatever the message says,
+ * and a message quoting "Nothing was changed." or "Next: " survives the trip
+ * unchanged.
  */
 export function toolError(input: { code: string; message: string; committed: boolean; next: string }): ToolError {
   return toolErrorSchema.parse({
     code: input.code.trim(),
     message: clamp(input.message, TOOL_ERROR_MESSAGE_MAX),
     committed: input.committed,
-    next: clamp(input.next, TOOL_ERROR_NEXT_MAX),
+    next: clamp(oneLine(input.next), TOOL_ERROR_NEXT_MAX),
   });
 }
 
 function clamp(text: string, max: number): string {
   const trimmed = text.trim();
   return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
+}
+
+/** One sentence, on one line: every run of whitespace becomes a single space. */
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ");
+}
+
+/** A literal string inside a regular expression, with nothing of its own to say. */
+function quoteForRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** The two sentences `committed` is written as. Fixed, so they can be read back. */
@@ -134,8 +153,17 @@ export function renderToolError(error: ToolError): string {
   return `[${error.code}] ${error.message}\n${state}\nNext: ${error.next}`;
 }
 
+/**
+ * The parse, built so that it cannot be fooled by its own vocabulary.
+ *
+ * The sentences are matched literally (their `.` is escaped, so "Nothing was
+ * changedX" is not one of them), the message is **greedy** so the split falls
+ * on the *last* state line rather than the first — a message may quote one —
+ * and `next` is a single line, which {@link toolError} guarantees. Together
+ * those three make the last candidate the real separator, always.
+ */
 const RENDERED = new RegExp(
-  `^\\[([a-z][a-z0-9_]*)\\] ([\\s\\S]*?)\\n(${TOOL_ERROR_UNCOMMITTED_SENTENCE}|${TOOL_ERROR_COMMITTED_SENTENCE})\\nNext: ([\\s\\S]+)$`,
+  `^\\[([a-z][a-z0-9_]*)\\] ([\\s\\S]*)\\n(${quoteForRegExp(TOOL_ERROR_UNCOMMITTED_SENTENCE)}|${quoteForRegExp(TOOL_ERROR_COMMITTED_SENTENCE)})\\nNext: ([^\\n]+)$`,
 );
 
 /**
@@ -186,6 +214,34 @@ export type JsonSchemaNode = Readonly<Record<string, unknown>>;
 /** Whether the worker injects D-277's activity label into this tool. */
 export type ToolLabelMode = "injected" | "exempt";
 
+/**
+ * Every tool Laser registers through `registerLaserTool` (D-350.d: ten
+ * today). The live truth is `laserToolRegistry()` in the companion
+ * extension, which only a process that imports the engine may read; this is
+ * the same list for the surfaces that may not — the transcript, which has to
+ * know whether a row it is drawing is a Laser tool or the engine's `bash`.
+ * `packages/worker/test/tool-eval/fixtures.test.ts` pins the two together
+ * after a real registration, so a tool added to one and not the other fails
+ * the suite.
+ */
+export const LASER_TOOL_NAMES: readonly string[] = [
+  "start_agent",
+  "send_agent_message",
+  "inspect_fleet",
+  "inspect_agent",
+  "stop_agent",
+  "remove_agent_worktree",
+  "complete_agent_run",
+  "task_output",
+  "task_stop",
+  "web_search",
+];
+
+/** Whether this tool name is one of Laser's own, rather than the engine's or an MCP server's. */
+export function isLaserToolName(name: string | undefined): boolean {
+  return name !== undefined && LASER_TOOL_NAMES.includes(name);
+}
+
 /** One Laser tool, as the contract sees it. */
 export interface LaserToolSpec {
   name: string;
@@ -229,6 +285,9 @@ export interface ToolContractIssue {
 const PAGE_SIZE_NAMES = new Set([
   "limit",
   "tail",
+  "take",
+  "bytes",
+  "window",
   "count",
   "size",
   "pagesize",
@@ -275,7 +334,7 @@ export function toolContract(spec: LaserToolSpec): ToolContractIssue[] {
     );
   }
 
-  checkInputObject(spec.input, "input", add);
+  checkInput(spec.input, add);
   checkLabel(spec, add);
   checkAnnotations(spec.annotations, add);
   checkOutput(spec.output, add);
@@ -292,79 +351,202 @@ export function assertToolContract(spec: LaserToolSpec): void {
 
 type Add = (rule: ToolContractRule, path: string, message: string) => void;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+/**
+ * A plain JSON object — a schema node, a result payload, an argument bag.
+ * Exported because six modules had written it out for themselves and one of
+ * them is the difference between a lint that walks a schema and one that
+ * skips it.
+ */
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** An object level: closed, and every property described and bounded. */
-function checkInputObject(node: JsonSchemaNode, path: string, add: Add): void {
+/** The types the contract's schema subset knows. Anything else is refused, not skipped. */
+const KNOWN_TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
+
+/**
+ * JSON Schema keywords the lint deliberately does not understand.
+ *
+ * The evaluation harness's validator already says the right thing about its
+ * own subset — "a construct it does not know is reported as unvalidatable
+ * rather than silently accepted" — and a lint that failed open where the
+ * validator fails loud would let a schema be *conforming* and *unvalidatable*
+ * at the same time. So a reference, a conditional, a negation or a rule about
+ * properties the lint cannot enumerate is an issue: write the shape out.
+ */
+const UNSUPPORTED_KEYWORDS = [
+  "$ref",
+  "$dynamicRef",
+  "$defs",
+  "definitions",
+  "patternProperties",
+  "propertyNames",
+  "if",
+  "then",
+  "else",
+  "not",
+  "contains",
+  "dependencies",
+  "dependentSchemas",
+  "dependentRequired",
+  "unevaluatedProperties",
+  "unevaluatedItems",
+  "additionalItems",
+] as const;
+
+/**
+ * How one schema is walked. Inputs and outputs are walked by the same code
+ * and judged by different rules (D-350.i): an input is a contract a model has
+ * to satisfy exactly, so it is closed and bounded; an output is the declared
+ * shape of a result, so it is described, and nothing more.
+ */
+interface Walk {
+  add: Add;
+  /** The rule a structural problem is reported under. */
+  structure: ToolContractRule;
+  /** The rule a missing description is reported under. */
+  described: ToolContractRule;
+  /** Whether strings, arrays and page sizes must declare their bounds. */
+  bounds: boolean;
+  /** Whether every object level must declare `additionalProperties: false`. */
+  closed: boolean;
+}
+
+/** The whole input schema: an object, closed, described and bounded at every level. */
+function checkInput(node: JsonSchemaNode, add: Add): void {
   if (!isRecord(node)) {
-    add("input-closed", path, "The input schema must be a JSON Schema object.");
+    add("input-closed", "input", "The input schema must be a JSON Schema object.");
     return;
   }
   if (node["type"] !== "object") {
-    add("input-closed", path, `The input schema must declare type "object"; this one declares ${JSON.stringify(node["type"] ?? null)}.`);
+    add("input-closed", "input", `The input schema must declare type "object"; this one declares ${JSON.stringify(node["type"] ?? null)}.`);
   }
-  if (node["additionalProperties"] !== false) {
-    add("input-closed", path, "A closed schema declares additionalProperties: false, so an invented field is refused rather than ignored.");
+  checkValue("input", node, "input", { add, structure: "input-closed", described: "property-described", bounds: true, closed: true });
+}
+
+/** One object level: closed, with every property described. */
+function checkObjectLevel(node: Record<string, unknown>, path: string, ctx: Walk): void {
+  if (ctx.closed && node["additionalProperties"] !== false) {
+    ctx.add(ctx.structure, path, "A closed schema declares additionalProperties: false, so an invented field is refused rather than ignored.");
   }
   const properties = node["properties"];
   if (properties !== undefined && !isRecord(properties)) {
-    add("input-closed", `${path}.properties`, "properties must be an object.");
+    ctx.add(ctx.structure, `${path}.properties`, "properties must be an object.");
     return;
   }
   for (const [name, property] of Object.entries(isRecord(properties) ? properties : {})) {
-    checkProperty(name, property, `${path}.properties.${name}`, add);
+    checkProperty(name, property, `${path}.properties.${name}`, ctx);
   }
 }
 
-/** One named property: it says what it is for, and it is bounded. */
-function checkProperty(name: string, node: unknown, path: string, add: Add): void {
+/** One named property: it says what it is for, and it is walked like any value. */
+function checkProperty(name: string, node: unknown, path: string, ctx: Walk): void {
   if (!isRecord(node)) {
-    add("property-described", path, "A property must be a JSON Schema object.");
+    ctx.add(ctx.described, path, "A property must be a JSON Schema object.");
     return;
   }
   const description = node["description"];
   if (typeof description !== "string" || description.trim().length === 0) {
-    add("property-described", path, `"${name}" has no description. Every field the model fills in says what it is for.`);
+    ctx.add(ctx.described, path, `"${name}" has no description. Every field the model fills in says what it is for.`);
   }
-  checkValue(name, node, path, add);
+  checkValue(name, node, path, ctx);
 }
 
-/** Bounds, enums and nesting, for a property or for one branch of a union. */
-function checkValue(name: string, node: Record<string, unknown>, path: string, add: Add): void {
-  const branches = node["anyOf"] ?? node["oneOf"];
-  if (Array.isArray(branches)) {
-    if (branches.length === 0) add("enum-closed", path, "An empty anyOf/oneOf accepts nothing and says nothing.");
-    branches.forEach((branch, index) => {
-      if (isRecord(branch)) checkValue(name, branch, `${path}.anyOf[${String(index)}]`, add);
-    });
+/**
+ * One value: a property, a union branch, an `allOf` member, an array's items.
+ *
+ * Everything that can hide a schema is walked — `allOf` (what TypeBox's
+ * `Type.Intersect` emits), `anyOf` *and* `oneOf` when both are present,
+ * `prefixItems`, a tuple-shaped `items`, a `type` written as a list — and a
+ * node that says nothing the lint understands is an issue rather than a pass.
+ */
+function checkValue(name: string, node: unknown, path: string, ctx: Walk): void {
+  if (!isRecord(node)) {
+    ctx.add(ctx.structure, path, `A schema must be a JSON Schema object; this one is ${describeJson(node)}.`);
     return;
   }
 
-  if (node["enum"] !== undefined) {
-    const values = node["enum"];
-    if (!Array.isArray(values) || values.length === 0) {
-      add("enum-closed", path, "An enum must list at least one value.");
-    } else if (!values.every((value) => ["string", "number", "boolean"].includes(typeof value))) {
-      add("enum-closed", path, "An enum lists scalars only, so the model can see every choice.");
+  for (const keyword of UNSUPPORTED_KEYWORDS) {
+    if (node[keyword] !== undefined) {
+      ctx.add(ctx.structure, path, `"${keyword}" is outside the schema subset the contract understands, so nothing here — or in the evaluation harness — can check it. Write the shape out in full.`);
     }
   }
 
+  // A combinator describes the value as much as a `type` does; a node may
+  // carry both (an intersection of objects that also names its own fields).
+  let says = false;
+  for (const keyword of ["allOf", "anyOf", "oneOf"] as const) {
+    const branches = node[keyword];
+    if (branches === undefined) continue;
+    says = true;
+    if (!Array.isArray(branches) || branches.length === 0) {
+      ctx.add("enum-closed", path, `An empty ${keyword} accepts nothing and says nothing.`);
+      continue;
+    }
+    branches.forEach((branch, index) => {
+      checkValue(name, branch, `${path}.${keyword}[${String(index)}]`, ctx);
+    });
+  }
+
+  if (node["enum"] !== undefined) {
+    says = true;
+    const values = node["enum"];
+    if (!Array.isArray(values) || values.length === 0) {
+      ctx.add("enum-closed", path, "An enum must list at least one value.");
+    } else if (!values.every((value) => ["string", "number", "boolean"].includes(typeof value))) {
+      ctx.add("enum-closed", path, "An enum lists scalars only, so the model can see every choice.");
+    }
+  }
+  if (node["const"] !== undefined) says = true;
+
   const type = node["type"];
+  if (type !== undefined) {
+    says = true;
+    // `type: ["string", "null"]` is still a string, and still needs its bound.
+    const types = Array.isArray(type) ? type : [type];
+    if (types.length === 0) ctx.add(ctx.structure, path, "An empty type list accepts nothing and says nothing.");
+    for (const entry of types) {
+      if (typeof entry !== "string" || !KNOWN_TYPES.has(entry)) {
+        ctx.add(ctx.structure, path, `type ${JSON.stringify(entry ?? null)} is not one of ${[...KNOWN_TYPES].join(", ")}, so nothing can tell what this accepts.`);
+        continue;
+      }
+      checkTyped(entry, name, node, path, ctx);
+    }
+  }
+
+  if (!says) {
+    ctx.add(ctx.structure, path, `"${name}" declares no type, enum, const or union, so nothing can tell what it accepts.`);
+  }
+}
+
+/** One declared type of one value: its bounds and its nesting. */
+function checkTyped(type: string, name: string, node: Record<string, unknown>, path: string, ctx: Walk): void {
   const constrained = node["enum"] !== undefined || node["const"] !== undefined;
-  if (type === "string" && !constrained && typeof node["maxLength"] !== "number") {
-    add("string-bounds", path, `"${name}" is an unbounded string. Declare maxLength, or close it with an enum.`);
+  if (type === "string" && ctx.bounds && !constrained && typeof node["maxLength"] !== "number") {
+    ctx.add("string-bounds", path, `"${name}" is an unbounded string. Declare maxLength, or close it with an enum.`);
   }
   if (type === "array") {
-    if (typeof node["maxItems"] !== "number") add("array-bounds", path, `"${name}" is an unbounded array. Declare maxItems.`);
+    if (ctx.bounds && typeof node["maxItems"] !== "number") ctx.add("array-bounds", path, `"${name}" is an unbounded array. Declare maxItems.`);
     const items = node["items"];
-    if (isRecord(items)) checkValue(name, items, `${path}.items`, add);
+    const prefix = node["prefixItems"];
+    if (Array.isArray(prefix)) prefix.forEach((entry, index) => checkValue(name, entry, `${path}.prefixItems[${String(index)}]`, ctx));
+    if (Array.isArray(items)) items.forEach((entry, index) => checkValue(name, entry, `${path}.items[${String(index)}]`, ctx));
+    else if (items !== undefined) checkValue(name, items, `${path}.items`, ctx);
+    else if (ctx.bounds && !Array.isArray(prefix)) {
+      ctx.add("array-bounds", path, `"${name}" is an array that never says what is in it. Declare items.`);
+    }
   }
-  if ((type === "number" || type === "integer") && isPageSizeProperty(name) && typeof node["maximum"] !== "number") {
-    add("page-size-bounds", path, `"${name}" is a page size without a ceiling. Declare maximum, so a truncated answer is a bound and not a surprise.`);
+  if ((type === "number" || type === "integer") && ctx.bounds && isPageSizeProperty(name) && typeof node["maximum"] !== "number") {
+    ctx.add("page-size-bounds", path, `"${name}" is a page size without a ceiling. Declare maximum, so a truncated answer is a bound and not a surprise.`);
   }
-  if (type === "object") checkInputObject(node, path, add);
+  if (type === "object") checkObjectLevel(node, path, ctx);
+}
+
+/** What a value is, for a message a person reads: `42`, `null`, `a list`. */
+function describeJson(value: unknown): string {
+  if (Array.isArray(value)) return "a list";
+  if (value === undefined) return "missing";
+  return JSON.stringify(value) ?? String(value);
 }
 
 /** D-277: the label is injected, never declared, and exactly three tools have none. */
@@ -398,6 +580,22 @@ function checkAnnotations(annotations: ToolAnnotations, add: Add): void {
   }
 }
 
+/**
+ * The declared result (D-350.i).
+ *
+ * An output is walked with the same walker as an input and judged by weaker
+ * rules, on purpose. Bounds and closure are what a model must satisfy when it
+ * *fills a schema in*: they turn an invented field or an unbounded page into
+ * a refusal. A result is produced by the tool itself, never sent to the model
+ * as a schema, and validated by nothing at runtime — so `additionalProperties:
+ * false` there would enforce nothing while looking like enforcement, and
+ * `maxLength` would duplicate the truncation the tool already does in code.
+ * What the output schema is *for* — telling a reader, a fixture and the docs
+ * what comes back — is exactly what this checks: an object, at least one
+ * field, every field described at every level, and no construct the lint
+ * cannot read. When results are validated (a lifecycle tool's payload against
+ * its declared output), this rule grows with the validator.
+ */
 function checkOutput(node: JsonSchemaNode, add: Add): void {
   if (!isRecord(node)) {
     add("output-schema", "output", "A tool declares the shape of its result; free text belongs inside a named field.");
@@ -411,10 +609,5 @@ function checkOutput(node: JsonSchemaNode, add: Add): void {
     add("output-schema", "output.properties", "The output schema names at least one field. A tool that returns nothing still says so.");
     return;
   }
-  for (const [name, property] of Object.entries(properties)) {
-    const description = isRecord(property) ? property["description"] : undefined;
-    if (typeof description !== "string" || description.trim().length === 0) {
-      add("output-schema", `output.properties.${name}`, `"${name}" has no description. A result field says what it means.`);
-    }
-  }
+  checkValue("output", node, "output", { add, structure: "output-schema", described: "output-schema", bounds: false, closed: false });
 }

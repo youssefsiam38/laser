@@ -14,6 +14,7 @@
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { isRecord } from "@lasercode/protocol";
 
 /** How many calls and how much context one task may cost. */
 export interface ToolEvalBudget {
@@ -102,8 +103,6 @@ export interface ToolEvalFixture {
   source?: string;
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
-
 function fail(source: string, what: string): never {
   throw new Error(`${source} is not a usable tool-evaluation fixture: ${what}`);
 }
@@ -138,6 +137,77 @@ function parseStep(value: unknown, source: string, index: number): RecordedStep 
   };
 }
 
+/** The statuses the scripted world knows an agent can be in. */
+const WORLD_STATUSES = ["running", "needs_input", "completed", "blocked", "failed", "cancelled"] as const;
+
+/**
+ * The world, checked field by field like every other part of the fixture.
+ *
+ * It used to be cast: a typo in `agents[0].statuss` or a `role` of `"parent"`
+ * reached `ScriptedWorld` as a shape it does not answer for, and the run
+ * failed somewhere far from the file that caused it. A fixture is data a
+ * person writes by hand, so the refusal names the field.
+ */
+function parseWorld(value: unknown, source: string): ToolEvalWorld {
+  if (value === undefined) return {};
+  if (!isRecord(value)) fail(source, "world must be an object.");
+  const role = value["role"];
+  if (role !== undefined && role !== "root" && role !== "child") fail(source, 'world.role must be "root" or "child".');
+  const search = value["search"];
+  if (search !== undefined && search !== "unconnected" && search !== "off") fail(source, 'world.search must be "unconnected" or "off".');
+  const catalog = value["catalog"];
+  if (catalog !== undefined && !Array.isArray(catalog)) fail(source, "world.catalog must be a list of agents.");
+  const agents = value["agents"];
+  if (agents !== undefined && !Array.isArray(agents)) fail(source, "world.agents must be a list of agents.");
+  return {
+    ...(role !== undefined ? { role } : {}),
+    ...(search !== undefined ? { search } : {}),
+    ...(catalog !== undefined
+      ? {
+          catalog: catalog.map((entry, index) => {
+            if (!isRecord(entry)) fail(source, `world.catalog[${String(index)}] must be an object.`);
+            return {
+              agentName: requireString(entry["agentName"], source, `world.catalog[${String(index)}].agentName`),
+              description: requireString(entry["description"], source, `world.catalog[${String(index)}].description`),
+            };
+          }),
+        }
+      : {}),
+    ...(agents !== undefined ? { agents: agents.map((entry, index) => parseWorldAgent(entry, source, index)) } : {}),
+  };
+}
+
+function parseWorldAgent(value: unknown, source: string, index: number): ToolEvalWorldAgent {
+  const at = `world.agents[${String(index)}]`;
+  if (!isRecord(value)) fail(source, `${at} must be an object.`);
+  const status = value["status"];
+  if (typeof status !== "string" || !(WORLD_STATUSES as readonly string[]).includes(status)) {
+    fail(source, `${at}.status must be one of ${WORLD_STATUSES.join(", ")}.`);
+  }
+  const worktree = value["worktree"];
+  if (worktree !== undefined && !isRecord(worktree)) fail(source, `${at}.worktree must be an object.`);
+  const question = value["question"];
+  if (question !== undefined && !isRecord(question)) fail(source, `${at}.question must be an object.`);
+  return {
+    agentName: requireString(value["agentName"], source, `${at}.agentName`),
+    subagentName: requireString(value["subagentName"], source, `${at}.subagentName`),
+    sessionId: requireString(value["sessionId"], source, `${at}.sessionId`),
+    runId: requireString(value["runId"], source, `${at}.runId`),
+    status: status as ToolEvalWorldAgent["status"],
+    task: requireString(value["task"], source, `${at}.task`),
+    ...(value["messageCount"] !== undefined ? { messageCount: requireNumber(value["messageCount"], source, `${at}.messageCount`) } : {}),
+    ...(isRecord(worktree)
+      ? {
+          worktree: {
+            branch: requireString(worktree["branch"], source, `${at}.worktree.branch`),
+            ...(worktree["unmergedCommits"] !== undefined ? { unmergedCommits: requireNumber(worktree["unmergedCommits"], source, `${at}.worktree.unmergedCommits`) } : {}),
+          },
+        }
+      : {}),
+    ...(isRecord(question) ? { question: { text: requireString(question["text"], source, `${at}.question.text`) } } : {}),
+  };
+}
+
 /**
  * Read one fixture, refusing anything the runner could only half-understand.
  * A fixture is data a person writes by hand, so every refusal names the field.
@@ -159,8 +229,7 @@ export function parseFixture(value: unknown, source: string): ToolEvalFixture {
     if (!(TOOL_EVAL_MEASURES as readonly string[]).includes(name)) fail(source, `"${name}" is not a measure; the measures are ${TOOL_EVAL_MEASURES.join(", ")}.`);
     measures.add(name as ToolEvalMeasureId);
   }
-  const world = value["world"];
-  if (world !== undefined && !isRecord(world)) fail(source, "world must be an object.");
+  const world = parseWorld(value["world"], source);
   const expected = requireString(value["expectedTool"], source, "expectedTool");
   const allowedTools = allowed.map((entry, index) => requireString(entry, source, `allowedTools[${String(index)}]`));
   if (!allowedTools.includes(expected)) fail(source, "allowedTools must contain expectedTool.");
@@ -177,7 +246,7 @@ export function parseFixture(value: unknown, source: string): ToolEvalFixture {
     },
     measures: TOOL_EVAL_MEASURES.filter((measure) => measures.has(measure)),
     ...(value["truncationBytes"] !== undefined ? { truncationBytes: requireNumber(value["truncationBytes"], source, "truncationBytes") } : {}),
-    world: (world ?? {}) as ToolEvalWorld,
+    world,
     steps: steps.map((step, index) => parseStep(step, source, index)),
     source,
   };

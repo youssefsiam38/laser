@@ -21,10 +21,10 @@ guide and the MCP tool-annotation specification into what Laser enforces.
 | Intent-named | verb + object in snake_case (`inspect_project_work`, `report_project_task`); no CRUD-over-table names, no engine vocabulary |
 | Single purpose | one tool does one thing a person could name; a tool that "does X or Y depending on fields" is two tools |
 | Closed input schema | JSON Schema object, `additionalProperties: false`, every field described, no ambiguous optional combinations (use a discriminated `action`/`kind` union instead) |
-| Declared output schema | a typed result; free text only inside a named field |
+| Declared output schema | a typed result whose every field is described, at every level; free text only inside a named field. Closure and bounds govern inputs, not results (D-350.i) |
 | Opaque ids | entity, revision, run, task and repository ids are opaque strings; never host paths, storage layout or engine session paths |
 | Exact revisions | any reference to project work carries `revisionId` and, where the tool can act on it, `digest` |
-| Bounds in the schema | `minLength`/`maxLength`, `maxItems`, enum values, page-size max; nothing unbounded |
+| Bounds in the schema | **of the input**: `minLength`/`maxLength`, `maxItems`, enum values, page-size max; nothing the model fills in is unbounded. A page size is recognised by name — `limit`, `tail`, `take`, `bytes`, `window`, `messages`, `depth` and their kin — and the list is explicit, so a new name for a page grows it in one place (`PAGE_SIZE_NAMES`) with the tool that introduced it, rather than being guessed at |
 | Optional `label` | every tool except `start_agent`, `complete_agent_run` and `inspect_fleet` (D-277); stripped before execution, never an argument |
 | Annotations | `readOnly`, `idempotent`, `destructive`, `external` flags on every tool, mapped to MCP annotations where exposed through MCP |
 
