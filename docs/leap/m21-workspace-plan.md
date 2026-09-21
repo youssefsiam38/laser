@@ -18,6 +18,7 @@ copy of the truth** (D-331, D-355).
 | --- | --- | --- |
 | M21-T5 UI client store, reconcile and deep links | done | `pnpm -F @lasercode/ui test` (`test/project-work/*`) |
 | M21-T6 Embedded workspace shell | done | `pnpm -F @lasercode/ui test`, `pnpm -F @lasercode/ui typecheck` |
+| M21-T16 Plans and Tasks workspace | done | `pnpm -F @lasercode/ui test` (`test/project-work/{plan-graph,plan-detail,task-detail,board-transitions}*`), `pnpm -F @lasercode/ui typecheck` |
 
 ---
 
@@ -183,3 +184,113 @@ Deferred on purpose, and recorded here rather than implied:
   the Design body reads its real fields today and names the sketches it has
   without ever rendering their bytes.
 - **Model tools and execution linking.** M21-T17.
+
+---
+
+## M21-T16 · Plans and Tasks
+
+### What landed
+
+| File | What it owns |
+| --- | --- |
+| `packages/ui/src/project-work/plan-graph.ts` | the declared graph's layout: dependency depth, reading order, arrow-key steps, the host's problems and orphans carried through untouched |
+| `packages/ui/src/project-work/task-model.ts` | attempts from execution links, evidence matched to them by provenance, checkpoints from repository links, the blocked sentence, the stale-upstream decode, the conflict sentence, assignment options |
+| `packages/ui/src/project-work/board.ts` | `dropFor`: what a drop *is*, separated from the gesture (added; `checkDrop` and `actionForDrop` unchanged) |
+| `packages/ui/src/components/project-work/PlanDetail.tsx` | the compact bar (`from SPEC-n` / standalone — the prompt was the brief), the Document ↔ Dependencies tabs, phases through `agent-plan` |
+| `packages/ui/src/components/project-work/PlanGraph.tsx` | the graph: nodes as buttons with key, type badge and state chip; edges as token-stroked SVG; one tab stop and arrow keys; the host's refusals and orphans in its own words |
+| `packages/ui/src/components/project-work/TaskDetail.tsx` | Start…, attempts, evidence, checkpoints, acceptance, the blocked / stale / conflict banners, the assignment control, the move menu |
+| `packages/ui/src/components/project-work/TaskStart.tsx` | the chooser that records `project/task/link-execution` against a session **in this project**, and shows the conflicts the host answers with |
+| `packages/ui/src/components/project-work/TaskCancel.tsx` | the reason a cancellation needs, asked for before the request |
+| `packages/ui/src/components/project-work/TaskInspector.tsx` | dependencies as key cards (state and all), and the Plan a Task belongs to |
+| `packages/ui/src/components/project-work/Board.tsx` | finished: the cascade said out loud, the per-card move menu extracted, and the phone's compact `todo-list` form |
+| `packages/ui/src/components/assistant-ui/elements/agent-plan.tsx` | reinstalled from the registry and restyled: phases, real `done/total`, no percentage, no cursor |
+| `packages/ui/src/components/assistant-ui/elements/todo-list.tsx` | `TodoItem.action` and `header={false}` (two additions, nothing else) |
+| `packages/ui/src/components/assistant-ui/elements/checkpoint-history.tsx` | `CheckpointTrail`: the same element's second form, for checkpoints from git |
+| `packages/ui/test/project-work/{plan-graph,plan-detail,task-detail,board-transitions}.test.*` | 39 tests over the real components and the pure models |
+
+Edits to files this task does not own, each as small as it could be and listed
+so a merge can check them:
+
+- `components/project-work/WorkDetail.tsx` — the detail switch routes `plan` to
+  `PlanDetail` and `task` to `TaskDetail`; every other kind still renders
+  `WorkBody`.
+- `components/project-work/Inspector.tsx` — a Task is read with `body: "full"`
+  (its dependencies and its Plan live in the body) and `TaskInspectorSections`
+  is rendered for it.
+- `project-work/store.ts` — `revise()` and `linkExecution()` added beside
+  `taskAction()`, and the `refused` failure carries the host's typed `data`
+  (that is how `{ refused: "stale_upstream", upstream }` reaches a banner).
+
+### Decisions where the contract is silent
+
+1. **The graph is Laser's own surface, the phases are the adopted element.**
+   D-355 keeps the board, the badges and the graph Laser-owned, and
+   `ux-elements.md` claims `agent-plan` for a Plan's phases. So the Document
+   view mounts `agent-plan` over real Tasks and the Dependencies view is
+   `PlanGraph`: HTML buttons for nodes (so type never shrinks and text never
+   clips) over one SVG layer for edges, stroked with `var(--line)` and
+   `var(--danger)`. Node geometry is three constants in one place, so the
+   edges and the nodes cannot drift apart.
+2. **A node this window has not read is still a node.** It says "unread"
+   rather than disappearing: a Plan's phase that looks two Tasks short because
+   the backlog page ended is a lie about the Plan.
+3. **A cycle is survivable.** The host refuses to store one, but a refusal has
+   to be *shown* — so the layout detects the loop, stops, marks every node and
+   edge it names and draws the rest normally, with the host's sentence above.
+4. **What this window can prove, it refuses itself; everything else it sends.**
+   The board pre-refuses by the state machine and the row's unmet keys and
+   sends a completion (a list row cannot see evidence). The Task detail *has*
+   read `readiness`, so it refuses a completion with no acceptance evidence
+   itself, with the sentence that says why. Same rule, different knowledge.
+5. **Evidence is matched to an attempt by provenance, never by guesswork.** An
+   evidence record carries `origin.sessionId`, not an attempt number, so it is
+   listed under the attempt whose session it came from and otherwise stands on
+   its own. Nothing is assigned to an attempt by time.
+6. **Accepting shared-checkout risk is a revision, and only a person's.**
+   There is no task action for it (`PROJECT_TASK_ACTIONS` is closed and every
+   action maps to a state), so the panel writes `scope.sharedWith` through
+   `project/work/revise` — an immutable revision that says who accepted it and
+   when. The host refuses an agent's revision that adds one (M21-T15).
+7. **Start… does the part that is real.** It records
+   `project/task/link-execution` against a session **in this project**,
+   because the link exists before any prompt is sent and it moves nothing.
+   There is no "new session" or "agent run" button standing there greyed out:
+   starting a run, the implementation context packet and the model tools are
+   M21-T17, and a button that cannot work is worse than one that is not there
+   yet. An attempt whose session this device still has offers **Open the
+   conversation**, which is the existing `openSession`.
+8. **No Jira chip is drawn.** Nothing in a Task revision carries an external
+   issue key today; the external-work link is M25. A chip for a link that does
+   not exist would be a promise the data cannot keep.
+9. **The Plan keeps the generic inspector.** D-355 says a Plan's inspector is
+   "none", meaning it has no *kind-specific* panel — its context is the graph,
+   which is in the middle column. The cross-kind links, comments and revision
+   history that T6 gives every kind are left alone rather than removed for one
+   kind.
+10. **A cancellation is asked why, not refused.** The engine refuses a
+    `cancel` that says nothing and writes the reason as durable evidence
+    (M21-T15), so both the board and the detail open one small dialog first
+    and send the note with the action. A control whose every press comes back
+    refused is not a control. Enter cancels nothing: the reason is a textarea
+    and "Keep it" holds focus.
+11. **The phone's board is the same board.** Columns keep their identity,
+    their counts and their transitions; only the card becomes a `todo-list`
+    row with the same "Move to" menu. Nothing is shown at a smaller size, and
+    the columns still scroll sideways with no page scroll.
+
+### What is proven, and what is not
+
+Proven by `pnpm -F @lasercode/ui test`: the drop mapping, the move's exact
+method and action, the pre-refusal naming the missing keys with **no request
+sent**, the host's `done`-without-evidence refusal rendered, the stale-upstream
+banner built from the refusal's `data`, the conflict panel and the
+`scope.sharedWith` revision it writes, the execution link (and that it is not a
+transition), the assignment revision, the graph's layout, its problems and
+orphans from a fixture, the tab roles and the single tab stop.
+
+Not proven by a test, and named rather than claimed: the **pointer drag
+itself**. dnd-kit measures real layout rectangles and happy-dom has none, so
+what a drag resolves to is proven as `dropFor` and the request it makes is
+proven through the same `move` the per-card menu calls — the path a keyboard
+and a coarse pointer take. A person dragging a card is the acceptance run
+(AGENTS.md, D-342).
