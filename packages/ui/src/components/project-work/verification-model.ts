@@ -7,6 +7,7 @@
  * component stays about what a person sees.
  */
 import {
+  PROJECT_WORK_BLOB_PAGE_MAX_BYTES,
   VERIFICATION_REPORT_MEDIA_TYPE,
   verificationReportSchema,
   type ClientRequests,
@@ -43,21 +44,90 @@ export function reportFrom(page: BlobPage): VerificationReport | undefined {
   if (page.data === undefined || page.released) return undefined;
   if (page.mediaType !== VERIFICATION_REPORT_MEDIA_TYPE) return undefined;
   if (page.nextOffset !== undefined) return undefined;
+  const bytes = proofPageBytes(page.data);
+  if (!bytes) return undefined;
+  const text = proofTextFrom([bytes]);
+  if (text === undefined) return undefined;
   try {
-    const parsed = verificationReportSchema.safeParse(JSON.parse(decode(page.data)));
+    const parsed = verificationReportSchema.safeParse(JSON.parse(withoutMark(text)));
     return parsed.success ? (parsed.data as VerificationReport) : undefined;
   } catch {
     return undefined;
   }
 }
 
-function decode(base64: string): string {
-  if (typeof atob === "function") {
-    const binary = atob(base64);
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    return new TextDecoder().decode(bytes);
+// ------------------------------------------------- bytes, read back as text
+
+/** Pages of a stored blob one read ever walks. A capture is at most 4 MB. */
+export const PROOF_CAPTURE_MAX_PAGES = 8;
+
+/**
+ * Bytes one read ever assembles, whatever the pages say.
+ *
+ * The page count alone is not a bound: a page is at most
+ * {@link PROJECT_WORK_BLOB_PAGE_MAX_BYTES}, but what actually comes back is
+ * what this window decides to hold, so the bytes are counted too.
+ */
+export const PROOF_CAPTURE_MAX_BYTES = PROOF_CAPTURE_MAX_PAGES * PROJECT_WORK_BLOB_PAGE_MAX_BYTES;
+
+/** Base64 of one page, exactly: anything else is not this page's bytes. */
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+
+/**
+ * One page of a blob, as the bytes it is.
+ *
+ * Strict on purpose: `Buffer.from(…, "base64")` drops characters it does not
+ * understand and returns a plausible shorter buffer, which is the one thing a
+ * proof reader must never do. A page that is not base64 is refused, not
+ * quietly shortened.
+ */
+export function proofPageBytes(base64: string): Uint8Array | undefined {
+  if (base64.length % 4 !== 0 || !BASE64.test(base64)) return undefined;
+  try {
+    if (typeof atob === "function") {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let at = 0; at < binary.length; at += 1) bytes[at] = binary.charCodeAt(at);
+      return bytes;
+    }
+    const buffer = Buffer.from(base64, "base64");
+    return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  } catch {
+    return undefined;
   }
-  return Buffer.from(base64, "base64").toString("utf8");
+}
+
+/**
+ * Every page of one blob, decoded **once**, as the text it is.
+ *
+ * A page boundary is a byte boundary, not a character one: a multi-byte
+ * character can straddle it, and decoding each page on its own turns such a
+ * character into replacement characters — a proof that reads differently from
+ * the source it is a proof of. So the pages are assembled and decoded in one
+ * pass, and that pass is `fatal`: bytes that are not valid UTF-8 are a refusal
+ * a person is told about, never `\uFFFD` silently standing in for what the
+ * file really said. `ignoreBOM: true` keeps a leading mark rather than eating
+ * it, so what comes out is what was stored.
+ */
+export function proofTextFrom(pages: readonly Uint8Array[]): string | undefined {
+  let total = 0;
+  for (const page of pages) total += page.length;
+  const bytes = new Uint8Array(total);
+  let at = 0;
+  for (const page of pages) {
+    bytes.set(page, at);
+    at += page.length;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
+
+/** JSON never starts with a byte order mark; a document that kept one still parses. */
+function withoutMark(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
 export const VERIFICATION_OUTCOME_LABEL: Readonly<Record<VerificationOutcome, string>> = {
@@ -192,6 +262,55 @@ function short(id: string): string {
 /** Files one opened proof lists at a time. A capture holds at most a hundred. */
 export const PROOF_CAPTURE_FILES_SHOWN = 20;
 
+/**
+ * One bounded page of a list a person walks, and where in the list it is.
+ *
+ * A cap on what is *shown* is not a cap on what exists: everything a capture
+ * recorded stays reachable by turning the page, because a proof that quietly
+ * stops listing what it holds is a proof a person cannot check.
+ */
+export interface ProofPage<T> {
+  items: T[];
+  /** 1-based. */
+  page: number;
+  pages: number;
+  /** 1-based and inclusive; both 0 when the list is empty. */
+  from: number;
+  to: number;
+  total: number;
+}
+
+/** One page of a list, clamped to the pages that exist. */
+export function proofPageOf<T>(items: readonly T[], page: number, size: number): ProofPage<T> {
+  const pages = Math.max(1, Math.ceil(items.length / size));
+  const at = Math.min(Math.max(1, Math.trunc(page)), pages);
+  const from = (at - 1) * size;
+  const shown = items.slice(from, from + size);
+  return {
+    items: [...shown],
+    page: at,
+    pages,
+    from: shown.length === 0 ? 0 : from + 1,
+    to: from + shown.length,
+    total: items.length,
+  };
+}
+
+/** Where a person is in a paged list, counted rather than guessed at. */
+export function proofPageLine(page: ProofPage<unknown>, label: string): string {
+  if (page.total === 0) return "";
+  return `${label} ${String(page.from)}\u2013${String(page.to)} of ${String(page.total)}.`;
+}
+
+/**
+ * Characters of one retained file shown at a time (D-363).
+ *
+ * A capture may hold four megabytes of source; a person reads one file, in
+ * parts. Nothing here ever holds more than one file's retained text, and it
+ * shows one part of that.
+ */
+export const PROOF_SOURCE_WINDOW_CHARS = 2_000;
+
 /** What an opened proof says, bounded, in the words of the thing it proves. */
 export interface ProofCaptureSummary {
   repository: string;
@@ -199,11 +318,36 @@ export interface ProofCaptureSummary {
   at: string;
   /** Where the set it keeps whole was taken from, when it says. */
   from?: string;
-  files: Array<{ path: string; note: string }>;
-  /** Said only when there are more than are listed. */
-  more?: string;
   /** The capture's own sentence about what it left out. */
   truncated?: string;
+}
+
+/** One file whose **text** this proof retained, and can be read out of it. */
+export interface ProofSourceEntry {
+  path: string;
+  side: "before" | "after";
+  note: string;
+  bytes: number;
+  /** Characters of retained text, which is what the reader pages through. */
+  length: number;
+  /** True when the capture kept only the first bytes of the file. */
+  truncated?: boolean;
+}
+
+/** One file this proof names but did **not** keep the bytes of, and why. */
+export interface ProofOmission {
+  path: string;
+  note: string;
+}
+
+/** One part of one retained file, as it is shown. */
+export interface ProofSourceWindow {
+  text: string;
+  /** 1-based. */
+  part: number;
+  parts: number;
+  from: number;
+  to: number;
 }
 
 const BASIS_SENTENCE = {
@@ -220,10 +364,17 @@ const STATUS_NOTE = {
   present: "kept whole",
 } as const;
 
+const OMISSION_NOTE = {
+  binary: "not text, so its bytes were never what a person would read",
+  too_large: "too large to keep whole, so none of it was kept",
+  budget: "listed without its source, to keep this proof bounded",
+  deleted: "removed here; what it said before is kept as its before side",
+} as const;
+
 /** One stored capture, read as the bounded record a person can check. */
 export function proofCaptureFrom(text: string): RepositoryCapture | undefined {
   try {
-    const parsed = repositoryCaptureSchema.safeParse(JSON.parse(text));
+    const parsed = repositoryCaptureSchema.safeParse(JSON.parse(withoutMark(text)));
     return parsed.success ? (parsed.data as RepositoryCapture) : undefined;
   } catch {
     return undefined;
@@ -239,11 +390,6 @@ export function proofCaptureFrom(text: string): RepositoryCapture | undefined {
  */
 export function proofCaptureSummary(capture: RepositoryCapture): ProofCaptureSummary {
   const required = capture.required;
-  const kept = required?.entries ?? [];
-  const files = kept.slice(0, PROOF_CAPTURE_FILES_SHOWN).map((entry) => ({
-    path: entry.path,
-    note: `${STATUS_NOTE[entry.status]}${entry.side === "before" ? ", as it was before" : ""}`,
-  }));
   return {
     // A capture written before the name was recorded says "a repository"
     // rather than inventing one.
@@ -254,12 +400,105 @@ export function proofCaptureSummary(capture: RepositoryCapture): ProofCaptureSum
         ? `the change from ${short(capture.change.base.commitObjectId)} to ${short(capture.change.head.commitObjectId)}`
         : "code this capture does not name",
     ...(required ? { from: BASIS_SENTENCE[required.basis] } : {}),
-    files,
-    ...(kept.length > files.length
-      ? { more: `${String(kept.length - files.length)} more files this proof keeps whole are not listed here.` }
-      : {}),
     ...(capture.truncated ? { truncated: capture.truncated } : {}),
   };
+}
+
+/**
+ * The files whose text this proof really holds — the ones a review of the
+ * decision reads (D-363).
+ *
+ * An index, never the bodies: what comes back is path, side, size and how much
+ * text there is, so a surface can offer a file without holding the whole
+ * capture. The note comes from the required block when there is one, because
+ * "changed" and "as it was before" are what a person needs to know about a
+ * body before reading it.
+ *
+ * Every retained file is indexed, not the first page of them: the index is
+ * metadata for the hundred files a capture may hold at most, and holds
+ * no body at all, and a surface pages through it with
+ * {@link proofPageOf}. Capping the index instead would make the hundredth file
+ * of a proof unreadable, which is hiding evidence rather than bounding it.
+ */
+export function proofSourceEntries(capture: RepositoryCapture): ProofSourceEntry[] {
+  const required = capture.required?.entries ?? [];
+  return capture.sources.map((source): ProofSourceEntry => {
+    const side = source.side ?? "after";
+    const named = required.find((entry) => entry.path === source.path && entry.side === side);
+    return {
+      path: source.path,
+      side,
+      note: `${named ? STATUS_NOTE[named.status] : "kept whole"}${side === "before" ? ", as it was before" : ""}${
+        source.truncated === true ? ", first part only" : ""
+      }`,
+      bytes: source.bytes,
+      length: source.text.length,
+      ...(source.truncated === true ? { truncated: true } : {}),
+    };
+  });
+}
+
+/**
+ * The files this proof names but whose bytes it did not keep, each saying why.
+ *
+ * Not a gap to hide: a person reading a decision's evidence has to know that
+ * a binary file's bytes were never evidence and that a file listed without
+ * its source is listed without its source. Every one of them is named — the
+ * reader pages through them — because "and some others" is exactly the gap
+ * this list exists to close.
+ */
+export function proofOmissions(capture: RepositoryCapture): ProofOmission[] {
+  return capture.files
+    .filter((file) => file.omitted !== undefined)
+    .map((file) => ({ path: file.path, note: OMISSION_NOTE[file.omitted as keyof typeof OMISSION_NOTE] }));
+}
+
+/** One retained body, by path and side. Nothing else of the capture is kept. */
+export function proofSourceText(capture: RepositoryCapture, path: string, side: "before" | "after"): string | undefined {
+  return capture.sources.find((source) => source.path === path && (source.side ?? "after") === side)?.text;
+}
+
+/**
+ * One part of one retained body.
+ *
+ * Cut by characters rather than lines on purpose: a capture may hold a file
+ * with no newlines at all, and "the first two thousand characters" is a bound
+ * that holds whatever the bytes look like.
+ *
+ * A cut never falls between the two halves of one character. JavaScript counts
+ * UTF-16 units, so an emoji or any other character outside the basic plane is
+ * two of them; cutting between them would show a person half a character that
+ * is not in the file they are reading. The high half moves to the next part
+ * instead, so the parts still join back into exactly the retained text and no
+ * part is ever longer than {@link PROOF_SOURCE_WINDOW_CHARS}.
+ */
+export function proofSourceWindow(text: string, part: number): ProofSourceWindow {
+  const cuts = windowCuts(text);
+  const parts = Math.max(1, cuts.length - 1);
+  const at = Math.min(Math.max(1, Math.trunc(part)), parts);
+  const from = cuts[at - 1] ?? 0;
+  const to = cuts[at] ?? text.length;
+  return { text: text.slice(from, to), part: at, parts, from, to };
+}
+
+/** Where each part of one retained body starts and ends, `[0, …, length]`. */
+function windowCuts(text: string): number[] {
+  const cuts = [0];
+  let at = 0;
+  while (at < text.length) {
+    at = wholeCharacterAt(text, Math.min(text.length, at + PROOF_SOURCE_WINDOW_CHARS));
+    cuts.push(at);
+  }
+  return cuts;
+}
+
+/** The nearest cut at or before `index` that does not split a surrogate pair. */
+function wholeCharacterAt(text: string, index: number): number {
+  if (index <= 0 || index >= text.length) return Math.max(0, Math.min(index, text.length));
+  const before = text.charCodeAt(index - 1);
+  const here = text.charCodeAt(index);
+  const splits = before >= 0xd800 && before <= 0xdbff && here >= 0xdc00 && here <= 0xdfff;
+  return splits ? index - 1 : index;
 }
 
 /**

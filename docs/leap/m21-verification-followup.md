@@ -1175,3 +1175,164 @@ the read-only plan `b7a4b290`).
 | `env -i … pnpm -F @lasercode/ui exec vitest run test/project-work/{native-acceptance,verification}.test.tsx` | 39 passed |
 | `pnpm -r typecheck` | clean |
 | `pnpm identity:check` | passes |
+
+### The retained source, actually read (parent review of `36e163ed`)
+
+UI only: `ProofTrail.tsx`, `verification-model.ts` and the verification UI
+tests. No host or protocol change (`36e163ed` is the settled host/protocol
+proof checkpoint; D-364 runtime work belongs to the runtime owner).
+
+**A capture's bodies are what a person reads, so they are read.** The opened
+proof no longer stops at names and notes:
+
+- `proofSourceEntries` indexes the files whose **text** the capture holds
+  (path, side, size, characters, "first part only" when the capture truncated
+  it) and `proofOmissions` names the ones it did not keep, each with the reason
+  in a person's words — binary, too large, listed without its source, removed
+  with its before side kept. Both bounded by `PROOF_CAPTURE_FILES_SHOWN`, with
+  an honest count of what is not offered.
+- `Read it` on a file fetches the **same bound blob** (`row.proofId`, never the
+  link's current pointer), takes that one body out of it, and shows it
+  `PROOF_SOURCE_WINDOW_CHARS` (2 000) characters at a time with
+  `Previous part` / `Next part` and `Part n of m · characters a–b`.
+- Nothing indiscriminate is retained: the parsed capture is a local in
+  `fetchCapture` and goes out of scope, so what the surface holds is the
+  metadata projection plus **one** file's retained text (a capture file is at
+  most 128 KB) — never the four megabytes a capture may hold. Choosing another
+  file replaces the body that was held.
+- The text is rendered as text in a wrapping `<pre>`: React escapes it, so a
+  file full of `<script>` and `onerror=` is characters on the screen and
+  nothing else. It wraps rather than scrolling sideways, because evidence whose
+  right-hand side cannot be read is not evidence a person can check.
+- A body that cannot be read back (released, deleted, damaged, unparseable,
+  named but absent) gets its own refusal beside the proof, and the rest of the
+  proof stays on screen.
+
+**The scope fence is now structural.** `ProofTrail` computes a scope of
+store identity (a `WeakMap`-minted id, so two stores answering for one project
+id are two subjects), project id, entity id and current revision, and renders
+`<ProofTrailFor key={scope} …>`. A change replaces the surface in the same
+render rather than leaving the previous subject's rows on screen until a
+passive effect tidies them; in-flight reads are invalidated by that unmount
+(cleanup bumps the generation) and by every new request.
+
+New tests in `packages/ui/test/project-work/verification.test.tsx`: the
+retained text of a chosen file, in parts, out of the bound proof of a
+superseded capture (the link points elsewhere by then); a second file replacing
+the first; markup-heavy source proven to be text and not elements (escaped in
+the document, no `script`/`img` node); omitted files named with their reasons;
+a body that cannot be read back leaving the proof intact; and a held-open blob
+read dropped across both a subject change and a store change, with the rows and
+the opened proof gone before the late answer lands.
+
+| Command | Result |
+| --- | --- |
+| `pnpm -r build` | clean |
+| `env -i … pnpm -F @lasercode/ui exec vitest run test/project-work/{native-acceptance,verification}.test.tsx` | 44 passed (verification 23) |
+| `pnpm -r typecheck` | clean |
+| `pnpm identity:check` | passes |
+
+Host `test/project-work` (311) and protocol (752) were last run green at
+`36e163ed` and are untouched by this commit.
+
+**Still the person's (D-342):** how the source reader looks in both themes and
+at both widths, including a long line and a file of one enormous line.
+
+### Bounded is not hidden, and the bytes are read once (parent review of `bedf8b40`)
+
+UI only: `ProofTrail.tsx`, the new `ProofReader.tsx` it renders,
+`verification-model.ts` and the verification UI tests. No host, protocol or
+worker change (`36e163ed` stays the settled backend checkpoint; the D-364
+verification runtime and the canonical quota accounting belong to their own
+owners).
+
+**1 · Every cap pages; nothing captured is unreachable.** A cap on what is
+*shown* had become a cap on what could be *read*: the first twenty retained
+files, the first twenty omission reasons and the five newest decisions were
+all a person could ever reach, with a count of the rest standing in for them.
+Evidence that cannot be opened is not evidence, so each of the three now turns
+a page.
+
+- `proofSourceEntries` and `proofOmissions` return the **whole** index — path,
+  side, note, size, characters, and the reason a file was not kept — and never
+  a body. The index is metadata for at most the hundred sources and five
+  hundred files a capture may hold; `proofPageOf`/`proofPageLine` slice it into
+  pages of `PROOF_CAPTURE_FILES_SHOWN` with `Previous`/`Next` (each carrying
+  the name of the list it turns, for a person who hears the page) and
+  `Files 21–24 of 24.`
+- Decisions are offered `PROOF_DECISIONS_OFFERED` at a time with
+  `Newer`/`Older` and `Decisions 6–6 of 6.`, so the sixth decision can be asked
+  about by name like the first.
+- A page *replaces* the page before it — the previous page's rows are gone from
+  the document, never stacked under the new ones — while the one body a person
+  is reading stays open, because the index moved and the file did not.
+- What is held is unchanged: the bounded index plus **one** file's retained
+  text (a capture file is at most 128 KB). The parsed capture is still a local
+  that goes out of scope, so the four megabytes a capture may hold are never
+  retained, and a page turn re-reads nothing.
+
+**2 · One decode per capture, and it is fatal.** `fetchCapture` used to append
+`decode(page)` per 512 KB page, each with its own `TextDecoder`: a valid
+multi-byte character whose bytes straddled a page boundary was silently turned
+into replacement characters — a proof that reads differently from the source it
+is a proof of. Now the pages are kept as bytes (`proofPageBytes`, strict base64
+rather than `Buffer`'s lossy decode), assembled once, and decoded in a single
+`new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })` pass
+(`proofTextFrom`). Consequences, all of them deliberate:
+
+- bytes that are not valid UTF-8 are a refusal a person is told about — "not
+  the text they are stored as… It may be damaged" — never `\uFFFD` standing in
+  for what the file said;
+- a byte order mark the file itself carries survives into what is read
+  (`ignoreBOM: true`), and JSON that carries one still parses;
+- a page that is not base64 is its own refusal, before any parse;
+- the order of the checks is the honest one: the host's refusal (damaged bytes
+  never come back as a page), then release, then absent bytes;
+- the read is bounded by both the page count (`PROOF_CAPTURE_MAX_PAGES`) **and**
+  this window's own byte count (`PROOF_CAPTURE_MAX_BYTES`), so a server that
+  answers with more than it was asked for still cannot make this surface hold
+  more than 4 MB. Neither limit was raised to make anything fit.
+- `proofSourceWindow` cuts the 2 000-character display parts on whole
+  characters: a surrogate pair is never split, so an emoji is never shown as
+  half of itself, the parts still join back into exactly the retained text, and
+  no part exceeds the bound.
+
+**3 · Copy that does not overclaim.** A proof that cannot be read used to say
+the decision "stands", which reads as "still reliable" precisely when its
+evidence is missing. It now says the **record** of the decision is kept, that
+it is the proof it was made on that cannot be read, and to review the work
+before relying on it. `known: false` no longer invents a cause ("it was decided
+before that record was kept"): the absence may predate the record or the record
+may not have survived, this app does not know which, and it says so. The
+known-empty/unknown distinction and the record/proof separation are unchanged.
+
+**Structure.** The reader came out of `ProofTrail.tsx` into `ProofReader.tsx`
+(opened proof, its two pagers, the source reader); the trail keeps the scope
+key (store identity, project, entity, revision), the generation fence and the
+cursor trail exactly as they were, and `ProofReader` is keyed by blob id so
+opening another proof starts at its first page.
+
+New `packages/ui/test/project-work/proof-reader.test.tsx` (8) drives the real
+`ProofTrail` over the real store against a blob server that pages exactly like
+the host: the twenty-first retained file opened and read out of the bound
+proof, the twenty-first omission and its reason, the sixth decision asked about
+by its own id, a three-byte character placed deliberately across the 512 KB
+boundary read as itself, a blob cut inside a character refused, a page that is
+not base64 refused, a file's own BOM preserved, and parts that never end in
+half a character (re-joined and compared with the source). Each one was checked
+against the previous behaviour: restoring the per-page decode fails three of
+them, restoring the hard slices fails the other three.
+
+| Command | Result |
+| --- | --- |
+| `pnpm install --frozen-lockfile` + `pnpm -r build` | clean |
+| `env -i … pnpm -F @lasercode/ui exec vitest run test/project-work/{native-acceptance,verification,proof-reader}.test.tsx` | 52 passed (44 preserved + 8 new) |
+| `pnpm -F @lasercode/ui typecheck` + `test:types` | clean |
+| `pnpm identity:check` | passes |
+
+Host, protocol and worker suites were not re-run: nothing outside
+`packages/ui` changed. The full gate is the parent's.
+
+**Still the person's (D-342):** how the pagers and the new refusals read in
+both themes and at both widths, including a proof with a hundred files and a
+file of one enormous line.
