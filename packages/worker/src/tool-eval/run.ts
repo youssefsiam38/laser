@@ -27,6 +27,7 @@ import type { RecordedStep, ToolEvalFixture } from "./fixture.js";
 import { CHARACTERS_PER_TOKEN, estimateTokens, startRecordedProvider, type RecordedProvider } from "./recorded-provider.js";
 import { ScriptedWorld } from "./world.js";
 import { ScriptedDesignWorld } from "./design-world.js";
+import { ProjectHostGrounding } from "../design/host/ground.js";
 import { ScriptedResearchWorld } from "./research-world.js";
 import { ScriptedProjectWorkWorld } from "./project-work-world.js";
 import { ProjectWorkSession } from "../project-work/session.js";
@@ -285,7 +286,7 @@ function projectWorkSession(
     : undefined;
   return new ProjectWorkSession({
     ...(bridge ? { bridge } : {}),
-    ...(design ? { design } : {}),
+    ...(design ? { design, hostGrounding: new ProjectHostGrounding({ projectCwd: design.projectCwd, index: () => design.index() }) } : {}),
     ...(research ? { research: { bridge: research, adapters: research.adapters() } } : {}),
     ...(task ? { task: { entityId: task.entity.entityId, key: task.entity.key } } : {}),
     reviewActor: { kind: "agent", label: "Evaluation run" },

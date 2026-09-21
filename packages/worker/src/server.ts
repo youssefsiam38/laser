@@ -81,6 +81,7 @@ import { excerptFromEntries, GitActionError, GitActionsService, type GitActionsF
 import { KeybindingsAdapter } from "./keybindings.js";
 import { ModelsAdapter, PackagesAdapter } from "./packages.js";
 import { SettingsAdapter, readEffectiveProductSettings, readProfileSettings, researchSourcesFrom, resolveProfile } from "./settings.js";
+import { ProjectHostGrounding } from "./design/host/ground.js";
 import { ProjectDesignIndex } from "./design/index/bridge.js";
 import { ProjectResearch } from "./research/bridge.js";
 import { enabledResearchAdapters, type ResearchAdapterId } from "@lasercode/protocol";
@@ -367,6 +368,7 @@ export class WorkerServer {
   private readonly hostPending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private hostRequestSeq = 0;
   /** This project's design index (M21-T10), built once and read on demand. */
+  private projectHostGrounding: ProjectHostGrounding | undefined;
   private projectDesignIndex: ProjectDesignIndex | undefined;
   /** This worker's research run, with the adapters the person left on. */
   private researchSession: { bridge: ResearchBridge; adapters: ResearchAdapterId[] } | undefined;
@@ -2139,6 +2141,7 @@ export class WorkerServer {
       bridge,
       cwd: openOptions.cwd,
       design: this.designIndex(),
+      hostGrounding: this.hostGrounding(),
       ...(this.researchRun(bridge, openOptions.cwd) ? { research: this.researchRun(bridge, openOptions.cwd) } : {}),
       projectInstructions: () => projectInstructions(this.options.cwd),
       reviewActor: { kind: "agent", label },
@@ -2192,6 +2195,15 @@ export class WorkerServer {
    */
   private stateDir(): string {
     return this.options.stateDir ?? join(this.options.agentDir ?? this.options.cwd, "..", "state");
+  }
+
+  /** Static grounding of this project's pages (M21-T12), sharing the index's eras. */
+  private hostGrounding(): ProjectHostGrounding {
+    this.projectHostGrounding ??= new ProjectHostGrounding({
+      projectCwd: this.options.cwd,
+      index: async () => (await this.designIndex().index()) ?? undefined,
+    });
+    return this.projectHostGrounding;
   }
 
   /** This project's design index, built once per worker and read on demand. */

@@ -19,10 +19,14 @@
  * or the implementation context packet, when this session is an attempt on a
  * Task. Both are built here and neither is ever cached across a turn.
  */
+import type { HostGroundingBridge } from "../design/host/ground.js";
 import type { ProjectWorkBridge as ExtensionProjectWorkBridge, ProjectWorkToolBinding } from "@lasercode/pi-extension";
 import type { ResearchAdapterId } from "@lasercode/protocol";
 import {
   DESIGN_INDEX_TOOL_RECOVERY,
+  GROUND_HOST_PAGE_SPEC,
+  groundHostPageTool,
+  type GroundHostPageInput,
   INSPECT_DESIGN_INDEX_SPEC,
   BUILD_DESIGN_INDEX_SPEC,
   REVIEW_DESIGN_INDEX_SPEC,
@@ -74,6 +78,8 @@ export interface ProjectWorkSessionOptions {
   cwd?: string;
   /** This project's design index, when the feature is on for this session. */
   design?: DesignIndexBridge | undefined;
+  /** Static host grounding for this project (M21-T12); needs the design index to be offered. */
+  hostGrounding?: HostGroundingBridge | undefined;
   /** This session's research run, and the adapters it may use. */
   research?: { bridge: ResearchBridge; adapters: readonly ResearchAdapterId[] } | undefined;
   /** The Task this session is an attempt on, when it was opened for one. */
@@ -168,6 +174,15 @@ export class ProjectWorkSession implements ExtensionProjectWorkBridge {
         recovery: DESIGN_INDEX_TOOL_RECOVERY["review_design_index"]!,
         run: (input) => reviewDesignIndexTool(design, input as unknown as ReviewDesignIndexInput, actor),
       },
+      ...(this.options.hostGrounding
+        ? [
+            {
+              spec: GROUND_HOST_PAGE_SPEC,
+              recovery: DESIGN_INDEX_TOOL_RECOVERY["ground_host_page"] ?? { code: "host_page_failed", next: "name a route or template file this project has" },
+              run: (input: Record<string, unknown>) => groundHostPageTool(this.options.hostGrounding!, input as unknown as GroundHostPageInput),
+            },
+          ]
+        : []),
     ];
   }
 

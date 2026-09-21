@@ -39,7 +39,7 @@ import { ProjectHostGrounding } from "../../src/design/host/ground.js";
 import { FIXTURE_ROOT } from "./helpers.js";
 
 const FIXTURES = join(import.meta.dirname, "..", "fixtures", "tool-eval");
-const DESIGN_FIXTURES = ["build_design_index.json", "inspect_design_index.json", "review_design_index.json"];
+const DESIGN_FIXTURES = ["build_design_index.json", "ground_host_page.json", "inspect_design_index.json", "review_design_index.json"];
 const AGENT = { kind: "agent" as const, label: "Design worker" };
 const worlds: ScriptedDesignWorld[] = [];
 
