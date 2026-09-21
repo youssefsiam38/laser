@@ -1548,8 +1548,21 @@ export interface ClientRequests {
    * The last two address a turn that is already in flight, so they have nothing
    * to accept or queue and answer `{}`. They fail if nothing is running.
    */
-  "pi/session/steer": { params: { path: string; content: ContentBlock[] }; result: {} };
-  "pi/session/follow_up": { params: { path: string; content: ContentBlock[] }; result: {} };
+  /**
+   * `projectWork` on both is the same host-supplied field `session/prompt`
+   * carries (M21-T9): a client never sends it, and one that does has it
+   * replaced by what the host read and validated itself. A person's mention
+   * means the same thing whichever key they pressed, so the projection and the
+   * outcomes are the same on all three verbs.
+   */
+  "pi/session/steer": {
+    params: { path: string; content: ContentBlock[]; projectWork?: ProjectWorkMentionProjection[] };
+    result: { projectWork?: ProjectWorkMentionOutcome[] };
+  };
+  "pi/session/follow_up": {
+    params: { path: string; content: ContentBlock[]; projectWork?: ProjectWorkMentionProjection[] };
+    result: { projectWork?: ProjectWorkMentionOutcome[] };
+  };
   "pi/session/clear_queue": { params: { path: string }; result: { steering: string[]; followUp: string[] } };
   /**
    * Forks before `entryId` into a new session; `editorText` carries that

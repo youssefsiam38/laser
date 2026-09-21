@@ -18,6 +18,7 @@
  * happen even when nobody is watching.
  */
 import type { ContentBlock } from "./messages.js";
+import type { ProjectWorkMentionOutcome, ProjectWorkMentionProjection } from "./project-work-mentions.js";
 
 /**
  * `waiting` is the default and the whole point: it goes in when the turn ends.
@@ -64,9 +65,24 @@ declare module "./messages.js" {
      * Put a message in the tray. Answers with the row that appeared, so the
      * composer can clear itself without waiting for the notification.
      */
-    "session/pending/add": { params: { path: string; content: ContentBlock[] }; result: { message: PendingMessage } };
+    /**
+     * `projectWork` is the host-supplied projection of everything this message
+     * mentions (M21-T9), exactly as on `session/prompt`: a client never sends
+     * it, and one that does has it replaced. The worker keeps it beside the
+     * row and hands it to the engine with that row's own message, so a message
+     * written while the agent worked reaches the model with what it named. The
+     * row itself never carries it: `PendingMessage` on the wire is the text a
+     * person wrote, and nothing else.
+     */
+    "session/pending/add": {
+      params: { path: string; content: ContentBlock[]; projectWork?: ProjectWorkMentionProjection[] };
+      result: { message: PendingMessage; projectWork?: ProjectWorkMentionOutcome[] };
+    };
     /** Rewrite one waiting message. Refused once it is on its way. */
-    "session/pending/edit": { params: { path: string; id: string; content: ContentBlock[] }; result: { message: PendingMessage } };
+    "session/pending/edit": {
+      params: { path: string; id: string; content: ContentBlock[]; projectWork?: ProjectWorkMentionProjection[] };
+      result: { message: PendingMessage; projectWork?: ProjectWorkMentionOutcome[] };
+    };
     /**
      * Drop one message. `message` is what was dropped, so "Edit" can put the
      * text back in the composer; `null` when it had already gone.

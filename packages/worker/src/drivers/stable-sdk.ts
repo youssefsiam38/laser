@@ -108,9 +108,11 @@ import {
   type ExtensionModelWorkHandler,
   type FirstTurnOptions,
   type PromptOptions,
+  type QueuedSendOptions,
   type SessionAdmissionLease,
   type SessionDriver,
 } from "../driver.js";
+import type { SessionMentionContext } from "../project-work/mentions.js";
 import { createUiBridge, type UiBridge } from "../ui-bridge.js";
 import { isGoalCommand } from "@lasercode/pi-extension";
 import { ENGINE_BUILTIN_TOOLS, ensureWorkspaceSessionCwd, filterSkills, removedWorktreeCwd } from "../agents/session-config.js";
@@ -245,6 +247,13 @@ export class StableSdkDriver implements SessionDriver {
    */
   private readonly dialogInvocations = new Map<string, DriverInvocationRef>();
 
+  /**
+   * This session's mention context (M21-T9). Held from `open()` so every send
+   * can name the message it admitted, and cleaned up explicitly on a runtime
+   * replacement and on disposal rather than left to an object's lifetime.
+   */
+  private mentionContext: SessionMentionContext | undefined;
+
   constructor(private readonly extraExtensionFactories: InlineExtension[] = []) {
     this.ui = createUiBridge(
       {
@@ -282,6 +291,7 @@ export class StableSdkDriver implements SessionDriver {
     this.cwd = options.cwd;
     this.projectTrusted = options.projectTrusted;
     this.captureLink = options.captureLink;
+    this.mentionContext = options.mentionContext;
 
     const agentDir = options.agentDir ?? getAgentDir();
     this.agentDir = agentDir;
@@ -338,11 +348,14 @@ export class StableSdkDriver implements SessionDriver {
           // One module for the whole project lifecycle (M21-T17). It is on
           // whenever the worker has a link to the host's authority; which
           // tools it registers is the bridge's own answer, not a flag here.
-          ...(options.projectWork ? ["project-work" as const] : []),
+          // …and the same module carries the mention context of a message,
+          // which a session with no project work of its own also has.
+          ...(options.projectWork || options.mentionContext ? ["project-work" as const] : []),
         ],
         ...(agent?.bridge ? { agents: agent.bridge } : {}),
         ...(agent?.backgroundWork ? { backgroundWork: agent.backgroundWork } : {}),
         ...(options.projectWork ? { projectWork: options.projectWork } : {}),
+        ...(options.mentionContext ? { mentionContext: options.mentionContext } : {}),
       };
       return createLaserExtension(companion);
     };
@@ -696,6 +709,10 @@ export class StableSdkDriver implements SessionDriver {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.extensionAdmission.invalidate();
+    // The replacement starts with empty queues, so a message that was waiting
+    // in the old runtime's is gone and its context goes with it. A message the
+    // model is reading survives, because a failover retries the same turn.
+    this.mentionContext?.rebaseline();
     await current.dispose();
     this.runtime = undefined;
     this.runtimeAgent = agent;
@@ -902,6 +919,8 @@ export class StableSdkDriver implements SessionDriver {
   async dispose(): Promise<void> {
     this.fallback?.cancel();
     this.fallback = undefined;
+    // Explicit: nothing about a closed session may outlive it.
+    this.mentionContext?.dropAll();
     this.extensionAdmission.setAfterNativeTurn(undefined);
     this.releaseHeldSettled();
     this.flushHeldUserEnd();
@@ -1139,6 +1158,13 @@ export class StableSdkDriver implements SessionDriver {
   async prompt(content: ContentBlock[], options?: PromptOptions): Promise<{ accepted: boolean; queued: boolean }> {
     const session = this.session();
     const { text, images } = split(content);
+    // Reserved before the engine is asked: a direct prompt's `message_start`
+    // and a steer's injection both arrive while this call is still running, so
+    // the identity has to exist before the engine can use it. A reservation
+    // that is never admitted is discarded below.
+    const mentions = options?.projectWork?.length ? this.mentionContext : undefined;
+    const correlationId = mentions && options?.projectWork ? mentions.reserve(options.projectWork) : undefined;
+    let admitted = false;
     // A goal command needs the goal tools before it dispatches (see below).
     if (isGoalCommand(text)) activateGoalTools(session);
     // A bare concurrent prompt is refused immediately. Explicit queue waiters
@@ -1167,6 +1193,15 @@ export class StableSdkDriver implements SessionDriver {
       }
       accepted = true;
       finishPreflight();
+      if (correlationId !== undefined && !admitted) {
+        admitted = true;
+        // Which door the engine put it through decides what a later
+        // `clear_queue` may remove: only a message really waiting in a queue.
+        mentions?.admitted(
+          correlationId,
+          options?.streamingBehavior && session.isStreaming ? options.streamingBehavior : "direct",
+        );
+      }
       try {
         // The replacement record must precede Pi's user-message append.
         // Like every acceptance observer, a disk failure is reported but
@@ -1201,6 +1236,7 @@ export class StableSdkDriver implements SessionDriver {
       await this.extensionAdmission.runInvocation(context, async () => {
         await session.prompt(text, {
           ...(images.length > 0 ? { images } : {}),
+          ...(correlationId !== undefined ? { correlationId } : {}),
           ...(options?.streamingBehavior ? { streamingBehavior: options.streamingBehavior } : {}),
           ...(options?.expandPromptTemplates !== undefined ? { expandPromptTemplates: options.expandPromptTemplates } : {}),
           // Pi's per-invocation preflight is the exact boundary between a prompt
@@ -1215,23 +1251,62 @@ export class StableSdkDriver implements SessionDriver {
     } catch (error) {
       // Pi can throw the same busy-shaped error after reporting true. Acceptance
       // is monotonic: only a busy error from before acknowledgement is refusal.
-      if (!accepted && isBusyError(error)) return { accepted: false, queued: false };
+      if (!accepted && isBusyError(error)) {
+        if (correlationId !== undefined) mentions?.discard(correlationId);
+        return { accepted: false, queued: false };
+      }
+      if (correlationId !== undefined && !accepted) mentions?.discard(correlationId);
       throw error;
     } finally {
       // Defensive for an engine failure that bypassed its documented callback.
       finishPreflight();
+      // A message the engine never took, and a text it answered without ever
+      // starting a turn (an extension command it dispatched instead), leave
+      // nothing behind: this call has returned, so a direct message that was
+      // going to be read has been read. A message waiting in a queue, and one
+      // the model is reading right now, are both left where they are.
+      if (correlationId !== undefined && (!accepted || mentions?.isPendingDirect(correlationId))) {
+        mentions?.discard(correlationId);
+      }
     }
     return { accepted: true, queued: streaming };
   }
 
-  async steer(content: ContentBlock[]): Promise<void> {
+  async steer(content: ContentBlock[], options?: QueuedSendOptions): Promise<void> {
     const { text, images } = split(content);
-    await this.session().steer(text, images.length > 0 ? images : undefined);
+    await this.queuedSend("steer", text, images, options);
   }
 
-  async followUp(content: ContentBlock[]): Promise<void> {
+  async followUp(content: ContentBlock[], options?: QueuedSendOptions): Promise<void> {
     const { text, images } = split(content);
-    await this.session().followUp(text, images.length > 0 ? images : undefined);
+    await this.queuedSend("followUp", text, images, options);
+  }
+
+  /**
+   * One of the engine's two queues, with the identity of the message being
+   * queued. Reserved before the call, because the engine can inject a queued
+   * message into the running turn before this promise resolves; discarded if
+   * the engine refuses it, so a refusal leaves nothing held.
+   */
+  private async queuedSend(
+    lane: "steer" | "followUp",
+    text: string,
+    images: ImageContent[],
+    options?: QueuedSendOptions,
+  ): Promise<void> {
+    const projections = options?.projectWork;
+    const mentions = projections?.length ? this.mentionContext : undefined;
+    const correlationId = mentions && projections ? mentions.reserve(projections) : undefined;
+    if (correlationId !== undefined) mentions?.admitted(correlationId, lane);
+    const session = this.session();
+    const sendOptions = correlationId !== undefined ? { correlationId } : undefined;
+    try {
+      if (lane === "steer") await session.steer(text, images.length > 0 ? images : undefined, sendOptions);
+      else await session.followUp(text, images.length > 0 ? images : undefined, sendOptions);
+    } catch (error) {
+      if (correlationId !== undefined) mentions?.discard(correlationId);
+      throw error;
+    }
   }
 
   /**
@@ -1248,6 +1323,10 @@ export class StableSdkDriver implements SessionDriver {
    */
   async clearQueue(): Promise<ClearedQueue> {
     const session = this.session();
+    // Exactly the messages that were waiting in the engine's queues lose their
+    // context; a message already being read, and one accepted but not yet
+    // queued, are not in what the person just emptied.
+    this.mentionContext?.dropQueued();
     const queues = session.agent as unknown as { steeringQueue?: { messages?: unknown[] }; followUpQueue?: { messages?: unknown[] } };
     const custom = {
       steering: customQueueTexts(queues.steeringQueue?.messages),
@@ -1739,6 +1818,7 @@ export class StableSdkDriver implements SessionDriver {
     this.toolCalls.note(event);
     this.noteFallbackEvent(event);
     this.flushHeldUserEnd();
+    this.noteMentionEvent(event);
     // The engine settles a turn before the chain can even look at it, and the
     // harness ends a run on that update. Hold it while a failover is possible.
     if (event.type === "agent_settled" && this.fallback?.pending()) {
@@ -1815,6 +1895,29 @@ export class StableSdkDriver implements SessionDriver {
    * status and headers and nothing else) and is cleared by the next request, so
    * it can only ever describe the attempt in hand.
    */
+  /**
+   * The engine's own word on where a message is (M21-T9).
+   *
+   * A user `message_start` is the engine delivering that exact message to the
+   * model — the moment a queued steer or follow-up stops waiting — and it
+   * names the message by the id this worker minted for it. `agent_settled` is
+   * the end of the activity that read them: what the model read is done with,
+   * and what is still queued stays queued, so a cancelled turn keeps the
+   * context of a message nobody has read yet.
+   */
+  private noteMentionEvent(event: AgentSessionEvent): void {
+    const mentions = this.mentionContext;
+    if (!mentions) return;
+    if (event.type === "message_start") {
+      const message = event.message as { role?: unknown; correlationId?: unknown };
+      if (message.role === "user" && typeof message.correlationId === "string") mentions.activate(message.correlationId);
+      return;
+    }
+    // A settle held for a failover retires nothing yet; `releaseHeldSettled`
+    // does it when the chain is finished with the turn.
+    if (event.type === "agent_settled" && !this.fallback?.pending()) mentions.settled();
+  }
+
   private noteFallbackEvent(event: AgentSessionEvent): void {
     if (event.type === "agent_start") {
       // A new turn: whatever failed before is history. Leaving the old signal
@@ -1866,6 +1969,10 @@ export class StableSdkDriver implements SessionDriver {
     const held = this.heldSettled;
     if (!held) return;
     this.heldSettled = undefined;
+    // Held for a failover: the same turn is retried on another model, so the
+    // context of the message it is answering is retired only here, when the
+    // activity really ends.
+    this.mentionContext?.settled();
     this.push({ kind: "agent_settled" }, held.invocation);
     this.push({ kind: "state", state: this.state() }, held.invocation);
     this.runDeferredSettingsReload();
