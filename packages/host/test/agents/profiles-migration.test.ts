@@ -343,7 +343,9 @@ describe("the model-profile migration at host start", () => {
     const carried = readFileSync(settingsLog, "utf8");
     expect(JSON.parse(carried.trim())).toEqual([{ path: "namingProfileId", op: "set", value: FAST }]);
     // Stamped where the migration record lives, so it survives the restart.
-    expect(existsSync(join(base, "state", "naming-carry.json"))).toBe(true);
+    // The fake worker logs the write before it answers, so the stamp — which
+    // follows the answer — is waited for rather than read at once.
+    await vi.waitFor(() => expect(existsSync(join(base, "state", "naming-carry.json"))).toBe(true), { timeout: 10_000, interval: 25 });
 
     client?.close();
     await host?.close();
