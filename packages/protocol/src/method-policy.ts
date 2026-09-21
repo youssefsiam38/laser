@@ -364,6 +364,34 @@ export const METHOD_POLICY = {
   // asking would be choosing which worker to make release something.
   "pi/worker/pressure": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
 
+  // ------------------------------------------------- M21 · project work ---
+  // Reading the project lifecycle is reading the product's own state, so it is
+  // `read` and reaches every authenticated connection: a phone reviews the
+  // same Specs and Designs a desktop does.
+  "project/work/list": { scope: "read", reach: "any" },
+  "project/work/get": { scope: "read", reach: "any" },
+  "project/work/search": { scope: "read", reach: "any" },
+  "project/work/blob/read": { scope: "read", reach: "any" },
+  // Every project-work mutation is `settings`: durable product state that
+  // outlives a turn, written by the host, and deliberately *not*
+  // `session_write` (it changes no conversation) and *not* `approval` — D-332
+  // requires that lifecycle approval does not borrow the authority to answer a
+  // session's questions. A dedicated `project_write` / `project_review` scope
+  // is the right long-term home (docs/leap/m21-spine-plan.md); it needs the
+  // environment-capabilities copy in the UI package, which M21-T1 does not own.
+  "project/work/create": { scope: "settings", reach: "any" },
+  "project/work/revise": { scope: "settings", reach: "any" },
+  "project/work/archive": { scope: "settings", reach: "any" },
+  "project/work/delete": { scope: "settings", reach: "any" },
+  "project/work/comment": { scope: "settings", reach: "any" },
+  "project/work/review": { scope: "settings", reach: "any" },
+  "project/work/approve": { scope: "settings", reach: "any" },
+  "project/work/resolve-comment": { scope: "settings", reach: "any" },
+  "project/work/link": { scope: "settings", reach: "any" },
+  "project/work/unlink": { scope: "settings", reach: "any" },
+  "project/task/action": { scope: "settings", reach: "any" },
+  "project/task/link-execution": { scope: "settings", reach: "any" },
+
   // ------------------------------------------------------------- device ---
   "pi/push/config": { scope: "device", reach: "any" },
   "pi/push/subscribe": { scope: "device", reach: "any" },
@@ -424,6 +452,11 @@ export const NOTIFICATION_SCOPE = {
   // Worker → host only as well (RP-8), consumed at ingress and never forwarded.
   "pi/resource/pressure": "diagnostics",
   "tasks/update": "read",
+  // Project-work news is readable by anything that may read the project: the
+  // workspace, a phone reviewing a gate and the sessions sidebar all draw from
+  // it. Acting on it still costs the mutation's own scope.
+  "project/work/updated": "read",
+  "project/work/attention": "read",
 } satisfies Record<keyof HostNotifications, MethodScope>;
 
 /** The scope that owns a notification, or `undefined` for an unknown method. */
