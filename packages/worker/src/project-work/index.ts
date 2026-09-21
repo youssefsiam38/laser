@@ -44,3 +44,21 @@ export {
   type DesignHandoffPacket,
 } from "./design-handoff.js";
 export { ProjectWorkSession, type ProjectWorkSessionOptions } from "./session.js";
+export {
+  VERIFICATION_ROW_INTERVAL_MS,
+  VERIFICATION_RUNS_KEPT,
+  VERIFY_PROJECT_TASK_SPEC,
+  VERIFY_TOOL_RECOVERY,
+  VerificationRefused,
+  VerificationRun,
+  VerificationService,
+  notRun,
+  runVerificationCommand,
+  verifyProjectTask,
+  type RunCommandOptions,
+  type VerificationCommandRunner,
+  type VerificationRunOptions,
+  type VerificationServiceOptions,
+  type VerifyProjectTaskDeps,
+  type VerifyProjectTaskInput,
+} from "./verification/index.js";

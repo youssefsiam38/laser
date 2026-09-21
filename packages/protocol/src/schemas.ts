@@ -1025,6 +1025,23 @@ export const clientParamsSchemas = {
     confirm: z.boolean().optional(),
     expect: gitActionExpect.optional(),
   }).strict(),
+  // M21-T19 · verification run control. The Task is named by id or by key;
+  // which project it belongs to is resolved from `cwd`, never from the params.
+  "pi/project/verify/start": z.object({
+    cwd: z.string().min(1),
+    entityId: z.string().min(1).max(64).optional(),
+    key: z.string().min(1).max(40).optional(),
+    sessionPath: z.string().min(1).max(4096).optional(),
+  }).strict(),
+  "pi/project/verify/state": z.object({
+    cwd: z.string().min(1),
+    runId: z.string().min(1).max(64).optional(),
+  }).strict(),
+  "pi/project/verify/stop": z.object({
+    cwd: z.string().min(1),
+    runId: z.string().min(1).max(64),
+    reason: z.string().min(1).max(2000).optional(),
+  }).strict(),
   "pi/project/git/push": z.object({
     cwd: z.string().min(1),
     repo: z.string().min(1).max(4096).optional(),

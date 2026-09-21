@@ -190,7 +190,16 @@ export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 export const COMMENT_STATES = ["open", "addressed", "resolved"] as const;
 export type CommentState = (typeof COMMENT_STATES)[number];
 
-/** What an evidence record is. `person_acceptance` is the person's own word. */
+/**
+ * What an evidence record is. `person_acceptance` is the person's own word.
+ *
+ * `verification` is a whole verification run's report (M21-T19): the four
+ * authorities it compared against, every criterion's outcome and the
+ * deviations it proposed, stored canonically in the blob the record names. It
+ * is its own kind because it is not a test, a diff or a command's output — it
+ * is the reasoning over all of them, and a surface that shows it shows a
+ * report rather than a line.
+ */
 export const EVIDENCE_KINDS = [
   "test",
   "diff",
@@ -200,6 +209,7 @@ export const EVIDENCE_KINDS = [
   "review",
   "person_acceptance",
   "command_output",
+  "verification",
 ] as const;
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
 
@@ -241,6 +251,15 @@ export const ATTEMPT_COMMITS_MAX = 100;
 /** What one canonical capture may hold before it says what it left out. */
 export const REPOSITORY_CAPTURE_FILES_MAX = 500;
 export const REPOSITORY_CAPTURE_SOURCES_MAX = 100;
+/**
+ * The most sources one decision may rest on (M21-T19).
+ *
+ * The same bound as {@link REPOSITORY_CAPTURE_SOURCES_MAX}, because they are
+ * the same thing seen from two sides: a decision whose required set does not
+ * fit in a bounded capture is refused with what to do, never captured as a
+ * silent prefix and never given a larger budget.
+ */
+export const REQUIRED_PATHS_MAX = 100;
 export const REPOSITORY_CAPTURE_SOURCE_BYTES_MAX = 128 * 1024;
 export const REPOSITORY_CAPTURE_BYTES_MAX = 4 * 1024 * 1024;
 
@@ -800,6 +819,17 @@ export interface RepositoryLink {
   /** The attempt this delivery came out of, when it came out of one. */
   executionLinkId?: string;
   /**
+   * The host's own record that a person accepted this state as native visual
+   * evidence (M21-T19, D-361).
+   *
+   * Written by the host and by nothing else: a caller asks for the acceptance,
+   * and what is stored is what the host proved when it validated the ask — the
+   * checkpoint ref it really found, the commit that ref really pointed at, and
+   * when it confirmed it. A request body can never mint this field, which is
+   * what makes it proof rather than a claim.
+   */
+  acceptance?: RepositoryLinkAcceptance;
+  /**
    * Branch, remote and pull request: what a person reads the link *by*, and
    * never what it *is* (M21-T18). Identity is the object ids in `target`;
    * every field here may move, be renamed or be deleted without the link
@@ -816,6 +846,88 @@ export interface RepositoryLink {
  * at a force-pushed head. It lives here, beside the branch and the remote
  * *name*, so that nothing reading identity can reach it by accident.
  */
+/**
+ * What the host proved when a person accepted a checkpoint preview.
+ *
+ * `checkpointRef` and `commitObjectId` are what it read out of git at that
+ * moment; `subjectDigest` is the artifact revision the acceptance was about,
+ * so a later revision cannot inherit it. Everything a reader needs is here and
+ * in the capture: convergence never re-reads git (D-361).
+ */
+export interface RepositoryLinkAcceptance {
+  kind: "checkpoint_preview";
+  confirmedAt: string;
+  /** The ref the host found, exactly as git named it. */
+  checkpointRef: string;
+  /** The commit that ref pointed at when it was confirmed. */
+  commitObjectId: string;
+  /** The digest of the artifact revision this acceptance is about. */
+  subjectDigest: string;
+  /** The person the host recorded it for. */
+  acceptedBy: ProjectWorkActor;
+  /**
+   * The exact capture this acceptance was taken against (D-363).
+   *
+   * A decision binds the immutable proof it consumed, by content address. The
+   * link's `captureBlobId` is a **current pointer** and may later be corrected
+   * to a capture nobody looked at when they accepted; this field does not
+   * move, so an acceptance that rested on a partial capture never becomes
+   * native evidence merely because that pointer was corrected afterwards.
+   *
+   * Absent on acceptances written before this rule existed. Their proof is the
+   * link's first recorded capture association, which is what the capture
+   * history says — never the latest one.
+   */
+  captureBlobId?: string;
+}
+
+/**
+ * Why one capture became the proof of one repository link (D-363).
+ *
+ * `first_capture` is the association written with the link itself;
+ * `gate_preparation` is a correction taken while a gate was being prepared —
+ * which is not itself a decision, and is never read as one; `legacy_baseline`
+ * is what a migration recorded for a link whose association predates this
+ * history, and it says exactly that rather than inventing a past.
+ */
+export const REPOSITORY_CAPTURE_ATTACH_REASONS = ["first_capture", "gate_preparation", "legacy_baseline"] as const;
+export type RepositoryCaptureAttachReason = (typeof REPOSITORY_CAPTURE_ATTACH_REASONS)[number];
+
+/**
+ * One immutable association between a repository link and the capture that
+ * proved it (D-363).
+ *
+ * The link's identity, subject, relation and target never change here: a
+ * correction to any of those still appends a superseding {@link RepositoryLink},
+ * as the root contract requires. What this records is which bounded canonical
+ * proof of that same exact link was current, when, at whose hand and why — so
+ * that "which capture did this decision rest on" is answered by a record
+ * rather than by inferring from a timestamp or from whatever the pointer says
+ * today. Rows are appended, never updated and never deleted.
+ */
+export interface RepositoryLinkCaptureRevision {
+  /** Stable identity of this association. Ordering within a link is `seq`. */
+  revisionId: string;
+  linkId: string;
+  /** The capture blob this association made current. */
+  blobId: string;
+  /** The capture it replaced, when it replaced one. */
+  supersedesBlobId?: string;
+  /** The association it replaced, when that association is itself recorded. */
+  supersedesRevisionId?: string;
+  attachedAt: string;
+  /** Monotonic within one link: two associations one millisecond apart stay ordered. */
+  seq: number;
+  reason: RepositoryCaptureAttachReason;
+  /** Which door wrote it — a gate being prepared is not a gate that succeeded. */
+  gate?: string;
+  /** Host-written: the actor the write was made for. Never caller text. */
+  actor: ProjectWorkActor;
+}
+
+/** The most capture associations one read returns for one link. */
+export const REPOSITORY_CAPTURE_HISTORY_MAX = 50;
+
 export interface RepositoryLinkContext {
   branch?: string;
   /** The remote's name (`origin`), never its URL. */
@@ -982,12 +1094,27 @@ export const REPOSITORY_CAPTURE_MEDIA_TYPE = `application/vnd.${PRODUCT_NAME}.re
 
 export interface RepositoryCaptureFile {
   path: string;
-  /** The three words the product speaks about a file (`FileChangeStatus`). */
-  status: "added" | "modified" | "deleted";
+  /**
+   * The three words the product speaks about a file (`FileChangeStatus`).
+   *
+   * A state capture has no difference to speak of, so every file in one is
+   * `present`: it is the tree as it stood, not a change to it.
+   */
+  status: "added" | "modified" | "deleted" | "present";
   added: number | null;
   removed: number | null;
   /** The head-side blob object id, when the file exists at head. */
   blobObjectId?: string;
+  /** The file's mode as git records it (`100644`). Identity, not display. */
+  mode?: string;
+  /**
+   * The file's true size in bytes, as git reports it.
+   *
+   * Recorded whether or not the bytes were captured, so a file left out is
+   * still described by its real size rather than by the size of what was
+   * kept (M21-T19, review F9).
+   */
+  bytes?: number;
   /** sha256 of the captured bytes, when they were captured. */
   contentDigest?: string;
   /** Why this file's bytes are not in the capture. */
@@ -1001,20 +1128,181 @@ export interface RepositoryCaptureSource {
   truncated?: boolean;
   contentDigest: string;
   text: string;
+  /**
+   * Which side of the change these bytes are (M21-T19).
+   *
+   * A deleted file is reviewed by reading what was removed, so its body is the
+   * one at the **base**. Absent means `after`, which is what every body of a
+   * state or a head side is — and saying so explicitly is what keeps a
+   * before-body from ever being read back as the accepted state's content.
+   */
+  side?: "before" | "after";
 }
 
-export interface RepositoryCapture {
+/**
+ * How a capture's required set was derived (M21-T19).
+ *
+ * Never a caller's word for it: each basis names an exact pair of commits (or,
+ * for `complete_bounded_state`, an exact bounded scope) the host read out of
+ * git itself.
+ */
+export const REPOSITORY_CAPTURE_BASES = [
+  /** The attempt's recorded base → the exact state being accepted. */
+  "attempt_base_to_state",
+  /** A parented commit's own `commit^ → commit`. */
+  "commit_parent_to_commit",
+  /** The accepted delivery's own `base → head`. */
+  "accepted_change",
+  /**
+   * Nothing changed between the base and the state, so what is kept whole is
+   * the named scope itself: a person can verify unchanged code, and demanding
+   * a fabricated edit before they may say so would be the wrong refusal.
+   */
+  "complete_bounded_state",
+] as const;
+export type RepositoryCaptureBasis = (typeof REPOSITORY_CAPTURE_BASES)[number];
+
+/** One source the decision rests on, as the host found it. */
+export interface RepositoryCaptureRequiredEntry {
+  path: string;
+  status: "added" | "modified" | "deleted" | "present";
+  side: "before" | "after";
+  /** sha256 of the whole body kept in `sources` at that side. */
+  contentDigest: string;
+  blobObjectId?: string;
+}
+
+/**
+ * The proof that a capture holds **every** source its decision rests on.
+ *
+ * Written by the host from what git answered, canonicalised into the
+ * content-addressed blob, and never taken from a request: a caller-uploaded
+ * blob cannot mint it, because the link that points at a capture is only ever
+ * written by the host in the same act that built it. `complete` exists only in
+ * the `true` form — a capture that could not keep every required body whole is
+ * not stored with a weaker flag, the decision is refused.
+ */
+export interface RepositoryCaptureRequired {
+  basis: RepositoryCaptureBasis;
+  from: {
+    /** The commit the difference was taken from, when there is one. */
+    baseCommitObjectId?: string;
+    /** The attempt this state belongs to, when it is one. */
+    executionLinkId?: string;
+    taskEntityId?: string;
+    /** The repository-relative scope a `complete_bounded_state` covers. */
+    scopePath?: string;
+  };
+  entries: RepositoryCaptureRequiredEntry[];
+  complete: true;
+}
+
+interface RepositoryCaptureBase {
   version: 1;
   createdAt: string;
   repositoryId: string;
   repositoryName?: string;
-  change: RepositoryChangeRef;
   files: RepositoryCaptureFile[];
-  /** The head-side source of the files the change touched, bounded. */
+  /** The head-side source of the files the capture covers, bounded. */
   sources: RepositoryCaptureSource[];
+  /**
+   * Every source the decision this capture backs rests on, kept whole
+   * (M21-T19). Absent on an ordinary provenance capture, which may be honestly
+   * partial — and which therefore never satisfies a decision.
+   */
+  required?: RepositoryCaptureRequired;
   /** What was left out, in one sentence a person can act on. */
   truncated?: string;
 }
+
+/**
+ * A bounded canonical record of what a link points at, kept so a decision
+ * stays reviewable after git has pruned what it was taken from (D-361).
+ *
+ * Exactly one of `change` and `state`, never both and never neither: a capture
+ * of a difference and a capture of a tree are different documents, and a shape
+ * that allowed both would let a reader pick the wrong one. The alternative is
+ * a discriminated union rather than two optional fields for that reason.
+ */
+export type RepositoryCapture =
+  | (RepositoryCaptureBase & { change: RepositoryChangeRef; state?: never })
+  | (RepositoryCaptureBase & { state: RepositoryStateRef; change?: never });
+
+const repositoryCaptureFileSchema = z
+  .object({
+    path: z.string().min(1).max(1024),
+    status: z.enum(["added", "modified", "deleted", "present"]),
+    added: z.number().int().nullable(),
+    removed: z.number().int().nullable(),
+    blobObjectId: z.string().min(1).max(64).optional(),
+    mode: z.string().min(1).max(16).optional(),
+    bytes: z.number().int().min(0).optional(),
+    contentDigest: digest.optional(),
+    omitted: z.enum(["binary", "too_large", "budget", "deleted"]).optional(),
+  })
+  .strict();
+
+const repositoryCaptureSourceSchema = z
+  .object({
+    path: z.string().min(1).max(1024),
+    bytes: z.number().int().min(0),
+    truncated: z.boolean().optional(),
+    contentDigest: digest,
+    text: z.string(),
+    side: z.enum(["before", "after"]).optional(),
+  })
+  .strict();
+
+export const repositoryCaptureRequiredSchema = z
+  .object({
+    basis: z.enum(REPOSITORY_CAPTURE_BASES),
+    from: z
+      .object({
+        baseCommitObjectId: z.string().regex(/^[0-9a-f]{7,64}$/, "a git object id").optional(),
+        executionLinkId: opaqueId.optional(),
+        taskEntityId: opaqueId.optional(),
+        scopePath: z.string().min(1).max(1024).optional(),
+      })
+      .strict(),
+    entries: z
+      .array(
+        z
+          .object({
+            path: z.string().min(1).max(1024),
+            status: z.enum(["added", "modified", "deleted", "present"]),
+            side: z.enum(["before", "after"]),
+            contentDigest: digest,
+            blobObjectId: z.string().min(1).max(64).optional(),
+          })
+          .strict(),
+      )
+      .max(REQUIRED_PATHS_MAX),
+    complete: z.literal(true),
+  })
+  .strict();
+
+const repositoryCaptureBaseSchema = {
+  version: z.literal(1),
+  createdAt: isoInstant,
+  repositoryId: opaqueId,
+  repositoryName: z.string().min(1).max(200).optional(),
+  files: z.array(repositoryCaptureFileSchema).max(REPOSITORY_CAPTURE_FILES_MAX),
+  sources: z.array(repositoryCaptureSourceSchema).max(REPOSITORY_CAPTURE_SOURCES_MAX),
+  required: repositoryCaptureRequiredSchema.optional(),
+  truncated: z.string().max(PROJECT_WORK_TEXT_MAX).optional(),
+};
+
+/**
+ * A stored capture, read back.
+ *
+ * Parsed rather than cast: everything a decision is re-checked against later
+ * comes out of this blob, so a blob that is not a capture of the shape the
+ * host writes answers nothing rather than half a proof.
+ */
+export const repositoryCaptureSchema = z.union([
+  z.object({ ...repositoryCaptureBaseSchema, change: repositoryChangeRefSchema }).strict(),
+  z.object({ ...repositoryCaptureBaseSchema, state: repositoryStateRefSchema }).strict(),
+]);
 
 /**
  * A Project Task joined to a session, run, checkpoint, branch or command.

@@ -64,6 +64,7 @@ import { BOARD_COLUMNS, BOARD_EXTRA_COLUMN, boardColumnLabel } from "@/project-w
 import { KeyTag, TypeBadge } from "./KindBadge.js";
 import { TaskCancelDialog } from "./TaskCancel.js";
 import { TaskStartDialog } from "./TaskStart.js";
+import { VerificationPanel } from "./VerificationPanel.js";
 import { Labelled, ListSection, Prose, Section, Tags } from "./bodies/fields.js";
 import { WorkRefusal } from "./states.js";
 
@@ -405,7 +406,10 @@ export function TaskDetail({
         </p>
       </Section>
 
-      <ListSection title="Verification" items={body.verificationCommands} mono />
+      <ListSection title="Declared verification commands" items={body.verificationCommands} mono />
+
+      {/* The run itself, and the report it wrote (M21-T19). */}
+      <VerificationPanel store={store} detail={detail} cwd={store?.paths()[0]} />
 
       {/* --- attempts --- */}
       <Section title="Attempts">

@@ -59,6 +59,11 @@ export function mintBlobId(): string {
   return `blb_${mintSuffix()}`;
 }
 
+/** One immutable link-to-capture association (D-363). */
+export function mintCaptureRevisionId(): string {
+  return `rlc_${mintSuffix()}`;
+}
+
 export function mintRepositoryId(): string {
   return `repo_${mintSuffix()}`;
 }

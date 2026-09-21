@@ -223,11 +223,52 @@ describe("notifications", () => {
     expect(schema.safeParse({ ...base, link: { ...stateOnly, target: { state } } }).success).toBe(false);
   });
 
+  it("carries the attempt a verified state came out of, as identity the host re-derives (M21-T19)", () => {
+    const schema = projectWorkParamsSchemas["project/work/link"];
+    const state = { vcs: "git" as const, objectFormat: "sha1" as const, commitObjectId: "1".repeat(40), checkpointId: "refs/x/1" };
+    const link = (verifiedAt: unknown) => ({
+      projectId: SAMPLE_PROJECT_ID,
+      expectedRevisionId: SAMPLE_REVISION_ID,
+      idempotencyKey: "accept-1",
+      link: {
+        type: "evidence" as const,
+        entityId: SAMPLE_ENTITY_ID,
+        revisionId: SAMPLE_REVISION_ID,
+        kind: "person_acceptance" as const,
+        role: "acceptance" as const,
+        summary: "I looked at the build.",
+        outcome: "passed" as const,
+        verifiedAt,
+      },
+    });
+    const attempt = { taskEntityId: SAMPLE_ENTITY_ID, executionLinkId: "lnk_1" };
+    expect(
+      schema.safeParse(link({ repositoryId: "repo_1", state, acceptance: { kind: "checkpoint_preview" }, attempt })).success,
+    ).toBe(true);
+    // A plain state link needs none of it, and is not native evidence.
+    expect(schema.safeParse(link({ repositoryId: "repo_1", state })).success).toBe(true);
+    // The attempt is two exact ids or nothing: a half-named one is refused at
+    // the boundary, and an acceptance with none of it is refused by the host,
+    // in a sentence that says which attempt it needs.
+    expect(schema.safeParse(link({ repositoryId: "repo_1", state, attempt: { executionLinkId: "lnk_1" } })).success).toBe(false);
+    expect(schema.safeParse(link({ repositoryId: "repo_1", state, attempt: { ...attempt, extra: 1 } })).success).toBe(false);
+  });
+
   it("lets a read ask git what it still has, and defaults to not asking", () => {
     const schema = projectWorkParamsSchemas["project/work/get"];
     const base = { projectId: SAMPLE_PROJECT_ID, entityId: SAMPLE_ENTITY_ID };
     expect(schema.parse({ ...base, include: { links: true, repositoryStatus: true } }).include?.repositoryStatus).toBe(true);
     expect(schema.parse(base).include?.repositoryStatus).toBeUndefined();
+  });
+
+  it("lets a read ask which capture proved each link, and defaults to not asking", () => {
+    const schema = projectWorkParamsSchemas["project/work/get"];
+    const base = { projectId: SAMPLE_PROJECT_ID, entityId: SAMPLE_ENTITY_ID };
+    // The history is a separate question from the link's current pointer, and
+    // costs a store read per link, so it is opt-in (D-363).
+    expect(schema.parse({ ...base, include: { links: true, captureHistory: true } }).include?.captureHistory).toBe(true);
+    expect(schema.parse(base).include?.captureHistory).toBeUndefined();
+    expect(schema.safeParse({ ...base, include: { captureHistory: "yes" } }).success).toBe(false);
   });
 
   it("keeps the attention count exact even when the item list is cut", () => {

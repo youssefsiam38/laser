@@ -239,6 +239,11 @@ const CWD_ROUTED = new Set([
   "pi/project/pr/checkout",
   "pi/project/pr/merge",
   "pi/project/pr/viewed",
+  // A verification run executes the Task's own commands in the checkout, so it
+  // is answered by the worker that owns that directory (M21-T19).
+  "pi/project/verify/start",
+  "pi/project/verify/state",
+  "pi/project/verify/stop",
   // The worker discovers user skills and supplies Laser's default
   // instructions; both name the answering cwd.
   "agents/skills",

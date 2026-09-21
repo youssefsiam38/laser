@@ -89,6 +89,7 @@ import {
   type RepositoryChangeRef,
   type RepositoryLink,
   type RepositoryLinkAvailability,
+  type RepositoryLinkCaptureRevision,
   type RepositoryLinkContext,
   type RepositoryLinkRelation,
   type RepositoryStateRef,
@@ -299,6 +300,13 @@ export interface ProjectWorkGetParams {
      * itself still says exactly what it always said.
      */
     repositoryStatus?: boolean;
+    /**
+     * The immutable capture associations behind each repository link on this
+     * read (D-363). Off by default, bounded per link, and never a substitute
+     * for the link's own current pointer: it says which proof was current
+     * when, so a decision can be read against the capture it rested on.
+     */
+    captureHistory?: boolean;
   };
 }
 
@@ -337,6 +345,12 @@ export interface ProjectWorkGetResult {
    * says what is gone and whether the canonical capture still answers.
    */
   repositoryStatus?: RepositoryLinkAvailability[];
+  /**
+   * The capture associations of the links on this read, newest first per link
+   * and bounded by {@link REPOSITORY_CAPTURE_HISTORY_MAX}, when
+   * `include.captureHistory` asked (D-363).
+   */
+  captureHistory?: RepositoryLinkCaptureRevision[];
   /**
    * The three hard gates of the Spec this entity belongs to, and where each
    * one stands (M21-T8).
@@ -624,7 +638,42 @@ export type ProjectWorkLinkInput =
        * about nothing in particular, and a `verified_at` link with no evidence
        * behind it is a claim.
        */
-      verifiedAt?: { repositoryId: string; state: RepositoryStateRef };
+      verifiedAt?: {
+        repositoryId: string;
+        state: RepositoryStateRef;
+        /**
+         * Ask the host to record this state as native visual evidence a
+         * person accepted (M21-T19, D-361).
+         *
+         * It is a **request for an action**, not the proof of one. The host
+         * validates it — person caller, the exact subject revision and digest,
+         * a checkpoint ref git really holds resolving to the named commit, and
+         * a bounded canonical capture stored before anything is accepted — and
+         * writes its own `RepositoryLink.acceptance` record. A caller cannot
+         * mint that record by sending this field, and a write without this
+         * field is a plain `verified_at` link: still validated, still
+         * captured, but not native visual evidence.
+         */
+        acceptance?: { kind: "checkpoint_preview" };
+        /**
+         * Which attempt this state came out of (M21-T19).
+         *
+         * **Required whenever `acceptance` is present**, because the sources a
+         * decision rests on are the difference between what that attempt
+         * started from and the exact state being accepted — and there is no
+         * honest way to find the attempt from the subject: a Design-backed
+         * visual criterion is accepted on the *Design*, and attempts are on
+         * the *Task*.
+         *
+         * It is identity the caller **reports**, never authority it carries:
+         * the host re-derives every part of it — that the execution link is
+         * this project's, that it belongs to that task, that the task is the
+         * subject or currently pins it, and that the attempt really recorded
+         * this repository's checkpoint at this commit — and refuses when any
+         * of it disagrees.
+         */
+        attempt?: { taskEntityId: string; executionLinkId: string };
+      };
     }
   | {
       type: "decision";
@@ -890,7 +939,18 @@ const linkInputSchema = z.discriminatedUnion("type", [
       blobId: projectWorkIdSchema.optional(),
       outcome: z.enum(["passed", "failed", "inconclusive"]),
       repositoryLinkId: projectWorkIdSchema.optional(),
-      verifiedAt: z.object({ repositoryId: projectWorkIdSchema, state: repositoryStateRefSchema }).strict().optional(),
+      verifiedAt: z
+        .object({
+          repositoryId: projectWorkIdSchema,
+          state: repositoryStateRefSchema,
+          acceptance: z.object({ kind: z.literal("checkpoint_preview") }).strict().optional(),
+          attempt: z
+            .object({ taskEntityId: projectWorkIdSchema, executionLinkId: projectWorkIdSchema })
+            .strict()
+            .optional(),
+        })
+        .strict()
+        .optional(),
     })
     .strict(),
   z
@@ -953,6 +1013,7 @@ export const projectWorkParamsSchemas = {
           links: z.boolean().optional(),
           history: z.boolean().optional(),
           repositoryStatus: z.boolean().optional(),
+          captureHistory: z.boolean().optional(),
         })
         .strict()
         .optional(),

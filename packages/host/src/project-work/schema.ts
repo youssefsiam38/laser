@@ -26,7 +26,7 @@ import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { ProjectWorkUnavailableError } from "./errors.js";
 
 /** The shape of the tables this file owns. Bump with a migration step. */
-export const PROJECT_WORK_SCHEMA_VERSION = 2;
+export const PROJECT_WORK_SCHEMA_VERSION = 4;
 
 export interface ProjectWorkDatabase {
   exec(sql: string): void;
@@ -128,6 +128,65 @@ export function migrate(db: ProjectWorkDatabase, file: string, log: (message: st
 }
 
 function step(db: ProjectWorkDatabase, from: number): void {
+  if (from === 3) {
+    // D-363. Which capture proved a repository link, and when. The link's
+    // `capture_blob_id` stays exactly what it was — the current pointer every
+    // reader already uses — and this table is the append-only history behind
+    // it: one row per association, never updated, never deleted, so that a
+    // decision can be read against the proof it actually rested on rather than
+    // against whatever the pointer says today.
+    //
+    // The backfill is a **baseline**, and says so: for a link that already has
+    // a capture, the one association this database can honestly attest is the
+    // one it currently holds. No earlier association is invented, and a link
+    // with no capture gets no row at all.
+    db.exec(`
+      CREATE TABLE repository_link_captures (
+        revision_id            TEXT PRIMARY KEY,
+        project_id             TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+        link_id                TEXT NOT NULL,
+        blob_id                TEXT NOT NULL,
+        supersedes_blob_id     TEXT,
+        supersedes_revision_id TEXT,
+        attached_at            TEXT NOT NULL,
+        seq                    INTEGER NOT NULL,
+        reason                 TEXT NOT NULL,
+        gate                   TEXT,
+        actor_json             TEXT NOT NULL,
+        UNIQUE (project_id, link_id, seq)
+      );
+      CREATE INDEX repository_link_captures_link ON repository_link_captures(project_id, link_id, seq);
+
+      INSERT INTO repository_link_captures
+        (revision_id, project_id, link_id, blob_id, supersedes_blob_id, supersedes_revision_id, attached_at, seq, reason, gate, actor_json)
+      SELECT
+        'rlc_legacy_' || link_id,
+        project_id,
+        link_id,
+        capture_blob_id,
+        NULL,
+        NULL,
+        created_at,
+        1,
+        'legacy_baseline',
+        NULL,
+        created_by_json
+      FROM repository_links
+      WHERE capture_blob_id IS NOT NULL;
+    `);
+    return;
+  }
+  if (from === 2) {
+    // M21-T19 / D-361. What the host proved when a person accepted a state as
+    // native visual evidence: the ref it really found, the commit that ref
+    // really pointed at, and the revision digest the acceptance was about. A
+    // column on the link it belongs to, because it is one row's fact and it is
+    // read every time that link is.
+    db.exec(`
+      ALTER TABLE repository_links ADD COLUMN acceptance_json TEXT;
+    `);
+    return;
+  }
   if (from === 1) {
     // M21-T18. What an attempt did in each repository, read from git at record
     // time, and the session whose checkpoint refs it was read from; plus the
