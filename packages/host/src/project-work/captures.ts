@@ -36,8 +36,9 @@ import {
   type RepositoryCaptureSource,
   type RepositoryChangeRef,
   type RepositoryLink,
+  type RepositoryStateRef,
 } from "@lasercode/protocol";
-import { fileAt, looksBinary, type HostRepository } from "../source-control/read.js";
+import { fileAt, parentsOf, treeManifest, type HostRepository } from "../source-control/read.js";
 import { diffBetween } from "../source-control/read.js";
 import { ProjectWorkQuotaError, ProjectWorkRefusedError } from "./errors.js";
 import { canonicalJson, sha256 } from "./ids.js";
@@ -116,8 +117,11 @@ export async function buildCapture(input: {
       files.push({ ...row, omitted: "budget" });
       continue;
     }
-    if (looksBinary(bytes.text)) {
-      files.push({ ...row, omitted: "binary" });
+    if (bytes.binary) {
+      // Its identity and its true size are the record; its bytes are not
+      // something a person reviews, and decoding them would be a lie about
+      // what the file is (review F9).
+      files.push({ ...row, bytes: bytes.bytes, omitted: "binary" });
       continue;
     }
     if (bytes.bytes > REPOSITORY_CAPTURE_SOURCE_BYTES_MAX && bytes.truncated) {
@@ -133,7 +137,7 @@ export async function buildCapture(input: {
       contentDigest,
       text: bytes.text,
     });
-    files.push({ ...row, contentDigest });
+    files.push({ ...row, bytes: bytes.bytes, contentDigest });
     budget -= Buffer.byteLength(bytes.text, "utf8");
     capturedCount += 1;
   }
@@ -148,6 +152,148 @@ export async function buildCapture(input: {
     repositoryId: input.repositoryId,
     repositoryName: input.repository.name,
     change: input.change,
+    files,
+    sources,
+    ...(notes.length > 0 ? { truncated: notes.join(" ") } : {}),
+  };
+}
+
+/**
+ * Read one **state** out of git as the bounded record of what it was
+ * (D-361, review F1).
+ *
+ * A state link names one commit and no difference, and an M20 checkpoint
+ * commit is parentless and reachable only through a ref that routine retention
+ * prunes. So there are two shapes, and which one is used is decided by git
+ * rather than by the caller:
+ *
+ * - **A parented commit** captures its own difference, `commit^ → commit`:
+ *   the smallest complete record of what it introduced.
+ * - **A parentless commit** — every checkpoint — captures a bounded manifest
+ *   of its whole tree: path, mode and blob object id, which stay true as
+ *   identity after gc has reclaimed the objects, plus the source of as many of
+ *   those files as the budget allows.
+ *
+ * `undefined` when git can no longer answer, which is what makes "capture it
+ * before you accept it" a rule rather than a hope.
+ */
+export async function buildStateCapture(input: {
+  repository: HostRepository;
+  repositoryId: string;
+  state: RepositoryStateRef;
+  now: string;
+  /** Paths whose source the decision needs; the rest are manifest-only. */
+  requiredPaths?: readonly string[];
+}): Promise<RepositoryCapture | undefined> {
+  const parents = await parentsOf(input.repository, input.state.commitObjectId);
+  const parent = parents[0];
+  if (parent !== undefined) {
+    const change: RepositoryChangeRef = {
+      base: { ...input.state, commitObjectId: parent },
+      head: input.state,
+      diffDigest: (await diffBetween(input.repository, parent, input.state.commitObjectId))?.digest ?? "",
+    };
+    if (change.diffDigest === "") return undefined;
+    const captured = await buildCapture({
+      repository: input.repository,
+      repositoryId: input.repositoryId,
+      change,
+      now: input.now,
+    });
+    if (!captured) return undefined;
+    // The record is about the state that was accepted, not about a difference
+    // nobody named; the difference is how its bytes were found.
+    const { change: _change, ...rest } = captured;
+    void _change;
+    return { ...rest, state: input.state };
+  }
+
+  const entries = await treeManifest(input.repository, input.state.commitObjectId, REPOSITORY_CAPTURE_FILES_MAX + 1);
+  if (!entries) return undefined;
+  const notes: string[] = [];
+  const kept = entries.slice(0, REPOSITORY_CAPTURE_FILES_MAX);
+  if (entries.length > kept.length) notes.push(`${String(entries.length - kept.length)} more files are not listed.`);
+
+  const required = new Set(input.requiredPaths ?? []);
+  // Required sources come first, so a budget that runs out never costs the
+  // files the decision actually rests on.
+  const ordered = [...kept].sort((a, b) => Number(required.has(b.path)) - Number(required.has(a.path)));
+  const files: RepositoryCaptureFile[] = [];
+  const sources: RepositoryCaptureSource[] = [];
+  let budget = REPOSITORY_CAPTURE_BYTES_MAX;
+  let capturedCount = 0;
+  let skippedForBudget = 0;
+  const missingRequired: string[] = [];
+
+  for (const entry of ordered) {
+    const row: RepositoryCaptureFile = {
+      path: entry.path,
+      status: "present",
+      added: null,
+      removed: null,
+      blobObjectId: entry.blobObjectId,
+      mode: entry.mode,
+      bytes: entry.bytes,
+    };
+    if (capturedCount >= REPOSITORY_CAPTURE_SOURCES_MAX || budget <= 0) {
+      files.push({ ...row, omitted: "budget" });
+      skippedForBudget += 1;
+      if (required.has(entry.path)) missingRequired.push(entry.path);
+      continue;
+    }
+    const bytes = await fileAt(
+      input.repository,
+      input.state.commitObjectId,
+      entry.path,
+      Math.min(REPOSITORY_CAPTURE_SOURCE_BYTES_MAX, budget),
+    );
+    if (!bytes) {
+      files.push({ ...row, omitted: "budget" });
+      if (required.has(entry.path)) missingRequired.push(entry.path);
+      continue;
+    }
+    if (bytes.binary) {
+      files.push({ ...row, omitted: "binary" });
+      continue;
+    }
+    if (bytes.truncated) {
+      notes.push(`${entry.path} was captured up to its first ${String(Math.round(REPOSITORY_CAPTURE_SOURCE_BYTES_MAX / 1024))} KB.`);
+      if (required.has(entry.path)) missingRequired.push(entry.path);
+    }
+    const contentDigest = sha256(bytes.text);
+    sources.push({
+      path: entry.path,
+      bytes: bytes.bytes,
+      ...(bytes.truncated ? { truncated: true } : {}),
+      contentDigest,
+      text: bytes.text,
+    });
+    files.push({ ...row, contentDigest });
+    budget -= Buffer.byteLength(bytes.text, "utf8");
+    capturedCount += 1;
+  }
+
+  // A required source that could not be kept whole means the decision would
+  // rest on a placeholder. That is not durable proof, so it is refused rather
+  // than stored as if it were (D-361).
+  if (missingRequired.length > 0) {
+    throw new ProjectWorkRefusedError(
+      `This state could not be kept where it can still be read: ${missingRequired.slice(0, 3).join(", ")}` +
+        `${missingRequired.length > 3 ? ` and ${String(missingRequired.length - 3)} more` : ""} did not fit in a bounded capture. ` +
+        `Accept a smaller change, or free space in this project's work, and try again.`,
+    );
+  }
+  if (skippedForBudget > 0) {
+    notes.push(`${String(skippedForBudget)} files are listed without their source, to keep this capture bounded.`);
+  }
+  files.sort((a, b) => a.path.localeCompare(b.path));
+
+  return {
+    version: 1,
+    createdAt: input.now,
+    repositoryId: input.repositoryId,
+    repositoryName: input.repository.name,
+    state: input.state,
     files,
     sources,
     ...(notes.length > 0 ? { truncated: notes.join(" ") } : {}),

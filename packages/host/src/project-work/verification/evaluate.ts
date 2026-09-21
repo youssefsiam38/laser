@@ -25,6 +25,7 @@
 import {
   convergenceOf,
   machineDecidable,
+  type ProjectWorkEvidence,
   type RepositoryLink,
   type VerificationBlocker,
   type VerificationCommandRun,
@@ -42,6 +43,10 @@ export interface EvaluationInput {
   commands: readonly VerificationCommandRun[];
   /** Every repository link on the Task and on the Design, for Native evidence. */
   repositoryLinks: readonly RepositoryLink[];
+  /** Every evidence record on those subjects, for the acceptance join. */
+  evidence: readonly ProjectWorkEvidence[];
+  /** Whether a link's stored capture is still readable. Never a git read. */
+  captureReadable: (link: RepositoryLink) => boolean;
   stopped?: boolean;
 }
 
@@ -54,33 +59,50 @@ export interface Evaluation {
 }
 
 /**
- * What this run currently accepts as an M20 checkpoint preview, linked
- * `verified_at` (D-353).
+ * The accepted M20 checkpoint preview that proves one exact revision, read
+ * **only from what is stored** (D-353, D-361).
  *
- * Three things have to be true at once: the relation is `verified_at` (a
- * state, not a delivery), the state names a checkpoint, and a **person** made
- * it — an agent's link would be a claim about its own work, and the actor kind
- * is the host's, never a request body's.
+ * Everything this asks was established and written down when the person
+ * accepted, and none of it is re-derived from git here. That is the whole
+ * point: the contract protects this evidence precisely against the day
+ * retention prunes the checkpoint, so a check that went back to git would
+ * fail exactly when it is needed.
  *
- * **This is not yet the authoritative test, and does not pretend to be.** The
- * approved contract (N2) is a host-validated acceptance written at the moment
- * a person confirms: the link's subject revision **and digest** must equal the
- * criterion's, the checkpoint ref must be one git really holds and must
- * resolve to the recorded commit, a joined `person_acceptance` record must
- * carry the confirmation, and the accepted proof must survive the checkpoint
- * being pruned through a durable canonical capture. The capture and
- * transaction half of that contract is being settled with the M21-T18 owner so
- * that one owner writes it; until it lands, a `verified_at` link that no
- * person confirmed, or one whose checkpoint git no longer has, is **not**
- * distinguished here. `docs/leap/m21-verification-followup.md` records the gap
- * rather than leaving it implied.
+ * Five stored facts, and all five have to hold:
+ *
+ * 1. the link is a `verified_at` **state** on this exact subject — same
+ *    entity, same revision, same digest, so a revision the work has moved on
+ *    to cannot inherit a preview nobody looked at;
+ * 2. a **person** created it;
+ * 3. the host's own `acceptance` record is on it, which only the host writes,
+ *    and it agrees with the link about the commit and the subject's digest;
+ * 4. the bounded canonical capture is there and still readable;
+ * 5. a `person_acceptance` evidence record that passed is joined to it.
  */
-export function acceptedPreview(links: readonly RepositoryLink[], subjectEntityId?: string): RepositoryLink | undefined {
+export function acceptedPreview(
+  links: readonly RepositoryLink[],
+  subject: { entityId: string; revisionId: string; digest: string },
+  evidence: readonly ProjectWorkEvidence[],
+  captureReadable: (link: RepositoryLink) => boolean,
+): RepositoryLink | undefined {
   return links.find((link) => {
     if (link.relation !== "verified_at") return false;
     if (link.createdBy.kind !== "person") return false;
-    if (subjectEntityId !== undefined && link.subject.entityId !== subjectEntityId) return false;
-    return "state" in link.target && link.target.state.checkpointId !== undefined;
+    if (link.subject.entityId !== subject.entityId) return false;
+    if (link.subject.revisionId !== subject.revisionId || link.subject.digest !== subject.digest) return false;
+    const accepted = link.acceptance;
+    if (!accepted || accepted.kind !== "checkpoint_preview") return false;
+    if (accepted.subjectDigest !== subject.digest) return false;
+    if (!("state" in link.target) || link.target.state.commitObjectId !== accepted.commitObjectId) return false;
+    if (!link.captureBlobId || !captureReadable(link)) return false;
+    return evidence.some(
+      (record) =>
+        record.repositoryLinkId === link.linkId &&
+        record.kind === "person_acceptance" &&
+        record.role === "acceptance" &&
+        record.outcome === "passed" &&
+        record.origin.actor.kind === "person",
+    );
   });
 }
 
@@ -208,24 +230,28 @@ function decide(
  * and until that link is there, this is the person's to settle.
  */
 function visualFinding(criterion: VerificationCriterion, input: EvaluationInput): VerificationFinding {
-  const subject = criterion.authority === "design" ? criterion.source.entityId : input.plan.task.entityId;
-  const link = acceptedPreview(input.repositoryLinks, subject);
+  // The subject is the authority the criterion came from, at the exact
+  // revision the plan read it at: a Design criterion is proven by a preview
+  // accepted against *that* Design revision, never against an earlier one.
+  const subject =
+    criterion.authority === "design"
+      ? { entityId: criterion.source.entityId, revisionId: criterion.source.revisionId, digest: criterion.source.digest }
+      : { entityId: input.plan.task.entityId, revisionId: input.plan.task.revisionId, digest: input.plan.task.digest };
+  const link = acceptedPreview(input.repositoryLinks, subject, input.evidence, input.captureReadable);
   if (!link) {
     return {
       criterionId: criterion.id,
       outcome: "needs_person",
-      detail: `Nothing has been accepted as native visual evidence for ${criterion.source.key} yet.`,
+      detail: `Nothing has been accepted as native visual evidence for ${criterion.source.key} at the revision this run checked.`,
       evidenceIds: [],
       steps: [
         `Open the checkpoint preview for this work and compare it with ${criterion.source.key}.`,
-        "Accept it if it matches; accepting records the exact commit as verified_at, which is what native evidence is.",
+        "Accept it if it matches; accepting keeps the exact state where it can still be read and records it as verified_at, which is what native evidence is.",
       ],
     };
   }
   const state = "state" in link.target ? link.target.state : undefined;
-  const evidenceIds = input.gathered.task.evidence
-    .filter((record) => record.repositoryLinkId === link.linkId)
-    .map((record) => record.evidenceId);
+  const evidenceIds = input.evidence.filter((record) => record.repositoryLinkId === link.linkId).map((record) => record.evidenceId);
   return {
     criterionId: criterion.id,
     outcome: "satisfied",

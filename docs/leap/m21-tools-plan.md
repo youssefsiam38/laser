@@ -269,20 +269,16 @@ the checkpoint ref. Nothing here ever resolves a missing object to `HEAD`.
   (display context). The worker writes no link; the person accepts a delivery
   with it. A preview, a refusal and an uncertain outcome carry none.
 
-## Known gap, and the one line that closes it
+## The session an attempt's checkpoints are read from — closed
 
-The worker's `executionShape()` lives in `packages/worker/src/server.ts`, which
-this task may not edit, so it does not yet set `sessionPath` on the execution
-shape. The plumbing is complete on both sides — `ProjectWorkExecutionShape.sessionPath`
-→ `attemptEnvelope()` → the bridge envelope's `attempt.sessionPath` → the host's
-`checkpointSessionKey` — and the client path (`project/task/link-execution`
-params) already carries it. Until that one line is added, a bridge-opened
-attempt selects its checkpoints by `sinceTurn` and its own time window across
-every session in the checkout rather than by session key, which is exact for one
-session per checkout and imprecise for two concurrent ones (the case the
-shared-checkout conflict already warns about). Whoever next owns
-`packages/worker/src/server.ts` should add
-`...(live.path ? { sessionPath: live.path } : {})` to `executionShape`.
+`fbe9a300` closed what this section used to list as open: `executionShape()`
+takes a `() => live.path` closure (`server.ts`), so a bridge-opened attempt
+carries `attempt.sessionPath` and the host derives its checkpoint key from it.
+The whole path — `ProjectWorkExecutionShape.sessionPath` → `attemptEnvelope()`
+→ the bridge envelope → `checkpointSessionKey` — is live, and M21-T19 made the
+key an attempt's **identity**: a closing call is attributed by it, never by
+recency, and it is never re-pointed once recorded
+([`m21-verification-followup.md`](m21-verification-followup.md), F2).
 
 ## The shapes the Task detail (UI) consumes
 

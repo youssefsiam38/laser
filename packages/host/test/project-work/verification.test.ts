@@ -503,46 +503,15 @@ describe("a run that does not converge", () => {
 });
 
 describe("native visual evidence", () => {
-  it("waits on the person's accepted checkpoint preview, and is satisfied by the verified_at link it records", async () => {
+  it("waits on the person, and a link nobody confirmed does not stand in for their acceptance", async () => {
     const w = await world({ visual: true });
-    const first = await report(w.task.entity.entityId, w.task.revision.revisionId, [commandRun("pnpm -F exports test", true)], {
-      runId: "ver_0001",
-    });
-    const visual = first.verifyResult!.report!.findings.find((finding) => finding.criterionId === "task:visual")!;
+    const answer = await report(w.task.entity.entityId, w.task.revision.revisionId, [commandRun("pnpm -F exports test", true)]);
+    const visual = answer.verifyResult!.report!.findings.find((finding) => finding.criterionId === "task:visual")!;
     expect(visual.outcome, "no preview accepted yet").toBe("needs_person");
     expect(visual.steps!.join(" ")).toContain("checkpoint preview");
-
-    // The person accepts the preview: a verified_at link from the exact
-    // checkpoint commit, made by a person and by nobody else.
-    const task = await current(w.task.entity.entityId);
-    ok(
-      await h.call("project/work/link", {
-        projectId: h.projectId,
-        expectedRevisionId: task.revision.revisionId,
-        link: {
-          type: "repository",
-          relation: "verified_at",
-          subjectEntityId: w.task.entity.entityId,
-          subjectRevisionId: task.revision.revisionId,
-          repositoryId: h.store.ensureRepository({
-            projectId: h.projectId,
-            name: "alpha",
-            gitCommonDir: h.projectRoot,
-            rootCommitId: "a".repeat(40),
-          }),
-          target: {
-            state: { vcs: "git", objectFormat: "sha1", commitObjectId: "c".repeat(40), checkpointId: "cp-7" },
-          },
-        },
-        idempotencyKey: "verified-at",
-      }),
-    );
-    const second = await report(w.task.entity.entityId, task.revision.revisionId, [commandRun("pnpm -F exports test", true)], {
-      runId: "ver_0002",
-    });
-    const after = second.verifyResult!.report!.findings.find((finding) => finding.criterionId === "task:visual")!;
-    expect(after.outcome).toBe("satisfied");
-    expect(after.repositoryLinkId, "the link is the evidence, named").toBeDefined();
+    // It is the person's to settle, so it is handed to them rather than held
+    // against the run: `needs_review` is exactly where that handover happens.
+    expect(answer.verifyResult!.report!.personDecisions.some((row) => row.criterionId === "task:visual")).toBe(true);
   });
 });
 

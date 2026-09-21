@@ -161,6 +161,31 @@ export class HostProjectWorkBridge implements ProjectWorkBridge {
     return this.resolvedProjectId;
   }
 
+  /**
+   * Where a write of this session's is being made from (review F3).
+   *
+   * `based_on` is the host's record of the code an artifact revision was
+   * derived from, and the host reads git in the directory the call names. A
+   * run working in a worktree of its own would otherwise have its writes
+   * recorded against the project root the worker was spawned for — two records
+   * of the same session disagreeing about where it was. Attaching the shape
+   * here, once, means every write takes the run's own checkout, whichever tool
+   * made it.
+   *
+   * Only creates and revises: nothing else in the family records `based_on`,
+   * and an envelope on a read would be provenance about nothing.
+   */
+  private async writeEnvelope(method: ProjectWorkMethod): Promise<ProjectWorkBridgeAttempt | undefined> {
+    if (method !== "project/work/create" && method !== "project/work/revise") return undefined;
+    try {
+      return attemptEnvelope(await this.options.execution());
+    } catch {
+      // A checkout that cannot be read leaves the write without provenance,
+      // exactly as a session with no checkout does. The revision is the point.
+      return undefined;
+    }
+  }
+
   identity(): ProjectWorkSessionIdentity {
     return this.options.identity();
   }
@@ -206,11 +231,12 @@ export class HostProjectWorkBridge implements ProjectWorkBridge {
     params: ClientRequests[M]["params"],
     extras?: { research?: ResearchOperation; attempt?: ProjectWorkBridgeAttempt; verify?: VerificationEnvelope },
   ): Promise<ProjectWorkBridgeResult> {
+    const attempt = extras?.attempt ?? (await this.writeEnvelope(method));
     const envelope: ProjectWorkBridgeParams = {
       agent: this.options.identity(),
       request: { method, params } as ProjectWorkBridgeParams["request"],
       ...(extras?.research ? { research: extras.research } : {}),
-      ...(extras?.attempt ? { attempt: extras.attempt } : {}),
+      ...(attempt ? { attempt } : {}),
       ...(extras?.verify ? { verify: extras.verify } : {}),
     };
     let answer: ProjectWorkBridgeResult;

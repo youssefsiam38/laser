@@ -810,6 +810,17 @@ export interface RepositoryLink {
   /** The attempt this delivery came out of, when it came out of one. */
   executionLinkId?: string;
   /**
+   * The host's own record that a person accepted this state as native visual
+   * evidence (M21-T19, D-361).
+   *
+   * Written by the host and by nothing else: a caller asks for the acceptance,
+   * and what is stored is what the host proved when it validated the ask — the
+   * checkpoint ref it really found, the commit that ref really pointed at, and
+   * when it confirmed it. A request body can never mint this field, which is
+   * what makes it proof rather than a claim.
+   */
+  acceptance?: RepositoryLinkAcceptance;
+  /**
    * Branch, remote and pull request: what a person reads the link *by*, and
    * never what it *is* (M21-T18). Identity is the object ids in `target`;
    * every field here may move, be renamed or be deleted without the link
@@ -826,6 +837,27 @@ export interface RepositoryLink {
  * at a force-pushed head. It lives here, beside the branch and the remote
  * *name*, so that nothing reading identity can reach it by accident.
  */
+/**
+ * What the host proved when a person accepted a checkpoint preview.
+ *
+ * `checkpointRef` and `commitObjectId` are what it read out of git at that
+ * moment; `subjectDigest` is the artifact revision the acceptance was about,
+ * so a later revision cannot inherit it. Everything a reader needs is here and
+ * in the capture: convergence never re-reads git (D-361).
+ */
+export interface RepositoryLinkAcceptance {
+  kind: "checkpoint_preview";
+  confirmedAt: string;
+  /** The ref the host found, exactly as git named it. */
+  checkpointRef: string;
+  /** The commit that ref pointed at when it was confirmed. */
+  commitObjectId: string;
+  /** The digest of the artifact revision this acceptance is about. */
+  subjectDigest: string;
+  /** The person the host recorded it for. */
+  acceptedBy: ProjectWorkActor;
+}
+
 export interface RepositoryLinkContext {
   branch?: string;
   /** The remote's name (`origin`), never its URL. */
@@ -992,12 +1024,27 @@ export const REPOSITORY_CAPTURE_MEDIA_TYPE = `application/vnd.${PRODUCT_NAME}.re
 
 export interface RepositoryCaptureFile {
   path: string;
-  /** The three words the product speaks about a file (`FileChangeStatus`). */
-  status: "added" | "modified" | "deleted";
+  /**
+   * The three words the product speaks about a file (`FileChangeStatus`).
+   *
+   * A state capture has no difference to speak of, so every file in one is
+   * `present`: it is the tree as it stood, not a change to it.
+   */
+  status: "added" | "modified" | "deleted" | "present";
   added: number | null;
   removed: number | null;
   /** The head-side blob object id, when the file exists at head. */
   blobObjectId?: string;
+  /** The file's mode as git records it (`100644`). Identity, not display. */
+  mode?: string;
+  /**
+   * The file's true size in bytes, as git reports it.
+   *
+   * Recorded whether or not the bytes were captured, so a file left out is
+   * still described by its real size rather than by the size of what was
+   * kept (M21-T19, review F9).
+   */
+  bytes?: number;
   /** sha256 of the captured bytes, when they were captured. */
   contentDigest?: string;
   /** Why this file's bytes are not in the capture. */
@@ -1013,18 +1060,30 @@ export interface RepositoryCaptureSource {
   text: string;
 }
 
-export interface RepositoryCapture {
+interface RepositoryCaptureBase {
   version: 1;
   createdAt: string;
   repositoryId: string;
   repositoryName?: string;
-  change: RepositoryChangeRef;
   files: RepositoryCaptureFile[];
-  /** The head-side source of the files the change touched, bounded. */
+  /** The head-side source of the files the capture covers, bounded. */
   sources: RepositoryCaptureSource[];
   /** What was left out, in one sentence a person can act on. */
   truncated?: string;
 }
+
+/**
+ * A bounded canonical record of what a link points at, kept so a decision
+ * stays reviewable after git has pruned what it was taken from (D-361).
+ *
+ * Exactly one of `change` and `state`, never both and never neither: a capture
+ * of a difference and a capture of a tree are different documents, and a shape
+ * that allowed both would let a reader pick the wrong one. The alternative is
+ * a discriminated union rather than two optional fields for that reason.
+ */
+export type RepositoryCapture =
+  | (RepositoryCaptureBase & { change: RepositoryChangeRef; state?: never })
+  | (RepositoryCaptureBase & { state: RepositoryStateRef; change?: never });
 
 /**
  * A Project Task joined to a session, run, checkpoint, branch or command.

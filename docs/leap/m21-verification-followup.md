@@ -121,6 +121,77 @@ the person who made the link and the presence of a checkpoint id, and its
 documentation says plainly that this is not yet the authoritative test. The
 exact N2 plan follows once that contract arrives.
 
+## Batch 2 · durable native proof (D-361) and the T18 review set
+
+### B · N2, as approved
+
+`verifiedAt.acceptance: { kind: "checkpoint_preview" }` is an **explicit
+request for a person's action**, never the proof of one. What the host does
+with it, through the one existing evidence-link door:
+
+1. **Only a person may ask.** The actor kind is the host's, from the
+   connection; an agent's ask is refused with what to do instead.
+2. **The subject is the authority's current revision.** The link's subject
+   revision and digest must be the ones the store holds for that entity now, so
+   a preview accepted against a revision the work has moved past cannot be
+   inherited by the revision that replaced it.
+3. **The checkpoint is proved, not asserted.** `state.checkpointId` must be a
+   ref `listCheckpointRefs` really returns, **and it must resolve to
+   `state.commitObjectId`**. That the commit exists is explicitly not the
+   test — a commit id can be borrowed from anywhere in the repository.
+4. **The capture is stored before the transaction.** A quota refusal
+   (`-32011`) accepts nothing: there is no accepted preview whose evidence was
+   never kept.
+5. **The host writes its own record.** `RepositoryLink.acceptance` holds the
+   ref it found, the commit that ref pointed at, the subject digest, who
+   accepted and when. A request body cannot mint that field, which is what
+   makes it proof.
+
+**Every** `verified_at` write is now validated and captured, not only the ones
+asking for acceptance: a state link naming a commit nobody ever had, or one
+whose checkpoint has been pruned, would otherwise sit in the record looking
+exactly like proof. This supersedes D-357.i's implementation-only "a state link
+has no capture" claim, per D-361; the formal ledger is the parent's.
+
+**Capture shape.** `RepositoryCapture` is a discriminated union — exactly one
+of `change` and `state`, never both and never neither. A parented commit is
+captured as its own `commit^ → commit` difference; a **parentless** M20
+checkpoint (the normal case) as a bounded `ls-tree -r` manifest carrying path,
+**mode and blob object id** — identity that stays true after gc — plus the
+sources the budget allows, required paths first. A required source that cannot
+be kept whole **refuses the acceptance** rather than storing a truncated
+placeholder and calling it durable proof.
+
+**Evaluation reads the store, never git.** `acceptedPreview()` now requires
+five stored facts: the `verified_at` state on this exact subject revision and
+digest, a person creator, the host's own `acceptance` record agreeing with the
+link's commit and the subject digest, a capture that is present and readable,
+and a joined `person_acceptance` record that passed. Re-reading git at
+convergence would fail exactly when retention has done its job.
+
+### The T18 review set
+
+| Finding | What landed |
+| --- | --- |
+| **F2** | The existing query already filters kind and target, and the new test proves two runs stay two rows; the suggested newest-fallback was **not** applied. What was strengthened is the same-target case: a close is attributed by the caller's own checkpoint key or by an explicit `executionLinkId`, an identity that matches no open attempt is **refused**, and the checkpoint key became immutable (`COALESCE(checkpoint_key, ?)`) so one session's namespace can never land on another's row |
+| **F3** | `HostProjectWorkBridge.call` attaches the execution envelope for `create`/`revise` in one place, so `based_on` records the run's own worktree rather than the worker's spawn root. Proved with two real checkouts at different HEADs |
+| **F4** | The gate/delivery orchestration moved out of `methods.ts` into `project-work/gate.ts` as `ProjectWorkGate`, taking an explicit `{ store, caller }`; routing and the verifier transaction are unchanged. `methods.ts` 1,445 → 1,214 lines |
+| **F5** | The stale "Known gap" section of the tools plan replaced with the closure that closed it |
+| **F6** | A supplied base git no longer has is kept as recorded identity and the record is marked `unavailable`; it never becomes `HEAD`, and no commit list is invented for it |
+| **F7** | `implemented_by` / `verified_at` are person-only to remove, and once evidence, an acceptance or an approved/completed subject names one, removal is refused: a correction supersedes, it never erases |
+| **F8** | **Deferred to M21-T22, explicitly.** The serialized reads are commented as such; no unbounded `Promise.all` was added beside a correctness fix |
+| **F9** | Capture decoding is strict: a blob whose decoded form does not weigh what git says it weighs (or carries a NUL) is recorded as `omitted: "binary"` with its **true** byte count and its blob id, and its bytes are not captured |
+
+### Still open: the person's way in (N2 refinement 4)
+
+There is **no UI caller** of `verifiedAt` / `person_acceptance` anywhere in the
+merged app — the acceptance door is host-side only, so today a person cannot
+reach it. That is an honest gap, not a claim of completeness, and the seam plan
+for it is in the handoff report: a checkpoint-preview affordance in the
+source-control preview surface plus an accept action in the Task verification
+panel, showing the exact checkpoint and subject and confirming before the host
+is asked. No code for it was written pending approval of that seam.
+
 ## Evidence
 
 | Command | Result |

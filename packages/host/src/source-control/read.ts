@@ -228,12 +228,71 @@ export async function commitsBetween(repo: HostRepository, base: string, head: s
 }
 
 /** One file's bytes at one commit, bounded, with the blob id they came from. */
+/**
+ * One commit's parents, oldest first. Empty for a parentless commit — which is
+ * what every M20 checkpoint is (`commit-tree` with no `-p`), and the reason a
+ * state capture cannot always be a difference (D-361).
+ */
+export async function parentsOf(repo: HostRepository, commit: string): Promise<string[]> {
+  if (!isObjectId(commit)) return [];
+  const line = (await read(repo, ["rev-list", "--parents", "-n", "1", commit]))?.trim();
+  if (!line) return [];
+  return line.split(/\s+/).slice(1).filter((value) => isObjectId(value));
+}
+
+/** One entry of a commit's tree: the identity a manifest records. */
+export interface TreeEntryRow {
+  path: string;
+  mode: string;
+  blobObjectId: string;
+  /** The blob's true size in bytes, as git reports it. */
+  bytes: number;
+}
+
+/**
+ * The whole tree of one commit, bounded.
+ *
+ * This is what a capture of a **state** records: a parentless checkpoint
+ * commit has no difference to describe, so what survives pruning is the paths,
+ * their modes and their blob object ids — identity that stays true after gc
+ * has reclaimed the objects themselves, exactly as a change capture's recorded
+ * ids do.
+ */
+export async function treeManifest(repo: HostRepository, commit: string, limit: number): Promise<TreeEntryRow[] | undefined> {
+  if (!isObjectId(commit)) return undefined;
+  const listed = await read(repo, ["ls-tree", "-r", "-z", "--long", commit]);
+  if (listed === undefined) return undefined;
+  const rows: TreeEntryRow[] = [];
+  for (const chunk of listed.split("\0")) {
+    if (!chunk) continue;
+    // `<mode> <type> <object> <size>\t<path>`
+    const tab = chunk.indexOf("\t");
+    if (tab < 0) continue;
+    const [mode, type, object, size] = chunk.slice(0, tab).trim().split(/\s+/);
+    const path = chunk.slice(tab + 1);
+    if (type !== "blob" || !mode || !object || !isObjectId(object) || !path) continue;
+    rows.push({ path, mode, blobObjectId: object, bytes: Number(size ?? "") || 0 });
+    if (rows.length >= limit) break;
+  }
+  return rows;
+}
+
+/**
+ * One file's bytes at one commit.
+ *
+ * `bytes` is the file's **true** size, from git, not the length of whatever
+ * came back decoded: git hands this process a string, so bytes that are not
+ * valid UTF-8 would otherwise be captured as mojibake and counted wrong
+ * (review F9). A file whose decoded form does not weigh what git says it
+ * weighs is reported as `binary: true` and its bytes are not captured — its
+ * identity is.
+ */
 export async function fileAt(
   repo: HostRepository,
   commit: string,
   path: string,
   limitBytes: number,
-): Promise<{ text: string; bytes: number; truncated: boolean; blobObjectId?: string } | undefined> {
+): Promise<{ text: string; bytes: number; truncated: boolean; binary: boolean; blobObjectId?: string } | undefined> {
   if (!isObjectId(commit) || !isRepoPath(path)) return undefined;
   const spec = `${commit}:${path}`;
   const size = Number((await read(repo, ["cat-file", "-s", spec]))?.trim() ?? Number.NaN);
@@ -247,12 +306,17 @@ export async function fileAt(
   }).catch(() => undefined);
   if (!result || result.timedOut || result.overflow || result.exitCode !== 0) return undefined;
   const whole = Buffer.from(result.stdout, "utf8");
-  const truncated = whole.byteLength > limitBytes;
+  // A lossy decode weighs a different number of bytes than the file does, and
+  // a NUL is the other tell. Either way the bytes are not text a person can
+  // review, so they are not captured as if they were.
+  const binary = whole.byteLength !== size || looksBinary(result.stdout);
+  const truncated = !binary && whole.byteLength > limitBytes;
   const kept = truncated ? sliceOnCharacterBoundary(whole, limitBytes) : whole;
   return {
-    text: kept.toString("utf8"),
-    bytes: whole.byteLength,
+    text: binary ? "" : kept.toString("utf8"),
+    bytes: size,
     truncated,
+    binary,
     ...(blobObjectId && isObjectId(blobObjectId) ? { blobObjectId } : {}),
   };
 }
