@@ -75,6 +75,13 @@ throws with all of them. Rules, in the order the contract lists them:
   person's configured provider, so its schema, description and failures are
   ours. It is `readOnly` + `external` (`openWorldHint`). This makes ten tools
   under the lint, not nine.
+- **D-350.e — the contract's view of a tool lives in a registry, not in the
+  engine's tool definition.** `ToolDefinition` has nowhere to put annotations,
+  a declared output or a recovery, so `registerLaserTool` keeps them in
+  `laserToolRegistry()` (keyed by tool name, last registration wins). That is
+  what a conformance fixture (M26-T3) and the docs-table tests read. It
+  describes the tool *surface*, not per-session state; only `start_agent`'s
+  description differs per session, because it carries that session's catalog.
 
 ## M26-T2 — the harness and background tools under the contract
 
@@ -122,15 +129,31 @@ What landed:
 4. **`send_agent_message` is not idempotent and has no key.** A repeat is a
    second message on purpose: the parent redirecting a child twice is a real
    intention. Recorded so the annotation is not read as an oversight.
+5. **`start_agent`'s description degrades instead of overflowing.** The
+   description carries the session's agent catalog, which a project controls:
+   60 agents with 300-character descriptions cannot fit in 1 200 characters.
+   Rather than exempt the tool from the budget or refuse to register it,
+   `startAgentDescription()` degrades in three steps — each agent's own
+   description cut to 120 characters, then descriptions dropped and names
+   kept, then names cut with an honest count of the rest, which `start_agent`
+   still accepts. What is lost is detail about an agent, never the ability to
+   start it. Pinned by a test with 60 agents.
+6. **Harness refusals keep their existing sentences.** `HarnessError` gained
+   optional `{ code, committed, next }`, but the ~60 throw sites in
+   `packages/worker/src/agents/harness.ts` were not touched: each failure
+   takes its calling tool's declared recovery, so the model gets a correct
+   `next` for every path today, and a site that wants a more specific code can
+   opt in later without a migration. Retrofitting sixty sites was outside this
+   task's write boundary and would have churned messages that are already
+   written for a person.
 
 ## What the M26-T3 and M26-T4 owners must know
 
 **Fixture format (T3).** Every Laser tool can be read as a `LaserToolSpec`
-without starting a session: `registerLaserTool` is fed a definition whose
-`parameters` (TypeBox) and `output` (JSON Schema) are already the lint's
-input, and `laserToolSpec(definition)` in
-`packages/pi-extension/src/register-tool.ts` produces the spec. A conformance
-fixture for a tool therefore needs only:
+without starting a session: after a module has registered its tools,
+`laserToolRegistry()` (exported from `@lasercode/pi-extension`) holds one spec
+per tool name, and `laserToolSpec(definition)` builds one from a definition
+directly. A conformance fixture for a tool therefore needs only:
 
 ```jsonc
 {
@@ -156,9 +179,14 @@ the evaluation harness.
 
 ## Checkpoints
 
-- T1: protocol module, lint, helper and tests landed; `pnpm -F
-  @lasercode/protocol test` and `pnpm -F @lasercode/pi-extension test` green.
-  Commit recorded in the task report.
-- T2: ten tools registered through the helper, docs tables updated; worker and
-  pi-extension suites, `pnpm -r build`, `pnpm -r typecheck`,
-  `pnpm identity:check` and `pnpm verify` results in the task report.
+- **T1 done.** `packages/protocol/src/tool-contract.ts` (+49 tests),
+  `packages/pi-extension/src/register-tool.ts` (+14 tests),
+  `packages/worker/src/agents/errors.ts` (+3 tests), both barrels export.
+  `pnpm -F @lasercode/protocol test` 515 passed; `pnpm -F
+  @lasercode/pi-extension test` 218 passed; `pnpm -F @lasercode/worker test`
+  1226 passed. Commit `a6ed4028`.
+- **T2 done.** Ten tools through the helper (7 harness + `task_output` +
+  `task_stop` + `web_search`); `bash` deliberately not (D-350.c);
+  `docs/agents.md` §2 and §6 gained annotation columns. New tests: harness
+  contract + error shape (subagents), task tools + error shape
+  (background-work), `web_search` spec + error shape (web-access).

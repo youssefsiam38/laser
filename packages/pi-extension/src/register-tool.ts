@@ -141,6 +141,24 @@ export function toolFailure(
 }
 
 /**
+ * Every Laser tool this process has registered, by name.
+ *
+ * The engine's own tool definition has nowhere to put annotations, a declared
+ * output or a recovery, so the contract's view of a tool lives here. It is a
+ * description of the tool *surface*, not per-session state: every session
+ * registers the same tools, and the last registration of a name wins (only
+ * `start_agent`'s description differs, because it carries the session's own
+ * catalog). A conformance fixture (M26-T3) reads its specs from here without
+ * starting a session.
+ */
+const registry = new Map<string, LaserToolSpec>();
+
+/** The registered tool surface, for fixtures and tests. */
+export function laserToolRegistry(): ReadonlyMap<string, LaserToolSpec> {
+  return registry;
+}
+
+/**
  * Register one Laser tool. Throws at registration when it does not conform,
  * so a non-conforming tool fails the module's tests rather than a session.
  */
@@ -149,7 +167,9 @@ export function registerLaserTool<TParams extends TSchema, TDetails = unknown>(
   definition: LaserToolDefinition<TParams, TDetails>,
   execute: LaserToolExecute<TParams, TDetails>,
 ): void {
-  assertToolContract(laserToolSpec(definition));
+  const spec = laserToolSpec(definition);
+  assertToolContract(spec);
+  registry.set(spec.name, spec);
 
   const tool: ToolDefinition<TParams, TDetails> = {
     name: definition.name,

@@ -29,8 +29,9 @@
  * touches sessions, files or worktrees itself.
  */
 import { StringEnum } from "@earendil-works/pi-ai";
-import { INSTRUCTION_APP_ORIGIN, PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
+import { INSTRUCTION_APP_ORIGIN, PRODUCT_DISPLAY_NAME, TOOL_DESCRIPTION_MAX } from "@lasercode/protocol";
 import { recordInstructionWrite } from "../prompt-provenance.js";
+import { registerLaserTool } from "../register-tool.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   AGENT_EVENT_MESSAGE_TYPE,
@@ -72,14 +73,44 @@ const states = new WeakMap<ModuleContext, State>();
 // Text the model reads
 // ---------------------------------------------------------------------------
 
+/** The most of one agent's own description that fits into the catalog line. */
+const CATALOG_ENTRY_DESCRIPTION_MAX = 120;
+
 /** The reference's description with the compact catalog appended: `name — description; …`. */
 export function startAgentDescription(catalog: AgentCatalogEntry[]): string {
-  const entries = catalog.map((entry) => `${entry.agentName} — ${entry.description}`).join("; ");
-  return (
-    `Start another agent for an independent piece of work. Available agents: ${entries || "none are allowed for this session"}. ` +
+  const prose = (entries: string): string =>
+    `Start another agent for an independent piece of work. Available agents: ${entries}. ` +
     "It runs in the background: do not wait for it — its result is delivered to you as a message when it ends, and inspect_agent shows how it is doing meanwhile. " +
-    "worktree true (the default) isolates the agent when this workspace can be isolated, false shares your checkout, and \"strict\" demands isolation and refuses without it. Reviewing a branch, merging it, and removing the worktree with remove_agent_worktree are yours, not the agent's."
-  );
+    "worktree true (the default) isolates the agent when this workspace can be isolated, false shares your checkout, and \"strict\" demands isolation and refuses without it. Reviewing a branch, merging it, and removing the worktree with remove_agent_worktree are yours, not the agent's.";
+  return prose(fitCatalog(catalog, TOOL_DESCRIPTION_MAX - prose("").length));
+}
+
+/**
+ * The catalog, inside the contract's description budget (D-350).
+ *
+ * A project may define more agents, with longer descriptions, than 1 200
+ * characters can hold. What degrades is how much the model is told about each
+ * agent, never which agents it may start: first each agent's own description
+ * is cut, then the descriptions go and the names remain, and only a list of
+ * names too long for the budget is cut — saying honestly how many were left
+ * out, because `start_agent` still accepts them by name.
+ */
+function fitCatalog(catalog: AgentCatalogEntry[], budget: number): string {
+  if (catalog.length === 0) return "none are allowed for this session";
+  const full = catalog.map((entry) => `${entry.agentName} — ${excerpt(entry.description, CATALOG_ENTRY_DESCRIPTION_MAX)}`).join("; ");
+  if (full.length <= budget) return full;
+  const names = catalog.map((entry) => entry.agentName).join("; ");
+  if (names.length <= budget) return names;
+  const kept: string[] = [];
+  for (const entry of catalog) {
+    const left = catalog.length - kept.length - 1;
+    const candidate = [...kept, entry.agentName].join("; ") + (left > 0 ? `; and ${String(left)} more you can start by name` : "");
+    if (candidate.length > budget) break;
+    kept.push(entry.agentName);
+  }
+  const rest = catalog.length - kept.length;
+  if (kept.length === 0) return `${String(catalog.length)} agents are available; ask the person which one to start`;
+  return kept.join("; ") + (rest > 0 ? `; and ${String(rest)} more you can start by name` : "");
 }
 
 /**
@@ -315,11 +346,58 @@ function asResult(view: unknown, details: unknown) {
 // Tools
 // ---------------------------------------------------------------------------
 
+/**
+ * The bound on an identifier the model hands back: a sessionId, a runId, a
+ * taskId. They are opaque strings the harness itself minted, so the bound is
+ * generous; it exists so that nothing on this schema is unbounded (D-350).
+ */
+const ID_MAX = 200;
+
+/** The four identities every agent-shaped result carries. */
+const IDENTITY_FIELDS = {
+  agent_name: { type: "string", description: "The reusable agent definition this run belongs to." },
+  subagent_name: { type: "string", description: "The name of this running instance." },
+  sessionId: { type: "string", description: "The agent's persistent conversation." },
+  runId: { type: "string", description: "One execution inside that conversation." },
+} as const;
+
+/** What a run summary says about how it is going and how it ended. */
+const RUN_STATE_FIELDS = {
+  status: { type: "string", description: "running, needs_input, completed, blocked, failed or cancelled." },
+  startedAt: { type: "string", description: "When the run started, as an ISO timestamp." },
+  endedAt: { type: "string", description: "When it ended, when it has; absent while it runs." },
+  result: { type: "object", description: "The declared ending: status completed or blocked, and the final message." },
+  error: { type: "string", description: "What went wrong, for a run that failed." },
+  endedBy: { type: "object", description: "Who ended it and why, when someone did." },
+  question: { type: "object", description: "The question it is paused on while its status is needs_input." },
+} as const;
+
 function registerStartAgent(pi: ExtensionAPI, bridge: AgentHarnessBridge, catalog: AgentCatalogEntry[]): void {
-  pi.registerTool({
+  registerLaserTool(pi, {
     name: "start_agent",
     label: "Start an agent",
     description: startAgentDescription(catalog),
+    // D-277: start_agent is labelled by its own subagent_name.
+    activityLabel: "exempt",
+    annotations: { readOnly: false, idempotent: false, destructive: false, external: false },
+    recovery: {
+      code: "start_agent_failed",
+      next: "call start_agent again with an agent_name from the list in this tool's description, or do the work here yourself",
+    },
+    output: {
+      type: "object",
+      properties: {
+        ...IDENTITY_FIELDS,
+        status: { type: "string", description: 'Always "running": start_agent returns before the agent has done anything.' },
+        working_directory: { type: "string", description: "The directory the agent works in." },
+        isolation: { type: "object", description: "Whether it got a worktree of its own or shares your checkout, and why." },
+        branch: { type: "string", description: "The branch its worktree is on; absent when it shares your checkout." },
+        environment: { type: "object", description: "What its fresh worktree started from, when it has one." },
+        setup: { type: "object", description: "How the project's worktree setup went, when it ran." },
+        guidance: { type: "string", description: "What to do now: carry on; the ending is delivered to you as a message." },
+        your_responsibility: { type: "string", description: "Whose the branch and the directory are once the agent has finished." },
+      },
+    },
     promptSnippet: "Start another agent in the background for an independent piece of work",
     promptGuidelines: [
       "Use start_agent for independent work another agent can do in parallel; it returns immediately with sessionId and runId. Do not wait for it and do not poll: its result is delivered to you as a message when it ends, and inspect_agent shows one agent in depth meanwhile.",
@@ -333,37 +411,59 @@ function registerStartAgent(pi: ExtensionAPI, bridge: AgentHarnessBridge, catalo
       subagent_name: Type.String({ minLength: 1, maxLength: SUBAGENT_NAME_MAX, description: 'A short human-readable name of two to five words for this running instance and its task, in sentence case with spaces. Never use a slug, dash- or underscore-separated words, or camelCase. Example: "Review login flow".' }),
       task: Type.String({ minLength: 1, maxLength: AGENT_TASK_MAX, description: "The complete task and all context the new agent needs." }),
       worktree: Type.Optional(
-        Type.Union([
-          Type.Boolean({
-            description:
-              "true (the default) isolates the agent when this workspace can be isolated, and shares your checkout — saying so — when it cannot. false runs it in this session's checkout for a task that only reads. It keeps every tool, and anything it writes lands in your working copy.",
-          }),
-          Type.Literal("strict", {
-            description:
-              'Demand an isolated git worktree. Refused, naming git or worktree false as the ways forward, when this workspace cannot isolate an agent.',
-          }),
-        ]),
+        Type.Union(
+          [
+            Type.Boolean({
+              description:
+                "true (the default) isolates the agent when this workspace can be isolated, and shares your checkout — saying so — when it cannot. false runs it in this session's checkout for a task that only reads. It keeps every tool, and anything it writes lands in your working copy.",
+            }),
+            Type.Literal("strict", {
+              description:
+                'Demand an isolated git worktree. Refused, naming git or worktree false as the ways forward, when this workspace cannot isolate an agent.',
+            }),
+          ],
+          { description: "Where the agent works: true (the default) isolates it when this workspace can, false shares your checkout, \"strict\" demands isolation and refuses without it." },
+        ),
       ),
-    }),
-    async execute(_toolCallId, params, signal) {
-      const result = await bridge.startAgent(
-        {
-          agentName: params.agent_name,
-          subagentName: params.subagent_name,
-          task: params.task,
-          ...(params.worktree !== undefined ? { worktree: params.worktree } : {}),
-        },
-        signal,
-      );
-      return asResult(startedView(result), result);
-    },
+    }, { additionalProperties: false }),
+  }, async (_toolCallId, params, signal) => {
+    const result = await bridge.startAgent(
+      {
+        agentName: params.agent_name,
+        subagentName: params.subagent_name,
+        task: params.task,
+        ...(params.worktree !== undefined ? { worktree: params.worktree } : {}),
+      },
+      signal,
+    );
+    return asResult(startedView(result), result);
   });
 }
 
 function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void {
-  pi.registerTool({
+  registerLaserTool(pi, {
     name: "send_agent_message",
     label: "Message an agent",
+    activityLabel: "injected",
+    // Not idempotent on purpose: a second call is a second message, and in
+    // interrupt mode it cancels a second invocation.
+    annotations: { readOnly: false, idempotent: false, destructive: false, external: false },
+    recovery: {
+      code: "send_agent_message_failed",
+      next: "call inspect_agent with that sessionId to see its status and any open question, then send again",
+    },
+    output: {
+      type: "object",
+      properties: {
+        sessionId: IDENTITY_FIELDS.sessionId,
+        runId: { type: "string", description: "The run the message reached, or the one it started." },
+        status: RUN_STATE_FIELDS.status,
+        delivery: { type: "string", description: "delivered, queued, answered, refused or control_failed." },
+        answered: { type: "object", description: "The question this message settled, in answer mode." },
+        question: { type: "object", description: "The question still open, when an answer was refused." },
+        error: { type: "string", description: "Why a refused or control_failed message did not start." },
+      },
+    },
     description:
       "Send a message to an agent you started, addressed by its sessionId. Choose one explicit mode: interrupt (the default) cancels and fences its current invocation, including an open question, then redirects it; steer reaches the next model-call boundary without cancellation; queue waits until current work ends; answer only settles an open needs_input question. " +
       "For answer, send exactly one listed select choice, yes or no for confirm, or the text for input/editor; it is refused if no question is open. Steer and queue never answer or cancel a question. " +
@@ -375,23 +475,39 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
       "When an agent is needs_input, use send_agent_message mode answer only to answer its open question; inspect_agent shows the question and the exact kind of answer it takes.",
     ],
     parameters: Type.Object({
-      sessionId: Type.String({ minLength: 1, description: "The sessionId returned by start_agent." }),
+      sessionId: Type.String({ minLength: 1, maxLength: ID_MAX, description: "The sessionId returned by start_agent." }),
       message: Type.String({ minLength: 1, maxLength: AGENT_MESSAGE_MAX, description: "The redirect/instruction, or the typed answer when mode is answer." }),
       mode: Type.Optional(StringEnum(AGENT_MESSAGE_MODES, {
         description: "interrupt (default): cancel/fence current work then redirect; steer: next model boundary without cancellation; queue: after current work; answer: settle an open question only.",
       })),
     }, { additionalProperties: false }),
-    async execute(_toolCallId, params) {
-      const result = await bridge.sendAgentMessage({ sessionId: params.sessionId, message: params.message, mode: params.mode ?? "interrupt" });
-      return asResult(result, result);
-    },
+  }, async (_toolCallId, params) => {
+    const result = await bridge.sendAgentMessage({ sessionId: params.sessionId, message: params.message, mode: params.mode ?? "interrupt" });
+    return asResult(result, result);
   });
 
   // D-163: the agent reads running work the way the person does — one tree,
   // both kinds of work, the same words — scoped to what is under it.
-  pi.registerTool({
+  registerLaserTool(pi, {
     name: "inspect_fleet",
     label: "Inspect the fleet",
+    // D-277: inspect_fleet describes nothing but itself.
+    activityLabel: "exempt",
+    annotations: { readOnly: true, idempotent: true, destructive: false, external: false },
+    recovery: {
+      code: "inspect_fleet_failed",
+      next: "carry on with your own work; endings are delivered to you as messages, or call inspect_agent with a runId you already have",
+    },
+    output: {
+      type: "object",
+      properties: {
+        summary: { type: "string", description: "How many rows are working, need you, and have finished." },
+        rows: { type: "array", description: "The tree, one row per agent run and per background command, children nested." },
+        omitted: { type: "integer", description: "How many rows were left out by the row ceiling, deepest first." },
+        note: { type: "string", description: "How to reach the rows that were left out." },
+        guidance: { type: "string", description: "What to do next, and why not to poll." },
+      },
+    },
     description:
       "The work going on under this session, as one tree: the agents you started, the agents they started, and the background commands any of them — you included — left running or finished. " +
       "It is the same tree, in the same words, that the person sees in the fleet column. Each row says its kind (agent or command), its name, its status word (Working, Asking, Blocked, Done, Failed, Ended, Waiting), " +
@@ -402,18 +518,43 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
     promptGuidelines: [
       "Use inspect_fleet to see what is running, asking, or ended under you, agents and background commands alike; do not call inspect_fleet repeatedly to wait for a result, which is delivered to you as a message when the work ends.",
     ],
-    parameters: Type.Object({}),
-    async execute() {
-      const result = await bridge.inspectFleet();
-      return asResult(fleetView(result), result);
-    },
+    parameters: Type.Object({}, { additionalProperties: false }),
+  }, async () => {
+    const result = await bridge.inspectFleet();
+    return asResult(fleetView(result), result);
   });
 
   // M13-T45: the one way to look closely at an agent without reading its
   // whole conversation into this context. Read-only, so it is always safe.
-  pi.registerTool({
+  registerLaserTool(pi, {
     name: "inspect_agent",
     label: "Inspect an agent",
+    activityLabel: "injected",
+    annotations: { readOnly: true, idempotent: true, destructive: false, external: false },
+    recovery: {
+      code: "inspect_agent_failed",
+      next: "call inspect_fleet to list the agents under you with their runIds, then inspect_agent with one of them",
+    },
+    output: {
+      type: "object",
+      properties: {
+        ...IDENTITY_FIELDS,
+        ...RUN_STATE_FIELDS,
+        task: { type: "string", description: "The whole task the agent was given." },
+        origin: { type: "string", description: "Who started it: an agent, or the person." },
+        depth: { type: "integer", description: "How deep in the tree it sits." },
+        model: { type: "string", description: "The model it is running on." },
+        cwd: { type: "string", description: "The directory it works in." },
+        isolation: { type: "object", description: "Worktree or shared checkout, and why." },
+        branch: { type: "string", description: "Its branch, only when it has a worktree of its own." },
+        worktree: { type: "object", description: "The worktree as it is now: whether it exists, and what git says about its branch. null when it was started without one." },
+        activity: { type: "object", description: "Turns, tool calls, the tool running now, and when it was last active." },
+        updatedAt: { type: "string", description: "When the run last changed." },
+        messages: { type: "array", description: "Its last assistant messages, excerpted, newest last." },
+        what_it_needs: { type: "string", description: "What a stalled agent needs from you, and how to give it." },
+        agents: { type: "array", description: "The agents it started itself, as run summaries." },
+      },
+    },
     description:
       "One agent in depth — any agent row inspect_fleet shows: one you started, or one an agent of yours started. Its identities and status, its result when it has ended, its whole task, where it works and whether that directory still exists, its activity (turns, tool calls, the tool running now, when it was last active), " +
       "its last assistant messages (excerpted; 1 by default, at most " + String(AGENT_INSPECT_MESSAGES_MAX) + "), the question it is paused on when its status is needs_input (paused on a question until someone answers), and any agents it started itself. " +
@@ -425,8 +566,8 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
       "Keep inspect_agent's messages small; pulling an agent's whole conversation into your context defeats delegating.",
     ],
     parameters: Type.Object({
-      runId: Type.Optional(Type.String({ minLength: 1, description: "A runId from start_agent or inspect_fleet." })),
-      sessionId: Type.Optional(Type.String({ minLength: 1, description: "The agent's sessionId, if you have that rather than a runId." })),
+      runId: Type.Optional(Type.String({ minLength: 1, maxLength: ID_MAX, description: "A runId from start_agent or inspect_fleet." })),
+      sessionId: Type.Optional(Type.String({ minLength: 1, maxLength: ID_MAX, description: "The agent's sessionId, if you have that rather than a runId." })),
       messages: Type.Optional(
         Type.Integer({
           minimum: 0,
@@ -434,40 +575,70 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
           description: `How many of the agent's last assistant messages to include, excerpted. Default ${AGENT_INSPECT_MESSAGES_DEFAULT}; at most ${AGENT_INSPECT_MESSAGES_MAX}.`,
         }),
       ),
-    }),
-    async execute(_toolCallId, params) {
-      const result = await bridge.inspectAgent({
-        ...(params.runId !== undefined ? { runId: params.runId } : {}),
-        ...(params.sessionId !== undefined ? { sessionId: params.sessionId } : {}),
-        ...(params.messages !== undefined ? { messages: params.messages } : {}),
-      });
-      return asResult(inspectedView(result), result);
-    },
+    }, { additionalProperties: false }),
+  }, async (_toolCallId, params) => {
+    const result = await bridge.inspectAgent({
+      ...(params.runId !== undefined ? { runId: params.runId } : {}),
+      ...(params.sessionId !== undefined ? { sessionId: params.sessionId } : {}),
+      ...(params.messages !== undefined ? { messages: params.messages } : {}),
+    });
+    return asResult(inspectedView(result), result);
   });
 
-  pi.registerTool({
+  registerLaserTool(pi, {
     name: "stop_agent",
     label: "Stop an agent",
+    activityLabel: "injected",
+    // Ending a run is destructive — work in flight stops — but repeating it on
+    // a run that has already ended reports it as it is.
+    annotations: { readOnly: false, idempotent: true, destructive: true, external: false },
+    recovery: {
+      code: "stop_agent_failed",
+      next: "call inspect_fleet to check whether that run is still going, then stop_agent with the runId it shows",
+    },
+    output: {
+      type: "object",
+      properties: { ...IDENTITY_FIELDS, ...RUN_STATE_FIELDS },
+    },
     description: "End one run now. The agent's session stays and can be messaged again later.",
     promptSnippet: "Stop a run that is no longer needed, by runId",
     promptGuidelines: ["Use stop_agent only for work that is no longer needed; give a reason."],
     parameters: Type.Object({
-      runId: Type.String({ minLength: 1, description: "The runId to stop." }),
+      runId: Type.String({ minLength: 1, maxLength: ID_MAX, description: "The runId to stop." }),
       reason: Type.Optional(Type.String({ maxLength: 1000, description: "Why it is no longer needed; recorded with the run." })),
-    }),
-    async execute(_toolCallId, params) {
-      const result = await bridge.stopAgent({ runId: params.runId, ...(params.reason !== undefined ? { reason: params.reason } : {}) });
-      return asResult(modelView(result), result);
-    },
+    }, { additionalProperties: false }),
+  }, async (_toolCallId, params) => {
+    const result = await bridge.stopAgent({ runId: params.runId, ...(params.reason !== undefined ? { reason: params.reason } : {}) });
+    return asResult(modelView(result), result);
   });
 
   // M13-T42: the parent owns a child's worktree, so it needs a verb for the
   // end of that ownership. There is deliberately no merge tool — merging is
   // `git merge` in the parent's own checkout, and a tool would have to invent
   // conflict semantics, which is exactly where a person's judgement belongs.
-  pi.registerTool({
+  registerLaserTool(pi, {
     name: "remove_agent_worktree",
     label: "Remove an agent's worktree",
+    activityLabel: "injected",
+    // A directory and a branch go. Repeating it on one already removed is
+    // refused rather than done twice.
+    annotations: { readOnly: false, idempotent: true, destructive: true, external: false },
+    recovery: {
+      code: "remove_agent_worktree_failed",
+      next: "merge the branch with git if it still holds work and call remove_agent_worktree again, or pass force true to throw that work away",
+    },
+    output: {
+      type: "object",
+      properties: {
+        agent_name: IDENTITY_FIELDS.agent_name,
+        subagent_name: IDENTITY_FIELDS.subagent_name,
+        sessionId: IDENTITY_FIELDS.sessionId,
+        removed: { type: "boolean", description: "Always true: a refusal is an error, never a false here." },
+        path: { type: "string", description: "The directory that is gone." },
+        branch: { type: "string", description: "The branch that went with it." },
+        discarded: { type: "object", description: "What force threw away: unmerged commits and uncommitted files." },
+      },
+    },
     description:
       "Remove the worktree and branch of an agent you started, once you have merged its work or decided against it. Address it by the sessionId or a runId start_agent returned. " +
       "Refused while that agent is still working, refused for an agent started with worktree false (it has none), and refused when the branch still holds commits or changes your checkout does not have — merge those first, or pass force true to throw them away.",
@@ -477,30 +648,45 @@ function registerParentTools(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
       "If remove_agent_worktree says the branch still holds unmerged work, merge it with git first and call it again; use force only when that work is genuinely to be thrown away.",
     ],
     parameters: Type.Object({
-      sessionId: Type.Optional(Type.String({ minLength: 1, description: "The sessionId start_agent returned for that agent." })),
-      runId: Type.Optional(Type.String({ minLength: 1, description: "A runId of that agent, if you have it rather than the sessionId." })),
+      sessionId: Type.Optional(Type.String({ minLength: 1, maxLength: ID_MAX, description: "The sessionId start_agent returned for that agent." })),
+      runId: Type.Optional(Type.String({ minLength: 1, maxLength: ID_MAX, description: "A runId of that agent, if you have it rather than the sessionId." })),
       force: Type.Optional(
         Type.Boolean({
           description: "Remove it even though the branch still holds work your checkout does not have. Default false. Only for work you are deliberately throwing away.",
         }),
       ),
-    }),
-    async execute(_toolCallId, params) {
-      const result = await bridge.removeAgentWorktree({
-        ...(params.sessionId !== undefined ? { sessionId: params.sessionId } : {}),
-        ...(params.runId !== undefined ? { runId: params.runId } : {}),
-        ...(params.force !== undefined ? { force: params.force } : {}),
-      });
-      const { agentName, subagentName, ...rest } = result;
-      return asResult({ agent_name: agentName, subagent_name: subagentName, ...rest }, result);
-    },
+    }, { additionalProperties: false }),
+  }, async (_toolCallId, params) => {
+    const result = await bridge.removeAgentWorktree({
+      ...(params.sessionId !== undefined ? { sessionId: params.sessionId } : {}),
+      ...(params.runId !== undefined ? { runId: params.runId } : {}),
+      ...(params.force !== undefined ? { force: params.force } : {}),
+    });
+    const { agentName, subagentName, ...rest } = result;
+    return asResult({ agent_name: agentName, subagent_name: subagentName, ...rest }, result);
   });
 }
 
 function registerCompleteRun(pi: ExtensionAPI, bridge: AgentHarnessBridge): void {
-  pi.registerTool({
+  registerLaserTool(pi, {
     name: "complete_agent_run",
     label: "Complete this run",
+    // D-277: complete_agent_run describes nothing but itself.
+    activityLabel: "exempt",
+    // It ends this run and publishes its result: not a read, and not safe to
+    // repeat — the second call is refused, because the run has already ended.
+    annotations: { readOnly: false, idempotent: false, destructive: false, external: false },
+    recovery: {
+      code: "complete_agent_run_failed",
+      next: "say what happened in an ordinary message instead; do not call complete_agent_run again",
+    },
+    output: {
+      type: "object",
+      properties: {
+        runId: IDENTITY_FIELDS.runId,
+        status: { type: "string", description: "The ending you declared: completed or blocked." },
+      },
+    },
     description: "Finish the current run and publish its final message.",
     promptSnippet: "Finish the current run and publish its final message",
     promptGuidelines: [
@@ -511,16 +697,15 @@ function registerCompleteRun(pi: ExtensionAPI, bridge: AgentHarnessBridge): void
         description: "completed when the task is done; blocked when it cannot be finished — say what is missing in the message.",
       }),
       message: Type.String({ minLength: 1, maxLength: AGENT_MESSAGE_MAX, description: "The final result, evidence, and any important next step." }),
-    }),
-    async execute(_toolCallId, { status, message }) {
-      const result = await bridge.completeRun({ status, message });
-      if (!result.ok) throw new Error(result.error);
-      return {
-        content: [{ type: "text" as const, text: `Run ${result.runId} ended with status ${status}. Do not send another message.` }],
-        details: { runId: result.runId, status },
-        terminate: true,
-      };
-    },
+    }, { additionalProperties: false }),
+  }, async (_toolCallId, { status, message }) => {
+    const result = await bridge.completeRun({ status, message });
+    if (!result.ok) throw new Error(result.error);
+    return {
+      content: [{ type: "text" as const, text: `Run ${result.runId} ended with status ${status}. Do not send another message.` }],
+      details: { runId: result.runId, status },
+      terminate: true,
+    };
   });
 }
 

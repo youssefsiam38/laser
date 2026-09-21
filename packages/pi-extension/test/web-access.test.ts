@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { parseToolError, toolContract } from "@lasercode/protocol";
 import { createLaserExtension } from "../src/index.js";
+import { laserToolRegistry } from "../src/register-tool.js";
 
 function harness(search?: (query: string, signal?: AbortSignal, options?: object) => Promise<string>, fail = false) {
   const events = new Map<string, (...args: unknown[]) => unknown>();
@@ -27,6 +29,30 @@ describe("web access companion module", () => {
     expect(h.send).toHaveBeenCalledWith({ type: "lasercode/capabilities", active: ["web-access"], failed: [] });
     expect(h.send).toHaveBeenCalledOnce(); // no duplicate results panel
   });
+  // D-350: `web_search` is Laser's own tool, not the engine's — the person's
+  // provider answers it — so it is under the contract, and it is the one tool
+  // that leaves this machine.
+  it("is registered under the tool contract as a read-only, external tool", () => {
+    harness(async () => "unused");
+    const spec = laserToolRegistry().get("web_search")!;
+    expect(toolContract(spec)).toEqual([]);
+    expect(spec.annotations).toEqual({ readOnly: true, idempotent: true, destructive: false, external: true });
+    expect(spec.label).toBe("injected");
+  });
+
+  it("reports a provider failure in the contract's error shape", async () => {
+    const h = harness(async () => {
+      throw new Error("The search provider did not answer.");
+    });
+    const failure = await h.tools[0]!.execute("call", { query: "docs" }).catch((error: unknown) => error);
+    expect(parseToolError((failure as Error).message)).toEqual({
+      code: "web_search_failed",
+      message: "The search provider did not answer.",
+      committed: false,
+      next: expect.stringContaining("web_search"),
+    });
+  });
+
   it("has no tool or capability without an enabled search executor", async () => {
     const h = harness();
     expect(h.tools).toEqual([]);
