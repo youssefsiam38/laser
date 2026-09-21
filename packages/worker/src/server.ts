@@ -91,8 +91,8 @@ import type { ProjectEnvironmentBridge } from "@lasercode/pi-extension";
 import { DefinitionsCache } from "./agents/definitions.js";
 import { defaultAgentInstructions } from "./agents/engine-instructions.js";
 import { AgentHarness, modelUnavailableMessage, type SessionHandle, type SessionHost } from "./agents/harness.js";
-import { NamerService, type NamerModelRuntime } from "./agents/namer.js";
-import { readSessionAgentRecord, rootRecord, rootRole, removedWorktreeCwd } from "./agents/session-config.js";
+import { canNameSessions, nameSession, type CompletionRuntime } from "./agents/session-naming.js";
+import { chatRecord, chatRole, readSessionAgentRecord, rootRecord, rootRole, removedWorktreeCwd } from "./agents/session-config.js";
 import { listAgentSkills } from "./agents/skills.js";
 import { TaskIndex } from "./agents/tasks.js";
 import { setWorkerProcessObserver } from "./process-registry.js";
@@ -140,8 +140,8 @@ export interface WorkerServerOptions {
   retireLeaseMs?: number;
   /** The package manager to run when settings name none (M10-T5): the one the host bundles. */
   npmCommand?: string[];
-  /** Test seam: the model runtime Namer completes through. Defaults to the engine's. */
-  namerModels?: () => Promise<NamerModelRuntime>;
+  /** Test seam: the model runtime a naming request completes through. Defaults to the engine's. */
+  namingModels?: () => Promise<CompletionRuntime>;
   /** Test seam for git actions (L6). */
   gitActions?: {
     run?: ProcessRunner;
@@ -178,9 +178,6 @@ export interface WorkerServerOptions {
   /** Explicit V8 old-space request parsed from this exact process's argv. */
   configuredOldSpaceBytes?: number;
 }
-
-/** Sessions whose first prompt may wait for a Namer model; a worker holds few at once. */
-const UNNAMED_MAX = 32;
 
 /** Bytes of replay one worker may hold across every session it serves (RP-4). */
 const REPLAY_BYTES_PER_SESSION = 16 * 1024 * 1024;
@@ -304,12 +301,11 @@ export class WorkerServer {
    * engine authenticates a model with.
    */
   private projectEnv: ProjectEnvironment | undefined;
-  /** M13 · agents: the host's definitions, the harness that runs them, and Namer. */
+  /** M13 · agents: the host's definitions and the harness that runs them. */
   private readonly definitions: DefinitionsCache;
   private readonly harness: AgentHarness;
   /** RP-5b: one body at a time, so slicing a large one stays linear. */
   private readonly bodyRanges = createBodyRangeReader();
-  private readonly namer: NamerService;
   /**
    * Every background command a session of this worker published, kept beside
    * the runs so the harness can hand an agent the same tree the fleet shows
@@ -320,21 +316,14 @@ export class WorkerServer {
   /** Resolved on first use; see `taskLogRoot`. */
   private logRoot: string | undefined;
   /**
-   * First prompts still waiting for a Namer model, by session path. A prompt
-   * that arrives before the host's `agents/sync` (or before qualification
-   * finishes) would otherwise be the one prompt that never names its session.
-   * Bounded, because a run with naming off must not grow this for ever.
-   */
-  private readonly unnamed = new Map<string, string>();
-  /**
    * Naming actually under way: **one** attempt per session, by path, holding
    * that attempt's token (RP-4).
    *
-   * This is the state safety reads: a session is pinned while a Namer
+   * This is the state safety reads: a session is pinned while a naming
    * completion for it is in flight, because that completion ends in a rename
    * **through this runtime** and nothing else can finish it. The entry is made
-   * before the await and removed in a `finally`, so it is bounded by Namer's
-   * own 8 s completion ceiling — no timer, lease or queue of ours.
+   * before the await and removed in a `finally`, so it is bounded by the
+   * request's own 8 s ceiling — no timer, lease or queue of ours.
    *
    * One per session, not one per prompt: a session is named from its first
    * prompt, so while an attempt is running another eligible message starts no
@@ -417,18 +406,6 @@ export class WorkerServer {
         projectEnv: this.projectEnvBridge(),
       }),
     });
-    this.namer = new NamerService({
-      models: options.namerModels ?? (() => this.modelCatalog().modelRuntime()),
-      // The profile assigned to session naming, or the built-in's own choice
-      // when a person made one (docs/model-profiles.md, "Assignments").
-      profile: () => this.namingProfile(),
-      instructions: () => this.definitions.namerInstructions(),
-    });
-    // The host's first `agents/sync` (and every later one) can be what turns
-    // naming on, and so can a first provider being connected: until then there
-    // is no profile to walk. A session whose first prompt found none is named
-    // the moment one appears.
-    this.definitions.onChange(() => this.nameWaitingSessions());
     // This worker answers for its own memory (RP-8): it samples itself, runs
     // the three steps it owns, and tells the host what it found. It takes part
     // only when the host gave it a generation it can prove; without one it
@@ -545,7 +522,6 @@ export class WorkerServer {
       await this.firstTurnLock.run(live.path, () => live.driver.dispose()).catch(() => {});
     }
     this.runtimes.clear();
-    this.unnamed.clear();
     // Every runtime this worker could have renamed is gone, so no attempt can
     // still be holding one. A completion that lands after this finds its
     // record already removed and its `finally` is a no-op.
@@ -1350,8 +1326,6 @@ export class WorkerServer {
       case "agents/set-default":
       case "agents/set-policy":
       case "agents/runs/list":
-      case "agents/builtin/set-profile":
-      case "agents/builtin/set-instructions":
         throw new ProtocolError(ErrorCodes.Unsupported, `${req.method} is answered by the host's agent store, not a worker`);
 
       case "pi/logs/query":
@@ -1648,14 +1622,24 @@ export class WorkerServer {
     if (params.cwd !== this.options.cwd) {
       throw new ProtocolError(ErrorCodes.InvalidParams, `this worker serves ${this.options.cwd}, not ${params.cwd}`);
     }
-    const agentName = params.agentName ?? this.definitions.defaultAgent().name;
-    if (agentName === "namer") throw new ProtocolError(ErrorCodes.InvalidParams, "Namer names things; it does not run sessions.");
-    const definition = this.definitions.definition(agentName);
-    if (!definition) throw new ProtocolError(ErrorCodes.InvalidParams, `No agent is called "${agentName}".`);
+    // A plain Chat runs no definition at all (`docs/plain-chat.md`): no
+    // persona, no project instructions, and the three live fields as its whole
+    // prompt. Everything else is a session of an agent.
+    const chat = params.sessionKind === "chat";
+    const agentName = chat ? undefined : params.agentName ?? this.definitions.defaultAgent().name;
+    const definition = agentName === undefined ? undefined : this.definitions.definition(agentName);
+    if (agentName !== undefined && !definition) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, `No agent is called "${agentName}".`);
+    }
     // A definition naming a profile that is gone opens the session anyway, on
     // the profile assigned to new sessions; the substitution is a warning on
     // the definition, not a closed door (docs/model-profiles.md).
-    const handle = this.harness.prepareSession({ role: rootRole(agentName), definition, record: rootRecord(agentName), projectCwd: this.options.cwd });
+    const handle = this.harness.prepareSession({
+      role: definition ? rootRole(definition.name) : chatRole(),
+      ...(definition ? { definition } : {}),
+      record: definition ? rootRecord(definition.name) : chatRecord(),
+      projectCwd: this.options.cwd,
+    });
     const live = await this.openAndAttach(
       {
         cwd: this.options.cwd,
@@ -1704,7 +1688,7 @@ export class WorkerServer {
       // Which agent this stored session runs as: its own record, else the
       // synced default. Read from the file only; the engine is not open yet.
       const { definition, role, record } = await this.recoverAgent(params.path);
-      const handle = this.harness.prepareSession({ role, definition, record, projectCwd: this.options.cwd });
+      const handle = this.harness.prepareSession({ role, ...(definition ? { definition } : {}), record, projectCwd: this.options.cwd });
       return this.openAndAttach({ cwd: this.options.cwd, sessionPath: params.path, ...this.commonOpen(), agent: this.agentOptions(definition, handle) }, handle);
     });
     // Opening the session already emitted updates (the companion's
@@ -1790,9 +1774,10 @@ export class WorkerServer {
     return { ...state, capabilities: [...this.activeModules], ...(agent ? { agent } : {}) };
   }
 
-  private agentOptions(definition: AgentDefinition, handle: SessionHandle): DriverAgentOptions {
+  /** `definition` is absent for a plain Chat, which runs none (`docs/plain-chat.md`). */
+  private agentOptions(definition: AgentDefinition | undefined, handle: SessionHandle): DriverAgentOptions {
     return {
-      definition,
+      ...(definition ? { definition } : {}),
       role: handle.role,
       record: handle.record,
       bridge: handle.bridge,
@@ -1809,15 +1794,21 @@ export class WorkerServer {
   }
 
   /**
-   * Which agent a stored session runs as. A child's depth is not in its
-   * record, so it is counted up the parent chain (bounded, and every hop is a
-   * file read, never an engine).
+   * Which agent a stored session runs as, or that it runs none at all. A
+   * child's depth is not in its record, so it is counted up the parent chain
+   * (bounded, and every hop is a file read, never an engine).
+   *
+   * A record whose kind is `chat` — including one written as `beam` before
+   * M23 — recovers as the plain conversation of `docs/plain-chat.md`: no
+   * definition, whatever name the old record still carries.
    */
-  private async recoverAgent(path: string): Promise<{ definition: AgentDefinition; role: HarnessSessionRole; record: SessionAgentRecord }> {
+  private async recoverAgent(path: string): Promise<{ definition: AgentDefinition | undefined; role: HarnessSessionRole; record: SessionAgentRecord }> {
     const record = (await readSessionAgentRecord(path)) ?? rootRecord(this.definitions.defaultAgent().name);
-    const definition = this.definitions.definition(record.agentName) ?? this.definitions.defaultAgent();
+    if (record.kind === "chat") return { definition: undefined, role: chatRole(), record };
+    const agentName = record.agentName ?? this.definitions.defaultAgent().name;
+    const definition = this.definitions.definition(agentName) ?? this.definitions.defaultAgent();
     if (record.kind !== "child" || !record.parentPath) {
-      return { definition, role: rootRole(record.agentName), record };
+      return { definition, role: rootRole(agentName), record };
     }
     let depth = 1;
     let parent = await readSessionAgentRecord(record.parentPath);
@@ -1826,7 +1817,7 @@ export class WorkerServer {
       parent = await readSessionAgentRecord(parent.parentPath);
     }
     const role: HarnessSessionRole = {
-      agentName: record.agentName,
+      agentName,
       kind: "child",
       ...(record.subagentName !== undefined ? { subagentName: record.subagentName } : {}),
       depth,
@@ -1919,20 +1910,14 @@ export class WorkerServer {
     await this.reloadLiveSettings("global");
   }
 
-  /**
-   * The profile assigned to session naming: the built-in's own choice when a
-   * person made one, otherwise the profile Settings assigns to naming.
-   */
+  /** The profile assigned to session naming (`docs/model-profiles.md`). */
   private namingProfile(): ModelProfile | null {
     const { profiles, assignments } = readProfileSettings(this.settings().agentDir);
     // Only an explicit assignment turns naming on. Falling through to the
     // profile new sessions use would spend the person's best model on titles,
     // which is the opposite of what the naming assignment is for.
-    for (const id of [this.definitions.namerProfileId(), assignments.namingProfileId]) {
-      const named = id ? profiles.find((profile) => profile.id === id) : undefined;
-      if (named) return named;
-    }
-    return null;
+    const id = assignments.namingProfileId;
+    return (id ? profiles.find((profile) => profile.id === id) : undefined) ?? null;
   }
 
   /**
@@ -1959,7 +1944,7 @@ export class WorkerServer {
   }
 
   /**
-   * Namer names a session after its first prompt, unless the person got there
+   * Name a conversation after its first prompt, unless the person got there
    * first.
    *
    * Never rejects, and that is load-bearing: every caller floats this promise
@@ -1969,44 +1954,39 @@ export class WorkerServer {
    * end the worker process, and with it every conversation in this project
    * (AGENTS.md invariant 5), because a session could not be given a title.
    *
-   * With no model this parks the words instead (`waitToName`), which is not a
-   * pin: nothing can perform that intent, so a runtime kept for it would be
-   * kept for the life of the worker. Once a model is there the attempt is
-   * real, bounded and answered through this runtime, and it is registered in
-   * {@link namingInFlight} for exactly as long as it runs — including the
+   * A request that cannot start simply does not run (`docs/plain-chat.md`):
+   * with no profile assigned to naming there is nothing to walk, nothing is
+   * parked and the conversation keeps the name it has. When the request does
+   * run it is bounded, answered through this runtime and registered in
+   * {@link namingInFlight} for exactly as long as it takes — including the
    * rename, which is the part that needs the runtime. One attempt at a time
    * per session: a message that arrives while that one is running is not a
    * second naming request.
    */
   private async nameSession(live: Live, text: string): Promise<void> {
     try {
-      if (!this.namer.enabled()) {
-        this.waitToName(live.path, text);
-        return;
-      }
+      const profile = this.namingProfile();
+      if (!canNameSessions(profile)) return;
       // This conversation is already being named. Naming is for its first
       // prompt, so a second request would spend a second completion to answer
-      // the same question, and nothing would show the result: Namer never
-      // renames over a name. Not parked either — the attempt that is running
-      // is the one that names this session.
+      // the same question, and nothing would show the result: naming never
+      // renames over a name.
       const path = live.path;
       if (this.namingInFlight.has(path)) return;
-      // Registered before the await, so there is no moment in which the work is
-      // neither parked nor in flight. The token says which attempt this entry
-      // belongs to, so a model taken away mid-completion cannot erase it and a
-      // late completion cannot clear a successor's.
+      // Registered before the await, so there is no moment in which the work
+      // is running without being visible. The token says which attempt this
+      // entry belongs to, so a late completion cannot clear a successor's.
       const token = Symbol("naming");
       this.namingInFlight.set(path, token);
       try {
-        const name = await this.namer.nameSession(text);
+        const name = await nameSession(text, {
+          models: this.options.namingModels ?? (() => this.modelCatalog().modelRuntime()),
+          profile,
+        });
         const current = this.namingPath(token) ?? path;
-        if (!name) {
-          // The whole profile was spent — no credential yet, every model
-          // failing. The words are parked rather than thrown away, so the
-          // conversation gets its title the moment naming can happen.
-          if (!live.driver.state().name) this.waitToName(current, text);
-          return;
-        }
+        // The whole profile was spent — no credential yet, every model
+        // failing. The conversation keeps the name it has.
+        if (!name) return;
         if (!this.runtimes.has(current) || live.driver.state().name) return;
         await live.driver.rename(name).catch(() => undefined);
       } finally {
@@ -2017,7 +1997,7 @@ export class WorkerServer {
     }
   }
 
-  /** Whether a Namer completion for this session is in flight right now. */
+  /** Whether a naming completion for this session is in flight right now. */
   private naming(path: string): boolean {
     return this.namingInFlight.has(path);
   }
@@ -2032,30 +2012,6 @@ export class WorkerServer {
   private forgetNaming(token: symbol): void {
     const path = this.namingPath(token);
     if (path !== undefined) this.namingInFlight.delete(path);
-  }
-
-  /** Hold a first prompt until naming can happen, oldest dropped past the cap. */
-  private waitToName(path: string, text: string): void {
-    this.unnamed.delete(path);
-    this.unnamed.set(path, text);
-    while (this.unnamed.size > UNNAMED_MAX) {
-      const oldest = this.unnamed.keys().next();
-      if (oldest.done) break;
-      this.unnamed.delete(oldest.value);
-    }
-  }
-
-  /** A model just appeared: name every session whose first prompt was waiting for one. */
-  private nameWaitingSessions(): void {
-    if (!this.namer.enabled() || this.unnamed.size === 0) return;
-    for (const [path, text] of [...this.unnamed]) {
-      this.unnamed.delete(path);
-      const live = this.runtimes.get(path);
-      // Gone, or named since — by the person, or by the harness after its
-      // `subagent_name`. Namer never renames over either.
-      if (!live || live.driver.state().name) continue;
-      void this.nameSession(live, text);
-    }
   }
 
   /**
@@ -2280,14 +2236,10 @@ export class WorkerServer {
         ? Math.max(live.pending.list().length, live.pending.deliveryInFlight() ? 1 : 0)
         : 0,
       runningTasks: this.tasks.tasksOf(live.path).filter((task) => task.status === "running").length,
-      // Naming this session is under way: a bounded Namer completion is in
-      // flight and it ends in a rename through this runtime, which nothing
-      // else can do. A first prompt merely *parked* for want of a model is
-      // not a pin — nothing can perform that intent, so a refusal for it
-      // would have no end and would hold this runtime, and the whole
-      // worker's automatic retirement, for the life of the process. The words
-      // stay in `unnamed` regardless, so a model that appears later still
-      // names the session; that is the moment this becomes a pin.
+      // Naming this session is under way: a bounded completion is in flight
+      // and it ends in a rename through this runtime, which nothing else can
+      // do. A request that could not start is not a pin, because there is no
+      // such state: with no profile assigned to naming, nothing runs at all.
       naming: this.naming(live.path),
       hasRecord,
       ...(live.closeFailed ? { closeFailed: true } : {}),
@@ -2448,7 +2400,7 @@ export class WorkerServer {
   }
 
   private cacheRecords(): number {
-    let records = this.unnamed.size + this.namingInFlight.size;
+    let records = this.namingInFlight.size;
     for (const live of this.runtimes.values()) records += live.pending?.list().length ?? 0;
     return records;
   }
@@ -2675,7 +2627,7 @@ export class WorkerServer {
    *
    * Naming starts before the driver is asked, not after it answers: the
    * driver's `prompt()` resolves when the whole turn is over (the engine
-   * awaits its agent loop), and the words are all Namer needs. Acceptance is
+   * awaits its agent loop), and the words are all a title needs. Acceptance is
    * judged the way the driver judges it — idle, or queued behind a running
    * turn when the caller asked for that — so a first turn that runs for
    * minutes is named while the person is looking at the sidebar, not after
@@ -2871,7 +2823,6 @@ export class WorkerServer {
         // to a session that is open. A closed session leaves none behind, so
         // nothing can serve its bytes afterwards and nothing keeps its memory.
         this.bodyRanges.forget();
-        this.unnamed.delete(live.path);
         // The runtime a naming attempt would have renamed is gone, so the
         // attempt can no longer finish its work: its entry goes with the
         // session rather than being left to pin whatever opens this path next.
@@ -2920,11 +2871,6 @@ export class WorkerServer {
     this.tasks.rekeySession(oldPath, newPath);
     this.mcpService?.rekeySession(oldPath, newPath);
     this.gitService?.rekey(oldPath, newPath);
-    const waiting = this.unnamed.get(oldPath);
-    if (waiting !== undefined) {
-      this.unnamed.delete(oldPath);
-      this.unnamed.set(newPath, waiting);
-    }
     // A naming completion already in flight is naming *this* conversation,
     // which now lives at the new path: the entry moves with it, token and all,
     // so the fork's runtime is the one held until the rename it is about to

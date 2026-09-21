@@ -8,12 +8,7 @@ import { describe, expect, it } from "vitest";
 import { agentPrompt, coreInstructions } from "../../src/agents/core-instructions.js";
 import { ACTIVITY_LABEL_GUIDANCE, instructionTemplateValues } from "../../src/agents/instruction-templates.js";
 import type { DriverAgentOptions } from "../../src/driver.js";
-import {
-  fallbackBeamAgent,
-  fallbackChatAgent,
-  fallbackDefaultAgent,
-  fallbackNamerAgent,
-} from "../../src/agents/definitions.js";
+import { fallbackDefaultAgent } from "../../src/agents/definitions.js";
 
 describe("core instructions", () => {
   it("is a valid agent template and documents every allowed field without inserting extra blocks", () => {
@@ -22,8 +17,8 @@ describe("core instructions", () => {
     expect(coreInstructions()).not.toContain("<!--");
     expect(coreInstructions()).toBe(source.replace(/^<!--[\s\S]*?-->/, "").trim());
     expect(coreInstructions().startsWith("You are an expert coding agent")).toBe(true);
-    expect(instructionTemplateIssue(source, "agent")).toBeNull();
-    for (const field of instructionTemplateFields("agent")) expect(source).toContain(field.key);
+    expect(instructionTemplateIssue(source)).toBeNull();
+    for (const field of instructionTemplateFields()) expect(source).toContain(field.key);
     expect(source).not.toContain("{{availableAgents}}");
     expect(source).not.toContain(PRODUCT_DISPLAY_NAME);
   });
@@ -41,14 +36,6 @@ describe("core instructions", () => {
     expect(agentPrompt({ ...saved, excludeCoreInstructions: true }, "ENGINE")).toEqual({ own: "SAVED", template: "SAVED" });
   });
 
-  it.each([
-    ["beam", fallbackBeamAgent({ model: null })],
-    ["chat", fallbackChatAgent()],
-    ["namer", fallbackNamerAgent(null)],
-  ])("never prepends the core block to the %s built-in", (_name, definition) => {
-    expect(agentPrompt({ ...definition, excludeCoreInstructions: false }, "ENGINE")).toEqual({ own: definition.instructions, template: definition.instructions });
-  });
-
   it("tells every model to write activity labels as human sentence-case phrases", () => {
     const values = instructionTemplateValues(
       { cwd: "/project" },
@@ -59,16 +46,6 @@ describe("core instructions", () => {
     expect(values.toolGuidelines).toContain("sentence case with spaces");
     expect(values.toolGuidelines).toContain("never a slug, dash- or underscore-separated words, or camelCase");
     expect(values.toolGuidelines).toContain('Example: "Reading build config".');
-  });
-
-  it("points Beam's definition field at the global definitions folder", () => {
-    const definition = fallbackBeamAgent({ model: null });
-    const values = instructionTemplateValues(
-      { cwd: "/project" },
-      {},
-      { agent: { definition } as DriverAgentOptions, agentDir: "/agent", stateDir: "/state", session: () => undefined },
-    );
-    expect(values.agentDefinitionsFile).toBe("/state/agents");
   });
 
   it("copies the runtime asset into the worker dist", () => {

@@ -39,7 +39,7 @@ export const AGENT_TASK_EXCERPT = 500;
 export const AGENT_INSPECT_MESSAGES_DEFAULT = 1;
 export const AGENT_INSPECT_MESSAGES_MAX = 10;
 export const AGENT_INSPECT_MESSAGE_EXCERPT = 1000;
-/** Namer's session-name ceiling (original request: 25–30 characters). */
+/** A generated session name's ceiling (original request: 25–30 characters). */
 export const SESSION_NAME_MAX = 30;
 export const SESSION_NAME_MIN = 25;
 export const AGENT_MAX_DEPTH_DEFAULT = 3;
@@ -52,14 +52,17 @@ export const FOREGROUND_COMMAND_SECONDS_MAX = 3600;
 export const WORKTREES_DIR_NAME = ".worktrees";
 
 export const DEFAULT_AGENT_NAME = "default";
-export const BUILTIN_AGENT_NAMES = ["beam", "chat", "namer"] as const;
-export type BuiltinAgentName = (typeof BUILTIN_AGENT_NAMES)[number];
-export function isBuiltinAgentName(name: string): name is BuiltinAgentName {
-  return (BUILTIN_AGENT_NAMES as readonly string[]).includes(name);
-}
 
-/** A string replaces the shipped prompt; `null` follows the current shipped prompt. */
-export type BuiltinInstructionOverrides = Readonly<Record<BuiltinAgentName, string | null>>;
+/**
+ * Names that were built-in agents before M23 (D-347). They are not agents any
+ * more and nothing synthesises them, but a definition a person wrote earlier
+ * may still name one in its allowed-agents list, so the name is dropped with a
+ * warning rather than refused (`docs/plain-chat.md`, "Migration").
+ */
+export const RETIRED_AGENT_NAMES = ["beam", "chat", "namer"] as const;
+export function isRetiredAgentName(name: string): boolean {
+  return (RETIRED_AGENT_NAMES as readonly string[]).includes(name);
+}
 
 /**
  * Tools are not part of an agent definition (D-144): every agent has every
@@ -115,15 +118,19 @@ export interface AgentSkillRef {
   scope: AgentSkillScope;
 }
 
-export type AgentKind = "custom" | "builtin";
+/**
+ * Every agent is one a person wrote (D-347). The single member is kept so a
+ * definition file and a persisted snapshot read the same as they did before
+ * the built-ins were removed.
+ */
+export type AgentKind = "custom";
 
 /**
- * Where a custom definition lives (D-230). `global` is one Markdown file per
+ * Where a definition lives (D-230). `global` is one Markdown file per
  * agent under `<stateDir>/agents/<name>.md`; `project` is
  * `<project>/.laser/agents/<name>.md`, read only while that project is
  * trusted. A project agent is offered only to sessions of that project, and
- * shadows a global agent of the same name there. Built-ins are code-defined
- * and carry `global`.
+ * shadows a global agent of the same name there.
  */
 export type AgentScope = "global" | "project";
 /** Exact storage location of one custom definition. Mutations never infer it. */
@@ -140,7 +147,7 @@ export interface AgentDefinition {
   scope: AgentScope;
   /** Project root of a `project`-scoped agent; absent for `global`. */
   projectCwd?: string;
-  /** The Markdown file this definition was read from; host-set, absent for built-ins. */
+  /** The Markdown file this definition was read from; host-set. */
   path?: string;
   /** Answers "when should another agent start this one?" Shown in the compact catalog. */
   description: string;
@@ -152,10 +159,9 @@ export interface AgentDefinition {
    */
   engineInstructions: boolean;
   /**
-   * Every custom agent's system prompt begins with Laser's core instructions
+   * Every agent's system prompt begins with Laser's core instructions
    * (`packages/worker/src/agents/core-instructions.md`), ahead of
-   * `instructions` or the shipped default prompt. True leaves them out. Never
-   * applies to a built-in.
+   * `instructions` or the shipped default prompt. True leaves them out.
    */
   excludeCoreInstructions: boolean;
   /**
@@ -180,19 +186,18 @@ export type AgentDefinitionInput = Omit<AgentDefinition, "kind" | "path" | "crea
 
 /**
  * Definitions visible in one scope. Project definitions shadow same-named
- * globals; built-ins remain visible. Callers canonicalise `projectCwd` before
- * storing it — this helper deliberately performs string comparison only.
+ * globals. Callers canonicalise `projectCwd` before storing it — this helper
+ * deliberately performs string comparison only.
  */
 export function effectiveAgents(agents: readonly AgentDefinition[], projectCwd?: string): AgentDefinition[] {
   const projectNames = new Set(
     projectCwd === undefined
       ? []
       : agents
-          .filter((agent) => agent.kind === "custom" && agent.scope === "project" && agent.projectCwd === projectCwd)
+          .filter((agent) => agent.scope === "project" && agent.projectCwd === projectCwd)
           .map((agent) => agent.name),
   );
   return agents.filter((agent) => {
-    if (agent.kind === "builtin") return true;
     if (agent.scope === "project") return projectCwd !== undefined && agent.projectCwd === projectCwd;
     return !projectNames.has(agent.name);
   });
@@ -203,7 +208,6 @@ export function canReferenceAgent(
   owner: Pick<AgentDefinition, "scope" | "projectCwd">,
   candidate: AgentDefinition,
 ): boolean {
-  if (candidate.kind === "builtin") return false;
   if (owner.scope === "global") return candidate.scope === "global";
   return candidate.scope === "global" || (candidate.scope === "project" && candidate.projectCwd === owner.projectCwd);
 }
@@ -237,18 +241,6 @@ export interface AgentPolicy {
   foregroundCommandSeconds: number;
 }
 
-/**
- * Which profile each built-in runs on, while built-ins exist (M23 removes
- * them). `null` inherits `defaultProfileId`, exactly as a custom agent does.
- * There is no benchmark, no candidate list and no qualification step: naming
- * is a one-shot request on the naming profile (`docs/model-profiles.md`).
- */
-export interface BuiltinProfiles {
-  beam: string | null;
-  chat: string | null;
-  namer: string | null;
-}
-
 export interface AgentsSnapshot {
   revision: number;
   agents: AgentDefinition[];
@@ -256,14 +248,10 @@ export interface AgentsSnapshot {
   defaultAgent: string;
   warnings: AgentWarning[];
   policy: AgentPolicy;
-  /** The profile each built-in runs on. */
-  builtinProfiles: BuiltinProfiles;
-  /** The person's durable prompt choices; `null` restores that built-in's shipped instructions. */
-  builtinInstructions: BuiltinInstructionOverrides;
-  /** Historical custom names → the current definition name, so persisted sessions survive a rename. */
+  /** Historical names → the current definition name, so persisted sessions survive a rename. */
   renamedAgents: Readonly<Record<string, string>>;
-  /** Directories the built-in projectless agents run in. */
-  workspaces: { beam: string; chat: string };
+  /** The container the projectless Chat conversations run in (`docs/plain-chat.md`). */
+  workspaces: { chat: string };
 }
 
 export interface AgentSkillsRoot {
@@ -493,12 +481,38 @@ export function worktreeHoldsWork(status: AgentWorktreeStatus): boolean {
  */
 export type SessionWorktreeDisposition = "keep" | "delete";
 
-export type SessionAgentKind = "root" | "child" | "beam" | "chat";
+/**
+ * How a session sits in the agent tree, as its own stored record says it
+ * (`SESSION_AGENT_ENTRY_TYPE`). `chat` is the plain conversation of
+ * `docs/plain-chat.md`: no definition, no project, its own workspace folder.
+ *
+ * `"beam"` was a fourth member before M23. It is deliberately not in the union
+ * any more: a stored record that still says it is read as `chat` by
+ * {@link sessionKindOf} and its parser, and is never rewritten — the
+ * transcript is evidence of what happened, not of what the product is now.
+ */
+export type SessionAgentKind = "root" | "child" | "chat";
+
+/**
+ * What a conversation is, for everything that shows or routes one: a plain
+ * Chat, or a session that belongs to a project (D-347). Every session is one
+ * or the other, whatever agent runs in it.
+ */
+export const SESSION_KINDS = ["chat", "project"] as const;
+export type SessionKind = (typeof SESSION_KINDS)[number];
+
+/** The one place a stored record's kind becomes the product's session kind. */
+export function sessionKindOf(kind: string): SessionKind {
+  return kind === "chat" || kind === "beam" ? "chat" : "project";
+}
 
 /** How a session relates to the agents feature, on `SessionSummary` and `SessionState`. */
 export interface SessionAgentInfo {
-  agentName: string;
+  /** The definition running this session. A Chat session runs none, and has no name here. */
+  agentName?: string;
   kind: SessionAgentKind;
+  /** Plain conversation or project session (`docs/plain-chat.md`). */
+  sessionKind: SessionKind;
   subagentName?: string;
   parentPath?: string;
   rootPath?: string;
@@ -511,7 +525,8 @@ export interface SessionAgentInfo {
  * first custom entry, so a catalog that only reads files can attribute it.
  */
 export interface SessionAgentRecord {
-  agentName: string;
+  /** Absent for a Chat session, which runs no definition. Legacy records name one. */
+  agentName?: string;
   kind: SessionAgentKind;
   subagentName?: string;
   parentPath?: string;
@@ -585,14 +600,6 @@ declare module "./messages.js" {
       params: { path: string; force?: boolean };
       result: { removed: boolean; worktree: AgentWorktreeStatus | null };
     };
-    /**
-     * A person chooses a built-in agent's profile. One method for all three:
-     * Beam, Chat and Namer are the same choice made in the same control, and
-     * `null` returns that agent to the configured default profile.
-     */
-    "agents/builtin/set-profile": { params: { name: BuiltinAgentName; profileId: string | null }; result: { snapshot: AgentsSnapshot } };
-    /** Replace one built-in's system instructions; `null` restores the shipped prompt. */
-    "agents/builtin/set-instructions": { params: { name: BuiltinAgentName; instructions: string | null }; result: { snapshot: AgentsSnapshot } };
     /** Host → worker only: the current definitions. Refused from clients. */
     "agents/sync": { params: { snapshot: AgentsSnapshot }; result: {} };
     /** Host → a recovered worker only: re-deliver harness-owned child failures to loaded parents. */

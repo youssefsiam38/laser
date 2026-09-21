@@ -49,7 +49,12 @@ import type { AgentHarnessBridge, BackgroundWorkOptions, HarnessSessionRole } fr
  * catalog that only reads files can attribute it.
  */
 export interface DriverAgentOptions {
-  definition: AgentDefinition;
+  /**
+   * The definition this session runs. Absent for a plain Chat conversation,
+   * which runs none: its whole prompt is the three live fields
+   * (`docs/plain-chat.md`).
+   */
+  definition?: AgentDefinition;
   role: HarnessSessionRole;
   /** Written as the session's first custom entry (`SESSION_AGENT_ENTRY_TYPE`) on a new session. */
   record: SessionAgentRecord;

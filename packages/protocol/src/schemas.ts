@@ -18,9 +18,9 @@ import {
   AGENT_MESSAGE_MODES,
   AGENT_NAME_PATTERN,
   AGENT_RUN_STATUSES,
-  BUILTIN_AGENT_NAMES,
   FOREGROUND_COMMAND_SECONDS_MAX,
   FOREGROUND_COMMAND_SECONDS_MIN,
+  SESSION_KINDS,
 } from "./agents.js";
 import {
   MAX_LEGACY_MODEL_CHOICES,
@@ -548,7 +548,6 @@ export const agentLocationSchema = z.discriminatedUnion("scope", [
   z.object({ scope: z.literal("global") }).strict(),
   z.object({ scope: z.literal("project"), projectCwd: agentProjectCwdSchema }).strict(),
 ]);
-export const builtinAgentNameSchema = z.enum(BUILTIN_AGENT_NAMES);
 export const agentSkillRefSchema = z
   .object({ name: z.string().min(1).max(64), path: z.string().min(1).max(4096), scope: z.enum(["global", "project"]) })
   .strict();
@@ -755,7 +754,20 @@ export const sessionLoadResultSchema = z
 // ---------- client → host request params, one per method ----------
 
 export const clientParamsSchemas = {
-  "session/new": z.object({ cwd: z.string().min(1), parentPath: sessionPath.optional(), agentName: agentNameSchema.optional() }).strict(),
+  "session/new": z
+    .object({
+      cwd: z.string().min(1),
+      parentPath: sessionPath.optional(),
+      agentName: agentNameSchema.optional(),
+      sessionKind: z.enum(SESSION_KINDS).optional(),
+    })
+    .strict()
+    // A plain chat runs no definition, so naming one alongside it is two
+    // intents in one request rather than a choice this side can make.
+    .refine((value) => value.sessionKind !== "chat" || value.agentName === undefined, {
+      message: "A chat runs no agent, so it cannot name one.",
+      path: ["agentName"],
+    }),
   "session/load": z
     .object({
       path: sessionPath,
@@ -1248,8 +1260,6 @@ export const clientParamsSchemas = {
   "agents/runs/stop": z.object({ runId, reason: z.string().max(2000).optional() }).strict(),
   "agents/worktree/status": z.object({ path: sessionPath }).strict(),
   "agents/worktree/remove": z.object({ path: sessionPath, force: z.boolean().optional() }).strict(),
-  "agents/builtin/set-profile": z.object({ name: builtinAgentNameSchema, profileId: modelProfileIdSchema.nullable() }).strict(),
-  "agents/builtin/set-instructions": z.object({ name: builtinAgentNameSchema, instructions: z.string().max(AGENT_INSTRUCTIONS_MAX).nullable() }).strict(),
 
   // --- M22 model profiles (docs/model-profiles.md) ---
   "models/profiles/list": z.object({ cwd: cwd.optional() }).strict(),

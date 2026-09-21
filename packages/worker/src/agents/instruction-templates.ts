@@ -7,30 +7,36 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   PRODUCT_DISPLAY_NAME,
-  PRODUCT_NAME,
   WIRE_NAMESPACE,
-  isBuiltinAgentName,
+  instructionTemplateToken,
   renderInstructionTemplate,
-  type InstructionTemplateTarget,
 } from "@lasercode/protocol";
-import { join, resolve } from "node:path";
 import type { DriverAgentOptions } from "../driver.js";
 import { recordInstructionWrite } from "@lasercode/pi-extension";
 import { agentPrompt } from "./core-instructions.js";
-import { fallbackBeamAgent, fallbackChatAgent } from "./definitions.js";
 import { templateProvenance } from "./template-provenance.js";
 
 interface TemplateExtensionOptions {
   agent: DriverAgentOptions;
   agentDir: string;
-  stateDir?: string;
   session: () => AgentSession | undefined;
 }
 
-function targetOf(agent: DriverAgentOptions): InstructionTemplateTarget {
-  const name = agent.definition.name;
-  return name === "beam" || name === "chat" ? name : "agent";
-}
+/**
+ * The whole system prompt of a plain Chat conversation (`docs/plain-chat.md`):
+ * the live tool catalogue, the guidance those tools supply, and the skills
+ * that were discovered. Nothing else — no identity paragraph, no product
+ * name, no project instructions, no role or goal block — because a Chat is
+ * not an agent and has nobody's persona to wear.
+ *
+ * It is a constant, not a definition: there is no editor for it and no stored
+ * override behind it.
+ */
+export const CHAT_INSTRUCTION_TEMPLATE = [
+  instructionTemplateToken("availableTools"),
+  instructionTemplateToken("toolGuidelines"),
+  instructionTemplateToken("availableSkills"),
+].join("\n\n");
 
 function toolsBlock(options: BuildSystemPromptOptions, session: AgentSession | undefined): string {
   const names = options.selectedTools ?? session?.getActiveToolNames() ?? [];
@@ -79,15 +85,15 @@ export function instructionTemplateValues(
   context: { model?: { provider: string; id: string } | undefined; thinkingLevel?: string | undefined },
   extension: TemplateExtensionOptions,
 ): Record<string, string> {
-  const { agent, agentDir } = extension;
-  const stateDir = resolve(extension.stateDir ?? join(agentDir, "..", "state"));
+  const { agent } = extension;
+  const definition = agent.definition;
   const model = context.model ? `${context.model.provider}/${context.model.id}` : "Following the session default";
   return {
     productName: PRODUCT_DISPLAY_NAME,
-    agentName: agent.definition.name,
-    agentDescription: agent.definition.description,
+    agentName: definition?.name ?? "",
+    agentDescription: definition?.description ?? "",
     model,
-    thinkingLevel: context.thinkingLevel ?? agent.definition.thinkingLevel ?? "Following the model default",
+    thinkingLevel: context.thinkingLevel ?? definition?.thinkingLevel ?? "Following the model default",
     workingDirectory: options.cwd.replace(/\\/g, "/"),
     availableTools: toolsBlock(options, extension.session()),
     toolGuidelines: toolGuidelinesBlock(options),
@@ -95,12 +101,6 @@ export function instructionTemplateValues(
     availableSkills: skillsBlock(options),
     additionalInstructions: options.appendSystemPrompt?.trim() ?? "",
     availableAgents: availableAgentsBlock(agent),
-    sessionHistoryDirectory: join(agentDir, "sessions"),
-    agentDefinitionsFile: join(stateDir, "agents"),
-    agentRunsFile: join(stateDir, "agent-runs.json"),
-    preferencesFile: join(stateDir, "prefs.json"),
-    projectsFile: join(stateDir, "projects.json"),
-    logsFile: join(stateDir, "logs.db"),
   };
 }
 
@@ -115,40 +115,34 @@ export function createInstructionTemplateExtension(options: TemplateExtensionOpt
     factory: (pi) => {
       pi.on("before_agent_start", (event, context) => {
         const definition = options.agent.definition;
-        let prompt = agentPrompt(definition, event.systemPromptOptions.customPrompt ?? "");
-        let template = prompt.template;
-        const target = targetOf(options.agent);
+        // A Chat has no definition at all, so there is no core-instructions
+        // block, no saved template and nothing to fall back to: the prompt is
+        // the three fields and only the three fields.
+        const prompt = definition
+          ? agentPrompt(definition, event.systemPromptOptions.customPrompt ?? "")
+          : { template: CHAT_INSTRUCTION_TEMPLATE, core: undefined };
+        const template = prompt.template;
         const values = instructionTemplateValues(event.systemPromptOptions, context, options);
-        let systemPrompt: string;
-        try {
-          systemPrompt = renderInstructionTemplate(template, target, values);
-        } catch (error) {
-          if (!isBuiltinAgentName(definition.name) || definition.name === "namer") throw error;
-          const shipped = definition.name === "beam" ? fallbackBeamAgent({ profileId: definition.profileId }) : fallbackChatAgent(definition.profileId);
-          prompt = agentPrompt(shipped, event.systemPromptOptions.customPrompt ?? "");
-          template = prompt.template;
-          console.error(`${PRODUCT_NAME} worker: ${definition.name}'s saved instructions could not be rendered; using the shipped prompt for this turn:`, error instanceof Error ? error.message : error);
-          systemPrompt = renderInstructionTemplate(template, target, values);
-        }
+        const systemPrompt = renderInstructionTemplate(template, values);
+        const label = definition ? `Agent · ${definition.name}` : "Chat";
         try {
           return recordInstructionWrite({ systemPrompt }, templateProvenance(
             template,
-            target,
             values,
             systemPrompt,
-            definition.name,
+            definition?.name,
             event.systemPromptOptions,
             prompt.core?.length,
-            definition.path,
+            definition?.path,
           ));
         } catch {
           return recordInstructionWrite({ systemPrompt }, {
             kind: "agent",
             origin: "agent",
-            label: `Agent · ${definition.name}`,
-            agentName: definition.name,
+            label,
+            ...(definition ? { agentName: definition.name } : {}),
             reason: "template-ranges-unavailable",
-            ...(definition.path ? { path: definition.path } : { inline: true as const }),
+            ...(definition?.path ? { path: definition.path } : { inline: true as const }),
           });
         }
       });

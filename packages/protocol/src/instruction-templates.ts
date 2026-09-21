@@ -8,42 +8,39 @@
 import Handlebars from "handlebars";
 import { PRODUCT_DISPLAY_NAME } from "./identity.js";
 
-export type InstructionTemplateTarget = "agent" | "beam" | "chat" | "namer";
-
+/**
+ * One vocabulary, for the only editable instructions there are: an agent's
+ * (D-347). The built-ins that had catalogues of their own — Beam's state
+ * locations, the Namer's source text — are gone, and the Chat prompt is a
+ * fixed worker constant rather than a definition anyone edits, so a template
+ * no longer has a target to be scoped to.
+ */
 export interface InstructionTemplateField {
   key: string;
   label: string;
   description: string;
-  targets: readonly InstructionTemplateTarget[] | "all";
   placement: "inline" | "block";
 }
 
 const product = PRODUCT_DISPLAY_NAME;
 
 export const INSTRUCTION_TEMPLATE_FIELDS: readonly InstructionTemplateField[] = [
-  { key: "productName", label: "Product name", description: `${product}'s current display name.`, targets: "all", placement: "inline" },
-  { key: "agentName", label: "Agent name", description: "The name of the agent running this instruction.", targets: "all", placement: "inline" },
-  { key: "agentDescription", label: "Agent description", description: "The saved one-line purpose of this agent.", targets: "all", placement: "inline" },
-  { key: "model", label: "Current model", description: "The provider and model selected for this run.", targets: "all", placement: "inline" },
-  { key: "thinkingLevel", label: "Thinking level", description: "The reasoning level selected for this run.", targets: ["agent", "beam", "chat"], placement: "inline" },
-  { key: "workingDirectory", label: "Working directory", description: "The directory this session is working in.", targets: ["agent", "beam", "chat"], placement: "inline" },
-  { key: "availableTools", label: "Available tools", description: "A live list of every active tool and its description.", targets: ["agent", "beam", "chat"], placement: "block" },
-  { key: "toolGuidelines", label: "Tool guidance", description: "Guidance supplied by the tools active in this session.", targets: ["agent", "beam", "chat"], placement: "block" },
-  { key: "projectInstructions", label: "Project instructions", description: "Trusted project instruction files loaded for this session.", targets: ["agent", "beam", "chat"], placement: "block" },
-  { key: "availableSkills", label: "Available skills", description: "The user and project skills offered to this agent.", targets: ["agent", "beam", "chat"], placement: "block" },
-  { key: "additionalInstructions", label: "Additional instructions", description: "Any appended system instructions loaded for this session.", targets: ["agent", "beam", "chat"], placement: "block" },
-  { key: "availableAgents", label: "Agents it can start", description: "The live child-agent catalog this agent may delegate to.", targets: ["agent"], placement: "block" },
-  { key: "sessionHistoryDirectory", label: "Session history folder", description: `Where ${product} keeps session transcripts on this device.`, targets: ["beam"], placement: "inline" },
-  { key: "agentDefinitionsFile", label: "Agent definitions folder", description: `${product}'s folder of saved agent definitions.`, targets: ["beam"], placement: "inline" },
-  { key: "agentRunsFile", label: "Agent runs file", description: `${product}'s durable record of agent work.`, targets: ["beam"], placement: "inline" },
-  { key: "preferencesFile", label: "Preferences file", description: `${product}'s saved device preferences.`, targets: ["beam"], placement: "inline" },
-  { key: "projectsFile", label: "Projects file", description: `${product}'s saved project catalog.`, targets: ["beam"], placement: "inline" },
-  { key: "logsFile", label: "Logs database", description: `${product}'s local diagnostics database.`, targets: ["beam"], placement: "inline" },
-  { key: "sourceText", label: "Source text", description: "The first message of the session Namer is naming.", targets: ["namer"], placement: "block" },
+  { key: "productName", label: "Product name", description: `${product}'s current display name.`, placement: "inline" },
+  { key: "agentName", label: "Agent name", description: "The name of the agent running this instruction.", placement: "inline" },
+  { key: "agentDescription", label: "Agent description", description: "The saved one-line purpose of this agent.", placement: "inline" },
+  { key: "model", label: "Current model", description: "The provider and model selected for this run.", placement: "inline" },
+  { key: "thinkingLevel", label: "Thinking level", description: "The reasoning level selected for this run.", placement: "inline" },
+  { key: "workingDirectory", label: "Working directory", description: "The directory this session is working in.", placement: "inline" },
+  { key: "availableTools", label: "Available tools", description: "A live list of every active tool and its description.", placement: "block" },
+  { key: "toolGuidelines", label: "Tool guidance", description: "Guidance supplied by the tools active in this session.", placement: "block" },
+  { key: "projectInstructions", label: "Project instructions", description: "Trusted project instruction files loaded for this session.", placement: "block" },
+  { key: "availableSkills", label: "Available skills", description: "The user and project skills offered to this agent.", placement: "block" },
+  { key: "additionalInstructions", label: "Additional instructions", description: "Any appended system instructions loaded for this session.", placement: "block" },
+  { key: "availableAgents", label: "Agents it can start", description: "The live child-agent catalog this agent may delegate to.", placement: "block" },
 ] as const;
 
-export function instructionTemplateFields(target: InstructionTemplateTarget): readonly InstructionTemplateField[] {
-  return INSTRUCTION_TEMPLATE_FIELDS.filter((field) => field.targets === "all" || field.targets.includes(target));
+export function instructionTemplateFields(): readonly InstructionTemplateField[] {
+  return INSTRUCTION_TEMPLATE_FIELDS;
 }
 
 export function instructionTemplateToken(key: string): string {
@@ -71,7 +68,7 @@ interface InstructionTemplateAnalysis {
   ranges: InstructionTemplateFieldRange[];
 }
 
-function instructionTemplateAnalysis(template: string, target: InstructionTemplateTarget): InstructionTemplateAnalysis {
+function instructionTemplateAnalysis(template: string): InstructionTemplateAnalysis {
   let ast: AstNode;
   try {
     ast = Handlebars.parse(template) as unknown as AstNode;
@@ -86,7 +83,7 @@ function instructionTemplateAnalysis(template: string, target: InstructionTempla
     const lineStart = lineStarts[position.line - 1];
     return lineStart === undefined ? undefined : lineStart + position.column;
   };
-  const allowed = new Set(instructionTemplateFields(target).map((field) => field.key));
+  const allowed = new Set(instructionTemplateFields().map((field) => field.key));
   const ranges: InstructionTemplateFieldRange[] = [];
   let issue: string | null = null;
   const visit = (value: unknown): void => {
@@ -120,23 +117,19 @@ function instructionTemplateAnalysis(template: string, target: InstructionTempla
 }
 
 /** Exact source ranges for valid live fields; invalid templates expose none. */
-export function instructionTemplateFieldRanges(template: string, target: InstructionTemplateTarget): readonly InstructionTemplateFieldRange[] {
-  return instructionTemplateAnalysis(template, target).ranges;
+export function instructionTemplateFieldRanges(template: string): readonly InstructionTemplateFieldRange[] {
+  return instructionTemplateAnalysis(template).ranges;
 }
 
 /** One actionable validation message, or null when the template is safe. */
-export function instructionTemplateIssue(template: string, target: InstructionTemplateTarget): string | null {
-  return instructionTemplateAnalysis(template, target).issue;
+export function instructionTemplateIssue(template: string): string | null {
+  return instructionTemplateAnalysis(template).issue;
 }
 
-export function renderInstructionTemplate(
-  template: string,
-  target: InstructionTemplateTarget,
-  values: Readonly<Record<string, string>>,
-): string {
-  const issue = instructionTemplateIssue(template, target);
+export function renderInstructionTemplate(template: string, values: Readonly<Record<string, string>>): string {
+  const issue = instructionTemplateIssue(template);
   if (issue) throw new Error(issue);
   const context: Record<string, string> = {};
-  for (const field of instructionTemplateFields(target)) context[field.key] = values[field.key] ?? "";
+  for (const field of instructionTemplateFields()) context[field.key] = values[field.key] ?? "";
   return Handlebars.compile(template, { noEscape: true, strict: true })(context).trim();
 }

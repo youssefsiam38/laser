@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   PROJECT_DIR_NAME,
+  RETIRED_AGENT_NAMES,
   canReferenceAgent,
   effectiveAgents,
+  isRetiredAgentName,
+  sessionKindOf,
   type AgentDefinition,
 } from "../src/index.js";
 
@@ -15,7 +18,7 @@ function agent(name: string, patch: Partial<AgentDefinition> = {}): AgentDefinit
     instructions: "Do it.",
     engineInstructions: false,
     excludeCoreInstructions: false,
-    model: null,
+    profileId: null,
     thinkingLevel: null,
     supportsSubagents: false,
     allowedAgents: [],
@@ -41,22 +44,16 @@ describe("agent scope helpers", () => {
     projectCwd: "/two",
     path: otherPath,
   });
-  const builtin = agent("beam", { kind: "builtin" });
-  const agents = [global, local, other, builtin];
+  const agents = [global, local, other];
 
-  it("selects globals and built-ins, with a same-named project definition shadowing global", () => {
+  it("selects globals, with a same-named project definition shadowing global", () => {
     expect(effectiveAgents(agents).map((candidate) => candidate.path ?? candidate.name)).toEqual([
       "/state/agents/reviewer.md",
-      "beam",
     ]);
-    expect(effectiveAgents(agents, "/one").map((candidate) => candidate.path ?? candidate.name)).toEqual([
-      localPath,
-      "beam",
-    ]);
+    expect(effectiveAgents(agents, "/one").map((candidate) => candidate.path ?? candidate.name)).toEqual([localPath]);
     expect(effectiveAgents(agents, "/two").map((candidate) => candidate.path ?? candidate.name)).toEqual([
       "/state/agents/reviewer.md",
       otherPath,
-      "beam",
     ]);
   });
 
@@ -66,7 +63,24 @@ describe("agent scope helpers", () => {
     expect(canReferenceAgent(local, global)).toBe(true);
     expect(canReferenceAgent(local, local)).toBe(true);
     expect(canReferenceAgent(local, other)).toBe(false);
-    expect(canReferenceAgent(local, builtin)).toBe(false);
     expect(canReferenceAgent({ scope: "project", projectCwd: "/one/." }, local)).toBe(false);
+  });
+});
+
+describe("session kinds", () => {
+  it("reads a chat conversation out of its own record, including an old one", () => {
+    expect(sessionKindOf("chat")).toBe("chat");
+    // Written before M23; the record is history and is never rewritten.
+    expect(sessionKindOf("beam")).toBe("chat");
+    expect(sessionKindOf("root")).toBe("project");
+    expect(sessionKindOf("child")).toBe("project");
+    // Anything a future writer invents is a project session, never a chat.
+    expect(sessionKindOf("something-else")).toBe("project");
+  });
+
+  it("still knows the names that were built-in agents, so a person's file can be fixed", () => {
+    expect([...RETIRED_AGENT_NAMES]).toEqual(["beam", "chat", "namer"]);
+    expect(isRetiredAgentName("namer")).toBe(true);
+    expect(isRetiredAgentName("reviewer")).toBe(false);
   });
 });

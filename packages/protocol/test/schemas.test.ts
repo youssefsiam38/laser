@@ -291,7 +291,6 @@ const samples: Record<ClientMethod, unknown> = {
   "agents/runs/stop": { runId: "run_7", reason: "Wrong direction" },
   "agents/worktree/status": { path: "/s.jsonl" },
   "agents/worktree/remove": { path: "/s.jsonl", force: true },
-  "agents/builtin/set-profile": { name: "chat", profileId: "mp_01jbalanced0000000000000" },
   "models/profiles/list": { cwd: "/p" },
   "models/profiles/save": {
     profile: {
@@ -309,7 +308,6 @@ const samples: Record<ClientMethod, unknown> = {
   },
   "session/profile/set": { path: "/s.jsonl", profileId: "mp_01jfast00000000000000000" },
   "session/model/pin": { path: "/s.jsonl", model: { provider: "stub", id: "stub-1" } },
-  "agents/builtin/set-instructions": { name: "chat", instructions: "Answer like an exacting editor." },
   "agents/sync": { snapshot: { revision: 3, agents: [], defaultAgent: "default" } },
   "pi/worker/recover-agent-failures": { runs: [{
     agentName: "reviewer", subagentName: "review-auth", sessionId: "child-1", runId: "run_7",
@@ -418,31 +416,13 @@ describe("client request schemas", () => {
     expect(clientParamsSchemas["web-search/configure"].safeParse({ cwd: "/p", change: { action: "test", provider: "duckduckgo" } }).success).toBe(false);
   });
 
-  it("a built-in's profile is set by name, for each of the three, and nulls back to the default", () => {
-    const schema = clientParamsSchemas["agents/builtin/set-profile"];
-    for (const name of ["beam", "chat", "namer"]) {
-      expect(schema.safeParse({ name, profileId: null }).success).toBe(true);
-      expect(schema.safeParse({ name, profileId: "mp_01jfast00000000000000000" }).success).toBe(true);
-    }
-    // Only the built-ins: a custom agent's profile is part of its definition.
-    expect(schema.safeParse({ name: "reviewer", profileId: null }).success).toBe(false);
-    expect(schema.safeParse({ profileId: null }).success).toBe(false);
-    expect(schema.safeParse({ name: "chat" }).success).toBe(false);
-    // A profile is chosen by id, never by a raw model.
-    expect(schema.safeParse({ name: "chat", profileId: { provider: "openai", id: "x" } }).success).toBe(false);
-    expect(schema.safeParse({ name: "chat", profileId: "mp_01jfast00000000000000000", extra: 1 }).success).toBe(false);
+  it("no longer answers to the built-in agent methods", () => {
+    // Beam, Chat and Namer are not agents (D-347), so there is no profile or
+    // instruction choice to make for one — the method is gone, not refused.
+    expect("agents/builtin/set-profile" in clientParamsSchemas).toBe(false);
+    expect("agents/builtin/set-instructions" in clientParamsSchemas).toBe(false);
   });
 
-  it("a built-in's instructions are set by name, or restored with null", () => {
-    const schema = clientParamsSchemas["agents/builtin/set-instructions"];
-    for (const name of ["beam", "chat", "namer"]) {
-      expect(schema.safeParse({ name, instructions: "Be exact." }).success).toBe(true);
-      expect(schema.safeParse({ name, instructions: null }).success).toBe(true);
-    }
-    expect(schema.safeParse({ name: "default", instructions: "x" }).success).toBe(false);
-    expect(schema.safeParse({ name: "chat" }).success).toBe(false);
-    expect(schema.safeParse({ name: "chat", instructions: "x", extra: true }).success).toBe(false);
-  });
 
   it("takes a bounded, opaque delivery owner on load and detach, and nothing else", () => {
     // RP-6: the label says which surface of one connection is holding a
@@ -496,7 +476,15 @@ describe("client request schemas", () => {
     expect(clientParamsSchemas["agents/save"].safeParse({ agent: { ...agentSample, name: "a".repeat(41) }, originalName: null }).success).toBe(false);
     expect(clientParamsSchemas["agents/set-policy"].safeParse({ policy: { maxDepth: 0 } }).success).toBe(false);
     expect(clientParamsSchemas["agents/set-policy"].safeParse({ policy: { budget: 3 } }).success).toBe(false);
-    expect(clientParamsSchemas["session/new"].safeParse({ cwd: "/p", agentName: "beam" }).success).toBe(true);
+    expect(clientParamsSchemas["session/new"].safeParse({ cwd: "/p", agentName: "reviewer" }).success).toBe(true);
+  });
+
+  it("starts a plain chat by kind, and never beside an agent", () => {
+    const schema = clientParamsSchemas["session/new"];
+    expect(schema.safeParse({ cwd: "/p", sessionKind: "chat" }).success).toBe(true);
+    expect(schema.safeParse({ cwd: "/p", sessionKind: "project" }).success).toBe(true);
+    expect(schema.safeParse({ cwd: "/p", sessionKind: "chat", agentName: "reviewer" }).success).toBe(false);
+    expect(schema.safeParse({ cwd: "/p", sessionKind: "beam" }).success).toBe(false);
   });
 
   it("requires an exact strict location for agent deletion", () => {

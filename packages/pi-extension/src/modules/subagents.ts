@@ -108,7 +108,10 @@ export function formatEvent(event: AgentModelEvent): string {
  */
 export function roleBlock(role: HarnessSessionRole, canDelegate: boolean, cwd: string): string | undefined {
   const parts: string[] = [];
-  if (role.kind === "child") {
+  // A Chat is not an agent run: it has no definition, no role to be told and
+  // nothing to delegate to (`docs/plain-chat.md`).
+  if (role.kind === "chat") return undefined;
+  if (role.kind === "child" && role.agentName) {
     const instance = role.subagentName ?? role.agentName;
     const parent = role.parent
       ? `your parent agent "${role.parent.agentName}"${role.parent.subagentName ? ` (${role.parent.subagentName})` : ""}, session ${role.parent.sessionId},`

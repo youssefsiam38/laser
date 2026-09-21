@@ -12,7 +12,8 @@
  * (`subagent_name`, which the row shows instead); `complete_agent_run` and
  * `inspect_fleet` describe nothing but themselves.
  *
- * Namer no longer labels activity; it names new sessions only.
+ * Nothing generates an activity label away from a turn: the only other model
+ * request the product makes is the one that titles a new conversation.
  */
 
 /** The parameter name every labelled tool gains. */

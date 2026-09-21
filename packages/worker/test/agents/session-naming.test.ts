@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fallbackSnapshot } from "../../src/agents/definitions.js";
-import type { NamerModelRuntime } from "../../src/agents/namer.js";
+import type { CompletionRuntime } from "../../src/agents/session-naming.js";
 import { DriverUnavailableError } from "../../src/driver.js";
 import type { DriverEvent, DriverListener, DriverOpenOptions, PromptOptions, SessionDriver } from "../../src/driver.js";
 import { WorkerServer } from "../../src/server.js";
@@ -66,7 +66,7 @@ class LongTurnDriver implements SessionDriver {
   async dispose() { this.emit({ type: "closed", reason: "disposed" }); }
 }
 
-function fakeNamerRuntime(answer: () => string): NamerModelRuntime & { calls: number } {
+function fakeNamingRuntime(answer: () => string): CompletionRuntime & { calls: number } {
   const runtime = {
     calls: 0,
     getModel: (provider: string, id: string) => ({ provider, id }),
@@ -99,11 +99,7 @@ function writeNamingProfile(): void {
   );
 }
 
-function namedSnapshot() {
-  writeNamingProfile();
-  const snapshot = fallbackSnapshot();
-  return { ...snapshot, builtinProfiles: { ...snapshot.builtinProfiles, namer: NAMING_PROFILE_ID } };
-}
+
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -115,7 +111,12 @@ async function until(cond: () => boolean): Promise<void> {
   }
 }
 
-function harness(runtime: NamerModelRuntime) {
+/**
+ * `naming: false` leaves the settings file without a naming assignment, which
+ * is the one state in which naming does not happen at all (`docs/plain-chat.md`).
+ */
+function harness(runtime: CompletionRuntime, options: { naming?: boolean } = {}) {
+  if (options.naming !== false) writeNamingProfile();
   const out: JsonRpcMessage[] = [];
   const drivers: LongTurnDriver[] = [];
   const server = new WorkerServer({
@@ -125,7 +126,7 @@ function harness(runtime: NamerModelRuntime) {
     stateDir: join(base, "state"),
     createDriver: () => { const d = new LongTurnDriver(); drivers.push(d); return d; },
     send: (m) => out.push(m),
-    namerModels: async () => runtime,
+    namingModels: async () => runtime,
   });
   const call = async (id: number, method: string, params?: unknown) => {
     await server.handle({ jsonrpc: "2.0", id, method, params });
@@ -152,9 +153,9 @@ afterEach(() => {
 
 describe("naming a session at the start of its first turn", () => {
   it("names the session while the first turn is still running", async () => {
-    const runtime = fakeNamerRuntime(() => "Fix the login form");
+    const runtime = fakeNamingRuntime(() => "Fix the login form");
     const h = harness(runtime);
-    await h.call(1, "agents/sync", { snapshot: namedSnapshot() });
+    await h.call(1, "agents/sync", { snapshot: fallbackSnapshot() });
     const path = await h.open(2);
     h.prompt(3, path, "please fix the login form");
     const driver = h.drivers[0]!;
@@ -168,9 +169,9 @@ describe("naming a session at the start of its first turn", () => {
   });
 
   it("does not name an empty prompt, and never renames a session that has a name", async () => {
-    const runtime = fakeNamerRuntime(() => "Anything");
+    const runtime = fakeNamingRuntime(() => "Anything");
     const h = harness(runtime);
-    await h.call(1, "agents/sync", { snapshot: namedSnapshot() });
+    await h.call(1, "agents/sync", { snapshot: fallbackSnapshot() });
     const path = await h.open(2);
     h.prompt(3, path, "   ");
     await tick();
@@ -186,9 +187,9 @@ describe("naming a session at the start of its first turn", () => {
   });
 
   it("judges acceptance up front: refused while busy, named when queued behind the turn", async () => {
-    const runtime = fakeNamerRuntime(() => "Second thoughts");
+    const runtime = fakeNamingRuntime(() => "Second thoughts");
     const h = harness(runtime);
-    await h.call(1, "agents/sync", { snapshot: namedSnapshot() });
+    await h.call(1, "agents/sync", { snapshot: fallbackSnapshot() });
     const path = await h.open(2);
     const driver = h.drivers[0]!;
     driver.streaming(true);
@@ -205,27 +206,29 @@ describe("naming a session at the start of its first turn", () => {
     expect(driver.state().name).toBe("Second thoughts");
   });
 
-  it("holds a first prompt sent before Namer had a model, and names it once when one arrives", async () => {
-    const runtime = fakeNamerRuntime(() => "Explore the repo");
-    const h = harness(runtime);
-    const path = await h.open(1);
-    h.prompt(2, path, "explore the repo");
+  it("does not run at all when no profile is assigned to naming", async () => {
+    // There is nothing to be unavailable any more: with no assignment there is
+    // no profile to walk, so nothing is spent, nothing is parked and the
+    // conversation simply keeps the name it has (`docs/plain-chat.md`).
+    const runtime = fakeNamingRuntime(() => "Explore the repo");
+    const h = harness(runtime, { naming: false });
+    await h.call(1, "agents/sync", { snapshot: fallbackSnapshot() });
+    const path = await h.open(2);
+    h.prompt(3, path, "explore the repo");
+    await tick();
     await tick();
     expect(runtime.calls).toBe(0);
     expect(h.drivers[0]!.state().name).toBeUndefined();
-    // The model lands while the turn is still running.
-    await h.call(3, "agents/sync", { snapshot: namedSnapshot() });
+    // And no record of it is held anywhere: a later sync names nothing either.
+    await h.call(4, "agents/sync", { snapshot: fallbackSnapshot() });
     await tick();
-    expect(h.drivers[0]!.state().name).toBe("Explore the repo");
-    expect(runtime.calls).toBe(1);
-    await h.call(4, "agents/sync", { snapshot: namedSnapshot() });
-    await tick();
-    expect(runtime.calls).toBe(1);
+    expect(runtime.calls).toBe(0);
+    expect(h.drivers[0]!.state().name).toBeUndefined();
   });
 
-  it("survives a driver that goes unavailable while Namer is thinking", async () => {
+  it("survives a driver that goes unavailable while a naming request is in flight", async () => {
     let answer: (name: string) => void = () => {};
-    const runtime: NamerModelRuntime & { calls: number } = {
+    const runtime: CompletionRuntime & { calls: number } = {
       calls: 0,
       getModel: (provider: string, id: string) => ({ provider, id }),
       async completeSimple() {
@@ -234,7 +237,7 @@ describe("naming a session at the start of its first turn", () => {
       },
     };
     const h = harness(runtime);
-    await h.call(1, "agents/sync", { snapshot: namedSnapshot() });
+    await h.call(1, "agents/sync", { snapshot: fallbackSnapshot() });
     const path = await h.open(2);
     const unhandled: unknown[] = [];
     const listener = (reason: unknown) => unhandled.push(reason);
@@ -259,9 +262,9 @@ describe("naming a session at the start of its first turn", () => {
     expect((await h.call(4, "pi/session/entries", { path })).error).toBeUndefined();
   });
 
-  it("lets a person who renames mid-turn win over a slow Namer", async () => {
+  it("lets a person who renames mid-turn win over a slow naming request", async () => {
     let answer: (name: string) => void = () => {};
-    const runtime: NamerModelRuntime & { calls: number } = {
+    const runtime: CompletionRuntime & { calls: number } = {
       calls: 0,
       getModel: (provider: string, id: string) => ({ provider, id }),
       async completeSimple() {
@@ -270,7 +273,7 @@ describe("naming a session at the start of its first turn", () => {
       },
     };
     const h = harness(runtime);
-    await h.call(1, "agents/sync", { snapshot: namedSnapshot() });
+    await h.call(1, "agents/sync", { snapshot: fallbackSnapshot() });
     const path = await h.open(2);
     h.prompt(3, path, "rename the auth module");
     await tick();
