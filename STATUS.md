@@ -38,7 +38,7 @@
 **Active owners:**
 - T10/T13: done; reviewed source merged `b4ed1003` + correction `d408e8ea`. Parent450 focused tests and merged full verify/identity pass.
 - T18/T19: backend/protocol checkpoint `36e163ed` settled; source-text reader and structural fence implemented at `bedf8b40`; bounded navigation/UTF8/copy corrections continue (`run_74e26cf4`). D-364 verification runtime implementation runs independently (`run_801faae2`). First full T19 review remains pending.
-- T2: canonical metadata/history was not charged to quotas; read-only accounting/migration plan underway (`run_e545e799`).
+- T2: canonical metadata/history quota repair is implementing under approved D-365 (`run_57787ee2`); accounting, migration and cross-decision deletion protection.
 - Integrated: T9/T17 mentions, T14 Foundation, T21 interop, image fixture and transcript continuity repairs. Exact ancestry/owners in `STATUS_DETAILED.md`.
 
 **Gate:** integrated Command/mention/transcript **`pnpm verify && pnpm identity:check` pass** (`t-37896cd3`, 141.7s, source `d408e8ea`; clean graphical environment). Current integration branch, **not final main**; excludes pending capture/verification work. Person-owned browser acceptance remains unclaimed (D-342).
