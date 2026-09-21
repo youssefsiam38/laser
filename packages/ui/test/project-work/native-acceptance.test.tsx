@@ -31,6 +31,7 @@ import {
   type VerificationReport,
 } from "@lasercode/protocol";
 
+import { NativeAcceptanceDialog } from "../../src/components/project-work/NativeAcceptance.js";
 import { VerificationPanel } from "../../src/components/project-work/VerificationPanel.js";
 import { ProjectWorkStore, type ProjectWorkMethod } from "../../src/project-work/store.js";
 import { resetWorkspaceUi } from "../../src/project-work/workspace-state.js";
@@ -571,6 +572,48 @@ describe("asynchronous answers", () => {
     const asked = hostCalls.filter((call) => call.method === "pi/project/checkpoint/list");
     expect(asked.length).toBeGreaterThan(0);
     expect(asked[0]!.params).toEqual({ cwd: "/work/app", path: SESSION.path });
+  });
+
+  it("asks once per checkpoint, however often the surface around it re-renders", async () => {
+    // The host connection is re-bound on every render of the panel above, so
+    // a dialog that watched its identity would ask git again for every answer
+    // it got. Re-rendering with a brand-new request function proves it does
+    // not: typing, ticking and a fresh connection are not new questions.
+    blob = report([visual()]);
+    const store = makeStore();
+    const value = taskDetail();
+    const render = async (): Promise<void> => {
+      await act(async () => {
+        root.render(
+          <NativeAcceptanceDialog
+            store={store}
+            detail={value}
+            report={blob}
+            sessions={sessions}
+            cwd="/work/app"
+            request={async (method, params) => {
+              hostCalls.push({ method, params: params as unknown as Record<string, unknown> });
+              return checkpointList();
+            }}
+            open
+            onOpenChange={() => {}}
+          />,
+        );
+        await settle(12);
+      });
+    };
+
+    await render();
+    await click(checkbox());
+    await setValue(confirmField(), "DES-7");
+    await render();
+    await render();
+    await act(async () => {
+      await settle(30);
+    });
+
+    expect(hostCalls.filter((call) => call.method === "pi/project/checkpoint/list")).toHaveLength(1);
+    expect(confirmButton()?.disabled).toBe(false);
   });
 
   it("stays usable when the checkpoint list cannot be read, because the host is the authority", async () => {

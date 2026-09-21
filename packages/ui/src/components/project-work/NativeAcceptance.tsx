@@ -38,6 +38,7 @@ import type { ClientRequests, VerificationReport } from "@lasercode/protocol";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { selectClass } from "@/components/settings/fields";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { dateTime, relativeTime } from "@/format";
@@ -63,7 +64,10 @@ import {
 
 type Detail = ClientRequests["project/work/get"]["result"];
 type CheckpointList = ClientRequests["pi/project/checkpoint/list"]["result"];
-type Request = (<M extends "pi/project/checkpoint/list">(method: M, params: ClientRequests[M]["params"]) => Promise<ClientRequests[M]["result"]>) | undefined;
+/** The one thing this dialog asks the host directly: is that checkpoint still there? */
+type Request =
+  | ((method: "pi/project/checkpoint/list", params: ClientRequests["pi/project/checkpoint/list"]["params"]) => Promise<CheckpointList>)
+  | undefined;
 
 /** What a person is told this action is, wherever it is offered. */
 export const NATIVE_ACCEPTANCE_TITLE = "Record my review…";
@@ -103,6 +107,11 @@ export function NativeAcceptanceDialog({
   const [liveness, setLiveness] = useState<CheckpointLiveness>({ state: "unknown" });
   const cancelRef = useRef<HTMLButtonElement>(null);
   const fence = useRef(0);
+  // The host connection is re-bound on every render of the panel above, so it
+  // is read through a ref: an effect that depended on its identity would ask
+  // again for every answer it got, forever.
+  const asking = useRef<Request>(request);
+  asking.current = request;
 
   const subject: AcceptanceSubject | undefined = subjects.find((row) => key(row) === subjectId) ?? subjects[0];
   const repository = repositories.find((row) => row.repositoryId === repositoryId) ?? repositories[0];
@@ -122,13 +131,14 @@ export function NativeAcceptanceDialog({
   // Is that checkpoint still there? The conversation's own list answers, and
   // only the newest answer is kept.
   useEffect(() => {
-    if (!open || !checkpoint || !cwd || !request || !checkpoint.sessionPath) {
+    const ask = asking.current;
+    if (!open || !checkpoint || !cwd || !ask || !checkpoint.sessionPath) {
       setLiveness({ state: "unknown" });
       return;
     }
     const ticket = ++fence.current;
     setLiveness({ state: "unknown" });
-    void request("pi/project/checkpoint/list", { cwd, path: checkpoint.sessionPath })
+    void ask("pi/project/checkpoint/list", { cwd, path: checkpoint.sessionPath })
       .then((answer: CheckpointList) => {
         if (ticket !== fence.current) return;
         setLiveness(checkpointLiveness(checkpoint, answer));
@@ -138,7 +148,7 @@ export function NativeAcceptanceDialog({
         // action stays available rather than being blocked by a failed probe.
         if (ticket === fence.current) setLiveness({ state: "unknown" });
       });
-  }, [checkpoint, cwd, open, request]);
+  }, [checkpoint, cwd, open]);
 
   useEffect(() => {
     if (!open) {
@@ -239,7 +249,7 @@ export function NativeAcceptanceDialog({
                     setRepositoryId(event.target.value);
                     setCheckpointId(undefined);
                   }}
-                  className="h-8 rounded-lg border border-line bg-surface px-2 text-sm leading-5 text-ink outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live pointer-coarse:min-h-11"
+                  className={cn(selectClass, "pointer-coarse:min-h-11")}
                 >
                   {repositories.map((row) => (
                     <option key={row.repositoryId} value={row.repositoryId}>
@@ -259,7 +269,7 @@ export function NativeAcceptanceDialog({
                 aria-label="Checkpoint you looked at"
                 value={checkpoint?.id ?? ""}
                 onChange={(event) => setCheckpointId(event.target.value)}
-                className="h-8 rounded-lg border border-line bg-surface px-2 text-sm leading-5 text-ink outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live pointer-coarse:min-h-11"
+                className={cn(selectClass, "pointer-coarse:min-h-11")}
               >
                 {inRepository.map((row) => (
                   <option key={row.id} value={row.id}>
@@ -283,7 +293,7 @@ export function NativeAcceptanceDialog({
               </dl>
             ) : null}
 
-            {gone ? <WorkRefusal message={liveness.state === "pruned" ? liveness.detail : liveness.detail} /> : null}
+            {liveness.state === "pruned" || liveness.state === "moved" ? <WorkRefusal message={liveness.detail} /> : null}
 
             {checkpoint?.sessionPath && checkpoint.turn >= 1 ? (
               <Button size="sm" variant="ghost" className="self-start" onClick={seeChanges}>

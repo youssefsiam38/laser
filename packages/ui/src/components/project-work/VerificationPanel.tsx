@@ -118,12 +118,15 @@ export function VerificationPanel({
 
   // What a person's review of the build could be recorded against, and why it
   // could not. The reason is shown rather than the action being hidden: an
-  // act that is missing says nothing about what to do to get it.
+  // act that is missing says nothing about what to do to get it. While the
+  // stored report is still being read, nothing is said at all — "verify this
+  // first" about a run that exists would be a sentence that is not true yet.
+  const reportPending = recordedBlob !== undefined && report === undefined;
   const subjects = useMemo(() => acceptanceSubjects(report), [report]);
   const checkpoints = useMemo(() => acceptanceCheckpoints(detail, sessions), [detail, sessions]);
   const acceptanceBlocked = useMemo(
-    () => acceptanceObstacle({ report, subjects, checkpoints }),
-    [checkpoints, report, subjects],
+    () => (reportPending ? undefined : acceptanceObstacle({ report, subjects, checkpoints })),
+    [checkpoints, report, reportPending, subjects],
   );
 
   const poll = useCallback(
@@ -227,7 +230,7 @@ export function VerificationPanel({
             Stop
           </Button>
         ) : null}
-        <NativeAcceptanceButton disabled={acceptanceBlocked !== undefined || !store} onClick={() => setAccepting(true)} />
+        <NativeAcceptanceButton disabled={acceptanceBlocked !== undefined || reportPending || !store} onClick={() => setAccepting(true)} />
         {acceptanceBlocked ? (
           <span data-slot="verification-acceptance-blocked" className="max-w-(--measure-prose) text-xs leading-xs text-ink-3">
             {acceptanceBlocked.detail}
