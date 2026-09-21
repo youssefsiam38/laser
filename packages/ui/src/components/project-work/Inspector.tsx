@@ -7,13 +7,13 @@
  * its evidence, and its revision history. Everything here is the current
  * state, read from the host.
  *
- * The acts belong to later tasks and are named where they will live:
- * approving and commenting are M21-T8, and the Design Index panel replaces
- * this column for a Design in M21-T13. **Linking is here** (M21-T7): adding
- * and removing a link is this section's own act, and both are optional in
- * every direction — nothing is pending because a link is missing (D-352).
+ * The gate card and the comments panel are M21-T8's own files beside this one;
+ * the Design Index panel replaces this column for a Design in M21-T13.
+ * **Linking is here** (M21-T7): adding and removing a link is this section's
+ * own act, and both are optional in every direction — nothing is pending
+ * because a link is missing (D-352).
  */
-import { MessageSquare, Link2, Plus, ShieldCheck, FlaskConical, Unlink } from "lucide-react";
+import { Link2, Plus, FlaskConical, Unlink } from "lucide-react";
 import type { ClientRequests } from "@lasercode/protocol";
 import { useCallback, useEffect, useState } from "react";
 
@@ -26,6 +26,8 @@ import { clockTime, dateTime, relativeTime } from "@/format";
 import { cn } from "@/lib/utils";
 import { selectWork, useWorkspaceUi, type ProjectWorkSnapshot, type ProjectWorkStore } from "@/project-work";
 
+import { CommentsPanel } from "./CommentsPanel.js";
+import { GateCard } from "./GateCard.js";
 import { KeyTag } from "./KindBadge.js";
 import { LinkDialog, RELATION_SENTENCE } from "./LinkDialog.js";
 import { Section } from "./bodies/fields.js";
@@ -57,7 +59,10 @@ export function Inspector({
     const outcome = await store.get({
       entityId,
       ...(revisionId ? { revisionId } : {}),
-      body: { mode: "none" },
+      // The body comes with it: an anchor is named against the revision the
+      // person is reading, and an anchor with no body to check is a pin with
+      // no target (M21-T8).
+      body: { mode: "full" },
       include: { comments: true, approvals: true, evidence: true, links: true, history: true },
     });
     setDetail(outcome.ok ? outcome.value : undefined);
@@ -76,9 +81,6 @@ export function Inspector({
   }
 
   const { entity, revision } = detail;
-  const approvals = detail.approvals;
-  const comments = detail.comments;
-  const blocking = comments.filter((comment) => comment.blocking && comment.state !== "resolved");
   const edges = detail.edges;
 
   const history: TimelineEvent[] = (detail.history ?? []).map((candidate, index) => ({
@@ -105,27 +107,7 @@ export function Inspector({
         ]}
       />
 
-      {entity.kind !== "task" ? (
-        <Section title="Gate">
-          <div className="flex flex-col gap-1.5 rounded-lg border border-line bg-surface p-2.5">
-            <span className="flex items-center gap-2 text-sm leading-5 text-ink">
-              <ShieldCheck aria-hidden="true" className="size-3.5 text-ink-3" />
-              {approvals.length === 0 ? "No approval recorded" : `${approvals.length} approval${approvals.length === 1 ? "" : "s"}`}
-            </span>
-            {approvals.map((approval) => (
-              <span key={approval.approvalId} className="flex flex-wrap items-center gap-1.5 text-xs leading-xs text-ink-2">
-                <Badge variant={approval.decision === "approved" ? "ok" : "attention"}>{approval.gate}</Badge>
-                {approval.decision} · {approval.origin.actor.label} · {dateTime(approval.at)}
-              </span>
-            ))}
-            <p className="text-xs leading-xs text-ink-3">
-              {blocking.length > 0
-                ? `${blocking.length} blocking comment${blocking.length === 1 ? "" : "s"} must be resolved before this can be approved.`
-                : "Gates are only used when a spec is run through them; nothing here waits on one by default."}
-            </p>
-          </div>
-        </Section>
-      ) : null}
+      {entity.kind !== "task" ? <GateCard store={store} detail={detail} onChanged={() => void read()} /> : null}
 
       <Section title="Links">
         {edges.length === 0 && detail.repositoryLinks.length === 0 && detail.executionLinks.length === 0 ? (
@@ -212,26 +194,7 @@ export function Inspector({
         </div>
       </Section>
 
-      <Section title="Comments">
-        {comments.length === 0 ? (
-          <p className="text-sm leading-5 text-ink-3">No comments on this one.</p>
-        ) : (
-          <ul role="list" className="flex flex-col gap-2">
-            {comments.map((comment) => (
-              <li key={comment.commentId} className="flex flex-col gap-1 rounded-lg border border-line bg-surface p-2">
-                <span className="flex flex-wrap items-center gap-1.5">
-                  <MessageSquare aria-hidden="true" className="size-3.5 text-ink-3" />
-                  <Badge variant={comment.blocking && comment.state !== "resolved" ? "attention" : "outline"}>{comment.state}</Badge>
-                  <span className="text-xs leading-xs text-ink-3">
-                    {comment.origin.actor.label} · {relativeTime(comment.createdAt)}
-                  </span>
-                </span>
-                <p className="text-sm leading-5 whitespace-pre-wrap text-ink-2">{comment.text}</p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
+      <CommentsPanel store={store} detail={detail} body={detail.body?.body} onChanged={() => void read()} />
 
       {detail.evidence.length > 0 ? (
         <Section title="Evidence">

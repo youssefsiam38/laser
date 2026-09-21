@@ -1113,6 +1113,266 @@ export function taskActionTransition(
 }
 
 // ---------------------------------------------------------------------------
+// Gates, comments and threads (M21-T8)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a gate needs, by the part each required revision plays in it.
+ *
+ * The three gates of the leap's "Lifecycle and gates" table, expressed as
+ * roles rather than as a list of ids, so a refusal can say *what* is missing
+ * ("this spec has no design and no recorded reason to skip one") instead of
+ * naming an id a person has never seen.
+ */
+export const GATE_ROLES = ["spec_brief", "spec_full", "design", "design_profile", "design_skip", "plan", "task_graph"] as const;
+export type GateRole = (typeof GATE_ROLES)[number];
+
+/** Why a required revision does not satisfy its role. */
+export const GATE_PROBLEMS = [
+  /** Nothing plays this role yet. */
+  "missing",
+  /** It exists but has not passed its own gate. */
+  "draft",
+  /** Something it rests on changed after it was written. */
+  "stale",
+  /** The decision was prepared against a revision that is no longer current. */
+  "not_current",
+  /** A design made only of sketches cannot pass a gate (D-354). */
+  "sketch_only",
+  /** The plan's task graph does not hold together yet. */
+  "incomplete_graph",
+  /** An earlier gate has not been decided, or was invalidated by a change. */
+  "gate_not_passed",
+  /** It is archived or superseded, so it cannot be approved into anything. */
+  "unavailable",
+] as const;
+export type GateProblem = (typeof GATE_PROBLEMS)[number];
+
+export interface GateRequirementReport {
+  role: GateRole;
+  satisfied: boolean;
+  problem?: GateProblem;
+  /** The exact revision bound to this role, when one is known. */
+  covered?: ApprovedRevision;
+  /** One sentence, written for a person, saying what this role needs. */
+  detail: string;
+}
+
+/** An open blocking comment, named so a refusal can point at it (D-355). */
+export interface BlockingCommentRef {
+  commentId: string;
+  entityId: string;
+  key: string;
+  state: CommentState;
+  /** The first line of the comment. Never the whole thread. */
+  excerpt: string;
+  /** True when the thing it was anchored to is no longer in the revision. */
+  orphaned?: boolean;
+}
+
+/**
+ * Where one gate stands.
+ *
+ * `not_applicable` is the normal state of most project work: gates bind only
+ * to a Spec a person put on the gated path (D-352, leap "Gates only when
+ * chosen"). Nothing is pending because a gate exists.
+ */
+export const GATE_STATES = ["not_applicable", "waiting", "ready", "approved", "changes_requested", "invalidated", "archived"] as const;
+export type GateState = (typeof GATE_STATES)[number];
+
+/** The entity a gate's decision is recorded on, at the exact revision. */
+export interface GateSubject {
+  entityId: string;
+  kind: ProjectWorkKind;
+  key: string;
+  title: string;
+  revisionId: string;
+  digest: string;
+  state: ProjectWorkState;
+}
+
+export interface GateStatusReport {
+  gate: ApprovalGate;
+  state: GateState;
+  /** Absent when nothing plays the gate's part yet (no design, no plan). */
+  subject?: GateSubject;
+  requirements: GateRequirementReport[];
+  /** The complete digest set an approval of this gate must carry (D-332). */
+  covers: ApprovedRevision[];
+  /** The outcomes this gate offers, in the leap's own words. */
+  outcomes: GateOutcome[];
+  blockingComments: BlockingCommentRef[];
+  /** The decision already recorded, when there is one. */
+  approval?: ProjectWorkApproval;
+  /** Why a decision cannot be recorded right now. Absent when it can. */
+  refusal?: string;
+}
+
+export interface GateReport {
+  /** The Spec whose lifecycle these gates belong to. */
+  specEntityId: string;
+  specKey: string;
+  /** False unless the Spec was put on the gated path. Nothing waits when false. */
+  gated: boolean;
+  /** The gate a person would decide next, when one is ready or waiting. */
+  next?: ApprovalGate;
+  gates: GateStatusReport[];
+}
+
+/**
+ * One outcome of a gate, in the words the leap uses for it.
+ *
+ * `id` is the person-facing outcome; `decision` and `mode` are what the
+ * approval records. "Build autonomously" and "Build with manual tool review"
+ * are the same decision with two permission modes, which is exactly why the
+ * mode cannot be a separate afterthought on the Build gate.
+ */
+export interface GateOutcome {
+  id: string;
+  label: string;
+  decision: ApprovalDecision;
+  mode?: ApprovalMode;
+  /** True for the outcome that settles the gate in favour of the work. */
+  approves: boolean;
+}
+
+export const GATE_OUTCOMES: Readonly<Record<ApprovalGate, readonly GateOutcome[]>> = {
+  brief: [
+    { id: "approve", label: "Approve direction", decision: "approved", approves: true },
+    { id: "request_changes", label: "Request changes", decision: "changes_requested", approves: false },
+    { id: "archive", label: "Archive", decision: "archived", approves: false },
+  ],
+  design: [
+    { id: "approve", label: "Approve", decision: "approved", approves: true },
+    { id: "request_changes", label: "Request changes", decision: "changes_requested", approves: false },
+  ],
+  build: [
+    { id: "build_autonomously", label: "Build autonomously", decision: "approved", mode: "autonomous", approves: true },
+    {
+      id: "build_with_manual_tool_review",
+      label: "Build with manual tool review",
+      decision: "approved",
+      mode: "manual_tool_review",
+      approves: true,
+    },
+    { id: "request_changes", label: "Request changes", decision: "changes_requested", approves: false },
+  ],
+};
+
+/** The outcome a gate offers under that id, or `undefined` if it offers none. */
+export function gateOutcome(gate: ApprovalGate, id: string): GateOutcome | undefined {
+  return GATE_OUTCOMES[gate].find((outcome) => outcome.id === id);
+}
+
+/** What this gate's outcomes are called, for a refusal that has to list them. */
+function outcomeList(gate: ApprovalGate): string {
+  return GATE_OUTCOMES[gate].map((outcome) => outcome.label.toLowerCase()).join(", ");
+}
+
+/**
+ * Is this decision one this gate can record, with the permission mode it came
+ * with?
+ *
+ * Three rules, all from the leap's gate table: a Design gate cannot archive a
+ * Spec; a Build approval has to say how the build may run; and a permission
+ * mode means nothing anywhere else, so carrying one is a mistake rather than
+ * something to ignore.
+ */
+export function gateDecisionAllowed(input: { gate: ApprovalGate; decision: ApprovalDecision; mode?: ApprovalMode | undefined }): TransitionOutcome {
+  const allowed = GATE_OUTCOMES[input.gate].some((outcome) => outcome.decision === input.decision);
+  if (!allowed) {
+    return refuse(`The ${input.gate} gate has these outcomes: ${outcomeList(input.gate)}.`);
+  }
+  if (input.gate === "build" && input.decision === "approved" && input.mode === undefined) {
+    return refuse("Say how the build may run: autonomously, or with manual tool review.");
+  }
+  if (input.mode !== undefined && (input.gate !== "build" || input.decision !== "approved")) {
+    return refuse("A permission mode belongs to approving the build, and to nothing else.");
+  }
+  return allow;
+}
+
+/** A comment and everything written under it, oldest first. */
+export interface CommentThread {
+  root: ProjectWorkComment;
+  replies: ProjectWorkComment[];
+  /** `open` while anything in the thread is open, then `addressed`, then `resolved`. */
+  state: CommentState;
+  /** True while an unresolved comment in the thread is marked blocking. */
+  blocking: boolean;
+  /** True when the root's anchor no longer resolves in the current revision. */
+  orphaned: boolean;
+}
+
+/**
+ * Group comments into threads.
+ *
+ * A reply whose parent is not in the list becomes its own root rather than
+ * disappearing: a thread that lost its head is still something a person wrote,
+ * and losing it would be the one thing this model must never do.
+ */
+export function commentThreads(comments: readonly ProjectWorkComment[]): CommentThread[] {
+  const byId = new Map(comments.map((comment) => [comment.commentId, comment]));
+  const replies = new Map<string, ProjectWorkComment[]>();
+  const roots: ProjectWorkComment[] = [];
+  for (const comment of comments) {
+    const parentId = comment.parentCommentId;
+    if (parentId !== undefined && byId.has(parentId) && parentId !== comment.commentId) {
+      const list = replies.get(parentId);
+      if (list) list.push(comment);
+      else replies.set(parentId, [comment]);
+      continue;
+    }
+    roots.push(comment);
+  }
+  return roots.map((root) => {
+    const own = (replies.get(root.commentId) ?? []).slice().sort((a, b) => (a.createdAt === b.createdAt ? a.commentId.localeCompare(b.commentId) : a.createdAt < b.createdAt ? -1 : 1));
+    const all = [root, ...own];
+    const state: CommentState = all.some((comment) => comment.state === "open")
+      ? "open"
+      : all.some((comment) => comment.state === "addressed")
+        ? "addressed"
+        : "resolved";
+    return {
+      root,
+      replies: own,
+      state,
+      blocking: all.some((comment) => comment.blocking && comment.state !== "resolved"),
+      orphaned: root.orphaned === true,
+    };
+  });
+}
+
+/** The comments that stop an approval: blocking, and not resolved yet. */
+export function openBlockingComments(comments: readonly ProjectWorkComment[]): ProjectWorkComment[] {
+  return comments.filter((comment) => comment.blocking && comment.state !== "resolved");
+}
+
+/**
+ * Who may move a comment where (D-332).
+ *
+ * The agent's half of the rule is as important as the person's: an agent that
+ * fixed something says so, and the comment stays visibly unresolved until the
+ * person who wrote it agrees.
+ */
+export function commentResolutionAllowed(input: {
+  resolution: "addressed" | "resolved" | "reopened";
+  actor: "person" | "agent";
+  from: CommentState;
+}): TransitionOutcome {
+  if (input.resolution !== "addressed" && input.actor !== "person") {
+    return refuse("An agent can mark a comment addressed; only you can resolve or reopen it.");
+  }
+  if (input.resolution === "addressed" && input.from === "resolved") {
+    return refuse("That comment is resolved. Reopen it before marking it addressed again.");
+  }
+  if (input.resolution === "reopened" && input.from === "open") {
+    return refuse("That comment is already open.");
+  }
+  return allow;
+}
+
+// ---------------------------------------------------------------------------
 // Staleness
 // ---------------------------------------------------------------------------
 

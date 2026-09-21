@@ -29,7 +29,9 @@
  * It spawns nothing, imports no Pi and knows nothing about JSON-RPC.
  */
 import {
+  anchorResolves,
   artifactTransition,
+  commentResolutionAllowed,
   designIsSketchOnly,
   projectWorkBodySchema,
   projectWorkKey,
@@ -75,6 +77,8 @@ import {
   type ProjectWorkLinkRecord,
   type ProjectTaskAction,
   type ProjectWorkReviewAction,
+  type BlockingCommentRef,
+  type GateReport,
   type ApprovalGate,
   type ApprovalDecision,
   type ApprovalMode,
@@ -83,6 +87,7 @@ import {
 } from "@lasercode/protocol";
 import { ProjectWorkConflictError, ProjectWorkNotFoundError, ProjectWorkQuotaError, ProjectWorkRefusedError } from "./errors.js";
 import { blobBytes, deleteBlob, putBlob, readBlobRange, releaseBlob, type BlobRange, type StoredBlob } from "./blobs.js";
+import { GateEngine, type GateEntity, type GateReader } from "./gates.js";
 import {
   bodyDigest,
   canonicalJson,
@@ -96,6 +101,7 @@ import {
   mintRepositoryId,
   mintRevisionId,
   repositoryIdentityKey,
+  sha256,
   type RepositoryIdentityInput,
 } from "./ids.js";
 import { openProjectWorkDatabase, transaction, type ProjectWorkDatabase, type ProjectWorkStatement } from "./schema.js";
@@ -214,6 +220,8 @@ export interface ProjectWorkDetail {
   conflicts?: TaskConflict[];
   /** Plans only: the Task graph, including the Tasks this Plan stopped listing. */
   planGraph?: PlanGraphReport;
+  /** The three gates of the Spec this entity's lifecycle belongs to (M21-T8). */
+  gates?: GateReport;
   truncated: string[];
 }
 
@@ -232,6 +240,8 @@ export class ProjectWorkStore {
   private readonly eventsRetained: number;
   /** The Plan DAG and Task rules (M21-T15). Reads through this store's rows. */
   private readonly engine: TaskEngine;
+  /** The three hard gates (M21-T8). Reads through this store's rows. */
+  private readonly gates: GateEngine;
   private closed = false;
   /** Events raised inside the open transaction, published after it commits. */
   private pending: Array<{ projectId: string; seq: number; change: ProjectWorkChange }> = [];
@@ -242,6 +252,7 @@ export class ProjectWorkStore {
     this.onEvent = options.onEvent;
     this.db = openProjectWorkDatabase(options.file, this.log);
     this.engine = new TaskEngine(this.engineReader());
+    this.gates = new GateEngine(this.gateReader());
     this.eventsRetained = Math.max(1, Math.trunc(options.eventsRetained ?? PROJECT_WORK_EVENTS_RETAINED));
     this.quota = {
       projectBytes: options.quota?.projectBytes ?? PROJECT_WORK_PROJECT_BYTES_DEFAULT,
@@ -889,7 +900,13 @@ export class ProjectWorkStore {
       });
       // A material change to an approved artifact stales what depends on it,
       // along the links that exist and no further (D-352).
-      this.applyStale(input.projectId, entity.entity_id, priorState, now);
+      const reached = this.applyStale(input.projectId, entity.entity_id, priorState, now);
+      // An anchor is preserved, never lost: a comment whose target survived
+      // this revision stays on it, one whose target went is orphaned (M21-T8).
+      this.refreshAnchors(input.projectId, entity.entity_id, revisionId);
+      // A material change invalidates the gate it was approved at, and only
+      // the downstream the change actually reaches (D-332).
+      this.invalidateApprovals(input.projectId, entity.entity_id, { previousDigest: entity.current_digest, digest, reached }, now);
       // A revision can change what this Task depends on, and an artifact
       // leaving `approved` can unsatisfy the Tasks that named it.
       this.applyCascade(
@@ -1043,12 +1060,21 @@ export class ProjectWorkStore {
       if (anchored.entity_id !== entity.entity_id) {
         throw new ProjectWorkRefusedError("That revision belongs to another item.");
       }
+      if (input.parentCommentId !== undefined) {
+        const parent = this.readComment(input.projectId, input.parentCommentId);
+        if (parent.entityId !== entity.entity_id) throw new ProjectWorkRefusedError("That comment belongs to another item.");
+      }
       const now = this.now();
       const commentId = mintCommentId();
       const blocking = input.blocking === true;
+      // An anchor that does not resolve in the *current* revision is kept and
+      // marked orphaned rather than refused: a person reviewing an older
+      // revision is still saying something real, and a lost anchor must never
+      // lose the comment with it (leap, "Design contract").
+      const orphaned = !this.anchorStillResolves(input.projectId, entity.current_revision_id, input.anchor);
       this.statement(
-        "INSERT INTO comments (comment_id, project_id, entity_id, revision_id, anchor_json, text, state, blocking, created_at, origin_json, parent_comment_id) " +
-          "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO comments (comment_id, project_id, entity_id, revision_id, anchor_json, text, state, blocking, created_at, origin_json, orphaned, parent_comment_id) " +
+          "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
       ).run(
         commentId,
         input.projectId,
@@ -1060,6 +1086,7 @@ export class ProjectWorkStore {
         blocking ? 1 : 0,
         now,
         JSON.stringify(input.origin),
+        orphaned ? 1 : 0,
         input.parentCommentId ?? null,
       );
       if (blocking) {
@@ -1083,6 +1110,9 @@ export class ProjectWorkStore {
         actorLabel: input.origin.actor.label,
         ...(input.origin.sessionId ? { sessionId: input.origin.sessionId } : {}),
       });
+      // A blocking comment is something waiting on a person, here and on the
+      // gate it stops (M21-T8).
+      this.refreshGateAttention(input.projectId, entity.entity_id, now);
       return { comment: this.readComment(input.projectId, commentId), entity: this.toEntity(updated), seq };
     });
   }
@@ -1144,9 +1174,8 @@ export class ProjectWorkStore {
       this.requireCurrent(entity, input.expectedRevisionId);
       const comment = this.readComment(input.projectId, input.commentId);
       if (comment.entityId !== entity.entity_id) throw new ProjectWorkRefusedError("That comment belongs to another item.");
-      if (input.resolution !== "addressed" && input.origin.actor.kind !== "person") {
-        throw new ProjectWorkRefusedError("An agent can mark a comment addressed; only you can resolve or reopen it.");
-      }
+      const move = commentResolutionAllowed({ resolution: input.resolution, actor: input.origin.actor.kind, from: comment.state });
+      if (!move.ok) throw new ProjectWorkRefusedError(move.reason);
       const now = this.now();
       if (input.resolution === "addressed") {
         this.statement("UPDATE comments SET state = 'addressed', addressed_at = ? WHERE comment_id = ?").run(now, input.commentId);
@@ -1174,6 +1203,9 @@ export class ProjectWorkStore {
         at: now,
         actorLabel: input.origin.actor.label,
       });
+      // Resolving the last blocking comment can make a gate decidable, which
+      // is a change to what is waiting on a person.
+      this.refreshGateAttention(input.projectId, entity.entity_id, now);
       return { comment: this.readComment(input.projectId, input.commentId), entity: this.toEntity(updated), seq };
     });
   }
@@ -1182,6 +1214,90 @@ export class ProjectWorkStore {
     this.statement(
       "UPDATE entities SET needs_attention = CASE WHEN blocking_comments > 0 OR state = 'needs_review' OR state = 'stale' OR state = 'blocked' THEN 1 ELSE 0 END WHERE entity_id = ?",
     ).run(entityId);
+  }
+
+  /**
+   * Does this anchor still point at something in that revision? (M21-T8)
+   *
+   * A text range also has to still say what it said: the hash is over the
+   * exact slice, so an edit inside the quoted words orphans the comment
+   * instead of silently moving it onto different text.
+   */
+  private anchorStillResolves(projectId: string, revisionId: string, anchor: ProjectWorkAnchor): boolean {
+    const row = this.statement("SELECT body FROM revisions WHERE project_id = ? AND revision_id = ?").get(projectId, revisionId) as
+      | { body: string }
+      | undefined;
+    if (!row) return false;
+    return anchorResolves(JSON.parse(row.body) as ProjectWorkBody, anchor, (value) => sha256(value));
+  }
+
+  /**
+   * Re-decide which of an entity's comments are orphaned, after a revision.
+   *
+   * Nothing is deleted and nothing moves: a comment whose target came back
+   * stops being orphaned, and one whose target went is marked and stays
+   * exactly where a person left it. Returns how many changed, so a caller can
+   * say so.
+   */
+  private refreshAnchors(projectId: string, entityId: string, revisionId: string): number {
+    const rows = this.statement("SELECT comment_id, anchor_json, orphaned FROM comments WHERE project_id = ? AND entity_id = ?").all(
+      projectId,
+      entityId,
+    ) as Array<{ comment_id: string; anchor_json: string; orphaned: number }>;
+    if (rows.length === 0) return 0;
+    const bodyRow = this.statement("SELECT body FROM revisions WHERE project_id = ? AND revision_id = ?").get(projectId, revisionId) as
+      | { body: string }
+      | undefined;
+    if (!bodyRow) return 0;
+    const body = JSON.parse(bodyRow.body) as ProjectWorkBody;
+    let changed = 0;
+    for (const row of rows) {
+      const anchor = JSON.parse(row.anchor_json) as ProjectWorkAnchor;
+      const orphaned = anchorResolves(body, anchor, (value) => sha256(value)) ? 0 : 1;
+      if (orphaned === row.orphaned) continue;
+      this.statement("UPDATE comments SET orphaned = ? WHERE comment_id = ?").run(orphaned, row.comment_id);
+      changed += 1;
+    }
+    return changed;
+  }
+
+  /**
+   * Keep "needs you" honest about gates (M21-T8).
+   *
+   * An artifact on the gated path joins the queue when its gate is ready to
+   * decide or has been invalidated, and leaves it when the gate is settled and
+   * nothing else is waiting. Bounded on purpose: the entity itself, its Spec
+   * and that Spec's linked Design and Plan — never a walk of the project.
+   */
+  private refreshGateAttention(projectId: string, entityId: string, at: string): void {
+    const reader = this.gateReader();
+    const entity = reader.entity(projectId, entityId);
+    if (!entity) return;
+    const spec = this.gates.specFor(projectId, entity);
+    if (!spec) return;
+    const report = this.gates.report(projectId, spec);
+    if (!report) return;
+    const subjects = new Map<string, boolean>();
+    subjects.set(spec.entityId, false);
+    for (const gate of report.gates) {
+      if (!gate.subject) continue;
+      const waiting = report.gated && (gate.state === "ready" || gate.state === "invalidated" || gate.blockingComments.length > 0);
+      subjects.set(gate.subject.entityId, (subjects.get(gate.subject.entityId) ?? false) || waiting);
+    }
+    for (const [subjectId, waiting] of subjects) {
+      const row = this.statement("SELECT needs_attention FROM entities WHERE project_id = ? AND entity_id = ?").get(projectId, subjectId) as
+        | { needs_attention: number }
+        | undefined;
+      if (!row) continue;
+      if (!waiting) {
+        // Back to the ordinary rule: a blocking comment, a review, a stale
+        // input or a blocked task — and nothing else — keeps it in the queue.
+        this.refreshAttention(subjectId);
+        continue;
+      }
+      if (row.needs_attention === 1) continue;
+      this.statement("UPDATE entities SET needs_attention = 1, updated_at = ? WHERE entity_id = ?").run(at, subjectId);
+    }
   }
 
   /** The review actions that are not approvals. */
@@ -1265,6 +1381,24 @@ export class ProjectWorkStore {
           throw new ProjectWorkRefusedError(`${covered.key} changed since this was prepared. Open it again before approving.`);
         }
       }
+      // Who may decide comes before what the decision needs: an agent asking
+      // to approve is told it may not, whatever else is outstanding (D-332).
+      if (input.decision === "approved" && input.origin.actor.kind !== "person") {
+        throw new ProjectWorkRefusedError("Only a person approves project work.");
+      }
+      // The gate's own rules: the right subject, the complete digest set, the
+      // prerequisites, and no open blocking comment anywhere it covers
+      // (M21-T8, D-332).
+      const subject = this.gateReader().entity(input.projectId, entity.entity_id);
+      if (!subject) throw new ProjectWorkNotFoundError("That item is not in this project — it may have been deleted.");
+      const gate = this.gates.check(input.projectId, subject, {
+        gate: input.gate,
+        decision: input.decision,
+        ...(input.mode !== undefined ? { mode: input.mode } : {}),
+        covers: input.covers,
+        ...(input.skipReason !== undefined ? { skipReason: input.skipReason } : {}),
+      });
+      if (!gate.ok) throw new ProjectWorkRefusedError(gate.reason);
       const to: ArtifactReviewState =
         input.decision === "approved" ? "approved" : input.decision === "changes_requested" ? "draft" : "archived";
       const sketchOnly = entity.kind === "design" ? this.isSketchOnlyDesign(input.projectId, entity.current_revision_id) : false;
@@ -1313,6 +1447,8 @@ export class ProjectWorkStore {
       // one away: the Tasks that named this artifact are recomputed either
       // way, after the approval itself is on the stream.
       this.applyCascade(input.projectId, { keys: [entity.key] }, now);
+      // A settled gate stops waiting on a person; the next one may start.
+      this.refreshGateAttention(input.projectId, entity.entity_id, now);
       return { approval: this.readApproval(input.projectId, approvalId), entity: this.toEntity(updated), seq };
     });
   }
@@ -1778,6 +1914,95 @@ export class ProjectWorkStore {
     };
   }
 
+  /**
+   * What the gate engine reads (M21-T8).
+   *
+   * Deliberately a different reader from the Task engine's: a gate asks about
+   * linked artifacts, approvals and blocking comments, and a Task asks about
+   * dependencies, evidence and scope. One reader that answered both would make
+   * every change to either of them a change to both.
+   */
+  private gateReader(): GateReader {
+    const toGate = (row: EntityRow): GateEntity => ({
+      entityId: row.entity_id,
+      kind: row.kind as ProjectWorkKind,
+      key: row.key,
+      title: row.title,
+      state: row.state as ProjectWorkState,
+      currentRevisionId: row.current_revision_id,
+      currentDigest: row.current_digest,
+      archived: row.archived_at !== null,
+      blockingComments: Number(row.blocking_comments),
+    });
+    return {
+      entity: (projectId, entityId) => {
+        const row = this.statement("SELECT * FROM entities WHERE project_id = ? AND entity_id = ?").get(projectId, entityId) as EntityRow | undefined;
+        return row ? toGate(row) : undefined;
+      },
+      body: (projectId, revisionId) => {
+        const row = this.statement("SELECT body FROM revisions WHERE project_id = ? AND revision_id = ?").get(projectId, revisionId) as
+          | { body: string }
+          | undefined;
+        return row ? (JSON.parse(row.body) as ProjectWorkBody) : undefined;
+      },
+      neighbours: (projectId, entityId) =>
+        (
+          this.statement(
+            `SELECT e.* FROM edges
+               JOIN entities e ON e.entity_id = CASE WHEN edges.subject_entity = ? THEN edges.object_entity ELSE edges.subject_entity END
+              WHERE edges.project_id = ? AND (edges.subject_entity = ? OR edges.object_entity = ?)`,
+          ).all(entityId, projectId, entityId, entityId) as EntityRow[]
+        ).map(toGate),
+      approvals: (projectId, entityId) =>
+        (
+          this.statement("SELECT approval_id FROM approvals WHERE project_id = ? AND entity_id = ? ORDER BY at ASC, rowid ASC").all(
+            projectId,
+            entityId,
+          ) as Array<{ approval_id: string }>
+        ).map((row) => this.readApproval(projectId, row.approval_id)),
+      blockingComments: (projectId, entityId) => this.openBlockingComments(projectId, entityId),
+      planGraph: (projectId, planEntityId) => {
+        const row = this.statement("SELECT * FROM entities WHERE project_id = ? AND entity_id = ?").get(projectId, planEntityId) as
+          | EntityRow
+          | undefined;
+        if (!row || row.kind !== "plan") return undefined;
+        const body = JSON.parse(this.revisionRow(projectId, row.current_revision_id).body) as ProjectWorkBody;
+        return body.kind === "plan" ? this.engine.planGraph(projectId, body.plan, row.key) : undefined;
+      },
+    };
+  }
+
+  /** The open blocking comments on one entity, named for a refusal (M21-T8). */
+  private openBlockingComments(projectId: string, entityId: string): BlockingCommentRef[] {
+    const rows = this.statement(
+      "SELECT c.comment_id AS comment_id, c.state AS state, c.text AS text, c.orphaned AS orphaned, e.key AS key FROM comments c " +
+        "JOIN entities e ON e.entity_id = c.entity_id " +
+        "WHERE c.project_id = ? AND c.entity_id = ? AND c.blocking = 1 AND c.state != 'resolved' ORDER BY c.created_at ASC",
+    ).all(projectId, entityId) as Array<{ comment_id: string; state: string; text: string; orphaned: number; key: string }>;
+    return rows.map((row) => ({
+      commentId: row.comment_id,
+      entityId,
+      key: row.key,
+      state: row.state as BlockingCommentRef["state"],
+      excerpt: row.text.split("\n", 1)[0]?.slice(0, 200) ?? "",
+      ...(row.orphaned === 1 ? { orphaned: true } : {}),
+    }));
+  }
+
+  /**
+   * Where this entity's gates stand (M21-T8).
+   *
+   * A Spec answers for itself; a Design or a Plan answers for the Spec it is
+   * linked to, because that is whose lifecycle the gate belongs to. Anything
+   * with no Spec in reach has no gates, and says so by answering `undefined`.
+   */
+  gateReport(projectId: string, entityId: string): GateReport | undefined {
+    const entity = this.gateReader().entity(projectId, entityId);
+    if (!entity) return undefined;
+    const spec = this.gates.specFor(projectId, entity);
+    return spec ? this.gates.report(projectId, spec) : undefined;
+  }
+
   private toEngineEntity(row: EntityRow): EngineEntity {
     return {
       projectId: row.project_id,
@@ -2059,8 +2284,8 @@ export class ProjectWorkStore {
    * not marked stale — a Task has no such state — but a stale Plan or Design
    * upstream of it is what `taskFacts` reads when it refuses a start.
    */
-  private applyStale(projectId: string, changedEntityId: string, priorState: ProjectWorkState, at: string): void {
-    if (priorState !== "approved") return;
+  private applyStale(projectId: string, changedEntityId: string, priorState: ProjectWorkState, at: string): Set<string> {
+    if (priorState !== "approved") return new Set<string>();
     const entities = this.statement("SELECT entity_id, kind, key, state FROM entities WHERE project_id = ?").all(projectId) as Array<{
       entity_id: string;
       kind: string;
@@ -2116,6 +2341,42 @@ export class ProjectWorkStore {
       // it is something waiting on a person, so it joins the queue.
       this.statement("UPDATE entities SET needs_attention = 1, updated_at = ? WHERE entity_id = ?").run(at, paused.entityId);
     }
+    return new Set<string>([...result.stale, ...result.paused].map((impact) => impact.entityId));
+  }
+
+  /**
+   * Invalidate the gates a material change reached (M21-T8, D-332).
+   *
+   * Two ways a decision stops meaning what it said, and no third:
+   *
+   * - it **covers** the revision that just changed, so the digest set it
+   *   records is no longer what the project holds;
+   * - it belongs to an artifact the change made **stale**, which is exactly
+   *   the reachable downstream `propagateStale` returns — never the whole
+   *   project, and never an artifact with no link to the change (D-352).
+   *
+   * A revision whose bytes are identical invalidates nothing: the digest is
+   * the test of "material", not the fact that someone pressed save.
+   */
+  private invalidateApprovals(
+    projectId: string,
+    changedEntityId: string,
+    change: { previousDigest: string; digest: string; reached: ReadonlySet<string> },
+    at: string,
+  ): string[] {
+    if (change.digest === change.previousDigest) return [];
+    const rows = this.statement(
+      "SELECT approval_id, entity_id, covers_json FROM approvals WHERE project_id = ? AND invalidated_at IS NULL",
+    ).all(projectId) as Array<{ approval_id: string; entity_id: string; covers_json: string }>;
+    const invalidated: string[] = [];
+    for (const row of rows) {
+      const covers = JSON.parse(row.covers_json) as ApprovedRevision[];
+      const coversChanged = covers.some((covered) => covered.entityId === changedEntityId && covered.digest !== change.digest);
+      if (!coversChanged && !change.reached.has(row.entity_id)) continue;
+      this.statement("UPDATE approvals SET invalidated_at = ? WHERE approval_id = ?").run(at, row.approval_id);
+      invalidated.push(row.approval_id);
+    }
+    return invalidated;
   }
 
   // ----------------------------------------------------------------- blobs
@@ -2360,6 +2621,10 @@ export class ProjectWorkStore {
     const planBody = entity.kind === "plan" ? (JSON.parse(revision.body) as ProjectWorkBody) : undefined;
     const planGraph =
       planBody?.kind === "plan" ? this.engine.planGraph(query.projectId, planBody.plan, entity.key) : undefined;
+    // Where the three gates stand, for a Spec and for the Design or Plan a
+    // Spec's gate is decided on. Absent for everything else: nothing ungated
+    // waits on a gate (M21-T8, D-352).
+    const gates = this.gateReport(query.projectId, entity.entity_id);
     return {
       ref: this.refOf(entity, revision),
       entity: this.toEntity(entity),
@@ -2368,6 +2633,7 @@ export class ProjectWorkStore {
       ...(readiness ? { readiness } : {}),
       ...(conflicts && conflicts.length > 0 ? { conflicts } : {}),
       ...(planGraph ? { planGraph } : {}),
+      ...(gates ? { gates } : {}),
       ...(query.body?.mode === "none" ? {} : { body: this.bodyPage(revision, query.body) }),
       edges,
       repositoryLinks,

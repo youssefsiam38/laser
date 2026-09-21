@@ -55,6 +55,9 @@ import {
   repositoryChangeRefSchema,
   repositoryStateRefSchema,
   PLAN_GRAPH_PROBLEMS,
+  GATE_PROBLEMS,
+  GATE_ROLES,
+  GATE_STATES,
   type ApprovalDecision,
   type ApprovalGate,
   type ApprovalMode,
@@ -79,6 +82,7 @@ import {
   type ProjectWorkRef,
   type ProjectWorkRevision,
   type ProjectWorkState,
+  type GateReport,
   type PlanGraphReport,
   type RepositoryChangeRef,
   type RepositoryLink,
@@ -309,6 +313,16 @@ export interface ProjectWorkGetResult {
   conflicts?: TaskConflict[];
   /** Plans only: the state of the Plan's Task graph, including its orphans. */
   planGraph?: PlanGraphReport;
+  /**
+   * The three hard gates of the Spec this entity belongs to, and where each
+   * one stands (M21-T8).
+   *
+   * Present for a Spec, and for the Design or Plan a gated Spec's gate is
+   * decided on, so a surface can draw the gate card without walking the graph
+   * itself. Absent when nothing here is on the gated path (D-352): an ungated
+   * artifact waits on no one.
+   */
+  gates?: GateReport;
   /** Which related lists were cut at `PROJECT_WORK_RELATED_MAX`. */
   truncated: string[];
 }
@@ -1202,6 +1216,80 @@ export const taskConflictSchema = z
   })
   .strict();
 
+export const gateReportSchema = z
+  .object({
+    specEntityId: projectWorkIdSchema,
+    specKey: projectWorkKeySchema,
+    gated: z.boolean(),
+    next: z.enum(APPROVAL_GATES).optional(),
+    gates: z
+      .array(
+        z
+          .object({
+            gate: z.enum(APPROVAL_GATES),
+            state: z.enum(GATE_STATES),
+            subject: z
+              .object({
+                entityId: projectWorkIdSchema,
+                kind: projectWorkKindSchema,
+                key: projectWorkKeySchema,
+                title: z.string().max(200),
+                revisionId: projectWorkRevisionIdSchema,
+                digest: z.string().regex(/^[0-9a-f]{64}$/),
+                state: projectWorkStateSchema,
+              })
+              .strict()
+              .optional(),
+            requirements: z
+              .array(
+                z
+                  .object({
+                    role: z.enum(GATE_ROLES),
+                    satisfied: z.boolean(),
+                    problem: z.enum(GATE_PROBLEMS).optional(),
+                    covered: approvedRevisionSchema.optional(),
+                    detail: z.string().min(1).max(PROJECT_WORK_TEXT_MAX),
+                  })
+                  .strict(),
+              )
+              .max(16),
+            covers: z.array(approvedRevisionSchema).max(64),
+            outcomes: z
+              .array(
+                z
+                  .object({
+                    id: z.string().min(1).max(60),
+                    label: z.string().min(1).max(120),
+                    decision: z.enum(APPROVAL_DECISIONS),
+                    mode: z.enum(APPROVAL_MODES).optional(),
+                    approves: z.boolean(),
+                  })
+                  .strict(),
+              )
+              .max(8),
+            blockingComments: z
+              .array(
+                z
+                  .object({
+                    commentId: projectWorkIdSchema,
+                    entityId: projectWorkIdSchema,
+                    key: projectWorkKeySchema,
+                    state: z.enum(["open", "addressed", "resolved"]),
+                    excerpt: z.string().max(500),
+                    orphaned: z.boolean().optional(),
+                  })
+                  .strict(),
+              )
+              .max(100),
+            approval: projectWorkApprovalSchema.optional(),
+            refusal: z.string().max(PROJECT_WORK_TEXT_MAX).optional(),
+          })
+          .strict(),
+      )
+      .max(3),
+  })
+  .strict();
+
 /** Entity, revision and supporting-record schemas, re-exported for result validation. */
 export const projectWorkResultSchemas = {
   entity: projectWorkEntitySchema,
@@ -1216,6 +1304,7 @@ export const projectWorkResultSchemas = {
   updated: projectWorkUpdatedSchema,
   attention: projectWorkAttentionSchema,
   planGraph: planGraphReportSchema,
+  gateReport: gateReportSchema,
   readiness: taskReadinessSchema,
   conflict: taskConflictSchema,
 } as const;

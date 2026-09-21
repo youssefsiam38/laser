@@ -10,6 +10,7 @@ import { TranscriptQuoteShortcut } from "@/components/assistant-ui/elements/quot
 import { ScrollAnchor } from "@/components/assistant-ui/elements/scroll-anchor";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
+import { ApprovalRequestCard } from "@/components/project-work/ApprovalRequestCard";
 import { ThreadDialogCards, WaitingNotice } from "@/dialogs";
 import { ToolRowScope } from "@/dialogs/tool-rows";
 import { useLaserStable, useLaserState, useLaserView, useWholeTranscriptRefusal } from "@/runtime";
@@ -214,6 +215,10 @@ function ThreadContent({ statusSlot }: ThreadProps) {
                       one in the footer never is. */}
                   <WaitingNotice />
                   <ThreadDialogCards />
+                  {/* A lifecycle review request: the same Approval Card, with
+                      the key in it, opening the workspace at that revision
+                      (M21-T8, D-355). It never approves from here. */}
+                  <ApprovalRequestCard cwd={cwd} />
                   <ThreadFollowupSuggestions />
                   <Composer />
                 </ThreadPrimitive.ViewportFooter>

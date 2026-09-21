@@ -18,6 +18,7 @@ copy of the truth** (D-331, D-355).
 | --- | --- | --- |
 | M21-T5 UI client store, reconcile and deep links | done | `pnpm -F @lasercode/ui test` (`test/project-work/*`) |
 | M21-T6 Embedded workspace shell | done | `pnpm -F @lasercode/ui test`, `pnpm -F @lasercode/ui typecheck` |
+| M21-T8 Comments, reviews and approval gates (UI half) | done | `pnpm -F @lasercode/ui test` (`test/project-work/{comments,gates,approval}*` 24) |
 
 ---
 
@@ -277,3 +278,64 @@ unlink), `WorkBacklog.tsx` (the filter also searches bodies),
   sources read, findings kept, questions settled — and says so. The run's own
   `maxSearches`/`maxReads`/`maxBytes` arrive with the loop (M21-T26) and the
   fleet row.
+
+
+---
+
+## M21-T8 · Comments, the gate card and the review request
+
+The host half is in [`m21-spine-plan.md`](m21-spine-plan.md) § M21-T8; this is
+what a person sees and touches.
+
+### What landed
+
+| File | What it owns |
+| --- | --- |
+| `packages/ui/src/project-work/review.ts` | the pure half: gate and role vocabulary, `focusedGate`, `isDecidable`, `approvalPhrase`, anchor labels, `reviewThreads`, `batchedChanges`/`batchedNote` |
+| `packages/ui/src/components/project-work/GateCard.tsx` | the gate card: the three gates as tabs, what each needs, the complete digest set, the outcome picker with the permission mode, the typed confirmation, "Ask for a decision", and the way onto the gated path |
+| `packages/ui/src/components/project-work/CommentsPanel.tsx` | threads, the anchor picker built from the body's own targets, the orphaned state, the blocking flag, addressed/resolved/reopen, and the batched revision request with its before/after preview |
+| `packages/ui/src/components/project-work/ApprovalRequestCard.tsx` | the lifecycle review request above the composer, on the existing Approval Card |
+| `packages/ui/test/project-work/{comments,gates,approval}*.tsx` | 24 tests over the three surfaces, plus `gates-fixture.ts` |
+
+Shared files edited, minimally and additively: `project-work/store.ts` gained
+`comment`, `resolveComment`, `review` and `approve` (every mutation's fence and
+idempotency key is minted in that one place, which is what the file is for);
+`components/project-work/Inspector.tsx` swapped its two T6 placeholders for the
+real gate card and comments panel and now reads the body with the detail (an
+anchor is named against the revision on screen); `components/thread/Thread.tsx`
+mounts `ApprovalRequestCard` in the footer beside `ThreadDialogCards`.
+
+### Decisions where the contract is silent
+
+1. **The gate card is drawn from the host's `gates` report and adds nothing.**
+   Every requirement sentence, the covered digest set and the refusal come from
+   `project/work/get`. The card decides *layout and vocabulary* only, so a rule
+   can never differ between the surface and the authority.
+2. **Approve is disabled, visible and explained.** A blocked gate keeps its
+   Approve control on screen, disabled, with the host's sentence beside it and
+   the blocking comments listed by key and excerpt. Request changes stays
+   enabled: a blocked gate is not a dead end.
+3. **Two deliberate acts, never one.** Recording an approval needs an outcome
+   chosen *and* the subject's key typed into a field that swallows Enter — the
+   same shape as Delete's typed confirmation, for the same reason (D-332).
+   Changing gate or revision clears both.
+4. **A draft is not up for decision.** The spine has no `draft → approved`
+   edge, so the card offers "Ask for a decision" (`project/work/review
+   request_review`) instead of letting a person press Approve into a refusal.
+5. **The transcript card navigates; it never decides.** Its single choice opens
+   the workspace at the exact revision, and the autofocused control is "Not
+   now". Enter can dismiss; there is no approval here for it to hit.
+6. **The anchor picker offers the body's own targets** (`anchorTargets`), so a
+   comment is pinned to a requirement, a criterion, a screen, a node, a flow
+   edge or a token — never to a coordinate, and never to an id the revision
+   does not have.
+7. **A batched request is one `return_to_draft` with a note** naming every
+   unresolved thread, its anchor, the text as it stands and what was asked.
+   Laser asks for the change; it does not write it.
+
+### Deferred, with the reason
+
+- **Pins on the design canvas.** The anchors and their orphaned state are here
+  and the canvas is M21-T13's; the panel lists what a canvas will draw pins for.
+- **Resolving from the Needs you queue.** The queue still only opens the item:
+  a decision needs what it is deciding on screen (D-355).
