@@ -1,6 +1,10 @@
 /**
- * The three Design Index tools: the contract lint, the handlers against a
- * real project, and the conformance fixtures replayed.
+ * The Design Index tools: the contract lint, the handlers against a real
+ * project, and the conformance fixtures replayed.
+ *
+ * Three of them read and review the index; `ground_host_page` (M21-T12)
+ * grounds a design in a page the project already has, and is evaluated the
+ * same way, against the same real fixture projects.
  *
  * **What this proves and what it does not.** The specs are linted by the
  * contract's own `toolContract()`, the handlers are the real ones, the world
@@ -25,13 +29,15 @@ import {
   DESIGN_INDEX_TOOL_RECOVERY,
   DESIGN_INDEX_TOOL_SPECS,
   DesignToolFailure,
+  GROUND_HOST_PAGE_SPEC,
   INSPECT_DESIGN_INDEX_SPEC,
   REVIEW_DESIGN_INDEX_SPEC,
   buildDesignIndexTool,
+  groundHostPageTool,
   inspectDesignIndex,
   reviewDesignIndexTool,
-  type DesignIndexBridge,
 } from "../../src/design/index/tools.js";
+import { ProjectHostGrounding } from "../../src/design/host/ground.js";
 import { FIXTURE_ROOT } from "./helpers.js";
 
 const FIXTURES = join(import.meta.dirname, "..", "fixtures", "tool-eval", "design-index");
@@ -48,15 +54,17 @@ afterAll(() => {
   for (const instance of worlds) instance.dispose();
 });
 
-describe("the three specs", () => {
+describe("the specs", () => {
   it("obey the tool contract", () => {
     for (const spec of DESIGN_INDEX_TOOL_SPECS) {
       expect(toolContract(spec), spec.name).toEqual([]);
     }
   });
 
-  it("are the three the design contract names, with honest annotations", () => {
-    expect(DESIGN_INDEX_TOOL_SPECS.map((spec) => spec.name)).toEqual(["inspect_design_index", "build_design_index", "review_design_index"]);
+  it("are the ones the design contract names, with honest annotations", () => {
+    expect(DESIGN_INDEX_TOOL_SPECS.map((spec) => spec.name)).toEqual(["inspect_design_index", "build_design_index", "review_design_index", "ground_host_page"]);
+    // Grounding parses files and answers; it writes nothing and runs nothing.
+    expect(GROUND_HOST_PAGE_SPEC.annotations).toEqual({ readOnly: true, idempotent: true, destructive: false, external: false });
     expect(INSPECT_DESIGN_INDEX_SPEC.annotations).toEqual({ readOnly: true, idempotent: true, destructive: false, external: false });
     // Building twice builds twice; nothing leaves the machine; nothing is destroyed.
     expect(BUILD_DESIGN_INDEX_SPEC.annotations).toEqual({ readOnly: false, idempotent: false, destructive: false, external: false });
@@ -182,12 +190,15 @@ describe("review_design_index", () => {
 
 // --------------------------------------------------------------- the fixtures
 
-type Handler = (bridge: DesignIndexBridge, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+type Handler = (world: ScriptedDesignWorld, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
 const HANDLERS: Record<string, Handler> = {
   inspect_design_index: (bridge, args) => inspectDesignIndex(bridge, args as never),
   build_design_index: (bridge, args) => buildDesignIndexTool(bridge, args as never),
   review_design_index: (bridge, args) => reviewDesignIndexTool(bridge, args as never, AGENT),
+  // The same temporary project, grounded by the real parser.
+  ground_host_page: (world, args) =>
+    groundHostPageTool(new ProjectHostGrounding({ projectCwd: world.projectCwd, index: () => world.index() }), args as never),
 };
 
 /** `{{entry:component:Card:id}}`, `{{entry:component:Card:digest}}`, `{{stale}}`. */
@@ -212,7 +223,7 @@ describe("the conformance fixtures", () => {
   const fixtures = loadDesignFixtures();
 
   it("has one for each tool, in the harness's own format", () => {
-    expect(fixtures.map((fixture) => fixture.tool).sort()).toEqual(["build_design_index", "inspect_design_index", "review_design_index"]);
+    expect(fixtures.map((fixture) => fixture.tool).sort()).toEqual(["build_design_index", "ground_host_page", "inspect_design_index", "review_design_index"]);
     for (const fixture of fixtures) {
       expect(fixture.world.designIndex?.project, fixture.tool).toBeDefined();
       expect(fixture.measures).toEqual(expect.arrayContaining(["schema", "selection", "budget"]));

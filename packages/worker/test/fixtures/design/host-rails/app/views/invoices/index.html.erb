@@ -1,0 +1,15 @@
+<section class="panel panel-default">
+  <h2>Invoices</h2>
+  <%= render partial: "shared/filters" %>
+  <table class="table table-striped">
+    <tbody>
+      <% @invoices.each do |invoice| %>
+        <%= render "invoices/row", invoice: invoice %>
+      <% end %>
+    </tbody>
+  </table>
+  <section class="well">
+    <h3>Nothing outstanding</h3>
+    <p>No results yet.</p>
+  </section>
+</section>

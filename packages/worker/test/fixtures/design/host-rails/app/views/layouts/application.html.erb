@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <%= stylesheet_link_tag "application" %>
+  </head>
+  <body>
+    <header class="navbar navbar-default">
+      <h1 class="navbar-brand">Ledger</h1>
+    </header>
+    <nav class="nav nav-pills">
+      <ul>
+        <li><a href="/invoices">Invoices</a></li>
+      </ul>
+    </nav>
+    <main class="container">
+      <%= yield %>
+    </main>
+    <footer class="footer">© Ledger</footer>
+  </body>
+</html>

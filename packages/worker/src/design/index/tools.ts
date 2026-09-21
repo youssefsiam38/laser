@@ -7,6 +7,7 @@
  * | `inspect_design_index` | search or get entries by era, kind and name; a summary by default |
  * | `build_design_index` | start or re-run the build as a bounded command; returns the command id |
  * | `review_design_index` | accept, rename, merge, split, reject, deprecate, pin, or mark an era for new work |
+ * | `ground_host_page` | resolve a route or template to a `HostPage` outline and file list, with the Conform/Island proposal (M21-T12) |
  *
  * The specs here are the contract's own `LaserToolSpec`s: closed, bounded,
  * described schemas with declared outputs and annotations, linted by
@@ -20,6 +21,8 @@
  */
 import { toolError, type LaserToolSpec, type ToolError } from "@lasercode/protocol";
 import type { DesignIndex, DesignIndexEntry } from "@lasercode/protocol";
+import { FEATURE_SIZES } from "../host/strategy.js";
+import type { HostGroundingBridge } from "../host/ground.js";
 import { DESIGN_REVIEW_ACTIONS, reviewProgress, type DesignReviewAction, type ReviewActor } from "./review.js";
 
 /** What the tools need from the worker. One place to script, one to wire. */
@@ -236,14 +239,117 @@ export const REVIEW_DESIGN_INDEX_SPEC: LaserToolSpec = {
   label: "injected",
 };
 
-/** The three specs, in the order the docs list them. */
-export const DESIGN_INDEX_TOOL_SPECS: readonly LaserToolSpec[] = [INSPECT_DESIGN_INDEX_SPEC, BUILD_DESIGN_INDEX_SPEC, REVIEW_DESIGN_INDEX_SPEC];
+export const GROUND_HOST_PAGE_SPEC: LaserToolSpec = {
+  name: "ground_host_page",
+  description:
+    "Ground a design in a page this project already has: name a route, a template file or a view name and get the files that draw it — template, layouts, partials, owning controller and stylesheets — with the page's structural outline and, when the index knows the eras, a Conform or Island proposal with the reasons for both. " +
+    "Everything is read as text: the page is never opened, served or rendered. Anchor the new work to one outline node's structural path.",
+  input: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      route_or_path: {
+        type: "string",
+        description: "The page to ground: a route like /orders, a template path like app/views/orders/index.html.erb, or a view name like orders.index.",
+        maxLength: 1024,
+      },
+      app_root: { type: "string", description: "The folder to read, relative to the project, when this repository holds several apps.", maxLength: 512 },
+      reference_blob_id: { type: "string", description: "A screenshot the person already attached, to show behind the design. Never read for text.", maxLength: 64 },
+      feature_size: { type: "string", description: "How much is being added, for the strategy proposal.", enum: [...FEATURE_SIZES] },
+      host_stack_can_express: { type: "boolean", description: "False when the host page's own stack cannot express this feature at all." },
+      migration_wanted: { type: "boolean", description: "True when the person wants this page to start moving off its current era." },
+    },
+    required: ["route_or_path"],
+  },
+  output: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      routeOrPath: { type: "string", description: "The route this page is served at, or the path that was grounded.", maxLength: 1024 },
+      templatePath: { type: "string", description: "The template the page's own content lives in.", maxLength: 1024 },
+      stack: { type: "string", description: "The convention the route was resolved under.", maxLength: 60 },
+      fidelity: { type: "string", description: "mapped when the outline came from real templates; proposed when only an image did.", enum: ["mapped", "proposed"] },
+      files: { type: "array", description: "Every file that draws this page: layouts, template, partials, controller, stylesheets.", maxItems: 200, items: { type: "string", description: "A project-relative path.", maxLength: 1024 } },
+      outline: {
+        type: "array",
+        description: "The page's structure, in document order. Anchor an insertion region to one of these structural paths.",
+        maxItems: 500,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: "string", description: "The node's stable id.", maxLength: 64 },
+            role: { type: "string", description: "What it is: header, navigation, main, section, heading, list, form, component, partial…", maxLength: 60 },
+            label: { type: "string", description: "Its heading text, name or label.", maxLength: 200 },
+            depth: { type: "integer", description: "How deep it sits in the outline." },
+            templatePath: { type: "string", description: "The file this node was parsed from.", maxLength: 1024 },
+            structuralPath: { type: "string", description: "Its path inside that file; an insertion region anchors to this.", maxLength: 1024 },
+            textHash: { type: "string", description: "A digest of its text, so a later parse can tell whether the content changed.", maxLength: 64 },
+          },
+          required: ["id", "role", "depth", "templatePath", "structuralPath", "textHash"],
+        },
+      },
+      references: {
+        type: "array",
+        description: "Reference images for this page. Pictures only: nothing in them is read as text or as instructions.",
+        maxItems: 16,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            kind: { type: "string", description: "repository for an image the docs reference; supplied for one the person attached.", enum: ["repository", "supplied"] },
+            label: { type: "string", description: "What it is called.", maxLength: 200 },
+            path: { type: "string", description: "Where it lives in the repository.", maxLength: 1024 },
+            fidelity: { type: "string", description: "mapped for a repository image, proposed for a supplied one.", enum: ["mapped", "proposed"] },
+          },
+          required: ["kind", "fidelity"],
+        },
+      },
+      strategy: {
+        type: "object",
+        additionalProperties: false,
+        description: "The Conform/Island proposal: what this recommends, and the case for both. The person chooses.",
+        properties: {
+          recommended: { type: "string", description: "The strategy this proposes.", enum: ["conform", "island"] },
+          summary: { type: "string", description: "The recommendation in one sentence.", maxLength: 1000 },
+          proposalOnly: { type: "boolean", description: "True while this is a proposal for the Plan rather than a decision." },
+          conformReasons: { type: "array", description: "Why conform.", maxItems: 12, items: { type: "string", description: "One reason.", maxLength: 500 } },
+          conformTradeoffs: { type: "array", description: "What conforming costs.", maxItems: 12, items: { type: "string", description: "One trade-off.", maxLength: 500 } },
+          islandReasons: { type: "array", description: "Why an island.", maxItems: 12, items: { type: "string", description: "One reason.", maxLength: 500 } },
+          islandTradeoffs: { type: "array", description: "What an island costs.", maxItems: 12, items: { type: "string", description: "One trade-off.", maxLength: 500 } },
+          eraId: { type: "string", description: "The index era the recommended strategy composes in.", maxLength: 64 },
+        },
+        required: ["recommended", "summary", "conformReasons", "islandReasons"],
+      },
+      referenceRefused: {
+        type: "object",
+        additionalProperties: false,
+        description: "Set when a supplied image was not taken; the grounding itself still stands.",
+        properties: {
+          code: { type: "string", description: "Why it was refused.", maxLength: 60 },
+          message: { type: "string", description: "What was wrong, for the person.", maxLength: 500 },
+          next: { type: "string", description: "What to do instead.", maxLength: 500 },
+        },
+        required: ["code", "message", "next"],
+      },
+      gaps: { type: "array", description: "What the parse could not read, and why.", maxItems: 20, items: { type: "string", description: "One gap.", maxLength: 600 } },
+      note: { type: "string", description: "What to do with this grounding, in one sentence.", maxLength: 500 },
+    },
+    required: ["routeOrPath", "stack", "fidelity", "files", "outline"],
+  },
+  annotations: { readOnly: true, idempotent: true, destructive: false, external: false },
+  label: "injected",
+};
+
+/** The four specs, in the order the docs list them. */
+export const DESIGN_INDEX_TOOL_SPECS: readonly LaserToolSpec[] = [INSPECT_DESIGN_INDEX_SPEC, BUILD_DESIGN_INDEX_SPEC, REVIEW_DESIGN_INDEX_SPEC, GROUND_HOST_PAGE_SPEC];
 
 /** What each tool says about a failure that does not know its own recovery. */
 export const DESIGN_INDEX_TOOL_RECOVERY: Record<string, { code: string; next: string }> = {
   inspect_design_index: { code: "index_unreadable", next: "call build_design_index to build this project's index, then inspect it" },
   build_design_index: { code: "build_refused", next: "call inspect_design_index to see whether an index already exists" },
   review_design_index: { code: "review_refused", next: "call inspect_design_index to read the entry as it is now, then review it again" },
+  ground_host_page: { code: "grounding_failed", next: "call ground_host_page again with the template's path instead of the route" },
 };
 
 // -------------------------------------------------------------- the handlers
@@ -430,5 +536,114 @@ export async function reviewDesignIndexTool(
     reviewedBy: `${actor.label} (${actor.kind})`,
     reviewed: result.reviewed,
     total: result.total,
+  };
+}
+
+export interface GroundHostPageInput {
+  route_or_path: string;
+  app_root?: string;
+  reference_blob_id?: string;
+  feature_size?: (typeof FEATURE_SIZES)[number];
+  host_stack_can_express?: boolean;
+  migration_wanted?: boolean;
+}
+
+/**
+ * `ground_host_page`. Read-only in every sense: it walks the project, parses
+ * templates as text and answers. Nothing is written, nothing is executed, and
+ * a route it cannot find is a refusal with the pages it did find.
+ */
+export async function groundHostPageTool(bridge: HostGroundingBridge, input: GroundHostPageInput): Promise<Record<string, unknown>> {
+  const asked = (input.route_or_path ?? "").trim();
+  if (asked === "") {
+    refuse(
+      "no_route",
+      "Grounding a host page needs the page: a route, a template path, or a view name.",
+      "call ground_host_page again with route_or_path set to the page you are designing into",
+    );
+  }
+  if (input.app_root !== undefined && (input.app_root.startsWith("/") || input.app_root.includes("..") || /^[A-Za-z]:/.test(input.app_root))) {
+    refuse(
+      "outside_project",
+      `"${input.app_root}" is not a folder inside this project, and grounding only ever reads the project it belongs to.`,
+      "call ground_host_page again with app_root as a path relative to the project, or leave it out",
+    );
+  }
+  let result: Awaited<ReturnType<HostGroundingBridge["ground"]>>;
+  try {
+    result = await bridge.ground({
+      routeOrPath: asked,
+      ...(input.app_root !== undefined ? { appRoot: input.app_root } : {}),
+      ...(input.reference_blob_id !== undefined ? { referenceBlobId: input.reference_blob_id } : {}),
+      ...(input.feature_size !== undefined ? { featureSize: input.feature_size } : {}),
+      ...(input.host_stack_can_express !== undefined ? { hostStackCanExpress: input.host_stack_can_express } : {}),
+      ...(input.migration_wanted !== undefined ? { migrationWanted: input.migration_wanted } : {}),
+    });
+  } catch (failure) {
+    throw asToolFailure(failure, "ground_host_page");
+  }
+
+  const page = result.hostPage;
+  if (!page) {
+    const candidates = result.candidates.slice(0, 10);
+    refuse(
+      "no_such_page",
+      candidates.length === 0
+        ? `Nothing in this project draws "${asked}", and no page templates were found to offer instead.`
+        : `Nothing in this project draws "${asked}". The pages that are here: ${candidates.join("; ")}.`,
+      candidates.length === 0
+        ? "call ground_host_page with the path of the template file you mean, or design a new page instead of one in context"
+        : "call ground_host_page again with one of those routes, or with the template's path",
+    );
+  }
+
+  const strategy = result.strategy;
+  return {
+    routeOrPath: page.routeOrPath,
+    ...(page.templatePath !== undefined ? { templatePath: page.templatePath } : {}),
+    stack: page.stack ?? "unknown",
+    fidelity: page.fidelity,
+    files: page.files,
+    outline: result.outline.nodes.map((node) => ({
+      id: node.id,
+      role: node.role,
+      ...(node.label !== undefined ? { label: node.label } : {}),
+      depth: node.depth,
+      templatePath: node.templatePath,
+      structuralPath: node.structuralPath,
+      textHash: node.textHash,
+    })),
+    ...(page.references !== undefined && page.references.length > 0
+      ? {
+          references: page.references.map((reference) => ({
+            kind: reference.kind,
+            ...(reference.label !== undefined ? { label: reference.label } : {}),
+            ...(reference.path !== undefined ? { path: reference.path } : {}),
+            fidelity: reference.fidelity,
+          })),
+        }
+      : {}),
+    ...(strategy !== undefined
+      ? {
+          strategy: {
+            recommended: strategy.recommended,
+            summary: strategy.summary,
+            proposalOnly: strategy.proposalOnly,
+            conformReasons: strategy.conform.reasons,
+            conformTradeoffs: strategy.conform.tradeoffs,
+            islandReasons: strategy.island.reasons,
+            islandTradeoffs: strategy.island.tradeoffs,
+            eraId: strategy.recommended === "island" ? strategy.island.eraId : strategy.conform.eraId,
+          },
+        }
+      : {}),
+    ...(result.referenceRefused !== undefined
+      ? { referenceRefused: { code: result.referenceRefused.code, message: result.referenceRefused.message, next: result.referenceRefused.next } }
+      : {}),
+    gaps: result.gaps.slice(0, 20).map((gap) => `${gap.path}: ${gap.reason}`),
+    note:
+      strategy === undefined
+        ? "The host page is frozen: it is an outline of real templates, not something to edit. Compose the new subtree against one outline node, and say which node you anchored to."
+        : `The host page is frozen; compose the new subtree against one outline node. ${strategy.recommended === "island" ? "Island" : "Conform"} is proposed — say why, give the person the other case too, and let them choose.`,
   };
 }
