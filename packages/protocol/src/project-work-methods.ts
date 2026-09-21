@@ -641,6 +641,24 @@ export type ProjectWorkLinkInput =
          * captured, but not native visual evidence.
          */
         acceptance?: { kind: "checkpoint_preview" };
+        /**
+         * Which attempt this state came out of (M21-T19).
+         *
+         * **Required whenever `acceptance` is present**, because the sources a
+         * decision rests on are the difference between what that attempt
+         * started from and the exact state being accepted — and there is no
+         * honest way to find the attempt from the subject: a Design-backed
+         * visual criterion is accepted on the *Design*, and attempts are on
+         * the *Task*.
+         *
+         * It is identity the caller **reports**, never authority it carries:
+         * the host re-derives every part of it — that the execution link is
+         * this project's, that it belongs to that task, that the task is the
+         * subject or currently pins it, and that the attempt really recorded
+         * this repository's checkpoint at this commit — and refuses when any
+         * of it disagrees.
+         */
+        attempt?: { taskEntityId: string; executionLinkId: string };
       };
     }
   | {
@@ -912,6 +930,10 @@ const linkInputSchema = z.discriminatedUnion("type", [
           repositoryId: projectWorkIdSchema,
           state: repositoryStateRefSchema,
           acceptance: z.object({ kind: z.literal("checkpoint_preview") }).strict().optional(),
+          attempt: z
+            .object({ taskEntityId: projectWorkIdSchema, executionLinkId: projectWorkIdSchema })
+            .strict()
+            .optional(),
         })
         .strict()
         .optional(),

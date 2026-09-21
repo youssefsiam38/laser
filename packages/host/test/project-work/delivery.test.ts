@@ -24,13 +24,13 @@ import {
   type RepositoryChangeRef,
 } from "@lasercode/protocol";
 import { checkpointSessionKey } from "@lasercode/protocol/checkpoint-key";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { failed, ok, projectWorkHarness, type ProjectWorkHarness } from "./harness.js";
 import { specBody, taskBody } from "./fixtures.js";
+import { checkpoint, git, haveGit, head, initRepo, prune, write } from "./git-fixtures.js";
 
 /** A Task body that declares the paths it means to write in. */
 function taskBodyWith(paths: string[]): ReturnType<typeof taskBody> {
@@ -38,15 +38,6 @@ function taskBodyWith(paths: string[]): ReturnType<typeof taskBody> {
   if (body.kind !== "task") throw new Error("unreachable");
   return { kind: "task", task: { ...body.task, scope: { packages: [], repositories: [], paths, capabilities: [] } } };
 }
-
-const haveGit = (() => {
-  try {
-    execFileSync("git", ["--version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
 
 let h: ProjectWorkHarness;
 const dirs: string[] = [];
@@ -59,75 +50,6 @@ afterEach(() => {
 const ACTOR = { class: "local_app" as const, id: "worker:alpha" };
 const AGENT = { label: "Builder", sessionId: "ses_1", runId: "run_1" };
 const SESSION = "/sessions/ses_1.jsonl";
-
-// ------------------------------------------------------------------ git
-
-function git(cwd: string, args: string[]): string {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@x",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@x",
-  };
-  delete env.GIT_INDEX_FILE;
-  return execFileSync("git", args, { cwd, env }).toString();
-}
-
-function initRepo(dir: string, contents: Record<string, string>): void {
-  mkdirSync(dir, { recursive: true });
-  git(dir, ["init", "-q", "-b", "main"]);
-  git(dir, ["config", "user.email", "t@x"]);
-  git(dir, ["config", "user.name", "t"]);
-  git(dir, ["config", "commit.gpgsign", "false"]);
-  write(dir, contents);
-  git(dir, ["add", "-A"]);
-  git(dir, ["commit", "-q", "-m", "init"]);
-}
-
-function write(dir: string, contents: Record<string, string>): void {
-  for (const [name, body] of Object.entries(contents)) {
-    mkdirSync(join(dir, name, ".."), { recursive: true });
-    writeFileSync(join(dir, name), body);
-  }
-}
-
-/**
- * One checkpoint, exactly as the worker writes one: a commit object built
- * through an isolated index and published under
- * `refs/<product>/checkpoints/<session>/<turn>`, touching nothing a person
- * can see (`docs/source-control-leap.md` §E.1).
- */
-function checkpoint(repo: string, sessionPath: string, turn: number): string {
-  const indexFile = join(repo, `.git/${PRODUCT_NAME}-test-index-${String(turn)}`);
-  const env = {
-    ...process.env,
-    GIT_INDEX_FILE: indexFile,
-    GIT_AUTHOR_NAME: "t",
-    GIT_AUTHOR_EMAIL: "t@x",
-    GIT_COMMITTER_NAME: "t",
-    GIT_COMMITTER_EMAIL: "t@x",
-  };
-  execFileSync("git", ["add", "-A"], { cwd: repo, env });
-  const tree = execFileSync("git", ["write-tree"], { cwd: repo, env }).toString().trim();
-  const commit = execFileSync("git", ["commit-tree", tree, "-m", `checkpoint turn=${String(turn)}`], { cwd: repo, env })
-    .toString()
-    .trim();
-  rmSync(indexFile, { force: true });
-  git(repo, ["update-ref", checkpointRef(checkpointSessionKey(sessionPath), turn), commit]);
-  return commit;
-}
-
-function head(repo: string): string {
-  return git(repo, ["rev-parse", "HEAD"]).trim();
-}
-
-/** Make an object unreachable for real: drop every ref to it, then prune. */
-function prune(repo: string, refs: string[]): void {
-  for (const ref of refs) git(repo, ["update-ref", "-d", ref]);
-  git(repo, ["reflog", "expire", "--expire=now", "--all"]);
-  git(repo, ["gc", "--prune=now", "--quiet"]);
-}
 
 // -------------------------------------------------------------- harness
 
@@ -188,6 +110,44 @@ async function endAttempt(task: ProjectWorkWriteResult, targetId = "run_1"): Pro
       idempotencyKey: `end-${targetId}`,
     }),
   );
+}
+
+/**
+ * One whole attempt, as the product records one: it starts, it writes a
+ * checkpoint while it runs, and it closes — which is when the host re-reads
+ * git and the attempt's record carries that checkpoint.
+ *
+ * What comes back is the identity a person's review reports: the attempt row,
+ * the repository the host identified, the base it recorded, and the checkpoint
+ * ref and commit.
+ */
+async function attemptWith(
+  task: ProjectWorkWriteResult,
+  repo: string,
+  turn: number,
+  options: { name?: string; targetId?: string } = {},
+): Promise<{
+  attempt: { taskEntityId: string; executionLinkId: string };
+  executionLinkId: string;
+  repositoryId: string;
+  base: string;
+  commit: string;
+  ref: string;
+}> {
+  const targetId = options.targetId ?? "run_1";
+  await startAttempt(task, targetId);
+  const commit = checkpoint(repo, SESSION, turn);
+  const ended = await endAttempt(task, targetId);
+  const record = ended.link.repositories?.find((row) => row.name === (options.name ?? "app"));
+  if (!record) throw new Error("the attempt recorded no repository");
+  return {
+    attempt: { taskEntityId: task.entity.entityId, executionLinkId: ended.link.linkId },
+    executionLinkId: ended.link.linkId,
+    repositoryId: record.repositoryId,
+    base: record.base.commitObjectId,
+    commit,
+    ref: checkpointRef(checkpointSessionKey(SESSION), turn),
+  };
 }
 
 async function detail(entityId: string, repositoryStatus = false): Promise<ProjectWorkGetResult> {
@@ -877,8 +837,10 @@ describe.runIf(haveGit)("accepting a checkpoint preview as native visual evidenc
     task: ProjectWorkWriteResult,
     repositoryId: string,
     state: { commitObjectId: string; checkpointId?: string },
-    over: { revisionId?: string; key?: string } = {},
+    over: { revisionId?: string; key?: string; attempt?: { taskEntityId: string; executionLinkId: string } } = {},
+    attempt?: { taskEntityId: string; executionLinkId: string },
   ) {
+    const named = over.attempt ?? attempt;
     return h.call("project/work/link", {
       projectId: h.projectId,
       expectedRevisionId: task.revision.revisionId,
@@ -894,24 +856,23 @@ describe.runIf(haveGit)("accepting a checkpoint preview as native visual evidenc
           repositoryId,
           state: { vcs: "git", objectFormat: "sha1", ...state },
           acceptance: { kind: "checkpoint_preview" },
+          ...(named ? { attempt: named } : {}),
         },
       },
       idempotencyKey: over.key ?? "accept-preview",
     });
   }
 
-  async function repositoryOf(task: ProjectWorkWriteResult): Promise<string> {
-    return (await startAttempt(task)).link.repositories?.find((row) => row.name === "app")!.repositoryId;
-  }
-
   it("records what the host proved, and keeps the state readable after the checkpoint is pruned", async () => {
     const { app } = workspace();
     const task = await seedTask();
-    const repositoryId = await repositoryOf(task);
-    const commit = checkpoint(app, SESSION, 1);
-    const ref = checkpointRef(checkpointSessionKey(SESSION), 1);
+    write(app, { "src/a.ts": "two\n" });
+    const run = await attemptWith(task, app, 1);
+    const { repositoryId, commit, ref } = run;
 
-    const written = ok<ProjectWorkLinkResult>(await accept(task, repositoryId, { commitObjectId: commit, checkpointId: ref }));
+    const written = ok<ProjectWorkLinkResult>(
+      await accept(task, repositoryId, { commitObjectId: commit, checkpointId: ref }, {}, run.attempt),
+    );
     if (written.link.type !== "evidence") throw new Error("unreachable");
     const linkId = written.link.evidence.repositoryLinkId!;
     const link = (await detail(task.entity.entityId)).repositoryLinks.find((row) => row.linkId === linkId)!;
@@ -921,6 +882,7 @@ describe.runIf(haveGit)("accepting a checkpoint preview as native visual evidenc
     expect(link.acceptance?.subjectDigest).toBe(task.revision.digest);
     expect(link.acceptance?.acceptedBy.kind).toBe("person");
     expect(link.captureBlobId, "captured before the acceptance was written").toBeDefined();
+    expect(link.executionLinkId, "the attempt the host tied it to").toBe(run.attempt.executionLinkId);
 
     prune(app, [ref]);
     const after = await detail(task.entity.entityId, true);
@@ -932,9 +894,17 @@ describe.runIf(haveGit)("accepting a checkpoint preview as native visual evidenc
   it("refuses a checkpoint id that is not a ref this repository has", async () => {
     const { app } = workspace();
     const task = await seedTask();
-    const repositoryId = await repositoryOf(task);
-    const commit = checkpoint(app, SESSION, 1);
-    const error = failed(await accept(task, repositoryId, { commitObjectId: commit, checkpointId: `${checkpointRef(checkpointSessionKey(SESSION), 99)}` }));
+    write(app, { "src/a.ts": "two\n" });
+    const run = await attemptWith(task, app, 1);
+    const error = failed(
+      await accept(
+        task,
+        run.repositoryId,
+        { commitObjectId: run.commit, checkpointId: `${checkpointRef(checkpointSessionKey(SESSION), 99)}` },
+        {},
+        run.attempt,
+      ),
+    );
     expect(error.message).toMatch(/not one this repository has/);
     expect((await detail(task.entity.entityId)).repositoryLinks.some((row) => row.relation === "verified_at")).toBe(false);
   });
@@ -942,21 +912,20 @@ describe.runIf(haveGit)("accepting a checkpoint preview as native visual evidenc
   it("refuses a checkpoint that points somewhere else than the state being recorded", async () => {
     const { app } = workspace();
     const task = await seedTask();
-    const repositoryId = await repositoryOf(task);
-    checkpoint(app, SESSION, 1);
-    const ref = checkpointRef(checkpointSessionKey(SESSION), 1);
+    write(app, { "src/a.ts": "two\n" });
+    const run = await attemptWith(task, app, 1);
     // A commit that exists in this repository, but is not the one that ref
     // names: existence alone is never the test.
-    const error = failed(await accept(task, repositoryId, { commitObjectId: head(app), checkpointId: ref }));
+    const error = failed(await accept(task, run.repositoryId, { commitObjectId: head(app), checkpointId: run.ref }, {}, run.attempt));
     expect(error.message).toMatch(/no longer points at the state/);
   });
 
   it("refuses an agent, and refuses a revision the work has moved past", async () => {
     const { app } = workspace();
     const task = await seedTask();
-    const repositoryId = await repositoryOf(task);
-    const commit = checkpoint(app, SESSION, 1);
-    const ref = checkpointRef(checkpointSessionKey(SESSION), 1);
+    write(app, { "src/a.ts": "two\n" });
+    const run = await attemptWith(task, app, 1);
+    const { repositoryId, commit, ref } = run;
 
     const byAgent = await (async () => {
       try {
@@ -977,6 +946,7 @@ describe.runIf(haveGit)("accepting a checkpoint preview as native visual evidenc
               repositoryId,
               state: { vcs: "git", objectFormat: "sha1", commitObjectId: commit, checkpointId: ref },
               acceptance: { kind: "checkpoint_preview" },
+              attempt: run.attempt,
             },
           },
           idempotencyKey: "agent-accepts",
@@ -1016,6 +986,7 @@ describe.runIf(haveGit)("accepting a checkpoint preview as native visual evidenc
             repositoryId,
             state: { vcs: "git", objectFormat: "sha1", commitObjectId: commit, checkpointId: ref },
             acceptance: { kind: "checkpoint_preview" },
+            attempt: run.attempt,
           },
         },
         idempotencyKey: "accept-stale",

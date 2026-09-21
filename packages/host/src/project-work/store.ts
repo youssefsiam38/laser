@@ -1530,7 +1530,14 @@ export class ProjectWorkStore {
        * (M21-T19, D-361): the capture it stored, and the acceptance record it
        * confirmed. Both are the host's own; a request body reaches neither.
        */
-      verified?: { captureBlobId?: string | undefined; acceptance?: RepositoryLinkAcceptance | undefined } | undefined;
+      verified?:
+        | {
+            captureBlobId?: string | undefined;
+            acceptance?: RepositoryLinkAcceptance | undefined;
+            /** The attempt the host tied this state to, re-derived by it. */
+            executionLinkId?: string | undefined;
+          }
+        | undefined;
     } & ProjectWorkWriteOrigin,
   ): {
     link: ProjectWorkLinkRecord;
@@ -1643,6 +1650,17 @@ export class ProjectWorkStore {
             payload.verifiedAt.repositoryId,
           );
           if (!known) throw new ProjectWorkRefusedError("That repository is not one this project knows.");
+          // The attempt a state came out of is recorded on the link, and only
+          // after this store has agreed it is one of its own: a client cannot
+          // substitute another project's attempt into the record (M21-T19).
+          const attemptId = input.verified?.executionLinkId;
+          if (attemptId !== undefined) {
+            const attempt = this.statement("SELECT 1 AS present FROM execution_links WHERE project_id = ? AND link_id = ?").get(
+              input.projectId,
+              attemptId,
+            );
+            if (!attempt) throw new ProjectWorkNotFoundError("That attempt is not one this project has.");
+          }
           const verifiedLinkId = mintLinkId();
           const verified: RepositoryLink = {
             projectId: input.projectId,
@@ -1657,6 +1675,7 @@ export class ProjectWorkStore {
             // before this transaction opened (D-361). The capture exists by
             // now or the write never got here.
             ...(input.verified?.captureBlobId ? { captureBlobId: input.verified.captureBlobId } : {}),
+            ...(attemptId ? { executionLinkId: attemptId } : {}),
             ...(input.verified?.acceptance ? { acceptance: input.verified.acceptance } : {}),
           };
           this.insertRepositoryLink(verifiedLinkId, entity.entity_id, payload.revisionId, verified, now);
@@ -1849,14 +1868,27 @@ export class ProjectWorkStore {
   }
 
   /**
-   * Attach a canonical capture to a link that had none (M21-T18).
+   * Attach a canonical capture to a link that had none, or correct one that
+   * was not enough (M21-T18, M21-T19).
    *
    * Used when a decision — an approval, a completion — reaches a link that was
    * recorded before anyone knew it would be leant on. The link's identity is
    * untouched: only the capture it can be read from is added.
+   *
+   * A correction names the blob it read (`replacing`), so the pointer moves
+   * off exactly that capture and off no other: an idempotent attach can never
+   * freeze a partial proof in place, and two callers cannot race one link into
+   * pointing at a capture neither of them checked. Nothing is deleted — the
+   * capture it replaces keeps its own content address in the store.
    */
-  attachCapture(projectId: string, linkId: string, blobId: string): void {
+  attachCapture(projectId: string, linkId: string, blobId: string, replacing?: string | undefined): void {
     this.write(() => {
+      if (replacing !== undefined) {
+        this.statement(
+          "UPDATE repository_links SET capture_blob_id = ? WHERE project_id = ? AND link_id = ? AND capture_blob_id = ?",
+        ).run(blobId, projectId, linkId, replacing);
+        return;
+      }
       this.statement("UPDATE repository_links SET capture_blob_id = ? WHERE project_id = ? AND link_id = ? AND capture_blob_id IS NULL").run(
         blobId,
         projectId,

@@ -19,6 +19,8 @@ import {
   projectWorkRefSchema,
   projectWorkRefText,
   projectWorkRevisionSchema,
+  REQUIRED_PATHS_MAX,
+  repositoryCaptureSchema,
   repositoryLinkSchema,
   sameProjectWorkRevision,
   statesForKind,
@@ -402,6 +404,61 @@ describe("bodies", () => {
     expect(projectTaskBodySchema.safeParse({ ...task.task, assignment: { policy: "agent", agentName: "Builder" } }).success).toBe(true);
     // A Task never embeds a session or run id: attempts are links.
     expect(projectTaskBodySchema.safeParse({ ...task.task, sessionId: "ses_1" }).success).toBe(false);
+  });
+});
+
+describe("a capture says what a decision rests on, and can be read back", () => {
+  const state = { vcs: "git" as const, objectFormat: "sha1" as const, commitObjectId: "a".repeat(40) };
+  const capture = {
+    version: 1 as const,
+    createdAt: "2026-03-01T09:00:00.000Z",
+    repositoryId: "rep_1",
+    state,
+    files: [{ path: "src/a.ts", status: "present" as const, added: null, removed: null }],
+    sources: [{ path: "src/a.ts", bytes: 4, contentDigest: "b".repeat(64), text: "two\n", side: "after" as const }],
+    required: {
+      basis: "attempt_base_to_state" as const,
+      from: { baseCommitObjectId: "c".repeat(40), executionLinkId: "lnk_1", taskEntityId: "ent_1" },
+      entries: [{ path: "src/a.ts", status: "modified" as const, side: "after" as const, contentDigest: "b".repeat(64) }],
+      complete: true as const,
+    },
+  };
+
+  it("parses a capture of a state with its required set, both sides and all", () => {
+    const parsed = repositoryCaptureSchema.safeParse(capture);
+    expect(parsed.success).toBe(true);
+    expect(
+      repositoryCaptureSchema.safeParse({
+        ...capture,
+        sources: [{ ...capture.sources[0]!, side: "before" }],
+        required: { ...capture.required, entries: [{ ...capture.required.entries[0]!, side: "before", status: "deleted" }] },
+      }).success,
+      "a delete is kept by the body at the base, which is a side and says so",
+    ).toBe(true);
+  });
+
+  it("has no half-complete form, and no shape that is both a change and a state", () => {
+    // `complete` exists only as `true`: a capture that could not keep every
+    // source whole is not stored with a weaker flag, the decision is refused.
+    expect(repositoryCaptureSchema.safeParse({ ...capture, required: { ...capture.required, complete: false } }).success).toBe(false);
+    expect(repositoryCaptureSchema.safeParse({ ...capture, required: { ...capture.required, basis: "whatever" } }).success).toBe(false);
+    expect(
+      repositoryCaptureSchema.safeParse({ ...capture, change: { base: state, head: state, diffDigest: "d".repeat(64) } }).success,
+      "exactly one of a change and a state",
+    ).toBe(false);
+    const { state: _state, ...neither } = capture;
+    void _state;
+    expect(repositoryCaptureSchema.safeParse(neither).success).toBe(false);
+  });
+
+  it("bounds the set a decision may rest on", () => {
+    const entries = Array.from({ length: REQUIRED_PATHS_MAX + 1 }, (_, index) => ({
+      path: `src/f-${String(index)}.ts`,
+      status: "added" as const,
+      side: "after" as const,
+      contentDigest: "b".repeat(64),
+    }));
+    expect(repositoryCaptureSchema.safeParse({ ...capture, required: { ...capture.required, entries } }).success).toBe(false);
   });
 });
 

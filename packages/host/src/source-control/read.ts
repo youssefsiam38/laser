@@ -332,8 +332,8 @@ export async function fileAt(
 ): Promise<{ text: string; bytes: number; truncated: boolean; binary: boolean; blobObjectId?: string } | undefined> {
   if (!isObjectId(commit) || !isRepoPath(path)) return undefined;
   const spec = `${commit}:${path}`;
-  const size = Number((await read(repo, ["cat-file", "-s", spec]))?.trim() ?? Number.NaN);
-  if (!Number.isFinite(size)) return undefined;
+  const size = await fileSizeAt(repo, commit, path);
+  if (size === undefined) return undefined;
   const blobObjectId = (await read(repo, ["rev-parse", "--verify", "--quiet", spec]))?.trim();
   const whole = await readBytes(repo, ["cat-file", "blob", spec], Math.max(limitBytes * 2, 64 * 1024));
   if (!whole) return undefined;
@@ -353,6 +353,20 @@ export async function fileAt(
     binary,
     ...(blobObjectId && isObjectId(blobObjectId) ? { blobObjectId } : {}),
   };
+}
+
+/**
+ * What git says one file weighs at one commit, without reading its bytes.
+ *
+ * `undefined` means the path is not in that commit at all — the one question
+ * that tells "this file was deleted here" apart from "this file is too big to
+ * keep whole", which is the difference between two very different refusals
+ * (M21-T19).
+ */
+export async function fileSizeAt(repo: HostRepository, commit: string, path: string): Promise<number | undefined> {
+  if (!isObjectId(commit) || !isRepoPath(path)) return undefined;
+  const size = Number((await read(repo, ["cat-file", "-s", `${commit}:${path}`]))?.trim() ?? Number.NaN);
+  return Number.isFinite(size) ? size : undefined;
 }
 
 /** Bytes that look like text a person can review. Anything else is not captured. */

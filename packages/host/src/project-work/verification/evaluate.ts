@@ -47,6 +47,17 @@ export interface EvaluationInput {
   evidence: readonly ProjectWorkEvidence[];
   /** Whether a link's stored capture is still readable. Never a git read. */
   captureReadable: (link: RepositoryLink) => boolean;
+  /**
+   * Whether a link's stored capture holds **every** source the decision it
+   * backs rests on, checked against the bodies beside it (M21-T19).
+   *
+   * Still only the store: the capture is parsed, its required block is matched
+   * against its own sources by path, side and digest, and the digest is taken
+   * again over the text that is there. A capture taken before this rule
+   * existed has no such block, and so is not native evidence — which is the
+   * honest answer, not a downgrade.
+   */
+  captureComplete: (link: RepositoryLink) => boolean;
   stopped?: boolean;
 }
 
@@ -68,7 +79,7 @@ export interface Evaluation {
  * retention prunes the checkpoint, so a check that went back to git would
  * fail exactly when it is needed.
  *
- * Five stored facts, and all five have to hold:
+ * Six stored facts, and all six have to hold:
  *
  * 1. the link is a `verified_at` **state** on this exact subject — same
  *    entity, same revision, same digest, so a revision the work has moved on
@@ -77,13 +88,16 @@ export interface Evaluation {
  * 3. the host's own `acceptance` record is on it, which only the host writes,
  *    and it agrees with the link about the commit and the subject's digest;
  * 4. the bounded canonical capture is there and still readable;
- * 5. a `person_acceptance` evidence record that passed is joined to it.
+ * 5. that capture holds every source the acceptance rests on, whole, at the
+ *    digests and sides it records — not merely a flag saying so;
+ * 6. a `person_acceptance` evidence record that passed is joined to it.
  */
 export function acceptedPreview(
   links: readonly RepositoryLink[],
   subject: { entityId: string; revisionId: string; digest: string },
   evidence: readonly ProjectWorkEvidence[],
   captureReadable: (link: RepositoryLink) => boolean,
+  captureComplete: (link: RepositoryLink) => boolean,
 ): RepositoryLink | undefined {
   return links.find((link) => {
     if (link.relation !== "verified_at") return false;
@@ -95,6 +109,7 @@ export function acceptedPreview(
     if (accepted.subjectDigest !== subject.digest) return false;
     if (!("state" in link.target) || link.target.state.commitObjectId !== accepted.commitObjectId) return false;
     if (!link.captureBlobId || !captureReadable(link)) return false;
+    if (!captureComplete(link)) return false;
     return evidence.some(
       (record) =>
         record.repositoryLinkId === link.linkId &&
@@ -237,12 +252,28 @@ function visualFinding(criterion: VerificationCriterion, input: EvaluationInput)
     criterion.authority === "design"
       ? { entityId: criterion.source.entityId, revisionId: criterion.source.revisionId, digest: criterion.source.digest }
       : { entityId: input.plan.task.entityId, revisionId: input.plan.task.revisionId, digest: input.plan.task.digest };
-  const link = acceptedPreview(input.repositoryLinks, subject, input.evidence, input.captureReadable);
+  const link = acceptedPreview(input.repositoryLinks, subject, input.evidence, input.captureReadable, input.captureComplete);
   if (!link) {
+    // A review recorded before this rule existed kept a bounded capture rather
+    // than every source the decision rests on. Nothing of it is erased or
+    // rewritten; it simply does not prove what native evidence has to prove,
+    // and the step is to record the review again (M21-T19).
+    const partial = input.repositoryLinks.some(
+      (candidate) =>
+        candidate.relation === "verified_at" &&
+        candidate.acceptance?.kind === "checkpoint_preview" &&
+        candidate.subject.entityId === subject.entityId &&
+        candidate.subject.revisionId === subject.revisionId &&
+        candidate.captureBlobId !== undefined &&
+        input.captureReadable(candidate) &&
+        !input.captureComplete(candidate),
+    );
     return {
       criterionId: criterion.id,
       outcome: "needs_person",
-      detail: `Nothing has been accepted as native visual evidence for ${criterion.source.key} at the revision this run checked.`,
+      detail: partial
+        ? `The review recorded for ${criterion.source.key} did not keep every file it rests on, so it cannot be read back as proof of this revision.`
+        : `Nothing has been accepted as native visual evidence for ${criterion.source.key} at the revision this run checked.`,
       evidenceIds: [],
       steps: [
         `Open the checkpoint preview for this work and compare it with ${criterion.source.key}.`,

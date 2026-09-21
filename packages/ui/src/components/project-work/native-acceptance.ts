@@ -57,6 +57,18 @@ export interface AcceptanceCheckpoint {
   /** Stable identity of this row, for selection only. */
   id: string;
   attempt: number;
+  /**
+   * The attempt row this checkpoint belongs to (M21-T19).
+   *
+   * Sent with the review so the host can work out which sources the review
+   * rests on: the difference between what that attempt started from and this
+   * exact checkpoint. Absent when the same checkpoint was recorded by more
+   * than one attempt — the row can no longer be tied to exactly one, and a
+   * guess is what this whole record exists to replace.
+   */
+  executionLinkId?: string;
+  /** The task the attempt belongs to. Identity the host re-derives. */
+  taskEntityId: string;
   repositoryId: string;
   repositoryName: string;
   objectFormat: "sha1" | "sha256";
@@ -124,20 +136,29 @@ export function acceptanceSubjects(report: VerificationReport | undefined): Acce
 export function acceptanceCheckpoints(detail: Detail, sessions: ReadonlyArray<{ id: string; path: string }>): AcceptanceCheckpoint[] {
   const pathOf = new Map(sessions.map((session) => [session.id, session.path]));
   const rows: AcceptanceCheckpoint[] = [];
-  const seen = new Set<string>();
+  const at = new Map<string, AcceptanceCheckpoint>();
   const attempts = [...detail.executionLinks].sort((a, b) => b.attempt - a.attempt);
   for (const link of attempts) {
     for (const repository of link.repositories ?? []) {
       if (repository.unavailable === true) continue;
       const checkpoints = [...repository.checkpoints].sort((a, b) => b.turn - a.turn);
       for (const checkpoint of checkpoints) {
-        const id = `${repository.repositoryId}:${checkpoint.commitObjectId}`;
-        if (seen.has(id)) continue;
-        seen.add(id);
+        const id = `${repository.repositoryId}:${checkpoint.ref}:${checkpoint.commitObjectId}`;
+        const already = at.get(id);
+        if (already) {
+          // The same checkpoint recorded by two attempts: there is no honest
+          // way to say which attempt's work it is, so the row keeps its
+          // identity and loses the attempt, and the dialog refuses it rather
+          // than picking one.
+          if (already.executionLinkId !== link.linkId) delete already.executionLinkId;
+          continue;
+        }
         const sessionPath = link.targetUnavailable === true ? undefined : pathOf.get(link.targetId);
-        rows.push({
+        const row: AcceptanceCheckpoint = {
           id,
           attempt: link.attempt,
+          executionLinkId: link.linkId,
+          taskEntityId: link.entityId,
           repositoryId: repository.repositoryId,
           repositoryName: repository.name,
           objectFormat: repository.base.objectFormat,
@@ -147,7 +168,9 @@ export function acceptanceCheckpoints(detail: Detail, sessions: ReadonlyArray<{ 
           ...(checkpoint.createdAt ? { createdAt: checkpoint.createdAt } : {}),
           sessionId: link.targetId,
           ...(sessionPath ? { sessionPath } : {}),
-        });
+        };
+        at.set(id, row);
+        rows.push(row);
         if (rows.length >= ACCEPTANCE_CHECKPOINTS_MAX) return rows;
       }
     }
@@ -217,6 +240,7 @@ export function acceptanceConfirmWord(subject: AcceptanceSubject): string {
 export function acceptanceLink(input: { subject: AcceptanceSubject; checkpoint: AcceptanceCheckpoint; note?: string }): LinkInput {
   const { subject, checkpoint } = input;
   const note = input.note?.trim();
+  if (!checkpoint.executionLinkId) throw new Error(ACCEPTANCE_AMBIGUOUS_ATTEMPT);
   return {
     type: "evidence",
     entityId: subject.entityId,
@@ -237,9 +261,17 @@ export function acceptanceLink(input: { subject: AcceptanceSubject; checkpoint: 
         checkpointId: checkpoint.checkpointId,
       },
       acceptance: { kind: "checkpoint_preview" },
+      // Identity the person's own surface already holds, reported so the host
+      // can work out the sources this review rests on. The host re-derives
+      // every part of it and refuses when any of it disagrees.
+      attempt: { taskEntityId: checkpoint.taskEntityId, executionLinkId: checkpoint.executionLinkId },
     },
   };
 }
+
+/** Said once, so the dialog and the model cannot drift apart on it. */
+export const ACCEPTANCE_AMBIGUOUS_ATTEMPT =
+  "More than one attempt recorded this checkpoint, so which work it is cannot be told from here. Pick a checkpoint from one attempt, or verify the task again and record your review at a newer one.";
 
 /**
  * Is the checkpoint this review would name still the one it was?

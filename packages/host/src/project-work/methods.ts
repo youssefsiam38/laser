@@ -83,7 +83,15 @@ import {
   repositoryFor,
   type IdentifiedRepository,
 } from "./delivery.js";
-import { buildCapture, captureReadable, evidenceUnreviewable, storeCapture, type StoredCapture } from "./captures.js";
+import {
+  buildCapture,
+  captureReadable,
+  evidenceUnreviewable,
+  readCapture,
+  requiredComplete,
+  storeCapture,
+  type StoredCapture,
+} from "./captures.js";
 import { convergeTask, evaluate, gatherAuthorities, planFrom, readerOf, storeReport } from "./verification/index.js";
 import {
   ProjectWorkConflictError,
@@ -523,6 +531,7 @@ export class ProjectWorkMethods {
                 repositoryId: params.link.verifiedAt.repositoryId,
                 state: params.link.verifiedAt.state,
                 ...(params.link.verifiedAt.acceptance ? { acceptance: params.link.verifiedAt.acceptance } : {}),
+                ...(params.link.verifiedAt.attempt ? { attempt: params.link.verifiedAt.attempt } : {}),
               })
             : undefined;
         return this.store.link({
@@ -985,6 +994,7 @@ export class ProjectWorkMethods {
       ...gathered.task.evidence,
       ...(gathered.design ? gathered.design.detail.evidence : []),
     ];
+    const completeness = new Map<string, boolean>();
     const evaluation = evaluate({
       plan,
       gathered,
@@ -995,6 +1005,18 @@ export class ProjectWorkMethods {
       // the contract protects this evidence against the day retention prunes
       // the checkpoint it came from (D-361).
       captureReadable: (link) => captureReadable(this.store, projectId, link),
+      // And, for native evidence, whether that capture holds every source the
+      // acceptance rests on — read out of the stored blob, never out of git
+      // (M21-T19). Answered once per link: several visual criteria commonly
+      // rest on the same acceptance, and a capture is up to four megabytes.
+      captureComplete: (link) => {
+        const known = completeness.get(link.linkId);
+        if (known !== undefined) return known;
+        const capture = readCapture(this.store, projectId, link);
+        const answer = capture !== undefined && requiredComplete(capture, "state" in link.target ? link.target.state : undefined);
+        completeness.set(link.linkId, answer);
+        return answer;
+      },
       ...(verify.stopped ? { stopped: true } : {}),
     });
     // A deviation is a proposal a person accepts; a run never records one as

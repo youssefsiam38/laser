@@ -376,6 +376,69 @@ describe("recording one", () => {
     });
     // The marker is a request for the host's action, and all this surface sends.
     expect(params.link.verifiedAt.acceptance).toEqual({ kind: "checkpoint_preview" });
+    // Which attempt's work this checkpoint is, reported from the row itself so
+    // the host can work out the sources the review rests on (M21-T19).
+    expect((params.link.verifiedAt as { attempt?: unknown }).attempt).toEqual({
+      taskEntityId: "e-task-44",
+      executionLinkId: "x1",
+    });
+  });
+
+  it("refuses a checkpoint that two attempts both recorded, rather than picking one", async () => {
+    blob = report([visual()]);
+    // The same repository, the same ref and the same commit, recorded by two
+    // attempts: there is no honest answer to "whose work is this".
+    const twice = detail({
+      entityId: "e-task-44",
+      kind: "task",
+      number: 44,
+      state: "in_progress",
+      body: taskBody() as unknown as ProjectWorkBody,
+      executionLinks: [
+        executionLink({
+          linkId: "x1",
+          targetId: SESSION.id,
+          attempt: 1,
+          repositories: [
+            attemptRepository({
+              repositoryId: APP_REPO.repositoryId,
+              name: APP_REPO.name,
+              checkpoints: [{ turn: 4, ref: APP_REPO.ref, commitObjectId: APP_REPO.commit }],
+            }),
+          ],
+        }),
+        executionLink({
+          linkId: "x2",
+          targetId: SESSION.id,
+          attempt: 2,
+          repositories: [
+            attemptRepository({
+              repositoryId: APP_REPO.repositoryId,
+              name: APP_REPO.name,
+              checkpoints: [{ turn: 4, ref: APP_REPO.ref, commitObjectId: APP_REPO.commit }],
+            }),
+          ],
+        }),
+      ],
+      evidence: [
+        evidence({
+          evidenceId: "evd_1",
+          kind: "verification",
+          role: "supporting",
+          outcome: "inconclusive",
+          summary: "Verification: 0 of 1 satisfied",
+          blobId: "blb_1",
+        }),
+      ],
+    });
+    await mount(twice, makeStore());
+    await click(openButton());
+    await click(checkbox());
+    await setValue(confirmField(), "DES-7");
+    expect(text(), "the surface says why, in a sentence").toContain("More than one attempt recorded this checkpoint");
+    expect(confirmButton()?.disabled, "and records nothing").toBe(true);
+    await click(confirmButton());
+    expect(links()).toHaveLength(0);
   });
 
   it("names the repository, the checkpoint, the commit and the revision on screen", async () => {

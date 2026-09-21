@@ -650,3 +650,119 @@ pnpm -r build && pnpm -r typecheck && pnpm identity:check
 
 The full `pnpm verify` gate is the parent's; nothing here runs a concurrent
 monorepo gate, opens a browser or automates acceptance.
+
+## Short plan v2 · implemented
+
+Approved with two binding amendments, and built as approved. What follows is
+what is in the code, where it differs from the plan above, and what is not
+proven.
+
+### The two amendments, in the code
+
+**A · a zero-change state is not refused on principle.** A person may verify
+code that did not need changing, and demanding a fabricated edit before they
+may say so would be the wrong refusal. When the difference between the
+attempt's base and the state is empty, the required set becomes the **complete
+body of one explicitly named bounded scope** — `RepositoryStateRef.path` when
+the link names one, otherwise the tracked tree — captured whole under the
+*existing* bounds, with `basis: "complete_bounded_state"` recording which. It
+is a bounded canonical capture of a named scope and nothing more: no prefix
+pretending to be complete, no traversal past the file cap, no larger budget,
+and an empty, oversized or unreadable scope is refused **for that specific
+reason** rather than blanket-refused. Proved both ways in
+`capture-completeness.test.ts` — a small unchanged scope succeeds and still
+reads back after `git gc`, an over-cap scope is refused naming what to do, and
+a scope holding bytes that are not text is refused naming the file.
+
+**B · a decision never rests on a partial capture.** `implemented_by` used to
+accept delivery, approve a gate or mark a Task done now requires a capture
+whose `required.complete` is `true`. `acceptDelivery` builds one (basis
+`accepted_change`) or refuses; `keepEvidenceReviewable` **corrects** a link
+whose capture predates the rule while git can still answer, and refuses the
+decision when it cannot. Ordinary non-decision provenance is unchanged: a
+plain `verified_at` or `based_on` capture may be honestly partial, and is
+therefore never native evidence. The correction never overwrites blindly —
+`attachCapture` takes the blob it read (`replacing`), so an idempotent attach
+cannot freeze a partial proof in place and two callers cannot race one link
+into a capture neither checked; the superseded capture keeps its own content
+address in the store. The budgets are untouched
+(`REPOSITORY_CAPTURE_BYTES_MAX`, `…SOURCES_MAX` = 100, `…FILES_MAX`), and
+`REQUIRED_PATHS_MAX` is the same 100 seen from the other side.
+
+### What changed, by file
+
+| Where | What |
+| --- | --- |
+| `protocol/project-work.ts` | `RepositoryCaptureSource.side`, `RepositoryCapture.required` (`basis`, `from`, `entries`, `complete: true`), `REPOSITORY_CAPTURE_BASES`, `REQUIRED_PATHS_MAX`, and `repositoryCaptureSchema` so a stored capture is **parsed** on the way back, never cast |
+| `protocol/project-work-methods.ts` | `verifiedAt.attempt { taskEntityId, executionLinkId }` |
+| `host/project-work/captures.ts` | `selectRequired` (one authority for the set), `captureRequired` (direct bounded reads, four refusals), `requiredComplete` (proof read from the bodies, not from a flag), `readCapture`; `buildCapture`/`buildStateCapture` both take the set |
+| `host/project-work/gate.ts` | `attemptOrigin` (the identity join), `prepareVerifiedAt` ordering, delivery's required set, decision-grade backfill |
+| `host/project-work/store.ts` | `executionLinkId` written on a `verified_at` link and validated against `execution_links`; `attachCapture(…, replacing)` |
+| `host/project-work/verification/evaluate.ts` | the sixth stored fact, and the report sentence for a review whose capture kept less than it rests on |
+| `host/source-control/read.ts` | `fileSizeAt`, so "not there" and "too big to keep whole" are different refusals. The strict byte-level decoder is untouched |
+| `ui/project-work/native-acceptance.ts`, `NativeAcceptance.tsx` | each row carries its own attempt; a checkpoint two attempts both recorded loses the attempt, says so, and cannot be recorded |
+
+### Three places this differs from the plan text
+
+1. **The `attempt` field is required by the host, not by the schema.** A zod
+   refusal reads as a schema complaint; the host's reads *"Accepting a build as
+   native evidence says which attempt's work you looked at…"*. One rule, one
+   place, one sentence a person can act on. The shape of the field is still
+   validated at the boundary (both ids or neither).
+2. **A state that names no checkpoint may be joined to an attempt too**, when
+   the commit is one that attempt recorded (`commits`, or its own change head).
+   That is what makes the parented branch reachable through the product rather
+   than only through a helper: an acceptance still requires a checkpoint ref,
+   exactly as before.
+3. **A `deleted` file's manifest row still says `omitted: "deleted"`.** That
+   row describes the head side, where there is nothing; the body a review reads
+   is in `sources` with `side: "before"` and in `required.entries`.
+
+### Evidence
+
+At the merge of `agents/complete-durable-capture-authority-aa559532` into this
+branch, with the work above on top:
+
+| Command | Result |
+| --- | --- |
+| `env -i PATH="$PATH" HOME="$HOME" pnpm -F @lasercode/host exec vitest run test/project-work` | 18 files, 269 passed (new `capture-completeness.test.ts`: 21) |
+| `pnpm -F @lasercode/protocol test` | 749 passed, no type errors |
+| `pnpm -F @lasercode/ui exec vitest run test/project-work/native-acceptance.test.tsx test/project-work/verification.test.tsx` | 31 passed |
+| `env -i … pnpm -F @lasercode/host test` · `pnpm -F @lasercode/ui test` · `pnpm -F @lasercode/worker test` | see the handoff for the run at the final revision |
+| `pnpm -r build` · `pnpm -r typecheck` · `pnpm identity:check` | clean |
+
+The host tests run against **real repositories in temp directories**, through
+the router and the bridge: the attempt's base against the exact checkpoint
+(including what the *first* checkpoint changed, which the attempt's own
+`changedPaths` aggregate omits — asserted in the test); an older checkpoint
+accepted while a later one reverted the file; a delete and a rename captured on
+both sides; a required path beyond the manifest cap; two repositories, two
+commits, two acceptances; a Design-backed criterion joined to the Task's
+attempt, with a foreign subject, a stale pinned revision, another task's
+attempt and a checkpoint that attempt never recorded each refused; binary, too
+large, over budget, over `REQUIRED_PATHS_MAX` and a collected base each refused
+**with the blob count unchanged and no link, evidence or acceptance written**;
+a delivery's capture corrected at the real completion gate and refused when git
+can no longer answer; and the whole round trip — verify, record a review,
+prune the ref, `git gc --prune=now`, verify again — finding the visual
+criterion *satisfied* from the store alone, with the person's own file still
+readable in it.
+
+### Open, and stated rather than discovered
+
+- **A decision cannot rest on bytes that are not text.** A change that adds an
+  image, a font or any other binary refuses the acceptance and the delivery,
+  because a capture is JSON and nothing of those bytes would survive `gc` —
+  keeping them would need a second, much larger facility, which this milestone
+  explicitly is not. The refusal names the file. If the product wants binary
+  assets to be deliverable, that is a scoped decision with its own row, not a
+  quiet exception here.
+- **The "could not be read" branch** of a required body (a path git has but
+  cannot hand back as a blob — a gitlink, a corrupted object) is written and
+  reasoned about, and is not covered by a test: every way to reach it needs a
+  deliberately broken repository.
+- **Not proven here, and the person's:** that the acceptance dialog's new
+  refusal reads well in both themes and at both widths, and that the round trip
+  behaves on a real project. Steps unchanged from batch 3, plus: pick a
+  checkpoint two attempts both recorded and check the action stays unavailable
+  with the sentence that says why.

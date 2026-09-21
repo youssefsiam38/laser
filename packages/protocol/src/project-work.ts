@@ -251,6 +251,15 @@ export const ATTEMPT_COMMITS_MAX = 100;
 /** What one canonical capture may hold before it says what it left out. */
 export const REPOSITORY_CAPTURE_FILES_MAX = 500;
 export const REPOSITORY_CAPTURE_SOURCES_MAX = 100;
+/**
+ * The most sources one decision may rest on (M21-T19).
+ *
+ * The same bound as {@link REPOSITORY_CAPTURE_SOURCES_MAX}, because they are
+ * the same thing seen from two sides: a decision whose required set does not
+ * fit in a bounded capture is refused with what to do, never captured as a
+ * silent prefix and never given a larger budget.
+ */
+export const REQUIRED_PATHS_MAX = 100;
 export const REPOSITORY_CAPTURE_SOURCE_BYTES_MAX = 128 * 1024;
 export const REPOSITORY_CAPTURE_BYTES_MAX = 4 * 1024 * 1024;
 
@@ -1058,6 +1067,73 @@ export interface RepositoryCaptureSource {
   truncated?: boolean;
   contentDigest: string;
   text: string;
+  /**
+   * Which side of the change these bytes are (M21-T19).
+   *
+   * A deleted file is reviewed by reading what was removed, so its body is the
+   * one at the **base**. Absent means `after`, which is what every body of a
+   * state or a head side is — and saying so explicitly is what keeps a
+   * before-body from ever being read back as the accepted state's content.
+   */
+  side?: "before" | "after";
+}
+
+/**
+ * How a capture's required set was derived (M21-T19).
+ *
+ * Never a caller's word for it: each basis names an exact pair of commits (or,
+ * for `complete_bounded_state`, an exact bounded scope) the host read out of
+ * git itself.
+ */
+export const REPOSITORY_CAPTURE_BASES = [
+  /** The attempt's recorded base → the exact state being accepted. */
+  "attempt_base_to_state",
+  /** A parented commit's own `commit^ → commit`. */
+  "commit_parent_to_commit",
+  /** The accepted delivery's own `base → head`. */
+  "accepted_change",
+  /**
+   * Nothing changed between the base and the state, so what is kept whole is
+   * the named scope itself: a person can verify unchanged code, and demanding
+   * a fabricated edit before they may say so would be the wrong refusal.
+   */
+  "complete_bounded_state",
+] as const;
+export type RepositoryCaptureBasis = (typeof REPOSITORY_CAPTURE_BASES)[number];
+
+/** One source the decision rests on, as the host found it. */
+export interface RepositoryCaptureRequiredEntry {
+  path: string;
+  status: "added" | "modified" | "deleted" | "present";
+  side: "before" | "after";
+  /** sha256 of the whole body kept in `sources` at that side. */
+  contentDigest: string;
+  blobObjectId?: string;
+}
+
+/**
+ * The proof that a capture holds **every** source its decision rests on.
+ *
+ * Written by the host from what git answered, canonicalised into the
+ * content-addressed blob, and never taken from a request: a caller-uploaded
+ * blob cannot mint it, because the link that points at a capture is only ever
+ * written by the host in the same act that built it. `complete` exists only in
+ * the `true` form — a capture that could not keep every required body whole is
+ * not stored with a weaker flag, the decision is refused.
+ */
+export interface RepositoryCaptureRequired {
+  basis: RepositoryCaptureBasis;
+  from: {
+    /** The commit the difference was taken from, when there is one. */
+    baseCommitObjectId?: string;
+    /** The attempt this state belongs to, when it is one. */
+    executionLinkId?: string;
+    taskEntityId?: string;
+    /** The repository-relative scope a `complete_bounded_state` covers. */
+    scopePath?: string;
+  };
+  entries: RepositoryCaptureRequiredEntry[];
+  complete: true;
 }
 
 interface RepositoryCaptureBase {
@@ -1068,6 +1144,12 @@ interface RepositoryCaptureBase {
   files: RepositoryCaptureFile[];
   /** The head-side source of the files the capture covers, bounded. */
   sources: RepositoryCaptureSource[];
+  /**
+   * Every source the decision this capture backs rests on, kept whole
+   * (M21-T19). Absent on an ordinary provenance capture, which may be honestly
+   * partial — and which therefore never satisfies a decision.
+   */
+  required?: RepositoryCaptureRequired;
   /** What was left out, in one sentence a person can act on. */
   truncated?: string;
 }
@@ -1084,6 +1166,82 @@ interface RepositoryCaptureBase {
 export type RepositoryCapture =
   | (RepositoryCaptureBase & { change: RepositoryChangeRef; state?: never })
   | (RepositoryCaptureBase & { state: RepositoryStateRef; change?: never });
+
+const repositoryCaptureFileSchema = z
+  .object({
+    path: z.string().min(1).max(1024),
+    status: z.enum(["added", "modified", "deleted", "present"]),
+    added: z.number().int().nullable(),
+    removed: z.number().int().nullable(),
+    blobObjectId: z.string().min(1).max(64).optional(),
+    mode: z.string().min(1).max(16).optional(),
+    bytes: z.number().int().min(0).optional(),
+    contentDigest: digest.optional(),
+    omitted: z.enum(["binary", "too_large", "budget", "deleted"]).optional(),
+  })
+  .strict();
+
+const repositoryCaptureSourceSchema = z
+  .object({
+    path: z.string().min(1).max(1024),
+    bytes: z.number().int().min(0),
+    truncated: z.boolean().optional(),
+    contentDigest: digest,
+    text: z.string(),
+    side: z.enum(["before", "after"]).optional(),
+  })
+  .strict();
+
+export const repositoryCaptureRequiredSchema = z
+  .object({
+    basis: z.enum(REPOSITORY_CAPTURE_BASES),
+    from: z
+      .object({
+        baseCommitObjectId: z.string().regex(/^[0-9a-f]{7,64}$/, "a git object id").optional(),
+        executionLinkId: opaqueId.optional(),
+        taskEntityId: opaqueId.optional(),
+        scopePath: z.string().min(1).max(1024).optional(),
+      })
+      .strict(),
+    entries: z
+      .array(
+        z
+          .object({
+            path: z.string().min(1).max(1024),
+            status: z.enum(["added", "modified", "deleted", "present"]),
+            side: z.enum(["before", "after"]),
+            contentDigest: digest,
+            blobObjectId: z.string().min(1).max(64).optional(),
+          })
+          .strict(),
+      )
+      .max(REQUIRED_PATHS_MAX),
+    complete: z.literal(true),
+  })
+  .strict();
+
+const repositoryCaptureBaseSchema = {
+  version: z.literal(1),
+  createdAt: isoInstant,
+  repositoryId: opaqueId,
+  repositoryName: z.string().min(1).max(200).optional(),
+  files: z.array(repositoryCaptureFileSchema).max(REPOSITORY_CAPTURE_FILES_MAX),
+  sources: z.array(repositoryCaptureSourceSchema).max(REPOSITORY_CAPTURE_SOURCES_MAX),
+  required: repositoryCaptureRequiredSchema.optional(),
+  truncated: z.string().max(PROJECT_WORK_TEXT_MAX).optional(),
+};
+
+/**
+ * A stored capture, read back.
+ *
+ * Parsed rather than cast: everything a decision is re-checked against later
+ * comes out of this blob, so a blob that is not a capture of the shape the
+ * host writes answers nothing rather than half a proof.
+ */
+export const repositoryCaptureSchema = z.union([
+  z.object({ ...repositoryCaptureBaseSchema, change: repositoryChangeRefSchema }).strict(),
+  z.object({ ...repositoryCaptureBaseSchema, state: repositoryStateRefSchema }).strict(),
+]);
 
 /**
  * A Project Task joined to a session, run, checkpoint, branch or command.

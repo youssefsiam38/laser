@@ -49,10 +49,15 @@ import {
   buildStateCapture,
   captureReadable,
   evidenceUnreviewable,
+  readCapture,
+  requiredComplete,
+  selectRequired,
   storeCapture,
+  type RequiredOrigin,
   type StoredCapture,
 } from "./captures.js";
 import { ProjectWorkRefusedError } from "./errors.js";
+import { gatherAuthorities, readerOf } from "./verification/authorities.js";
 import type { ProjectWorkStore } from "./store.js";
 
 /** Who is asking, and where git is read for them. */
@@ -270,11 +275,25 @@ export class ProjectWorkGate {
         "That change is not what it was when you looked at it. Look at the difference again, then accept it.",
       );
     }
+    // Accepting delivery is a decision, so it rests on every source it
+    // touched, kept whole. An honestly partial capture is good provenance and
+    // is never good enough for this (M21-T19).
+    const required = await selectRequired({
+      repository,
+      origin: {
+        basis: "accepted_change",
+        base: payload.change.base.commitObjectId,
+        ...(payload.executionLinkId ? { executionLinkId: payload.executionLinkId } : {}),
+        ...(payload.change.head.path !== undefined ? { scopePath: payload.change.head.path } : {}),
+      },
+      at: payload.change.head.commitObjectId,
+    });
     const built = await buildCapture({
       repository,
       repositoryId: payload.repositoryId,
       change: payload.change,
       now: this.now(),
+      required,
     });
     if (!built) {
       throw new ProjectWorkRefusedError(
@@ -330,13 +349,19 @@ export class ProjectWorkGate {
     repositoryId: string;
     state: RepositoryStateRef;
     acceptance?: { kind: "checkpoint_preview" } | undefined;
-    /** Paths the decision needs the source of, when the caller knows them. */
-    requiredPaths?: readonly string[] | undefined;
-  }): Promise<{ captureBlobId: string; acceptance?: RepositoryLinkAcceptance }> {
+    /** Which attempt this state came out of, as the caller reports it. */
+    attempt?: { taskEntityId: string; executionLinkId: string } | undefined;
+  }): Promise<{ captureBlobId: string; acceptance?: RepositoryLinkAcceptance; executionLinkId?: string }> {
     const wantsAcceptance = input.acceptance !== undefined;
     if (wantsAcceptance && this.caller.origin.actor.kind !== "person") {
       throw new ProjectWorkRefusedError(
         "Only a person accepts a checkpoint preview as native visual evidence. Report what you saw as evidence instead.",
+      );
+    }
+    if (wantsAcceptance && input.attempt === undefined) {
+      throw new ProjectWorkRefusedError(
+        "Accepting a build as native evidence says which attempt's work you looked at, and this did not name one. " +
+          "Record your review from the task's own verification panel, which knows the attempt behind each checkpoint.",
       );
     }
     const repository = await this.repositoryOrRefuse(input.projectId, input.repositoryId);
@@ -360,13 +385,38 @@ export class ProjectWorkGate {
       }
       checkpointRef = found.ref;
     }
+    if (wantsAcceptance && checkpointRef === undefined) {
+      throw new ProjectWorkRefusedError(
+        "Native visual evidence is a checkpoint preview you accepted, so it has to name the checkpoint it was taken from.",
+      );
+    }
+
+    // Whoever is asking, and whether or not they asked for an acceptance:
+    // everything that could refuse this write is settled here, before a single
+    // byte is stored. A refused decision costs no quota and leaves no blob.
+    const subject = this.store.refFor(input.projectId, input.entityId);
+    if (wantsAcceptance && subject.revisionId !== input.revisionId) {
+      throw new ProjectWorkRefusedError(
+        `${subject.key} has moved on since that preview was made, so accepting it would say something about a revision nobody looked at. Look at the current revision and accept a preview of it.`,
+      );
+    }
+    const required = input.attempt
+      ? this.attemptOrigin({
+          projectId: input.projectId,
+          subjectEntityId: input.entityId,
+          subjectRevisionId: input.revisionId,
+          repositoryId: input.repositoryId,
+          state: input.state,
+          attempt: input.attempt,
+        })
+      : undefined;
 
     const built = await buildStateCapture({
       repository,
       repositoryId: input.repositoryId,
       state: input.state,
       now: this.now(),
-      ...(input.requiredPaths ? { requiredPaths: input.requiredPaths } : {}),
+      ...(required ? { required } : {}),
     });
     if (!built) {
       throw new ProjectWorkRefusedError(
@@ -379,30 +429,116 @@ export class ProjectWorkGate {
       capture: built,
       gate: wantsAcceptance ? "Accepting this preview" : "Recording this state",
     });
+    const attemptId = input.attempt?.executionLinkId;
 
-    if (!wantsAcceptance) return { captureBlobId: stored.blobId };
-
-    if (checkpointRef === undefined) {
-      throw new ProjectWorkRefusedError(
-        "Native visual evidence is a checkpoint preview you accepted, so it has to name the checkpoint it was taken from.",
-      );
-    }
-    const subject = this.store.refFor(input.projectId, input.entityId);
-    if (subject.revisionId !== input.revisionId) {
-      throw new ProjectWorkRefusedError(
-        `${subject.key} has moved on since that preview was made, so accepting it would say something about a revision nobody looked at. Look at the current revision and accept a preview of it.`,
-      );
+    if (!wantsAcceptance) {
+      return { captureBlobId: stored.blobId, ...(attemptId ? { executionLinkId: attemptId } : {}) };
     }
     return {
       captureBlobId: stored.blobId,
+      ...(attemptId ? { executionLinkId: attemptId } : {}),
       acceptance: {
         kind: "checkpoint_preview",
         confirmedAt: this.now(),
-        checkpointRef,
+        checkpointRef: checkpointRef as string,
         commitObjectId: input.state.commitObjectId,
         subjectDigest: subject.digest,
         acceptedBy: this.caller.origin.actor,
       },
+    };
+  }
+
+  /**
+   * The attempt a state came out of, re-derived from the store (M21-T19).
+   *
+   * The caller reports an identity; every part of it is checked here, and none
+   * of it is believed:
+   *
+   * 1. the execution link is one this project holds, and it belongs to the
+   *    task it names — a link borrowed from another task, or another project,
+   *    is refused rather than joined;
+   * 2. the subject is that task, or an artifact the task **currently** pins at
+   *    exactly the revision being recorded. The pin is read through the same
+   *    `gatherAuthorities` the verification run used, so the Task ↔ Design ↔
+   *    attempt join is one rule with one implementation, and the evaluator
+   *    reads back what this wrote;
+   * 3. the attempt really recorded **this** repository, and one of its own
+   *    checkpoints is this exact ref **and** this exact commit. Not the newest
+   *    one, not the ref alone: a workspace with two repositories has two
+   *    records with two commits, and one acceptance names one of them.
+   *
+   * What comes back is the base the required set is taken from — the commit
+   * that attempt started at, as the host wrote it from git when the attempt
+   * was recorded.
+   */
+  private attemptOrigin(input: {
+    projectId: string;
+    subjectEntityId: string;
+    subjectRevisionId: string;
+    repositoryId: string;
+    state: RepositoryStateRef;
+    attempt: { taskEntityId: string; executionLinkId: string };
+  }): RequiredOrigin {
+    const link = this.store.executionLink(input.projectId, input.attempt.executionLinkId);
+    if (!link || link.entityId !== input.attempt.taskEntityId) {
+      throw new ProjectWorkRefusedError(
+        "That attempt is not one this task has, so the work you looked at cannot be tied to it. Record your review from the task's own verification panel.",
+      );
+    }
+    const task = this.store.get({ projectId: input.projectId, entityId: input.attempt.taskEntityId, body: { mode: "none" } });
+    if (task.entity.kind !== "task") {
+      throw new ProjectWorkRefusedError(
+        "Attempts belong to tasks, and that is not a task, so there is no work of it to review. Record your review from the task's own verification panel.",
+      );
+    }
+    if (input.subjectEntityId !== input.attempt.taskEntityId) {
+      // A Design-backed visual criterion is accepted on the Design, so the
+      // subject is allowed to be something other than the Task — but only
+      // something this Task answers to, at exactly the revision it answers to.
+      const gathered = gatherAuthorities(readerOf(this.store), input.projectId, input.attempt.taskEntityId);
+      const pinned = [gathered.spec?.detail, gathered.design?.detail, gathered.plan?.detail].find(
+        (detail) => detail?.entity.entityId === input.subjectEntityId,
+      );
+      if (!pinned) {
+        throw new ProjectWorkRefusedError(
+          `${task.entity.key} does not answer to that item, so work done for it proves nothing about that item. Record your review against ${task.entity.key} or against the design it is built from.`,
+        );
+      }
+      if (pinned.revision.revisionId !== input.subjectRevisionId) {
+        throw new ProjectWorkRefusedError(
+          `${task.entity.key} is built from ${pinned.entity.key} at a different revision than the one you are recording against, so this would say something about a revision this work never answered to. ` +
+            `Verify ${task.entity.key} again and record your review against what that run read.`,
+        );
+      }
+    }
+    const record = link.repositories?.find((row) => row.repositoryId === input.repositoryId);
+    if (!record || record.unavailable === true) {
+      throw new ProjectWorkRefusedError(
+        "That attempt has no readable record of this repository, so there is no starting point to work out what it changed. Record your review at a checkpoint from an attempt that has one.",
+      );
+    }
+    // A checkpoint is proved by the exact ref **and** the exact commit the
+    // attempt recorded for this repository — not the newest one, not the ref
+    // alone. A state that names no checkpoint is an ordinary commit, and it
+    // has to be one this attempt actually made.
+    const matched =
+      input.state.checkpointId !== undefined
+        ? record.checkpoints.some(
+            (checkpoint) => checkpoint.ref === input.state.checkpointId && checkpoint.commitObjectId === input.state.commitObjectId,
+          )
+        : record.commits.includes(input.state.commitObjectId) || record.change?.head.commitObjectId === input.state.commitObjectId;
+    if (!matched) {
+      throw new ProjectWorkRefusedError(
+        input.state.checkpointId !== undefined
+          ? "That checkpoint is not one this attempt recorded in this repository, so it cannot be the work this attempt did. Record your review at a checkpoint this attempt recorded."
+          : "That commit is not one this attempt recorded in this repository, so it cannot be the work this attempt did. Record this against a commit or checkpoint the attempt made.",
+      );
+    }
+    return {
+      basis: "attempt_base_to_state",
+      base: record.base.commitObjectId,
+      executionLinkId: link.linkId,
+      taskEntityId: link.entityId,
     };
   }
 
@@ -429,7 +565,15 @@ export class ProjectWorkGate {
     if (links.length === 0) return;
     const repositories = await this.repositories(projectId);
     for (const link of links) {
-      if (captureReadable(this.store, projectId, link)) continue;
+      const existing = readCapture(this.store, projectId, link);
+      // A delivery is what the decision says was built, so the decision rests
+      // on its whole source. A capture that is merely present — today's
+      // bounded one, or one taken before this rule existed — is not enough,
+      // and is corrected here from git while git can still answer (D-361,
+      // M21-T19).
+      const needsWhole = link.relation === "implemented_by";
+      if (existing && (!needsWhole || requiredComplete(existing))) continue;
+      if (!needsWhole && captureReadable(this.store, projectId, link)) continue;
       const repository = repositoryFor(repositories, link.repositoryId)?.repository;
       const availability = await linkAvailability(link, repository, false);
       if (!repository || !availability.sourceAvailable) {
@@ -437,11 +581,35 @@ export class ProjectWorkGate {
       }
       const built =
         "change" in link.target
-          ? await buildCapture({ repository, repositoryId: link.repositoryId, change: link.target.change, now: this.now() })
+          ? await buildCapture({
+              repository,
+              repositoryId: link.repositoryId,
+              change: link.target.change,
+              now: this.now(),
+              ...(needsWhole
+                ? {
+                    required: await selectRequired({
+                      repository,
+                      origin: {
+                        basis: "accepted_change",
+                        base: link.target.change.base.commitObjectId,
+                        ...(link.executionLinkId ? { executionLinkId: link.executionLinkId } : {}),
+                        ...(link.target.change.head.path !== undefined ? { scopePath: link.target.change.head.path } : {}),
+                      },
+                      at: link.target.change.head.commitObjectId,
+                    }),
+                  }
+                : {}),
+            })
           : await buildStateCapture({ repository, repositoryId: link.repositoryId, state: link.target.state, now: this.now() });
       if (!built) throw evidenceUnreviewable(link, availability.missing, gate);
       const stored = storeCapture(this.store, { projectId, entityId: link.subject.entityId, capture: built, gate });
-      this.store.attachCapture(projectId, link.linkId, stored.blobId);
+      // A correction, never an overwrite: the capture it replaces stays in the
+      // store under its own content address, and the pointer only moves off
+      // the exact blob this read — so a partial proof can never be frozen in
+      // place by an idempotent attach, and two callers cannot race one link
+      // into disagreeing with itself.
+      this.store.attachCapture(projectId, link.linkId, stored.blobId, link.captureBlobId);
     }
   }
 

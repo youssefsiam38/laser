@@ -57,6 +57,7 @@ import {
   acceptanceRepositories,
   acceptanceSubjects,
   checkpointLiveness,
+  ACCEPTANCE_AMBIGUOUS_ATTEMPT,
   type AcceptanceCheckpoint,
   type AcceptanceSubject,
   type CheckpointLiveness,
@@ -161,7 +162,12 @@ export function NativeAcceptanceDialog({
 
   const word = subject ? acceptanceConfirmWord(subject) : "";
   const gone = liveness.state === "pruned" || liveness.state === "moved";
-  const ready = Boolean(store && subject && checkpoint) && attested && typed.trim() === word && !gone;
+  // Which attempt's work this checkpoint is has to be one answer. When two
+  // attempts recorded it, the row says so and the action stays unavailable:
+  // the sources a review rests on are that attempt's, and picking one would be
+  // the guess this record exists to replace (M21-T19).
+  const ambiguous = checkpoint !== undefined && checkpoint.executionLinkId === undefined;
+  const ready = Boolean(store && subject && checkpoint) && attested && typed.trim() === word && !gone && !ambiguous;
 
   const record = async (): Promise<void> => {
     if (!store || !subject || !checkpoint || !ready) return;
@@ -294,6 +300,7 @@ export function NativeAcceptanceDialog({
             ) : null}
 
             {liveness.state === "pruned" || liveness.state === "moved" ? <WorkRefusal message={liveness.detail} /> : null}
+            {ambiguous ? <WorkRefusal message={ACCEPTANCE_AMBIGUOUS_ATTEMPT} /> : null}
 
             {checkpoint?.sessionPath && checkpoint.turn >= 1 ? (
               <Button size="sm" variant="ghost" className="self-start" onClick={seeChanges}>
