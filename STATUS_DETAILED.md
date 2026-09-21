@@ -5988,7 +5988,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T8 | Comments, reviews and approval gates | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T9 | Cross-session and cross-project mentions | todo | — | — | `PLAN.md` M21 |
 | M21-T10 | Design Index: static facts, synthesis, review, storage | done | claude-2026-09-21-leap | `9306d0fa`; `pnpm -F @lasercode/worker test` (1344 passed; `test/design/*` 70 incl. the parse-only module-graph and side-effect-marker proofs) | see notes |
-| M21-T11 | DesignTree, canvas, primitive kit, prototypes and Sketch | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T11 | DesignTree, canvas, primitive kit, prototypes and Sketch | done | claude-2026-09-21-leap | `05e270d7` (merged `66348ae2`); protocol 652 (`design-tree.test.ts` 21), `pnpm -F @lasercode/ui test` 3176 (`test/design/*` 48) | see notes |
 | M21-T12 | Native validation runner and source selection | todo | — | — | `PLAN.md` M21 |
 | M21-T13 | Design workspace and anchored review | todo | — | — | `PLAN.md` M21 |
 | M21-T14 | Greenfield design foundation | todo | — | — | `PLAN.md` M21 |
@@ -6010,6 +6010,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap: one UI worker (client store → workspace shell) from the merged spine; plan in `docs/leap/m21-workspace-plan.md`.
 
 #### M21-T11 notes
+- 2026-09-21 done (`05e270d7`): `packages/protocol/src/design-tree.ts` (validate/migrate, DTCG → `--design-*` flattener refusing injection-shaped values, nearest-token suggestion, no React fields), `packages/ui/src/design/**` + `components/design/**` (DOM infinite canvas with SVG edges and keyboard/RTL/reduced motion, Shadow DOM `TreeFrame` skinned by index tokens, 16-primitive kit sheet token-only, declarative `PrototypeStage`, `SketchFrame` with `sandbox="allow-scripts"` + CSP asserted, inspectors, Design Index panel), `DesignDetail.tsx` (Prototype/Full screen/phone read-only, revise fenced, conflict banner). Honest pending states until T17 wires the index/ground/implement methods.
 - 2026-09-21 claimed by claude-2026-09-21-leap (row title aligned with `PLAN.md` as amended by D-354): UI worker on `components/design/**` — validated DesignTree editing, DOM infinite canvas, Shadow DOM frames skinned by index tokens, primitive kit, Prototype mode, sandboxed Sketch frame, Sketch→Tree ladder; write set disjoint from T8 (comments/gates) and T17 (backend).
 
 #### M21-T10 notes
