@@ -2038,20 +2038,29 @@ export class StableSdkDriver implements SessionDriver {
   }
 
   /**
-   * The entry holding exactly this message object — `appendMessage` stores
-   * the reference — or undefined when Pi did not persist it. The leaf first,
+   * The entry holding this message, or its shallow persistence copy. The
+   * correlation seam copies only the envelope: the SDK-created content array
+   * keeps its object identity (never matched by text, timestamp or queue order).
+   * Undefined when Pi did not persist it. The leaf first,
    * because that is where a fresh append lands; the branch only when
    * something else was written after it.
    */
   private persistedEntryOf(message: unknown): { id: string; parentId: string | null } | undefined {
     try {
       const manager = this.session().sessionManager;
+      const routed = message as { role?: unknown; correlationId?: unknown; content?: unknown } | null;
+      const contentIdentity = routed?.role === "user" && typeof routed.correlationId === "string" && Array.isArray(routed.content)
+        ? routed.content : undefined;
+      const matches = (candidate: unknown): boolean => {
+        const stored = candidate as { role?: unknown; content?: unknown } | null;
+        return candidate === message || (contentIdentity !== undefined && stored?.role === "user" && stored.content === contentIdentity);
+      };
       const leaf = manager.getLeafEntry();
-      if (leaf?.type === "message" && leaf.message === message) return { id: leaf.id, parentId: leaf.parentId };
+      if (leaf?.type === "message" && matches(leaf.message)) return { id: leaf.id, parentId: leaf.parentId };
       const branch = manager.getBranch();
       for (let i = branch.length - 1; i >= 0; i--) {
         const entry = branch[i]!;
-        if (entry.type === "message" && entry.message === message) return { id: entry.id, parentId: entry.parentId };
+        if (entry.type === "message" && matches(entry.message)) return { id: entry.id, parentId: entry.parentId };
       }
       return undefined;
     } catch {
@@ -2485,14 +2494,17 @@ export function mapEvent(event: AgentSessionEvent): SessionUpdate | undefined {
     case "message_end": {
       // The named fields are the ones the UI must not have to dig for: why the
       // turn stopped (the stopped-run row), what it cost (the turn's usage) and
-      // who said it. `message` still carries Pi's whole entry beside them.
+      // who said it. Copy before stripping engine-only routing metadata: the
+      // live message must retain its identity for subsequent model calls.
+      const message = "correlationId" in event.message ? { ...event.message } : event.message;
+      if (message !== event.message) delete (message as { correlationId?: unknown }).correlationId;
       const speaker = speakerOf(event.message);
       const stopReason = stopReasonOf(event.message);
       const usage = usageOf(event.message);
       const errorMessage = (event.message as { errorMessage?: unknown }).errorMessage;
       return {
         kind: "message_end",
-        message: event.message,
+        message,
         role: roleOf(event.message),
         ...(speaker ? { speaker } : {}),
         ...(stopReason !== undefined ? { stopReason } : {}),

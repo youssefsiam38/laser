@@ -17,7 +17,7 @@
  *      projectless chat and a cross-project mention useful (leap,
  *      "Cross-session mentions and context").
  */
-import { PRODUCT_NAME, type ProjectWorkMentionProjection } from "@lasercode/protocol";
+import { PRODUCT_NAME, type ProjectWorkMentionProjection, type SessionUpdate } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -208,6 +208,12 @@ async function whenStreaming(): Promise<void> {
 describe("a mention's projection at the model call", () => {
   it("gives a prompt, a steer and a follow-up of identical words their own context", async () => {
     await open();
+    const userEnds: Extract<SessionUpdate, { kind: "message_end" }>[] = [];
+    driver.subscribe((event) => {
+      if (event.type === "update" && event.update.kind === "message_end" && event.update.role === "user") {
+        userEnds.push(event.update);
+      }
+    });
     const release = stub.holdNextResponse();
     const turn = driver.prompt([{ type: "text", text: SAME_WORDS }], {
       projectWork: [projection("TASK-44", "Rework the picker", "the picker excerpt")],
@@ -249,6 +255,14 @@ describe("a mention's projection at the model call", () => {
     expect(stored).not.toContain("TASK-44");
     expect(stored).not.toContain("the picker excerpt");
     expect(stored).not.toContain("lasercode/project-work-mentions");
+    // Routing identity stays inside the engine; the public settled frames still
+    // identify the exact persisted entries and their addressable bodies.
+    expect(userEnds).toHaveLength(3);
+    expect.soft(JSON.stringify(userEnds)).not.toContain("correlationId");
+    const persistedUsers = stored.split("\n").filter(Boolean).map((line) => JSON.parse(line))
+      .filter((entry) => entry.type === "message" && entry.message.role === "user");
+    expect.soft(userEnds.map((update) => update.entry?.id)).toEqual(persistedUsers.map((entry) => entry.id));
+    expect.soft(userEnds.every((update) => (update.entry?.bodies?.length ?? 0) > 0)).toBe(true);
 
     // The turn settled, so the next message starts with nothing owed to it.
     stub.requests.length = 0;
