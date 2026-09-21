@@ -39,6 +39,7 @@ import { resourceParamsSchemas } from "./resources.js";
 import { sessionLifetimeParamsSchemas } from "./session-lifetime.js";
 import { memoryPressureParamsSchemas } from "./memory-pressure.js";
 import { environmentParamsSchemas } from "./environment-policy.js";
+import { projectWorkParamsSchemas } from "./project-work-methods.js";
 import { GIT_PR_MERGE_METHODS, GIT_PROSE_KINDS } from "./git-actions.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX, TASK_LOG_SEGMENTS_MAX } from "./tasks.js";
@@ -1290,6 +1291,9 @@ export const clientParamsSchemas = {
 
   // --- RP-13 environment descriptor. Shape lives in environment-policy.ts ---
   ...environmentParamsSchemas,
+
+  // --- M21 project lifecycle. Shapes live in project-work-methods.ts ---
+  ...projectWorkParamsSchemas,
 } satisfies Record<ClientMethod, z.ZodTypeAny>;
 
 export const clientMethods = Object.keys(clientParamsSchemas) as ClientMethod[];

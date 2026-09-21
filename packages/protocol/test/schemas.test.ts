@@ -11,6 +11,7 @@ import {
   ProtocolError,
   MCP_KNOWN_SERVERS,
   METHOD_POLICY,
+  PROJECT_WORK_METHODS,
   mcpConversationContextSchema,
   type McpCatalogOption,
   agentMessageModeSchema,
@@ -28,6 +29,7 @@ import {
   type ClientMethod,
   type ClientRequests,
 } from "../src/index.js";
+import { sampleMethodParams as projectWorkSamples } from "./project-work-samples.js";
 
 /** One valid params sample per method. The compiler-checked `satisfies` in schemas.ts
  *  guarantees the map is complete; this table guarantees each schema accepts a real shape. */
@@ -336,7 +338,19 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/worker/safety": {},
   "pi/worker/retire": { mode: "automatic" },
   "pi/worker/pressure": { level: "warning", epoch: 3, generation: 7 },
+  // M21 project lifecycle. The bodies and the full per-method round trip live
+  // in `project-work-methods.test.ts`; these are the envelope samples this
+  // table requires of every method.
+  ...projectWorkSamples,
 };
+
+describe("project work methods", () => {
+  it("registers one sample for every method in the leap's inventory", () => {
+    for (const method of PROJECT_WORK_METHODS) {
+      expect(Object.prototype.hasOwnProperty.call(samples, method)).toBe(true);
+    }
+  });
+});
 
 describe("process inventory methods", () => {
   it("refuses a desktop report that tries to say more than pids and counters", () => {

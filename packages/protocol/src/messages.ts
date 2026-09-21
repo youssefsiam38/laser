@@ -18,6 +18,41 @@ import type { AgentIsolationDefault, WorkspaceShape } from "./workspace.js";
 import type { AccountUsageState, PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
 import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
 import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
+import type {
+  ProjectTaskActionParams,
+  ProjectTaskActionResult,
+  ProjectTaskLinkExecutionParams,
+  ProjectTaskLinkExecutionResult,
+  ProjectWorkApproveParams,
+  ProjectWorkApproveResult,
+  ProjectWorkArchiveParams,
+  ProjectWorkArchiveResult,
+  ProjectWorkAttentionNotification,
+  ProjectWorkBlobReadParams,
+  ProjectWorkBlobReadResult,
+  ProjectWorkCommentParams,
+  ProjectWorkCommentResult,
+  ProjectWorkCreateParams,
+  ProjectWorkDeleteParams,
+  ProjectWorkDeleteResult,
+  ProjectWorkGetParams,
+  ProjectWorkGetResult,
+  ProjectWorkLinkParams,
+  ProjectWorkLinkResult,
+  ProjectWorkListParams,
+  ProjectWorkListResult,
+  ProjectWorkResolveCommentParams,
+  ProjectWorkResolveCommentResult,
+  ProjectWorkReviewParams,
+  ProjectWorkReviewResult,
+  ProjectWorkReviseParams,
+  ProjectWorkSearchParams,
+  ProjectWorkSearchResults,
+  ProjectWorkUnlinkParams,
+  ProjectWorkUnlinkResult,
+  ProjectWorkUpdatedNotification,
+  ProjectWorkWriteResult,
+} from "./project-work-methods.js";
 // Type-only, and erased: `pending.ts` augments the interfaces below, so the
 // cycle exists in the type graph and never in the emitted modules.
 import type { PendingMessage } from "./pending.js";
@@ -1967,6 +2002,45 @@ export interface ClientRequests {
   /** `text` is "" when the phrase was claimed by a prompt while still in flight. */
   "pi/transcribe/end": { params: { id: string }; result: { text: string } };
   "pi/transcribe/cancel": { params: { id: string }; result: {} };
+
+  // ------------------------------------------------- M21 · project work --
+  // The project lifecycle (docs/project-lifecycle-leap.md). Every one of these
+  // is answered by the host from its own canonical store: a read never starts
+  // a worker, and a write is the host's authority, not a session's. Shapes,
+  // bounds and conflict behaviour live in `project-work-methods.ts`.
+
+  /** One page of the project's backlog, or everything after `sinceSeq`. */
+  "project/work/list": { params: ProjectWorkListParams; result: ProjectWorkListResult };
+  /** One entity at one exact revision, with its optional related records. */
+  "project/work/get": { params: ProjectWorkGetParams; result: ProjectWorkGetResult };
+  /** The value-only search projection. Keys match exactly and rank first. */
+  "project/work/search": { params: ProjectWorkSearchParams; result: ProjectWorkSearchResults };
+  /** A ranged read of one content-addressed blob. */
+  "project/work/blob/read": { params: ProjectWorkBlobReadParams; result: ProjectWorkBlobReadResult };
+  /** Create an entity and its first revision. Allocates the next key. */
+  "project/work/create": { params: ProjectWorkCreateParams; result: ProjectWorkWriteResult };
+  /** Append a child revision and move the current pointer after it commits. */
+  "project/work/revise": { params: ProjectWorkReviseParams; result: ProjectWorkWriteResult };
+  /** Archive or restore. Reversible, and every link is kept. */
+  "project/work/archive": { params: ProjectWorkArchiveParams; result: ProjectWorkArchiveResult };
+  /** Permanent deletion. Without `confirm` this is the preview and writes nothing. */
+  "project/work/delete": { params: ProjectWorkDeleteParams; result: ProjectWorkDeleteResult };
+  /** A review comment anchored to a revision and a semantic target. */
+  "project/work/comment": { params: ProjectWorkCommentParams; result: ProjectWorkCommentResult };
+  /** The review actions that are not approvals. */
+  "project/work/review": { params: ProjectWorkReviewParams; result: ProjectWorkReviewResult };
+  /** A gate decision binding an exact revision set (D-332). */
+  "project/work/approve": { params: ProjectWorkApproveParams; result: ProjectWorkApproveResult };
+  /** Mark a comment addressed (agent) or resolved/reopened (person). */
+  "project/work/resolve-comment": { params: ProjectWorkResolveCommentParams; result: ProjectWorkResolveCommentResult };
+  /** Add a dependency edge, repository link, evidence record or decision. */
+  "project/work/link": { params: ProjectWorkLinkParams; result: ProjectWorkLinkResult };
+  /** Remove one of those by its link id. */
+  "project/work/unlink": { params: ProjectWorkUnlinkParams; result: ProjectWorkUnlinkResult };
+  /** An explicit Task transition. A run ending is never one of these. */
+  "project/task/action": { params: ProjectTaskActionParams; result: ProjectTaskActionResult };
+  /** Join a Task to a session, run, checkpoint, branch or command. */
+  "project/task/link-execution": { params: ProjectTaskLinkExecutionParams; result: ProjectTaskLinkExecutionResult };
 }
 
 /** Answer to `pi/transcribe/status`. */
@@ -2037,6 +2111,15 @@ export interface HostNotifications {
   // ----------------------------------------------------------------- M11 --
   /** A host-owned preference namespace changed, on any device. */
   "pi/prefs/updated": PrefsEntry;
+
+  // ----------------------------------------------------------------- M21 --
+  /**
+   * One project-work change, with the project's event sequence number. A
+   * client that missed some reconciles with `project/work/list { sinceSeq }`.
+   */
+  "project/work/updated": ProjectWorkUpdatedNotification;
+  /** What is waiting on a person in this project, and how many things there are. */
+  "project/work/attention": ProjectWorkAttentionNotification;
 }
 
 export type ClientMethod = keyof ClientRequests;
