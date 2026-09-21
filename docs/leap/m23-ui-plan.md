@@ -143,8 +143,9 @@ into this branch and the whole workspace is green.
   `activity-beam` keep the word as a description of light (see the survivor
   table). `packages/ui/src` has no person-visible "Beam"/"Namer" copy left.
 - `docs/mobile.md`, `docs/ux-elements.md`, `docs/ux-theme.md` and
-  `packages/ui/DESIGN.md` still describe the spark, the bubble and the Beam
-  group; the code no longer has them.
+  `docs/agents.md` §7 still describe the spark, the bubble and the Beam group;
+  the code no longer has them. (`packages/ui/DESIGN.md` and
+  `packages/ui/README.md` never named Beam and needed no change.)
 - The new keyboard shortcut `Mod+Shift+N` (D-v) wants a line wherever
   shortcuts are documented.
 
