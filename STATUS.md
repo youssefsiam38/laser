@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T19:06:46+03:00 · leap integration · HEAD: 64c701cc
+**Last updated:** 2026-09-21T19:11:34+03:00 · leap integration · HEAD: 376dd920
 **Current focus:** M21 integration and acceptance gaps. T13/T14/T21 checkpoints merged, not yet accepted; T19 checkpoint returned for required corrections. M26 v0.14.0 is published and verified; M21 remains the next release gate.
 
 | Milestone | State |
@@ -35,7 +35,7 @@
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
-**Active owners:** T13/T14 approval-projection/gate proof (`f4286351` batch passed focused gates); T18/T19 durable capture implementation (Command/convergence checkpoint `48ca7d60`, owner merge `f86b2d07`); T9/T17 explicit ephemeral SDK identity seam approved (D-362), patch and consumer implementation. T21 single review-fix batch (`run_587c6d87`). M26 publication completed; all four active owners are on M21. Exact paths/sessions in `STATUS_DETAILED.md`.
+**Active owners:** T13/T14 final decision precedence (`8f6bbb57` authority/gate proofs passed); T18/T19 durable capture implementation (Command/convergence checkpoint `48ca7d60`, owner merge `f86b2d07`); T9/T17 explicit ephemeral SDK identity seam approved (D-362), patch and consumer implementation. T21 exact document-deletion proof + selected-checkpoint preview (`0bdafdbe` partial batch passed). M26 publication completed; all four active owners are on M21. Exact paths/sessions in `STATUS_DETAILED.md`.
 **Gate:** merged build/typecheck, host lifecycle 179/179 and UI design 97/97 pass. Full verify failed CLI timeout (focused 2/2 pass); M26 release preparation initially failed MCP status test (focused 11/11 pass); full staged gate passed on resume without bypass. Browser acceptance remains the person's (D-342).
 **Published:** v0.14.0 Latest (M26), v0.13.0 (M23), v0.12.0 (M22). Candidate `ac098597`; exact-source CI `35616431166` and release `35616858358` attempt4 pass. Twelve assets, manifest digests and source-bound provenance verified by release controller; evidence `docs/leap/m26-release-evidence.json`. Parent merged release metadata (`64c701cc`), identity check passes. Final integrated main-branch gates remain required.
 **Next dependency-ready work:** finish active corrections/review, close T9/T17 worker mention-context delivery gap (tasks reopened), then T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
