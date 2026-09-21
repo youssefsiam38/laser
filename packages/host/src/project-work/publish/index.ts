@@ -291,12 +291,11 @@ export class ProjectWorkPublish {
    * so both shapes of export can be published.
    */
   private currentExportAt(projectId: string, root: string): ComputedExport | undefined {
+    const projectRoot = projectDirectory(this.store, projectId);
+    const absolute = insideProject(projectRoot, root);
     for (const includeArchived of [false, true]) {
       const computed = this.exporter.compute(projectId, root, includeArchived);
-      const projectRoot = projectDirectory(this.store, projectId);
-      const absolute = insideProject(projectRoot, root);
-      const onDisk = readAll(projectRoot, absolute, computed);
-      if (onDisk) return computed;
+      if (readAll(projectRoot, absolute, computed)) return computed;
     }
     return undefined;
   }

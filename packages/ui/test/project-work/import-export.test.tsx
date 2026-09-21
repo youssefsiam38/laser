@@ -243,6 +243,45 @@ describe("Export…", () => {
     expect(apply.params["mode"]).toBe("replace");
     expect(apply.params["previewDigest"]).toBe(DIGEST);
   });
+
+  it("names every file a replace would remove, and every one it keeps instead", async () => {
+    const world = await fixture();
+    world.answers.set("project/work/export/preview", {
+      ...base,
+      existing: { root: ROOT, files: 6, manifestDigest: "c".repeat(64), unchanged: false },
+      removes: ["SPEC-9.md", "bodies/SPEC-9.json"],
+      preserved: [{ path: "bodies/SPEC-8.json", reason: "changed" }],
+    });
+
+    await act(async () => root.render(<ExportDialog store={world.store} open onOpenChange={() => {}} />));
+    await act(async () => {});
+
+    // The count is the honest total, and the paths themselves are on screen:
+    // a deletion a person confirms is one they were shown, file by file.
+    expect(text()).toContain("2 files of the export already there would be removed");
+    const removed = document.body.querySelector<HTMLElement>('[aria-label="Files this export would remove"]');
+    expect(removed?.textContent).toContain("SPEC-9.md");
+    expect(removed?.textContent).toContain("bodies/SPEC-9.json");
+    // And what is kept rather than removed says which file and why.
+    expect(text()).toContain("bodies/SPEC-8.json");
+    expect(text()).toContain("changed here");
+  });
+
+  it("says plainly when nothing in that folder can be removed", async () => {
+    const world = await fixture();
+    world.answers.set("project/work/export/preview", {
+      ...base,
+      existing: { root: ROOT, files: 3, unchanged: false },
+      removes: [],
+      removeRefusal: "There is no export manifest in that folder, so nothing already in it will be deleted.",
+    });
+
+    await act(async () => root.render(<ExportDialog store={world.store} open onOpenChange={() => {}} />));
+    await act(async () => {});
+
+    expect(text()).toContain("nothing already in it will be deleted");
+    expect(document.body.querySelector('[aria-label="Files this export would remove"]')).toBeNull();
+  });
 });
 
 describe("Publish…", () => {

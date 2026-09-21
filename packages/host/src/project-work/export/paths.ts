@@ -308,6 +308,12 @@ export function walkFiles(root: string, options: { max: number; extensions?: rea
  * `maxBytes + 1` bytes are ever pulled into memory, and that one extra byte is
  * the whole test — if it arrives, the file is over the ceiling and nothing is
  * returned.
+ *
+ * The buffer starts at the size the file really is, not at the ceiling: this is
+ * called once per file of an export with a 64 MiB ceiling, and a small document
+ * must not cost 64 MiB of transient memory. A file that outgrows its own
+ * measurement grows the buffer instead, still stopping one byte past the
+ * ceiling, so the bound holds whatever the file does.
  */
 export function readTextFile(path: string, maxBytes: number): string | undefined {
   const noFollow = constants.O_NOFOLLOW ?? 0;
@@ -320,9 +326,17 @@ export function readTextFile(path: string, maxBytes: number): string | undefined
   try {
     const stat = fstatSync(handle);
     if (!stat.isFile() || stat.size > maxBytes) return undefined;
-    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    const ceiling = maxBytes + 1;
+    let buffer = Buffer.allocUnsafe(Math.min(stat.size, maxBytes) + 1);
     let read = 0;
     for (;;) {
+      if (read === buffer.byteLength) {
+        // The file grew past the size it was measured at. Read on — bounded by
+        // the ceiling, never by what `fstat` happened to say.
+        const grown = Buffer.allocUnsafe(Math.min(buffer.byteLength * 2, ceiling));
+        buffer.copy(grown, 0, 0, read);
+        buffer = grown;
+      }
       const got = readSync(handle, buffer, read, buffer.byteLength - read, null);
       if (got <= 0) break;
       read += got;

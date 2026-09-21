@@ -62,7 +62,7 @@ export class ProjectWorkImport {
     return {
       adapter: params.adapter,
       root: output.root,
-      previewDigest: previewDigest(params.adapter, output, proposals),
+      previewDigest: previewDigest(params.adapter, output, matched),
       proposals,
       creates: proposals.filter((proposal) => proposal.action === "create").length,
       conflicts: proposals.filter((proposal) => proposal.action === "decide").length,
@@ -84,10 +84,10 @@ export class ProjectWorkImport {
   apply(params: WorkImportApplyParams, origin: ProjectWorkOrigin): Omit<WorkImportApplyResult, "seq"> {
     const { output, matched } = this.read(params.projectId, params.adapter, params.path);
     const proposals = matched.map((row) => row.proposal);
-    const digest = previewDigest(params.adapter, output, proposals);
+    const digest = previewDigest(params.adapter, output, matched);
     if (digest !== params.previewDigest) {
       throw new ProjectWorkRefusedError(
-        "Those files changed after that preview, so nothing was imported. Preview the import again to see what would be created now.",
+        "Those files, or the work here they would update, changed after that preview, so nothing was imported. Preview the import again to see what would be created and what would be updated now.",
       );
     }
     const decisions = new Map((params.decisions ?? []).map((decision) => [decision.sourceId, decision.choice]));
@@ -318,16 +318,20 @@ function importNote(item: ParsedItem): string {
 }
 
 /**
- * What the person confirmed: the adapter, the root, and every proposal with
- * the digest of the file it came from. A source file edited between the
- * preview and the press changes this, and the apply refuses.
+ * What the person confirmed: the adapter, the root, every proposal with the
+ * digest of the file it came from, **and the exact revision of the work each
+ * one would land on**. A source file edited between the preview and the press
+ * changes this, and so does a matched item gaining a revision: a person who
+ * confirmed "new revision" onto the content they read may not have it appended
+ * to content they never saw. Either way the apply refuses and asks for a fresh
+ * preview.
  */
-function previewDigest(adapter: WorkImportAdapter, output: AdapterOutput, proposals: readonly WorkImportProposal[]): string {
+function previewDigest(adapter: WorkImportAdapter, output: AdapterOutput, matched: readonly Matched[]): string {
   return sha256(
     canonicalJson({
       adapter,
       root: output.root,
-      proposals: proposals.map((proposal) => ({
+      proposals: matched.map(({ proposal, match }) => ({
         sourceId: proposal.sourceId,
         kind: proposal.kind,
         title: proposal.title,
@@ -335,6 +339,10 @@ function previewDigest(adapter: WorkImportAdapter, output: AdapterOutput, propos
         path: proposal.source.path,
         action: proposal.action,
         match: proposal.match?.entityId ?? null,
+        // The revision the apply would revise, and that revision's own digest:
+        // the fence the other two applies already have.
+        matchRevision: match?.expectedRevisionId ?? null,
+        matchDigest: proposal.match?.digest ?? null,
       })),
       relations: output.relations.map((relation) => [relation.relation, relation.subjectKey, relation.objectKey]),
     }),

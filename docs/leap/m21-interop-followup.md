@@ -211,6 +211,177 @@ Three contract holes in the new helpers, fixed as one batch:
    own last name is a link is refused — rather than widening the policy to
    match the sentence.
 
+## The independent review's corrections (batch two)
+
+`docs/leap/m21-interop-review.md` reviewed the whole of M21-T21 at `1a157c44`
+and found five non-blocking items. Four of them are fixed here as one batch
+(F1, F2, F4, F5); the fifth (F3, the checkpoint publication having no person-
+facing surface) is a contract change with a written plan below, waiting on the
+owner's approval before any of it is coded.
+
+### F1 · a `replace` may delete only what it can prove it wrote
+
+The previous behaviour: `staleFiles` read the manifest already in the export
+folder, `JSON.parse`d it **without validating it**, and offered every
+`entity.document` / `entity.body` it named as a deletion candidate after only a
+containment, forbidden-area and regular-file check. Containment did bound it to
+the export root — `insideProjectAt` refuses a path that leaves the base, so a
+`..` path in a manifest was already refused — but inside that folder a manifest
+anyone could write decided what got unlinked, and the UI showed the removals as
+a **count** rather than as paths.
+
+Now, in `export/index.ts`:
+
+1. **The manifest is validated** against the canonical
+   `projectWorkManifestSchema` (`previousManifest`). Absent, unreadable or
+   invalid: nothing in that folder is deleted, and the preview carries
+   `removeRefusal` — a sentence saying the export's own files are written over,
+   everything else is kept, and what to do if they want a folder the app keeps
+   alone. Failing closed here means keeping a person's files, so it is also the
+   safe direction.
+2. **The layout must be this product's own for that identity.** A candidate is
+   only ever `<KEY>.md` and `bodies/<KEY>.json` for the key the manifest row
+   itself carries. A row naming any other path inside the export does not
+   authorise deleting it.
+3. **The bytes must still be the bytes that export wrote** (`bodyStillIs`): the
+   body file is canonicalised and compared against the `digest` and `bodyBytes`
+   the manifest declared for that revision. A body that was edited, replaced,
+   missing or over the read ceiling is a **conflict**: it and its document are
+   kept, and the preview reports them as `preserved` with the reason
+   (`changed`, `not_this_export`).
+4. The preview digest binds `removes`, `preserved` and `removeRefusal`, so a
+   file that turned from a leftover into someone's own work between the preview
+   and the press is a refusal rather than a deletion.
+5. The export dialog lists **the exact paths** a replace would remove, in a
+   bounded scrolling list, with the whole count in the sentence above it; the
+   files list shares the height so the dialog still fits a short window. What is
+   kept instead is one line naming the first file, its reason, and an honest
+   "and N more".
+
+**Known limit, stated rather than implied:** a document (`<KEY>.md`) has no
+digest of its own in the manifest — the manifest fences the *body*. So a
+leftover document whose body still proves the pair is removed even if someone
+edited that document by hand. It is named in the preview before anything
+happens, and the export's own README says editing an export changes nothing;
+recording document digests in the manifest would be a format change, which this
+batch does not make. A body that is only **reformatted** (same JSON, different
+whitespace) still proves the pair, by design: it is the same content.
+
+### F2 · the import fence binds the revision it would land on
+
+`previewDigest` in `import/index.ts` recorded `match.entityId` and nothing about
+which revision it matched, so a matched item that gained a revision between the
+preview and the apply was still revised — appending a child revision onto
+content the person never read. The digest now also binds the matched
+`expectedRevisionId` and that revision's digest, which is the fence the export
+and publish applies already had, and the refusal sentence says the files *or the
+work here they would update* changed. A fresh preview applies against what is
+there now.
+
+### F4 · the read ceiling no longer allocates the ceiling
+
+`readTextFile` allocated `maxBytes + 1` whatever the file's size — one 64 MiB
+transient buffer per file while checking an existing export. It now allocates
+`min(stat.size, maxBytes) + 1` and **grows** (doubling, capped at `maxBytes + 1`)
+only if the file outgrows its own measurement, so the ceiling is still enforced
+on the read: a file that grows mid-read still trips the refusal at one byte over.
+
+### F5 · the two straightforward cleanups
+
+- `export/index.ts` · `params.mode ?? (existing ? "replace" : "replace")` →
+  `params.mode ?? "replace"`.
+- `publish/index.ts` · `currentExportAt` resolved the project directory and the
+  export root inside its two-iteration loop; both are hoisted.
+- The review's third item (one shared `ProjectWorkExport` instead of one in
+  `ProjectWorkPublish` and one in `ProjectWorkMethods`) is **not done**:
+  `methods.ts` belongs to another task's owner right now, and a constructor
+  dependency there is not this batch's to change. Both instances are stateless
+  beyond the store, so this is tidiness, not behaviour.
+
+### The method byte-limit tables
+
+`PROJECT_WORK_INTEROP_METHOD_LIMITS` is still declared and not consumed, exactly
+as the spine's table is. The review noted it; enforcement is M21-T22's
+("method-policy coverage"), and this batch deliberately does not expand into it.
+Requests stay bounded by the length-bounded schemas.
+
+### Evidence for batch two
+
+| Command (`env -i PATH HOME`) | Result |
+| --- | --- |
+| `vitest run test/project-work/` (host) | 14 files, 205 passed |
+| `vitest run test/project-work/interop*.test.ts` (host) | 3 files, 51 passed |
+| `pnpm -F @lasercode/protocol test` | 46 files, 727 passed, no type errors |
+| `pnpm -F @lasercode/ui exec vitest run test/project-work` | 22 files, 175 passed |
+| `pnpm -F @lasercode/host test` | see the commit message for the run at this revision |
+| `pnpm -r build`, `pnpm -r typecheck`, `pnpm identity:check` | see the commit message |
+
+New tests, all fixture- or mock-based, with no traversal and no external target:
+
+- `interop.test.ts` · a `replace` after two items left the project removes only
+  the pair whose body still matches its declared digest, and keeps the edited
+  body and its document byte-for-byte; a manifest this app did not write leaves
+  every file in the folder alone and says so; a schema-valid manifest edited to
+  name another file inside the export keeps that file instead of deleting it.
+- `interop.test.ts` · an import apply is refused when the matched item gained a
+  revision after the preview, nothing is written, and a fresh preview applies.
+- `interop-paths.test.ts` · the read asks for the file's own size plus one byte
+  rather than the ceiling, and still returns a file whole when it grew past its
+  measurement while staying under the ceiling.
+- `import-export.test.tsx` (ui) · the replace preview names every removed path
+  (proxy: the list's `aria-label` and its text) with the honest total in the
+  sentence, names what is kept and why, and says plainly when nothing in the
+  folder can be removed.
+
+## F3 · the plan for a checkpoint publication surface (awaiting approval)
+
+What exists: the host and the protocol fully support publishing against an M20
+checkpoint, proved against that checkpoint's commit; `PublishDialog` always
+sends `commit: "HEAD"` and gates the button on `preview.ready`, so the path is
+reachable over the wire and not by the person the product is for. `plan()`
+always measures the export against `HEAD`, so a text field for a checkpoint id
+would be a way to bypass the ready gate, not a surface — the preview itself has
+to validate the selected source.
+
+The shape proposed, all additive:
+
+- **protocol** (`project-work-interop.ts`): `WorkPublishSource`
+  (`kind: "commit" | "checkpoint"`, resolved `commitObjectId`, `checkpointId?`,
+  a display `label`, `carriesExport`, bounded `missing[]`); preview params gain
+  an optional `source` selection (omitted = the current commit, today's
+  behaviour); the preview result gains `selected: WorkPublishSource` and
+  `sources: WorkPublishSource[]`, bounded at a new
+  `WORK_PUBLISH_SOURCES_MAX = 20`. Apply params are unchanged — `commit` and
+  `checkpointId` already carry the selection, and no old-schema machinery is
+  added.
+- **host** (`publish/git.ts`, `publish/index.ts` only): `listCheckpoints(cwd,
+  max)` — one bounded read-only `for-each-ref --count=<max>
+  --sort=-creatordate --format=%(refname)%00%(objectname)
+  <CHECKPOINT_REF_NAMESPACE>`, every row parsed with the shared
+  `parseCheckpointRef` and proved to be a commit through the existing
+  `resolveCommit`. No worker, no new route, no change to the T18/T19
+  source-control evidence code. `plan()` measures the export against the
+  **selected** source's tree (the existing `treeAt` + `blobObjectId` proof),
+  `publishDigest` binds that source's kind, resolved commit id and ref in place
+  of `head`, and `apply` resolves the same selection (`checkpointCommit`
+  unchanged for the exact-ref proof), recomputes and refuses a source that moved.
+- **UI** (`ImportExportDialogs.tsx`, `project-work/store.ts`): a source chooser
+  — "Current commit" plus one row per discovered checkpoint, in the existing
+  `aria-pressed` button style, **no free-text id field**. Choosing one
+  re-previews, so the digest always fences the state on screen; each row says
+  whether that state carries the export; the confirm button stays gated on the
+  selected source's `ready`.
+- **tests**: host — a real checkpoint selected in the preview is shown as the
+  resolved source and applies against its commit; a selected checkpoint that
+  does not carry the export is not ready and names the missing files; a moved
+  source refuses at apply; `listCheckpoints` bounded and namespace-only with git
+  mocked. UI — the chooser lists candidates, sends the selected identity, has no
+  text input, and stays disabled while the selection does not carry the export.
+
+Rough size: ~40 lines protocol, ~120 host, ~60 UI, five tests. Nothing here
+fabricates an id, relaxes a proof, or switches the default away from the current
+commit.
+
 ## What is not covered
 
 - The three interop previews and their typed confirmations are unchanged, and

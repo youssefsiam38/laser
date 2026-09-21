@@ -26,19 +26,23 @@ import {
   WORK_EXPORT_ENTITIES_MAX,
   WORK_EXPORT_FILES_LISTED_MAX,
   WORK_EXPORT_MAX_BYTES,
+  projectWorkManifestSchema,
   type ProjectWorkListItem,
   type ProjectWorkManifest,
   type WorkExportApplyParams,
   type WorkExportApplyResult,
   type WorkExportFile,
   type WorkExportMode,
+  type WorkExportPreserved,
+  type WorkExportPreserveReason,
   type WorkExportPreviewParams,
   type WorkExportPreviewResult,
   type WorkManifestAttachment,
+  type WorkManifestEntity,
 } from "@lasercode/protocol";
 
 import { ProjectWorkRefusedError } from "../errors.js";
-import { canonicalJson, sha256 } from "../ids.js";
+import { bodyDigest, canonicalJson, sha256 } from "../ids.js";
 import type { ProjectWorkStore } from "../store.js";
 import { renderDocument } from "./markdown.js";
 import { attachmentsOf, buildManifest, manifestBytes, type ManifestEntityInput } from "./manifest.js";
@@ -71,6 +75,17 @@ export interface ComputedExport {
 const MANIFEST_FILE = "manifest.json";
 const README_FILE = "README.md";
 const BODIES_DIR = "bodies";
+/** The ceiling for reading a previous export's manifest or one of its bodies. */
+const PREVIOUS_FILE_MAX_BYTES = 8 * 1024 * 1024;
+
+/** What a `replace` may delete, what it keeps, and why it may delete nothing. */
+interface StaleFiles {
+  removes: string[];
+  preserved: WorkExportPreserved[];
+  refusal?: string;
+}
+
+const NO_STALE_FILES: StaleFiles = { removes: [], preserved: [] };
 
 export class ProjectWorkExport {
   constructor(private readonly store: ProjectWorkStore) {}
@@ -79,21 +94,23 @@ export class ProjectWorkExport {
     const root = this.rootOf(params.path);
     const computed = this.compute(params.projectId, root, params.includeArchived === true);
     const existing = this.existingAt(params.projectId, root, computed);
-    const mode = params.mode ?? (existing ? "replace" : "replace");
+    const mode = params.mode ?? "replace";
     const target = mode === "new_revision" && existing ? this.nextRevisionRoot(params.projectId, root) : root;
     const placed = target === root ? computed : { ...computed, root: target };
-    const removes = mode === "replace" && existing ? this.staleFiles(params.projectId, root, computed) : [];
+    const stale = mode === "replace" && existing ? this.staleFiles(params.projectId, root, computed) : NO_STALE_FILES;
 
     return {
       root: placed.root,
-      previewDigest: previewDigest(placed, mode, removes),
+      previewDigest: previewDigest(placed, mode, stale),
       files: placed.files.slice(0, WORK_EXPORT_FILES_LISTED_MAX),
       entities: placed.entities,
       attachments: placed.attachments,
       totalBytes: placed.totalBytes,
       mode,
       ...(existing ? { existing } : {}),
-      removes,
+      removes: stale.removes,
+      ...(stale.preserved.length > 0 ? { preserved: stale.preserved } : {}),
+      ...(stale.refusal !== undefined ? { removeRefusal: stale.refusal } : {}),
       ...(existing && params.mode === undefined
         ? { decide: { reason: "existing_export" as const, choices: ["replace", "new_revision"] as const } }
         : {}),
@@ -108,8 +125,9 @@ export class ProjectWorkExport {
    * digest the person confirmed: work that moved between the preview and the
    * press is a refusal naming what to do, never a write of something they did
    * not see. Files are written atomically, one by one; a previous export's
-   * leftovers are removed only in `replace`, and only files the previous
-   * manifest itself listed.
+   * leftovers are removed only in `replace`, and only the files a **valid**
+   * previous manifest listed in this product's own layout whose bytes still
+   * match the digest it declared (see {@link ProjectWorkExport.staleFiles}).
    */
   apply(params: WorkExportApplyParams): Omit<WorkExportApplyResult, "seq"> {
     const root = this.rootOf(params.path);
@@ -123,8 +141,9 @@ export class ProjectWorkExport {
     }
     const target = mode === "new_revision" && existing ? this.nextRevisionRoot(params.projectId, root) : root;
     const placed = target === root ? computed : { ...computed, root: target };
-    const removes = mode === "replace" && existing ? this.staleFiles(params.projectId, root, computed) : [];
-    const digest = previewDigest(placed, mode, removes);
+    const stale = mode === "replace" && existing ? this.staleFiles(params.projectId, root, computed) : NO_STALE_FILES;
+    const removes = stale.removes;
+    const digest = previewDigest(placed, mode, stale);
     if (digest !== params.previewDigest) {
       throw new ProjectWorkRefusedError(
         "This project's work changed after that preview, so nothing was written. Preview the export again to see what would be written now.",
@@ -260,7 +279,7 @@ export class ProjectWorkExport {
     const projectRoot = projectDirectory(this.store, projectId);
     const absolute = insideProject(projectRoot, root);
     if (kindOf(absolute) !== "directory") return undefined;
-    const manifestText = readTextFile(insideProjectAt(projectRoot, absolute, MANIFEST_FILE), 8 * 1024 * 1024);
+    const manifestText = readTextFile(insideProjectAt(projectRoot, absolute, MANIFEST_FILE), PREVIOUS_FILE_MAX_BYTES);
     if (manifestText === undefined) {
       const walked = walkFiles(absolute, { max: WORK_EXPORT_FILES_LISTED_MAX });
       if (walked.files.length === 0) return undefined;
@@ -278,30 +297,67 @@ export class ProjectWorkExport {
   }
 
   /**
-   * The files a previous export wrote that this one does not.
+   * The files a previous export wrote that this one does not — and nothing
+   * else.
    *
-   * Taken from the previous **manifest**, never from a scan: a file a person
-   * put in that folder themselves is not this export's to delete.
+   * A manifest on disk is a file anyone can write, so it authorises no deletion
+   * by itself. Three things must hold before a path becomes a candidate:
+   *
+   * 1. the manifest **validates** against the canonical schema
+   *    (`projectWorkManifestSchema`). One that does not is not this product's
+   *    export: nothing in that folder is deleted, and the preview says so in a
+   *    sentence rather than silently keeping everything;
+   * 2. the entity's paths are the ones an export of this product **generates**
+   *    for that identity — `<KEY>.md` and `bodies/<KEY>.json` for the key the
+   *    manifest row itself carries. A manifest may not name some other file and
+   *    have it deleted, whatever the path resolves to;
+   * 3. the bytes on disk are still the bytes that export wrote, proved against
+   *    the **digest the manifest declared** for that revision's body. A body
+   *    that was edited, replaced or is missing is a conflict: it and its
+   *    document are kept, and the preview names them.
+   *
+   * So a `replace` deletes only files it can prove a previous export of this
+   * project wrote and nobody has touched since. Everything it cannot prove is
+   * reported as preserved and left exactly as it is.
    */
-  private staleFiles(projectId: string, root: string, computed: ComputedExport): string[] {
+  private staleFiles(projectId: string, root: string, computed: ComputedExport): StaleFiles {
     const projectRoot = projectDirectory(this.store, projectId);
     const absolute = insideProject(projectRoot, root);
-    const manifestText = readTextFile(insideProjectAt(projectRoot, absolute, MANIFEST_FILE), 8 * 1024 * 1024);
-    if (manifestText === undefined) return [];
-    let previous: ProjectWorkManifest;
-    try {
-      previous = JSON.parse(manifestText) as ProjectWorkManifest;
-    } catch {
-      return [];
-    }
+    const previous = this.previousManifest(projectRoot, absolute);
+    if (!previous.entities) return { removes: [], preserved: [], ...(previous.refusal !== undefined ? { refusal: previous.refusal } : {}) };
+
     const written = new Set(computed.files.map((file) => file.path));
     const stale = new Set<string>();
-    for (const entity of previous.entities ?? []) {
-      for (const path of [entity.document, entity.body]) {
-        if (typeof path !== "string" || written.has(path)) continue;
-        // A manifest is a file a person can edit. One that names a path this
-        // export may not touch is not a reason to refuse the whole export:
-        // that path is simply not one of this export's leftovers.
+    const preserved = new Map<string, WorkExportPreserveReason>();
+    const keep = (path: unknown, reason: WorkExportPreserveReason): void => {
+      if (typeof path !== "string" || written.has(path) || preserved.has(path)) return;
+      // A path the manifest names that this export may not touch at all is not
+      // a file to report either: it is simply not part of this export.
+      let absolutePath: string;
+      try {
+        absolutePath = insideProjectAt(projectRoot, absolute, path);
+      } catch {
+        return;
+      }
+      if (kindOf(absolutePath) !== "file") return;
+      preserved.set(path, reason);
+    };
+
+    for (const entity of previous.entities) {
+      const document = `${entity.key}.md`;
+      const body = `${BODIES_DIR}/${entity.key}.json`;
+      if (entity.document !== document || entity.body !== body) {
+        keep(entity.document, "not_this_export");
+        keep(entity.body, "not_this_export");
+        continue;
+      }
+      if (!this.bodyStillIs(projectRoot, absolute, body, entity)) {
+        keep(document, "changed");
+        keep(body, "changed");
+        continue;
+      }
+      for (const path of [document, body]) {
+        if (written.has(path)) continue;
         let absolutePath: string;
         try {
           absolutePath = insideProjectAt(projectRoot, absolute, path);
@@ -312,7 +368,71 @@ export class ProjectWorkExport {
         stale.add(path);
       }
     }
-    return [...stale].sort(compare);
+
+    return {
+      removes: [...stale].sort(compare),
+      preserved: [...preserved.entries()].map(([path, reason]) => ({ path, reason })).sort((a, b) => compare(a.path, b.path)),
+    };
+  }
+
+  /**
+   * The previous export's manifest, or the sentence saying why this export may
+   * delete nothing in that folder.
+   *
+   * Fails closed in both directions: an unreadable or invalid manifest gives no
+   * deletion list at all, and the person is told plainly that their files stay.
+   */
+  private previousManifest(projectRoot: string, absolute: string): { entities?: WorkManifestEntity[]; refusal?: string } {
+    const manifestText = readTextFile(insideProjectAt(projectRoot, absolute, MANIFEST_FILE), PREVIOUS_FILE_MAX_BYTES);
+    if (manifestText === undefined) {
+      return {
+        refusal:
+          "There is no export manifest in that folder, so nothing already in it will be deleted. This export's own files are written over; everything else there is kept as it is.",
+      };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(manifestText);
+    } catch {
+      return {
+        refusal:
+          "The manifest in that folder is not readable, so nothing already in it will be deleted. This export's own files are written over; everything else there is kept. Export to another folder if you want one this app keeps alone.",
+      };
+    }
+    const validated = projectWorkManifestSchema.safeParse(parsed);
+    if (!validated.success) {
+      return {
+        refusal:
+          "The manifest in that folder is not one this app wrote, so nothing already in it will be deleted. This export's own files are written over; everything else there is kept. Export to another folder if you want one this app keeps alone.",
+      };
+    }
+    return { entities: validated.data.entities };
+  }
+
+  /**
+   * Is this body file still the exact revision the previous manifest declared?
+   *
+   * The manifest carries that revision's canonical digest and byte count, so
+   * the file's own bytes prove it: canonicalise what is there and compare. A
+   * file that is missing, unparseable, over the read ceiling or different in
+   * any byte answers `false`, and nothing about that item is deleted.
+   */
+  private bodyStillIs(projectRoot: string, absolute: string, body: string, entity: WorkManifestEntity): boolean {
+    let text: string | undefined;
+    try {
+      text = readTextFile(insideProjectAt(projectRoot, absolute, body), PREVIOUS_FILE_MAX_BYTES);
+    } catch {
+      return false;
+    }
+    if (text === undefined) return false;
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      return false;
+    }
+    const { digest, bytes } = bodyDigest(json);
+    return digest === entity.digest && bytes === entity.bodyBytes;
   }
 
   /** `…/work` → `…/work-2`, the first free one. A new revision never overwrites. */
@@ -331,14 +451,19 @@ export class ProjectWorkExport {
  * and every file this would delete. Anything that changes what lands on disk
  * changes this, so a stale confirmation cannot write.
  */
-function previewDigest(computed: ComputedExport, mode: WorkExportMode, removes: readonly string[]): string {
+function previewDigest(computed: ComputedExport, mode: WorkExportMode, stale: StaleFiles): string {
   return sha256(
     canonicalJson({
       root: computed.root,
       mode,
       manifestDigest: computed.manifestDigest,
       files: computed.files.map((file) => ({ path: file.path, digest: file.digest, bytes: file.bytes })),
-      removes: [...removes],
+      removes: [...stale.removes],
+      // What is kept, and why, is part of what the person confirmed: a file that
+      // changed from a leftover into someone's own work between the preview and
+      // the press is a refusal, not a deletion.
+      preserved: stale.preserved.map((entry) => [entry.path, entry.reason]),
+      removeRefusal: stale.refusal ?? null,
     }),
   );
 }

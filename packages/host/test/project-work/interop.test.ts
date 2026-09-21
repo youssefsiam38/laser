@@ -276,6 +276,64 @@ describe("import adapters", () => {
     expect(revisedSpec.revisionCount).toBe(2);
   });
 
+  it("refuses an apply when the work a proposal would revise gained a revision after the preview", async () => {
+    h = harnessWithProjectFolder();
+    writeSpecKit(h.projectRoot);
+    await importApply(h, "spec_kit", await importPreview(h, "spec_kit"), { key: "i1" });
+
+    const second = await importPreview(h, "spec_kit");
+    const conflicted = second.proposals.find((proposal) => proposal.kind === "spec")!;
+    const decisions = second.proposals.map((proposal) => ({
+      sourceId: proposal.sourceId,
+      choice: proposal.sourceId === conflicted.sourceId ? "new_revision" : "skip",
+    }));
+
+    // The item that proposal would land on is revised in the app, in between.
+    // The files did not change; the work the person read did.
+    const existing = ok<ProjectWorkListResult>(await h.call("project/work/list", { projectId: h.projectId })).items.find(
+      (item) => item.ref.entityId === conflicted.match!.entityId,
+    )!;
+    ok(
+      await h.call("project/work/revise", {
+        projectId: h.projectId,
+        entityId: existing.ref.entityId,
+        expectedRevisionId: existing.ref.revisionId,
+        body: specBody("Someone else wrote this while that preview was open."),
+        idempotencyKey: "r1",
+      }),
+    );
+
+    const refusal = failed(
+      await h.call("project/work/import/apply", {
+        projectId: h.projectId,
+        adapter: "spec_kit",
+        previewDigest: second.previewDigest,
+        confirm: true,
+        decisions,
+        idempotencyKey: "i2",
+      }),
+    );
+    expect(refusal.message).toContain("Preview the import again");
+
+    // Nothing was written: the revised item still has exactly its two revisions.
+    const after = ok<ProjectWorkListResult>(await h.call("project/work/list", { projectId: h.projectId })).items.find(
+      (item) => item.ref.entityId === existing.ref.entityId,
+    )!;
+    expect(after.revisionCount).toBe(2);
+
+    // A fresh preview of the same files applies, against the revision that is
+    // there now.
+    const third = await importPreview(h, "spec_kit");
+    const applied = await importApply(h, "spec_kit", third, {
+      key: "i3",
+      decisions: third.proposals.map((proposal) => ({
+        sourceId: proposal.sourceId,
+        choice: proposal.match?.entityId === existing.ref.entityId ? "new_revision" : "skip",
+      })),
+    });
+    expect(applied.revised).toBe(1);
+  });
+
   it("reads OpenSpec capabilities, proposals, designs and task lists", async () => {
     h = harnessWithProjectFolder();
     writeOpenSpec(h.projectRoot);
@@ -465,6 +523,134 @@ describe("export", () => {
     const replaced = await exportOnce(h, { key: "e4", mode: "replace" });
     expect(replaced.removed).toEqual(["SPEC-1.md", "bodies/SPEC-1.json"]);
     expect(() => readFileSync(join(h.projectRoot, EXPORT_ROOT, "SPEC-1.md"), "utf8")).toThrow();
+  });
+
+  it("deletes only leftovers a valid manifest proves this export wrote, and keeps a changed body and its document", async () => {
+    h = harnessWithProjectFolder();
+    await create(h, "spec", "Phone review", "c1");
+    await create(h, "spec", "Sticky footer", "c2");
+    await exportOnce(h, { key: "e1" });
+
+    // Both items leave the project, so both exports' files are leftovers — and
+    // then a person edits one of the two bodies in the folder.
+    for (const item of ok<ProjectWorkListResult>(await h.call("project/work/list", { projectId: h.projectId })).items) {
+      ok(
+        await h.call("project/work/delete", {
+          projectId: h.projectId,
+          entityId: item.ref.entityId,
+          expectedRevisionId: item.ref.revisionId,
+          confirm: true,
+          idempotencyKey: `d-${item.key}`,
+        }),
+      );
+    }
+    const editedBody = join(h.projectRoot, EXPORT_ROOT, "bodies", "SPEC-2.json");
+    const edited = JSON.parse(readFileSync(editedBody, "utf8")) as { spec: { brief: string } };
+    edited.spec.brief = "I rewrote this in the folder myself.";
+    const mine = `${JSON.stringify(edited, null, 2)}\n`;
+    writeFileSync(editedBody, mine);
+
+    const preview = ok<WorkExportPreviewResult>(await h.call("project/work/export/preview", { projectId: h.projectId, mode: "replace" }));
+    expect(preview.removes).toEqual(["SPEC-1.md", "bodies/SPEC-1.json"]);
+    expect(preview.preserved).toEqual([
+      { path: "SPEC-2.md", reason: "changed" },
+      { path: "bodies/SPEC-2.json", reason: "changed" },
+    ]);
+
+    const applied = ok<WorkExportApplyResult>(
+      await h.call("project/work/export/apply", {
+        projectId: h.projectId,
+        mode: "replace",
+        previewDigest: preview.previewDigest,
+        confirm: true,
+        idempotencyKey: "e2",
+      }),
+    );
+    expect(applied.removed).toEqual(["SPEC-1.md", "bodies/SPEC-1.json"]);
+    expect(() => readFileSync(join(h.projectRoot, EXPORT_ROOT, "SPEC-1.md"), "utf8")).toThrow();
+    // The changed body, and the document beside it, are exactly as they were.
+    expect(readFileSync(editedBody, "utf8")).toBe(mine);
+    expect(readFileSync(join(h.projectRoot, EXPORT_ROOT, "SPEC-2.md"), "utf8")).toContain("Sticky footer");
+  });
+
+  it("deletes nothing when the manifest in that folder is not one this app wrote, and says so", async () => {
+    h = harnessWithProjectFolder();
+    const spec = await create(h, "spec", "Phone review", "c1");
+    await exportOnce(h, { key: "e1" });
+    ok(
+      await h.call("project/work/delete", {
+        projectId: h.projectId,
+        entityId: spec.entity.entityId,
+        expectedRevisionId: spec.revision.revisionId,
+        confirm: true,
+        idempotencyKey: "d1",
+      }),
+    );
+
+    // A manifest anyone could have written: valid JSON, not a manifest of ours.
+    const manifestPath = join(h.projectRoot, EXPORT_ROOT, "manifest.json");
+    writeFileSync(manifestPath, `${JSON.stringify({ format: "project-work", version: 1, entities: [{ document: "SPEC-1.md" }] }, null, 2)}\n`);
+
+    const preview = ok<WorkExportPreviewResult>(await h.call("project/work/export/preview", { projectId: h.projectId, mode: "replace" }));
+    expect(preview.removes).toEqual([]);
+    expect(preview.removeRefusal).toContain("not one this app wrote");
+
+    const applied = ok<WorkExportApplyResult>(
+      await h.call("project/work/export/apply", {
+        projectId: h.projectId,
+        mode: "replace",
+        previewDigest: preview.previewDigest,
+        confirm: true,
+        idempotencyKey: "e2",
+      }),
+    );
+    expect(applied.removed).toEqual([]);
+    expect(readFileSync(join(h.projectRoot, EXPORT_ROOT, "SPEC-1.md"), "utf8")).toContain("Phone review");
+    expect(readFileSync(join(h.projectRoot, EXPORT_ROOT, "bodies", "SPEC-1.json"), "utf8")).toContain("spec");
+  });
+
+  it("keeps a file a manifest names outside this export's own layout, rather than deleting what it points at", async () => {
+    h = harnessWithProjectFolder();
+    const spec = await create(h, "spec", "Phone review", "c1");
+    await exportOnce(h, { key: "e1" });
+    ok(
+      await h.call("project/work/delete", {
+        projectId: h.projectId,
+        entityId: spec.entity.entityId,
+        expectedRevisionId: spec.revision.revisionId,
+        confirm: true,
+        idempotencyKey: "d1",
+      }),
+    );
+
+    // A schema-valid manifest, edited to name a different file for that item.
+    // A path inside the export is not a licence to delete it: only the layout
+    // an export of this product writes for that identity is.
+    const manifestPath = join(h.projectRoot, EXPORT_ROOT, "manifest.json");
+    const manifest = projectWorkManifestSchema.parse(JSON.parse(readFileSync(manifestPath, "utf8")));
+    manifest.entities[0]!.document = "notes/keep-me.md";
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    mkdirSync(join(h.projectRoot, EXPORT_ROOT, "notes"), { recursive: true });
+    writeFileSync(join(h.projectRoot, EXPORT_ROOT, "notes", "keep-me.md"), "my own notes\n");
+
+    const preview = ok<WorkExportPreviewResult>(await h.call("project/work/export/preview", { projectId: h.projectId, mode: "replace" }));
+    expect(preview.removes).toEqual([]);
+    expect(preview.preserved).toEqual([
+      { path: "bodies/SPEC-1.json", reason: "not_this_export" },
+      { path: "notes/keep-me.md", reason: "not_this_export" },
+    ]);
+
+    const applied = ok<WorkExportApplyResult>(
+      await h.call("project/work/export/apply", {
+        projectId: h.projectId,
+        mode: "replace",
+        previewDigest: preview.previewDigest,
+        confirm: true,
+        idempotencyKey: "e2",
+      }),
+    );
+    expect(applied.removed).toEqual([]);
+    expect(readFileSync(join(h.projectRoot, EXPORT_ROOT, "notes", "keep-me.md"), "utf8")).toBe("my own notes\n");
   });
 
   it("refuses an apply whose preview is no longer what would be written", async () => {

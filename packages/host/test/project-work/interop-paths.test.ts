@@ -285,6 +285,30 @@ describe("the file operations themselves", () => {
     expect(readTextFile(path, 10)).toBe("y".repeat(10));
   });
 
+  it("asks for the size the file really is, not for the whole ceiling", () => {
+    // The export reads every file of an existing export with a 64 MiB ceiling.
+    // A 6-byte document must not cost 64 MiB of transient memory per file.
+    const path = `${PROJECT}/docs/small.md`;
+    files.set(path, "tiny\n");
+    expect(readTextFile(path, 64 * 1024 * 1024)).toBe("tiny\n");
+    const first = Number(fs.readSync.mock.calls[0]![3]);
+    expect(first).toBe(Buffer.byteLength("tiny\n", "utf8") + 1);
+    for (const call of fs.readSync.mock.calls) expect(Number(call[3])).toBeLessThanOrEqual(first);
+  });
+
+  it("still returns the whole file when it grew past its measurement but stayed under the ceiling", () => {
+    const path = `${PROJECT}/docs/appending.md`;
+    files.set(path, "x".repeat(10));
+    // Measured at 10 bytes, 5000 bytes by the time it is read: the ceiling is
+    // 1 MiB, so this is a file to read whole, not one to refuse — and the
+    // buffer grows to it rather than having been the ceiling all along.
+    fs.fstatSync.mockImplementationOnce(() => kind("file", 10));
+    files.set(path, "x".repeat(5000));
+    expect(readTextFile(path, 1024 * 1024)).toBe("x".repeat(5000));
+    expect(Number(fs.readSync.mock.calls[0]![3])).toBe(11);
+    expect(open.size).toBe(0);
+  });
+
   it("writes through a fresh exclusive temporary file and renames it into place", () => {
     writeFileAtomic(`${PROJECT}/${PROJECT_DIR_NAME}/${WORK_EXPORT_DIR}/SPEC-1.md`, "# Spec\n", { within: PROJECT });
     const write = fs.writeFileSync.mock.calls[0]!;

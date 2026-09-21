@@ -16,7 +16,15 @@
  */
 import { Check, Download, FileText, GitCommitHorizontal, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PROJECT_DIR_NAME, WORK_EXPORT_DIR, type ClientRequests, type WorkExportMode, type WorkImportAdapter, type WorkImportChoice } from "@lasercode/protocol";
+import {
+  PROJECT_DIR_NAME,
+  WORK_EXPORT_DIR,
+  type ClientRequests,
+  type WorkExportMode,
+  type WorkExportPreserveReason,
+  type WorkImportAdapter,
+  type WorkImportChoice,
+} from "@lasercode/protocol";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -67,6 +75,16 @@ const MODE_LABEL: Readonly<Record<WorkExportMode, string>> = {
   new_revision: "Keep both",
 };
 
+/**
+ * Why a file already in that folder is kept rather than removed, in the
+ * person's words. A file the app cannot prove it wrote is never deleted, and
+ * saying which one and why is the difference between a promise and a surprise.
+ */
+const PRESERVE_REASON: Readonly<Record<WorkExportPreserveReason, string>> = {
+  changed: "changed here",
+  not_this_export: "not written by this export",
+};
+
 /** A row of a preview list: one line, never smaller type, always truncating. */
 function Row({ children, className }: { children: React.ReactNode; className?: string }) {
   return <li className={cn("flex min-w-0 items-center gap-2 py-1", className)}>{children}</li>;
@@ -76,10 +94,16 @@ function Waiting({ what }: { what: string }) {
   return <p className="text-sm leading-5 text-ink-2">{what}</p>;
 }
 
-/** The scrolling area every preview list sits in. Bounded, never a page scroll. */
-function PreviewList({ children, label }: { children: React.ReactNode; label: string }) {
+/**
+ * The scrolling area every preview list sits in. Bounded, never a page scroll.
+ *
+ * `height` is how much of the dialog this list may take: two lists beside each
+ * other each take less, so the dialog still fits a short window instead of
+ * clipping its own buttons.
+ */
+function PreviewList({ children, label, height = "max-h-64" }: { children: React.ReactNode; label: string; height?: string }) {
   return (
-    <ul role="list" aria-label={label} className="max-h-64 min-w-0 overflow-y-auto rounded-lg border border-line bg-surface px-2.5 py-1">
+    <ul role="list" aria-label={label} className={cn("min-w-0 overflow-y-auto rounded-lg border border-line bg-surface px-2.5 py-1", height)}>
       {children}
     </ul>
   );
@@ -394,7 +418,7 @@ export function ExportDialog({ store, open, onOpenChange }: WorkDialogProps) {
               {preview.attachments > 0 ? ` · ${String(preview.attachments)} attachment${preview.attachments === 1 ? "" : "s"} referenced` : null} ·{" "}
               <span className="typed">{preview.root}</span>
             </p>
-            <PreviewList label="Files this export would write">
+            <PreviewList label="Files this export would write" height={preview.removes.length > 0 ? "max-h-40" : "max-h-64"}>
               {preview.files.map((file) => (
                 <Row key={file.path}>
                   <span className="typed min-w-0 flex-1 truncate text-sm leading-5 text-ink">{file.path}</span>
@@ -403,10 +427,32 @@ export function ExportDialog({ store, open, onOpenChange }: WorkDialogProps) {
               ))}
             </PreviewList>
             {preview.removes.length > 0 ? (
+              <>
+                <p className="text-xs leading-xs text-ink-2">
+                  {preview.removes.length} file{preview.removes.length === 1 ? "" : "s"} of the export already there would be removed:
+                </p>
+                {/* The exact paths, never only their number: a deletion a person
+                    confirmed is one they were shown, file by file. The list is
+                    bounded and scrolls; the sentence above carries the whole
+                    count, so nothing is hidden by the bound. */}
+                <PreviewList label="Files this export would remove" height="max-h-40">
+                  {preview.removes.map((path) => (
+                    <Row key={path}>
+                      <span className="typed min-w-0 flex-1 truncate text-sm leading-5 text-ink-2">{path}</span>
+                    </Row>
+                  ))}
+                </PreviewList>
+              </>
+            ) : null}
+            {preview.preserved && preview.preserved.length > 0 ? (
               <p className="text-xs leading-xs text-ink-2">
-                {preview.removes.length} file{preview.removes.length === 1 ? "" : "s"} of the export already there would be removed.
+                {preview.preserved.length} file{preview.preserved.length === 1 ? "" : "s"} there {preview.preserved.length === 1 ? "is" : "are"} kept
+                rather than removed ·{" "}
+                <span className="typed text-ink-3">{preview.preserved[0]!.path}</span> ({PRESERVE_REASON[preview.preserved[0]!.reason]})
+                {preview.preserved.length > 1 ? ` · and ${String(preview.preserved.length - 1)} more` : null}
               </p>
             ) : null}
+            {preview.removeRefusal ? <p className="text-xs leading-xs text-ink-2">{preview.removeRefusal}</p> : null}
             {preview.decide ? (
               <div className="flex flex-col gap-1.5 rounded-lg border border-line bg-surface p-2.5">
                 <p className="text-sm leading-5 text-ink">

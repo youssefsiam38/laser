@@ -236,6 +236,29 @@ export type WorkExportMode = (typeof WORK_EXPORT_MODES)[number];
 export const WORK_EXPORT_FILE_ROLES = ["manifest", "document", "body", "readme"] as const;
 export type WorkExportFileRole = (typeof WORK_EXPORT_FILE_ROLES)[number];
 
+/**
+ * Why a file a previous export listed is kept rather than deleted by a
+ * `replace`.
+ *
+ * - `changed` — the bytes on disk are no longer the ones that export wrote, so
+ *   whatever is there now is someone's own work, not this export's leftover.
+ * - `not_this_export` — the previous manifest names it, but not in the layout
+ *   an export of this product writes, so nothing proves this export put it
+ *   there.
+ *
+ * Either way the file stays exactly as it is. A `replace` deletes only the
+ * files it can prove a previous export of this project wrote.
+ */
+export const WORK_EXPORT_PRESERVE_REASONS = ["changed", "not_this_export"] as const;
+export type WorkExportPreserveReason = (typeof WORK_EXPORT_PRESERVE_REASONS)[number];
+
+/** One file a `replace` will not delete, and why. */
+export interface WorkExportPreserved {
+  /** Path under the export root, as the previous manifest named it. */
+  path: string;
+  reason: WorkExportPreserveReason;
+}
+
 /** One file of an export, by its path under the export root. */
 export interface WorkExportFile {
   path: string;
@@ -276,6 +299,16 @@ export interface WorkExportPreviewResult {
   existing?: WorkExportExisting;
   /** Files of a previous export this one would delete. `replace` only. */
   removes: string[];
+  /**
+   * Files the previous export listed that this one keeps instead of deleting,
+   * because their bytes changed or nothing proves this export wrote them.
+   */
+  preserved?: WorkExportPreserved[];
+  /**
+   * Why a `replace` will delete nothing at all: the folder holds no manifest
+   * this app wrote, or one that no longer validates. Written for a person.
+   */
+  removeRefusal?: string;
   /** Set when a decision is required: an export is already at the root. */
   decide?: { reason: "existing_export"; choices: readonly WorkExportMode[] };
   truncated?: boolean;
