@@ -9,16 +9,19 @@
 import { describe, expect, it } from "vitest";
 import {
   VERIFICATION_NEEDS_SESSION,
+  VERIFICATION_PHASES,
   VERIFICATION_REPORT_MEDIA_TYPE,
   browserMatrixSteps,
   convergenceOf,
   isVerificationFleetTaskId,
+  isVerificationPhaseTerminal,
   machineDecidable,
   mustBeProven,
   verificationFleetTaskId,
   verificationRunIdOf,
   verificationReportSchema,
   verificationRunLine,
+  verificationRunStateSchema,
   verificationSummary,
   type VerificationCriterion,
   type VerificationFinding,
@@ -190,6 +193,46 @@ describe("what a person reads", () => {
       criteriaTotal: 9,
     });
     expect(line).toBe("pnpm -F exports test — command 2 of 3");
+  });
+
+  it("says a run is winding up without saying it has stopped", () => {
+    const winding = {
+      runId: "ver_0001",
+      taskKey: "TASK-1",
+      entityId: "ent_1",
+      sessionPath: "/work/app/one.jsonl",
+      fleetTaskId: verificationFleetTaskId("ver_0001"),
+      startedAt: "2026-03-01T09:00:00.000Z",
+      commandsRun: 1,
+      commandsTotal: 3,
+      criteriaTotal: 9,
+      stopping: true,
+    } as const;
+
+    const ending = verificationRunLine({ ...winding, phase: "running", currentCommand: "pnpm test" });
+    expect(ending, "the commands are being ended").toContain("Stopping");
+    expect(ending, "and what it proved is still being saved").toContain("saving what it proved");
+
+    const saving = verificationRunLine({ ...winding, phase: "reporting" });
+    expect(saving, "once the record is being written, that is what it says").toBe("Saving what this run proved for TASK-1");
+
+    const ended = verificationRunLine({ ...winding, phase: "stopped" });
+    expect(ended, "a run that really has stopped says so, and nothing lingers").toBe("Stopped after 1 of 3 commands");
+
+    expect(
+      verificationRunStateSchema.safeParse({ ...winding, phase: "running", line: ending }).success,
+      "and the state it travels in round-trips",
+    ).toBe(true);
+    const { stopping: _stopping, ...withoutStopping } = winding;
+    void _stopping;
+    expect(
+      verificationRunStateSchema.safeParse({ ...withoutStopping, phase: "running", line: "Running 3 commands" }).success,
+      "a run that was never stopped carries no such field",
+    ).toBe(true);
+  });
+
+  it("agrees in one place about which phases mean the work is over", () => {
+    expect(VERIFICATION_PHASES.filter((phase) => isVerificationPhaseTerminal(phase))).toEqual(["done", "stopped", "failed"]);
   });
 
   it("namespaces a run's fleet id so a row and a Stop find each other, and nothing else does", () => {

@@ -732,6 +732,21 @@ export class WorkerServer {
           if (live.driver.state().isStreaming) {
             throw new ProtocolError(ErrorCodes.SessionBusy, "This chat is still answering. Wait for it to finish, or stop it, then move it.");
           }
+          // Work this conversation owns is still running. Closing here means
+          // the file is about to move, and a command runs against the
+          // checkout and publishes rows under this exact path: disposing now
+          // would either lose its ending or re-create the row under a path
+          // nobody serves. The same running-command count `unload` and
+          // `pi/worker/safety` already pin on, read under the same lock that
+          // serializes the move, plus verification runs that are winding up
+          // and have not published their ending yet.
+          const running = this.tasks.tasksOf(live.path).filter((task) => task.status === "running").length;
+          if (running > 0 || this.verificationRuns?.hasUnsettled(live.path) === true) {
+            throw new ProtocolError(
+              ErrorCodes.SessionBusy,
+              "This chat still has work running in it. Stop it and wait for it to finish, then move it.",
+            );
+          }
           await live.driver.dispose();
           this.runtimes.drop(live.path);
           return { closed: true } satisfies Result<"pi/session/close">;
@@ -2221,11 +2236,15 @@ export class WorkerServer {
    */
   private verification(): VerificationService {
     this.verificationRuns ??= new VerificationService({
-      bridgeFor: (cwd) =>
+      bridgeFor: (cwd, sessionPath) =>
         new HostProjectWorkBridge({
           link: (method, params) => this.hostRequest(method, params),
           identity: () => ({ label: "Verification" }),
-          execution: () => this.executionShape(cwd),
+          // The conversation that admitted this run, at the address it lives
+          // at now: what the host records about a verification write names
+          // the owner it was actually started by, never "whatever session is
+          // current" and never nothing at all.
+          execution: () => this.executionShape(cwd, undefined, sessionPath),
         }),
       // A run belongs to a conversation this worker is actually holding: a
       // path nobody here has open could not be watched or stopped, and a row
@@ -2236,7 +2255,17 @@ export class WorkerServer {
       // person stops it from the fleet exactly as they stop a shell command.
       publishTask: (path, task) => {
         const { logPath: _logPath, ...rest } = task as typeof task & { logPath?: string };
-        this.notify("pi/extension/message", { path, message: { type: "lasercode/task/update", task: rest } });
+        const message = { type: "lasercode/task/update", task: rest } as const;
+        // This worker's own fleet index first, then the host's. A verification
+        // run is a Command of that session like any other: an agent reading
+        // `inspect_fleet` sees it, and — because a session with a running
+        // command is pinned (`session-safety.ts`) — the conversation that owns
+        // it cannot be released, and therefore cannot be unloaded or retired
+        // out from under it, while it runs. That is how "no invisible running
+        // work" is kept: through the rules that already exist, not a second
+        // set for verification.
+        this.tasks.observe(path, message);
+        this.notify("pi/extension/message", { path, message });
       },
     });
     return this.verificationRuns;
@@ -3325,6 +3354,12 @@ export class WorkerServer {
         // allowance (RP-4); a released session keeps no replay.
         live.buffer.dispose();
         this.mcpService?.sessionClosed(live.path);
+        // Before the index is swept: a verification run of this conversation
+        // stops and publishes nothing further, so its own settlement cannot
+        // re-create the row the sweep below is about to close — or the closed
+        // session itself. The field, not the getter: a conversation that
+        // never verified must not acquire a service because it closed.
+        this.verificationRuns?.sessionClosed(live.path);
         this.tasks.sessionClosed(live.path);
         // One holder fewer: the rest of this worker's sessions may keep more.
         this.applyLogBudgets();
@@ -3405,6 +3440,11 @@ export class WorkerServer {
     // the republished row lands in the moved task index rather than under it.
     this.projectDesignIndex?.rekeySession(oldPath, newPath);
     this.projectDesignWorkspace?.rekeySession(oldPath, newPath);
+    // A verification run is a Command of the conversation that started it, on
+    // the same terms: its owner is unchanged and never re-derived, its rows
+    // follow the conversation, and the host requests it makes from here on
+    // name the address it now lives at. The field, not the getter.
+    this.verificationRuns?.rekeySession(oldPath, newPath);
   }
 
   /** Re-send accepted updates after `fromSeq`, then any dialogs still waiting. */

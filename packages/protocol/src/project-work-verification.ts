@@ -556,9 +556,21 @@ export function browserMatrixSteps(cell: { screen?: string; theme?: string; widt
 // The run, as a person's surface sees it
 // ---------------------------------------------------------------------------
 
-/** Where a run has got to. `done` and `stopped` are terminal. */
+/** Where a run has got to. `done`, `stopped` and `failed` are terminal. */
 export const VERIFICATION_PHASES = ["gathering", "running", "reporting", "done", "stopped", "failed"] as const;
 export type VerificationPhase = (typeof VERIFICATION_PHASES)[number];
+
+/**
+ * The phases that mean the run is over — and, because the fleet row is the
+ * pin, that the work behind it has settled (M21-T19).
+ *
+ * One predicate rather than three copies of the same three-way comparison:
+ * the run, the registry and the row all have to agree about what "ended"
+ * means, because releasing a session depends on it.
+ */
+export function isVerificationPhaseTerminal(phase: VerificationPhase): boolean {
+  return phase === "done" || phase === "stopped" || phase === "failed";
+}
 
 /**
  * One verification run, as the Task detail and the fleet read it.
@@ -601,6 +613,21 @@ export interface VerificationRunState {
   blobId?: string;
   /** The Task's state after the run, when the run moved it. */
   taskState?: string;
+  /**
+   * A stop was accepted and the run is winding up (M21-T19).
+   *
+   * Not a phase: the run has **not** ended. It starts no further command, the
+   * one it was running is being ended, and the report it already owes still
+   * has to land or fail — and until that happens the row stays running and
+   * the conversation stays pinned, because the ending of a Command is
+   * published after the work ends, never before it
+   * (`docs/agents.md` §6, RP-6).
+   *
+   * A stop that arrives after the report has already been sent does not set
+   * this: nothing can un-send it, and a row saying "stopping" about a
+   * decision already being written would be a claim the app cannot keep.
+   */
+  stopping?: boolean;
   /** Why the run could not finish, written for a person. */
   problem?: string;
 }
@@ -624,6 +651,7 @@ export const verificationRunStateSchema = z
     evidenceId: opaqueId.optional(),
     blobId: opaqueId.optional(),
     taskState: z.string().max(40).optional(),
+    stopping: z.boolean().optional(),
     problem: z.string().max(PROJECT_WORK_TEXT_MAX).optional(),
   })
   .strict();
@@ -663,6 +691,15 @@ export const VERIFICATION_NEEDS_SESSION =
 
 /** The line a run's fleet row and live region show. */
 export function verificationRunLine(state: Omit<VerificationRunState, "line">): string {
+  // A stop that was accepted, while the run is still winding up. The row is
+  // still running, so this is the sentence a person reads instead of the one
+  // about the work that is no longer going to happen — and it never says the
+  // run has stopped, because it has not.
+  if (state.stopping === true && !isVerificationPhaseTerminal(state.phase)) {
+    return state.phase === "reporting"
+      ? `Saving what this run proved for ${state.taskKey}`
+      : "Stopping — ending this run's commands and saving what it proved";
+  }
   switch (state.phase) {
     case "gathering":
       return `Reading what ${state.taskKey} has to satisfy`;

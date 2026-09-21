@@ -18,6 +18,7 @@
  * It never decides a criterion, never writes a link, and never moves a Task.
  */
 import {
+  isVerificationPhaseTerminal,
   verificationFleetTaskId,
   verificationRunLine,
   type ProjectWorkGetResult,
@@ -57,6 +58,16 @@ export class VerificationRun {
   private readonly controller = new AbortController();
   private state: VerificationRunState;
   private stoppedReason: string | undefined;
+  /**
+   * The report has left this worker.
+   *
+   * The single boundary a stop has to respect: before it, a stop is accepted
+   * and the run reports what it had proved *as stopped*; after it, the host
+   * may already be committing, the request took no signal (`report()` below),
+   * and there is no rollback to invent — so a stop from that moment changes
+   * nothing at all rather than pretending to cancel it.
+   */
+  private reportDispatched = false;
   /** One run runs once: starting it and awaiting it are the same run. */
   private running: Promise<VerificationRunState> | undefined;
 
@@ -87,18 +98,50 @@ export class VerificationRun {
   /**
    * A person's stop. The commands stop; the report still says what it knows.
    *
-   * The row says `stopped` **now**, not when the run next notices: a person
-   * who stopped something and watches it keep saying "running" has been told
-   * something untrue. Whatever the run is still waiting on — a command's
-   * process, or the app's own authority — it is stopped from this moment, and
-   * the report it writes afterwards says so too.
+   * What a stop *is*, exactly: start no further command, end the one running,
+   * and write what was proved up to here — as stopped. What it is not is a
+   * cancellation of something already committed. So the run does not go
+   * terminal here: it says it is stopping, keeps its fleet row running and
+   * keeps the conversation pinned until the report it owes has landed or
+   * failed. A Command's ending is published after the work ends, never before
+   * it (`docs/agents.md` §6, RP-6) — a row that said `stopped` while the app
+   * was still writing the record would release the session under a live host
+   * write, and would be telling a person something that is not true yet.
+   *
+   * Answers whether *this* stop changed anything: a run that has ended, one
+   * already stopping, and one whose report is already on its way to the host
+   * all answer `false`, and none of them is altered.
    */
-  stop(reason = "you stopped it"): void {
-    if (this.state.phase === "done" || this.state.phase === "stopped" || this.state.phase === "failed") return;
+  stop(reason = "you stopped it"): boolean {
+    if (isVerificationPhaseTerminal(this.state.phase)) return false;
+    // Already winding up: the second press is not a second stop, and it must
+    // not restate a reason the first one already recorded.
+    if (this.stoppedReason !== undefined) return false;
+    // The report is with the host. Nothing here can change its bytes — they
+    // were serialized when the call was made — and nothing here may claim the
+    // decision it may already have committed was revoked. The row keeps
+    // saying what is really happening, and the pin keeps holding.
+    if (this.reportDispatched) return false;
     this.stoppedReason = reason;
     this.controller.abort();
     this.clearCommand();
-    this.publish({ phase: "stopped", endedAt: this.clock() });
+    this.publish({ stopping: true });
+    return true;
+  }
+
+  /**
+   * The conversation this run belongs to now lives at another path
+   * (`server.ts` `rekeySessionState`).
+   *
+   * The *owner* is unchanged and is never re-derived: the same conversation
+   * still owns this run, and only the file it lives in has moved. The state
+   * is replaced rather than mutated in place, and the caller's own options
+   * object is left exactly as it was handed over — `options.sessionPath` is
+   * read once, at construction, so there is no second truth to drift.
+   */
+  rekeySession(newPath: string): void {
+    if (newPath === this.state.sessionPath || newPath.trim() === "") return;
+    this.state = { ...this.state, sessionPath: newPath };
   }
 
   /** Run it through: plan, commands, report. Never throws at the caller. */
@@ -114,9 +157,20 @@ export class VerificationRun {
       return await this.report(plan, commands);
     } catch (error) {
       // A run a person stopped did not fail: whatever it was waiting on gave
-      // up afterwards, and the row keeps the reason the person gave it.
-      if (this.stoppedReason !== undefined) return this.publish({ phase: "stopped", endedAt: this.clock() });
-      return this.publish({
+      // up afterwards, and the row keeps the reason the person gave it. What
+      // it must not do is look exactly like a stopped run that *did* record
+      // what it proved — so the failure is kept, in words, and the row carries
+      // it. A record that could not be written is not a record.
+      if (this.stoppedReason !== undefined) {
+        return this.settle({
+          phase: "stopped",
+          endedAt: this.clock(),
+          problem: this.reportDispatched
+            ? `You stopped this run, and what it had proved could not be recorded: ${problemOf(error)}`
+            : `You stopped this run before it could record anything: ${problemOf(error)}`,
+        });
+      }
+      return this.settle({
         phase: "failed",
         endedAt: this.clock(),
         problem: problemOf(error),
@@ -138,6 +192,18 @@ export class VerificationRun {
   private publish(over: Partial<VerificationRunState>): VerificationRunState {
     const next = { ...this.state, ...over };
     this.state = { ...next, line: verificationRunLine(next) };
+    this.options.onProgress?.(this.state);
+    return this.state;
+  }
+
+  /**
+   * The run has ended. `stopping` was about winding up, and the winding up is
+   * over, so it goes rather than lingering beside a terminal phase.
+   */
+  private settle(over: Partial<VerificationRunState> & { phase: VerificationRunState["phase"] }): VerificationRunState {
+    const { stopping: _stopping, ...rest } = { ...this.state, ...over };
+    void _stopping;
+    this.state = { ...rest, line: verificationRunLine(rest) };
     this.options.onProgress?.(this.state);
     return this.state;
   }
@@ -219,6 +285,10 @@ export class VerificationRun {
     const endedAt = this.clock();
     this.clearCommand();
     this.publish({ phase: "reporting" });
+    // From here the report is the host's: its bytes are the ones built below,
+    // fixed at the moment of the call, and a stop that arrives afterwards
+    // neither rewrites them nor revokes what the host decides from them.
+    this.reportDispatched = true;
     const answer = await this.options.bridge.verifyReport(
       {
         projectId,
@@ -245,7 +315,7 @@ export class VerificationRun {
       },
     );
     const report: VerificationReport | undefined = answer.verify.report;
-    return this.publish({
+    return this.settle({
       phase: this.stoppedReason !== undefined ? "stopped" : "done",
       endedAt,
       ...(report ? { report } : {}),

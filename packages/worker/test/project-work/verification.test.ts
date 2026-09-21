@@ -7,12 +7,13 @@
  * verdict is never the worker's, so the bridge in these tests is scripted:
  * it answers the plan and takes the report, exactly as the host does.
  */
-import { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { execFileSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ClientRequests,
   VerificationBridgeResult,
@@ -27,6 +28,7 @@ import type { ProjectWorkBridge, ProjectWorkExecutionShape, ProjectWorkSessionId
 import { ProjectWorkToolFailure } from "../../src/project-work/bridge.js";
 import { VerificationRefused } from "../../src/project-work/verification/service.js";
 import { runVerificationCommand } from "../../src/project-work/verification/commands.js";
+import { VERIFICATION_RUNS_KEPT } from "../../src/project-work/verification/service.js";
 import { VerificationService } from "../../src/project-work/verification/service.js";
 import { verifyProjectTask } from "../../src/project-work/verification/tools.js";
 
@@ -36,6 +38,35 @@ afterEach(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
   dirs = [];
 });
+
+/**
+ * A barrier the test resolves by hand.
+ *
+ * Everything about a run's lifetime below is asserted at an exact point —
+ * before a command has closed, before the report has landed, after it has
+ * failed — and a wall-clock sleep would be asserting about a machine's speed
+ * instead.
+ */
+function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (error: unknown) => void } {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** One turn of the event loop, so what the last barrier released has run. */
+async function turn(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+/** Run turns until something the code under test did becomes true. */
+async function until(what: string, ready: () => boolean): Promise<void> {
+  for (let step = 0; step < 200 && !ready(); step += 1) await turn();
+  expect(ready(), what).toBe(true);
+}
 
 /** A real repository, because a verification run happens in a real checkout. */
 function repository(): string {
@@ -428,5 +459,524 @@ describe("verify_project_task", () => {
     }).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(ProjectWorkToolFailure);
     expect((failure as ProjectWorkToolFailure).toolError.code).toBe("no_deviation_upstream");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Command's lifetime: a stop, the report it still owes, and its ending
+// ---------------------------------------------------------------------------
+
+/** The scripted host, with the two host calls held open until a test lets go. */
+class BarrierHost extends ScriptedHost {
+  readonly planGate = deferred();
+  readonly reportGate = deferred();
+  reportCalls = 0;
+  lastEnvelope: Extract<VerificationEnvelope, { action: "report" }> | undefined;
+
+  override async verify(): Promise<{ result: ClientRequests["project/work/get"]["result"]; verify: VerificationBridgeResult }> {
+    await this.planGate.promise;
+    return await super.verify();
+  }
+
+  override async verifyReport(
+    params: ClientRequests["project/work/link"]["params"],
+    envelope: Extract<VerificationEnvelope, { action: "report" }>,
+  ): Promise<{ result: ClientRequests["project/work/link"]["result"]; verify: VerificationBridgeResult }> {
+    this.reportCalls += 1;
+    this.lastEnvelope = envelope;
+    await this.reportGate.promise;
+    return await super.verifyReport(params, envelope);
+  }
+}
+
+/** A service whose rows a test can read, with the command held on a barrier. */
+function lifetime(host: BarrierHost, commandGate?: { promise: Promise<void> }) {
+  const rows: Array<{ sessionPath: string; task: BackgroundTask }> = [];
+  const logged: string[] = [];
+  const service = new VerificationService({
+    bridgeFor: () => host,
+    holdsSession: () => true,
+    publishTask: (sessionPath, task) => rows.push({ sessionPath, task }),
+    log: (line) => logged.push(line),
+    runner: async ({ command, signal }) => {
+      if (commandGate) await commandGate.promise;
+      return {
+        command,
+        status: signal?.aborted === true ? ("stopped" as const) : ("passed" as const),
+        ...(signal?.aborted === true ? {} : { exitCode: 0 }),
+        startedAt: "2026-03-01T09:00:00.000Z",
+        endedAt: "2026-03-01T09:00:01.000Z",
+        outputBytes: 0,
+        outputDigest: "b".repeat(64),
+        tail: "",
+      };
+    },
+  });
+  return { rows, logged, service };
+}
+
+describe("a stop, and the ending it does not publish early", () => {
+  it("keeps the run running and pinned until the report it owes has landed", async () => {
+    const host = new BarrierHost(["pnpm test"]);
+    const commandGate = deferred();
+    const { rows, service } = lifetime(host, commandGate);
+    const started = service.start({ cwd: repository(), key: "TASK-1", sessionPath: SESSION });
+    host.planGate.resolve();
+    await until("the command started", () => service.state({ cwd: "x", runId: started.runId })[0]!.phase === "running");
+
+    // The stop, while the command is still open.
+    expect(service.stop({ runId: started.runId }).stopped, "the first stop changes something").toBe(true);
+    const stopping = service.state({ cwd: "x", runId: started.runId })[0]!;
+    expect(stopping.stopping, "it is winding up").toBe(true);
+    expect(stopping.phase, "and it has not ended").not.toBe("stopped");
+    expect(stopping.endedAt, "so nothing says when it ended").toBeUndefined();
+    expect(stopping.line).toContain("Stopping");
+    expect(rows.at(-1)!.task.status, "the fleet row is still running, so the session is still pinned").toBe("running");
+    expect(rows.some((row) => row.task.status === "stopped"), "no ending has been published").toBe(false);
+
+    // A second stop is not a second stop, and it does not restate anything.
+    expect(service.stop({ runId: started.runId }).stopped, "nothing left to change").toBe(false);
+    expect(service.stopByTaskId(started.fleetTaskId), "but this worker plainly holds it").toBe(true);
+
+    // The command closes; the report is still held open.
+    commandGate.resolve();
+    await until("the report was dispatched", () => host.reportCalls === 1);
+    const reporting = service.state({ cwd: "x", runId: started.runId })[0]!;
+    expect(reporting.phase).toBe("reporting");
+    expect(reporting.line, "and it says what it is doing now").toContain("Saving what this run proved");
+    expect(rows.at(-1)!.task.status, "still running, still pinned").toBe("running");
+
+    // Only now, with the record written, is the ending published.
+    host.reportGate.resolve();
+    await until("the run settled", () => service.state({ cwd: "x", runId: started.runId })[0]!.phase === "stopped");
+    const terminal = rows.filter((row) => row.task.status === "stopped");
+    expect(terminal, "exactly one ending, published once").toHaveLength(1);
+    expect(terminal[0]!.task.endedAt).toBeDefined();
+    expect(terminal[0]!.task.terminalReason).toBe("you stopped it");
+    expect(host.lastEnvelope!.stopped?.reason, "the report says the run was stopped").toBe("you stopped it");
+    expect(host.reports.at(-1)!.converged, "a stopped run's report moves nothing").toBe(false);
+  });
+
+  it("says what was lost when the record of a stopped run could not be written", async () => {
+    const host = new BarrierHost(["pnpm test"]);
+    const commandGate = deferred();
+    const { rows, service } = lifetime(host, commandGate);
+    const started = service.start({ cwd: repository(), key: "TASK-1", sessionPath: SESSION });
+    host.planGate.resolve();
+    await until("the command started", () => service.state({ cwd: "x", runId: started.runId })[0]!.phase === "running");
+    service.stop({ runId: started.runId });
+    commandGate.resolve();
+    await until("the report was dispatched", () => host.reportCalls === 1);
+
+    host.reportGate.reject(new Error("The app could not reach this project's work."));
+    await until("the run settled", () => service.state({ cwd: "x", runId: started.runId })[0]!.phase === "stopped");
+    const state = service.state({ cwd: "x", runId: started.runId })[0]!;
+    expect(state.problem, "a stopped run whose record was lost does not look like one that kept it").toContain(
+      "could not be recorded",
+    );
+    expect(state.problem).toContain("could not reach");
+    expect(rows.at(-1)!.task.error, "and the fleet row carries it too").toContain("could not be recorded");
+  });
+
+  it("does not claim a report already with the host was cancelled", async () => {
+    const host = new BarrierHost(["pnpm test"]);
+    const { rows, service } = lifetime(host);
+    const started = service.start({ cwd: repository(), key: "TASK-1", sessionPath: SESSION });
+    host.planGate.resolve();
+    await until("the report was dispatched", () => host.reportCalls === 1);
+    const before = service.state({ cwd: "x", runId: started.runId })[0]!;
+
+    const stop = service.stop({ runId: started.runId });
+    expect(stop.stopped, "nothing was changed, because nothing here can change it").toBe(false);
+    expect(service.stopByTaskId(started.fleetTaskId), "the run is still held here, and says so").toBe(true);
+    const after = service.state({ cwd: "x", runId: started.runId })[0]!;
+    expect(after.stopping, "it is not winding up: the record is being written").toBeUndefined();
+    expect(after.phase).toBe(before.phase);
+    expect(after.line, "and the line stays the true one").toBe(before.line);
+    expect(host.lastEnvelope!.stopped, "the payload the host is reading was not rewritten").toBeUndefined();
+
+    host.reportGate.resolve();
+    await until("the run settled", () => service.state({ cwd: "x", runId: started.runId })[0]!.phase === "done");
+    const settled = service.state({ cwd: "x", runId: started.runId })[0]!;
+    expect(host.reportCalls, "no second report, and no rollback invented").toBe(1);
+    expect(settled.taskState, "the host's own outcome, reported as it is").toBe("needs_review");
+    expect(rows.filter((row) => row.task.status === "completed"), "one ending").toHaveLength(1);
+  });
+});
+
+describe("the conversation a run belongs to", () => {
+  it("follows a fork, republishes once under the new path and never names the old one again", async () => {
+    const host = new BarrierHost(["pnpm test"]);
+    const commandGate = deferred();
+    const owners: Array<() => string> = [];
+    const rows: Array<{ sessionPath: string; task: BackgroundTask }> = [];
+    const service = new VerificationService({
+      bridgeFor: (_cwd, sessionPath) => {
+        owners.push(sessionPath);
+        return host;
+      },
+      holdsSession: () => true,
+      publishTask: (sessionPath, task) => rows.push({ sessionPath, task }),
+      runner: async ({ command }) => {
+        await commandGate.promise;
+        return {
+          command,
+          status: "passed" as const,
+          exitCode: 0,
+          startedAt: "2026-03-01T09:00:00.000Z",
+          endedAt: "2026-03-01T09:00:01.000Z",
+          outputBytes: 0,
+          outputDigest: "c".repeat(64),
+          tail: "",
+        };
+      },
+    });
+    const cwd = repository();
+    const started = service.start({ cwd, key: "TASK-1", sessionPath: SESSION });
+    const elsewhere = service.start({ cwd, key: "TASK-1", sessionPath: "/work/app/other.jsonl" });
+    host.planGate.resolve();
+    await until("the command started", () => service.state({ cwd: "x", runId: started.runId })[0]!.phase === "running");
+    expect(owners[0]!(), "the bridge asks the host as the conversation that admitted the run").toBe(SESSION);
+
+    const moved = "/work/app/two.jsonl";
+    const before = rows.length;
+    service.rekeySession(SESSION, moved);
+    expect(rows.length, "the moved conversation is told about the Command it owns, once").toBe(before + 1);
+    expect(rows.at(-1)!.sessionPath).toBe(moved);
+    expect(service.state({ cwd: "x", runId: started.runId })[0]!.sessionPath).toBe(moved);
+    expect(owners[0]!(), "and the host hears the address it lives at now").toBe(moved);
+    expect(
+      service.state({ cwd: "x", runId: elsewhere.runId })[0]!.sessionPath,
+      "another conversation's run is not touched by a fork that was not its own",
+    ).toBe("/work/app/other.jsonl");
+    expect(owners[1]!()).toBe("/work/app/other.jsonl");
+
+    commandGate.resolve();
+    host.reportGate.resolve();
+    await until("the run settled", () => service.state({ cwd: "x", runId: started.runId })[0]!.phase === "done");
+    expect(
+      rows.slice(before).filter((row) => row.task.id === started.fleetTaskId).every((row) => row.sessionPath === moved),
+      "nothing is ever published under the old path",
+    ).toBe(true);
+
+    // A settled run does not republish, and a path this service holds nothing
+    // for publishes nothing at all.
+    const after = rows.length;
+    service.rekeySession(moved, "/work/app/three.jsonl");
+    service.rekeySession("/nobody/here.jsonl", "/work/app/four.jsonl");
+    expect(rows.length, "a run that has ended is not re-announced").toBe(after);
+  });
+
+  it("stops its runs when the conversation closes, and publishes nothing under a path nobody serves", async () => {
+    const host = new BarrierHost(["pnpm test"]);
+    const commandGate = deferred();
+    const { rows, service } = lifetime(host, commandGate);
+    const started = service.start({ cwd: repository(), key: "TASK-1", sessionPath: SESSION });
+    host.planGate.resolve();
+    await until("the command started", () => service.state({ cwd: "x", runId: started.runId })[0]!.phase === "running");
+    const before = rows.length;
+
+    service.sessionClosed(SESSION);
+    commandGate.resolve();
+    host.reportGate.resolve();
+    await until("the run settled privately", () => service.state({ cwd: "x", runId: started.runId })[0]!.phase === "stopped");
+    expect(rows.length, "a closed conversation is never re-created by a row").toBe(before);
+    expect(host.reports.at(-1)!.stopped?.reason, "and what it had proved was still written").toContain("closed");
+  });
+});
+
+describe("what this worker keeps", () => {
+  const instant = (host: ScriptedHost, rows: Array<{ sessionPath: string; task: BackgroundTask }>) =>
+    new VerificationService({
+      bridgeFor: () => host,
+      holdsSession: () => true,
+      publishTask: (sessionPath, task) => rows.push({ sessionPath, task }),
+      runner: async ({ command }) => ({
+        command,
+        status: "passed" as const,
+        exitCode: 0,
+        startedAt: "2026-03-01T09:00:00.000Z",
+        endedAt: "2026-03-01T09:00:01.000Z",
+        outputBytes: 0,
+        outputDigest: "a".repeat(64),
+        tail: "",
+      }),
+    });
+
+  it("keeps twenty settled runs without waiting for another to start, and publishes every ending first", async () => {
+    const host = new ScriptedHost(["pnpm test"]);
+    const rows: Array<{ sessionPath: string; task: BackgroundTask }> = [];
+    const service = instant(host, rows);
+    const cwd = repository();
+    const ids: string[] = [];
+    for (let index = 0; index < VERIFICATION_RUNS_KEPT + 1; index += 1) {
+      ids.push(service.start({ cwd, key: "TASK-1", sessionPath: SESSION }).runId);
+    }
+    await until("every run settled", () => rows.filter((row) => row.task.status === "completed").length === ids.length);
+
+    expect(service.state({ cwd }), "the bound holds with no further start").toHaveLength(VERIFICATION_RUNS_KEPT);
+    expect(service.state({ cwd, runId: ids[0]! }), "the oldest settled run is the one that went").toHaveLength(0);
+    expect(
+      rows.filter((row) => row.task.id === `verify-${ids[0]!}` && row.task.status === "completed"),
+      "and its ending was published before it was forgotten",
+    ).toHaveLength(1);
+  });
+
+  it("never forgets a run that has not settled, however many there are", async () => {
+    const host = new BarrierHost(["pnpm test"]);
+    const commandGate = deferred();
+    const { service } = lifetime(host, commandGate);
+    const cwd = repository();
+    const ids: string[] = [];
+    for (let index = 0; index < VERIFICATION_RUNS_KEPT + 4; index += 1) {
+      ids.push(service.start({ cwd, key: "TASK-1", sessionPath: SESSION }).runId);
+    }
+    host.planGate.resolve();
+    await until("they are all working", () => service.state({ cwd }).every((run) => run.phase === "running"));
+    expect(service.state({ cwd }), "nothing still working is ever evicted").toHaveLength(ids.length);
+  });
+
+  it("loses no ending and prints no raw error when an observer throws", async () => {
+    const host = new ScriptedHost(["pnpm test"]);
+    const logged: string[] = [];
+    const service = new VerificationService({
+      bridgeFor: () => host,
+      holdsSession: () => true,
+      publishTask: () => {
+        throw new Error("the fleet row carried /home/someone/secret and 'pnpm test' output");
+      },
+      log: (line) => logged.push(line),
+      runner: async ({ command }) => ({
+        command,
+        status: "passed" as const,
+        exitCode: 0,
+        startedAt: "2026-03-01T09:00:00.000Z",
+        endedAt: "2026-03-01T09:00:01.000Z",
+        outputBytes: 0,
+        outputDigest: "a".repeat(64),
+        tail: "",
+      }),
+    });
+    const cwd = repository();
+    const started = service.start({ cwd, key: "TASK-1", sessionPath: SESSION });
+    const rest = Array.from({ length: VERIFICATION_RUNS_KEPT }, () => service.start({ cwd, key: "TASK-1", sessionPath: SESSION }));
+    await until(
+      "every run settled anyway",
+      () => [started, ...rest].every((run) => (service.state({ cwd, runId: run.runId })[0]?.phase ?? "done") === "done"),
+    );
+
+    // What this registry can prove is its own state and its own bound: it
+    // cannot promise a delivery through an observer that throws, and it does
+    // not pretend to. What it can prove is that nothing here is lost or kept
+    // for ever because somebody else's code failed.
+    expect(service.state({ cwd }), "the bound still holds when every row was refused").toHaveLength(VERIFICATION_RUNS_KEPT);
+    expect(service.state({ cwd, runId: rest.at(-1)!.runId })[0]!.report, "the run kept what it proved").toBeDefined();
+    expect(logged.length, "and said that a row went missing").toBeGreaterThan(0);
+    const ids = new Set([started, ...rest].map((run) => run.runId));
+    for (const line of logged) {
+      expect([...ids].some((id) => line.includes(id)), "the line names the run it is about").toBe(true);
+      expect(line, "and the error's kind, which is all a diagnostic needs").toContain("Error");
+      expect(line, "never the message, the path or a byte the command printed").not.toContain("secret");
+      expect(line).not.toContain("pnpm test");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The runner's own lifecycle, driven with an inert double
+// ---------------------------------------------------------------------------
+
+/** A child process that does nothing until a test makes it do something. */
+class InertChild extends EventEmitter {
+  pid: number | undefined = 4242;
+  readonly stdout = new EventEmitter();
+  readonly stderr = new EventEmitter();
+  kill(): boolean {
+    return true;
+  }
+  /** What a real child emits when it has gone and its output is closed. */
+  close(code: number | null, signal: NodeJS.Signals | null = null): void {
+    this.emit("exit", code, signal);
+    this.emit("close", code, signal);
+  }
+  say(text: string): void {
+    this.stdout.emit("data", Buffer.from(text));
+  }
+}
+
+const inert = () => {
+  const child = new InertChild();
+  return { child, as: child as unknown as ChildProcess };
+};
+
+describe("when a verification command really ends", () => {
+  it("starts no process at all for a run that was already stopped", async () => {
+    let spawned = 0;
+    const controller = new AbortController();
+    controller.abort();
+    const run = await runVerificationCommand({
+      command: "pnpm test",
+      cwd: "/tmp",
+      signal: controller.signal,
+      spawnProcess: () => {
+        spawned += 1;
+        return inert().as;
+      },
+    });
+    expect(spawned, "nothing is started in order to be killed").toBe(0);
+    expect(run.status).toBe("stopped");
+    expect(run.detail).toContain("You stopped");
+  });
+
+  it("records a spawn that fails on the spot as unavailable, rather than throwing", async () => {
+    const run = await runVerificationCommand({
+      command: "pnpm test",
+      cwd: "/tmp",
+      spawnProcess: () => {
+        throw new Error("this machine has no shell to run that in");
+      },
+    });
+    expect(run.status).toBe("unavailable");
+    expect(run.detail).toContain("no shell");
+  });
+
+  it("waits for the output to close, and keeps what arrived after the process ended", async () => {
+    const { child, as } = inert();
+    let settled = false;
+    const running = runVerificationCommand({ command: "pnpm test", cwd: "/tmp", spawnProcess: () => as }).then((run) => {
+      settled = true;
+      return run;
+    });
+    await turn();
+    child.say("first\n");
+    child.emit("exit", 0, null);
+    await turn();
+    expect(settled, "an exit is not a closed pipe, and the record is not made yet").toBe(false);
+    child.say("the line that says why\n");
+    child.emit("close", 0, null);
+    const run = await running;
+    expect(run.status).toBe("passed");
+    expect(run.exitCode).toBe(0);
+    expect(run.tail, "the last thing it printed is in the record").toContain("the line that says why");
+    expect(run.outputBytes).toBe(Buffer.byteLength("first\nthe line that says why\n"));
+  });
+
+  it("kills the tree on a stop and still records nothing until it has closed", async () => {
+    const { child, as } = inert();
+    const controller = new AbortController();
+    const killed: number[] = [];
+    let settled = false;
+    const running = runVerificationCommand({
+      command: "pnpm test",
+      cwd: "/tmp",
+      signal: controller.signal,
+      spawnProcess: () => as,
+      killTree: (process_) => killed.push(process_.pid ?? 0),
+    }).then((run) => {
+      settled = true;
+      return run;
+    });
+    await turn();
+    controller.abort();
+    await turn();
+    expect(killed, "the whole tree was asked to end").toEqual([4242]);
+    expect(settled, "but nothing has been recorded: a signal sent is not a process gone").toBe(false);
+    child.close(null, "SIGKILL");
+    const run = await running;
+    expect(run.status).toBe("stopped");
+    expect(run.exitCode, "a stopped command has no exit code to report").toBeUndefined();
+    expect(run.detail).toContain("You stopped");
+  });
+
+  it("ends a command that outstays its bound, and still waits for it to close", async () => {
+    vi.useFakeTimers();
+    try {
+      const { child, as } = inert();
+      let settled = false;
+      const running = runVerificationCommand({
+        command: "pnpm test",
+        cwd: "/tmp",
+        timeoutMs: 60_000,
+        spawnProcess: () => as,
+        killTree: () => {},
+      }).then((run) => {
+        settled = true;
+        return run;
+      });
+      await vi.advanceTimersByTimeAsync(60_001);
+      expect(settled, "the bound ends it; the close is what records it").toBe(false);
+      child.close(null, "SIGKILL");
+      await vi.advanceTimersByTimeAsync(0);
+      const run = await running;
+      expect(run.status).toBe("stopped");
+      expect(run.detail).toContain("was ended");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records a command that is not on this machine as unavailable", async () => {
+    const { child, as } = inert();
+    child.pid = undefined;
+    const running = runVerificationCommand({ command: "pnpm test", cwd: "/tmp", spawnProcess: () => as });
+    await turn();
+    const error: NodeJS.ErrnoException = new Error("spawn pnpm ENOENT");
+    error.code = "ENOENT";
+    child.emit("error", error);
+    const run = await running;
+    expect(run.status).toBe("unavailable");
+    expect(run.detail).toContain("PATH");
+  });
+
+  it("invents no ending for a process tree it could not end", async () => {
+    const { child, as } = inert();
+    const controller = new AbortController();
+    const logged: string[] = [];
+    let settled = false;
+    const running = runVerificationCommand({
+      command: "pnpm test",
+      cwd: "/tmp",
+      signal: controller.signal,
+      spawnProcess: () => as,
+      killTree: () => {
+        const error: NodeJS.ErrnoException = new Error("kill EPERM");
+        error.code = "EPERM";
+        throw error;
+      },
+      log: (line) => logged.push(line),
+    }).then((run) => {
+      settled = true;
+      return run;
+    });
+    await turn();
+    controller.abort();
+    await turn();
+    expect(settled, "no record is made: nothing witnessed an exit").toBe(false);
+    expect(logged, "one bounded line says why the run is still pinned").toHaveLength(1);
+    expect(logged[0]).toContain("EPERM");
+    expect(logged[0], "and it carries nothing the command read").not.toContain("pnpm test");
+
+    // And it is not leaked: if the process does go, the record is still made.
+    child.close(null, "SIGKILL");
+    const run = await running;
+    expect(run.status).toBe("stopped");
+  });
+
+  it("settles on a bounded wait when output nobody owns is holding the pipe open", async () => {
+    vi.useFakeTimers();
+    try {
+      const { child, as } = inert();
+      const running = runVerificationCommand({ command: "pnpm test", cwd: "/tmp", stdioGraceMs: 500, spawnProcess: () => as });
+      await vi.advanceTimersByTimeAsync(0);
+      child.emit("exit", 0, null);
+      await vi.advanceTimersByTimeAsync(501);
+      const run = await running;
+      expect(run.status).toBe("passed");
+      expect(run.detail, "and says the last of the output may be missing rather than pretending it is whole").toContain(
+        "may be missing",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
