@@ -4,7 +4,17 @@ type Request = ClientRequests["pi/session/list"]["params"];
 type Result = ClientRequests["pi/session/list"]["result"];
 const parentOf = (row: SessionSummary) => row.parentPath ?? row.agent?.parentPath;
 const order = (a: SessionSummary, b: SessionSummary) => b.modifiedAt.localeCompare(a.modifiedAt) || a.path.localeCompare(b.path);
-const important = (row: SessionSummary) => row.messageCount === 0 || (row.attention !== undefined && row.attention !== "idle")
+/**
+ * Rows a page must carry whatever its quota: an empty conversation, one that
+ * needs a person now, one that is live. A finished child nobody has opened is
+ * not one of them: `finished_unread` stays on every subagent row for ever
+ * (a person rarely opens a child), and exempting those pulled hundreds of
+ * rows and their ancestors into every refresh, defeating paging altogether.
+ * A child rides in with its root when the root is paged; a root's own
+ * `finished_unread` still pins it, since that is the notice a person reads.
+ */
+const important = (row: SessionSummary) => row.messageCount === 0
+  || (row.attention !== undefined && row.attention !== "idle" && !(row.attention === "finished_unread" && parentOf(row) !== undefined))
   || ["queued", "running", "needs_input"].includes(row.agent?.runStatus ?? "");
 
 function addDescendants(
