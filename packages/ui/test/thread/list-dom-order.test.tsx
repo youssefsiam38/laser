@@ -273,12 +273,20 @@ function duringMoves(during: (moved: HTMLElement) => void): { moved: HTMLElement
  * Nothing is dropped: a browser leaves a collapsed selection at that point, and
  * that is the state the repair has to recognise as its own. `applies` chooses
  * which moved container is treated as removed, so a case can hold one endpoint
- * inside the row that moves and leave the other one untouched.
+ * inside the row that moves and leave the other one untouched. `left` records
+ * the point the DOM was left at, so a case can assert the repair left it there
+ * instead of restating the repair's own formula. `during` runs immediately
+ * after that, the moment a browser's synchronous blur handler would run with
+ * the boundary already relocated.
  */
-function withDomRangeMutation(applies: (moved: HTMLElement) => boolean): { relocations: number; release: () => void } {
+type LeftBehind = { anchorNode: Node | null; anchorOffset: number; focusNode: Node | null; focusOffset: number };
+function withDomRangeMutation(
+  applies: (moved: HTMLElement) => boolean,
+  during?: (moved: HTMLElement) => void,
+): { relocations: number; left: LeftBehind | null; release: () => void } {
   const node = track();
   const selection = document.getSelection()!;
-  const state = { relocations: 0, release: () => {} };
+  const state: { relocations: number; left: LeftBehind | null; release: () => void } = { relocations: 0, left: null, release: () => {} };
   for (const name of ["insertBefore", "appendChild"] as const) {
     const original = (Node.prototype as unknown as Record<string, (...args: unknown[]) => unknown>)[name]!;
     Object.defineProperty(node, name, {
@@ -305,7 +313,12 @@ function withDomRangeMutation(applies: (moved: HTMLElement) => boolean): { reloc
           focus = shift(focus);
           selection.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset);
           state.relocations += 1;
+          state.left = {
+            anchorNode: selection.anchorNode, anchorOffset: selection.anchorOffset,
+            focusNode: selection.focusNode, focusOffset: selection.focusOffset,
+          };
         }
+        during?.(moved);
         return out;
       },
     });
@@ -531,6 +544,79 @@ describe("the list's own DOM-order pass", () => {
     } finally {
       taking.release();
       prose.remove();
+    }
+  });
+
+  it("keeps a selection something else made inside the very row that moved, with no focus change", async () => {
+    const { viewport, held } = await reading();
+    const text = textIn(rowOf(held)!);
+    // The other words are inside the moved subtree too, so the only thing that
+    // separates them from the move's own leftover is that they are not where
+    // the move left the boundary: a different node, at offsets nobody held.
+    const aside = document.createElement("p");
+    aside.textContent = "the words something else selected inside this very row";
+    rowOf(held)!.append(aside);
+    const selection = document.getSelection()!;
+    selection.setBaseAndExtent(text, 4, text, 19);
+    // No focus moves at all, so the handover check never fires: this is the
+    // ownership test on its own.
+    const taking = duringMoves(moved => {
+      if (!moved.contains(text)) return;
+      selection.setBaseAndExtent(aside.firstChild!, 2, aside.firstChild!, 9);
+    });
+    try {
+      await sortPass(viewport);
+      expect(document.activeElement).toBe(document.body);
+      expect(selection.anchorNode, "an intentional selection inside the row is not overwritten").toBe(aside.firstChild);
+      expect(selection.anchorOffset).toBe(2);
+      expect(selection.focusNode).toBe(aside.firstChild);
+      expect(selection.focusOffset).toBe(9);
+    } finally {
+      taking.release();
+      aside.remove();
+    }
+  });
+
+  it("leaves a handover into another field in the same moved row holding focus, caret and the selection the DOM left", async () => {
+    const { viewport, held, action } = await reading();
+    const text = textIn(rowOf(held)!);
+    const selection = document.getSelection()!;
+    // The field the handover moves into is inside the moved row itself, and the
+    // document's selection is exactly where the DOM's own steps left it — so
+    // every other guard says "restore": the endpoints are the move's own
+    // relocated point, they fit, and they changed. Only the handover check
+    // knows that putting the row's selection back would reach across an
+    // editable control the person was just moved into.
+    const field = document.createElement("input");
+    field.value = "the field the handler moved into";
+    rowOf(held)!.append(field);
+    await act(async () => { action.focus(); action.dispatchEvent(new FocusEvent("focusin", { bubbles: true })); });
+    selection.setBaseAndExtent(text, 4, text, 19);
+    // Both proxies at once, named: happy-dom implements neither the DOM's range
+    // mutation on removal nor a blur when a focused node is removed, so the
+    // case applies the standard's steps and then runs the handler's effect at
+    // the moment the browser would.
+    const mutation = withDomRangeMutation(moved => moved.contains(text), moved => {
+      if (!moved.contains(field)) return;
+      field.focus();
+      field.setSelectionRange(4, 9, "forward");
+    });
+    try {
+      await sortPass(viewport);
+      expect(mutation.relocations, "the row holding the selection is one the pass moved").toBeGreaterThan(0);
+      expect(document.activeElement).toBe(field);
+      expect(field.selectionStart).toBe(4);
+      expect(field.selectionEnd).toBe(9);
+      // The selection is left exactly as the DOM left it, read from the DOM at
+      // the moment of the move rather than recomputed here.
+      expect(selection.anchorNode).toBe(mutation.left!.anchorNode);
+      expect(selection.anchorOffset).toBe(mutation.left!.anchorOffset);
+      expect(selection.focusNode).toBe(mutation.left!.focusNode);
+      expect(selection.focusOffset).toBe(mutation.left!.focusOffset);
+      expect(selection.anchorNode, "the row's own selection was not put back over the handover").not.toBe(text);
+      expect(action.isConnected).toBe(true);
+    } finally {
+      mutation.release();
     }
   });
 

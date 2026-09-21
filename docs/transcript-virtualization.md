@@ -98,11 +98,14 @@ Native app. Four corrections, and why each one matters here:
    leaves is not an empty selection: the standard relocates a boundary inside
    the removed subtree to (its parent, the node's old index), and the insertion
    then shifts boundaries after the insertion point, so that point is computed
-   before the move and recognised as the move's own. One check gates focus and
+   before the move and recognised as the move's own: an endpoint is restored
+   only when it never changed or sits exactly there. One check gates focus and
    selection together: if something took focus while the move happened, a blur
    handler moved the person into another control with its own caret and its own
-   selection, and neither is put back over it; a selection made in nodes of
-   somebody else's choosing stays, focus change or not. Held offsets are checked
+   selection, and neither is put back over it — including a handover into a
+   field inside the moved row itself. A selection made while the move happened,
+   in nodes of somebody else's choosing, stays: inside the moved row or outside
+   it, focus change or not. Held offsets are checked
    against their nodes' current text first, so a selection that no longer fits
    is dropped instead of throwing inside the sort. The list's pass is a re-sort,
    not a scroll, and this keeps it that way.
