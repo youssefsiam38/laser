@@ -475,6 +475,59 @@ describe("approval is the host's record, not the body's claim", () => {
     expect(calls).toEqual([]);
   });
 
+  /**
+   * The host appends a change request or an archive **beside** the approval it
+   * overrides, without invalidating that row (`store.approve`). The reading
+   * therefore takes the last decision still standing for these bytes and then
+   * asks whether it was an approval — filtering for approvals first would
+   * resurrect the one that was superseded.
+   */
+  it("follows the last decision on the revision, not the last approval in the list", async () => {
+    const body = bodyFixture(foundationFixture({ status: "approved", profile: { version: 1, digest: "d".repeat(64) } }));
+    const approvals = [
+      approvalFixture(),
+      approvalFixture({ approvalId: "apr_2", decision: "changes_requested", at: "2026-02-04T10:00:00.000Z" }),
+    ];
+    await render(body, contextFor(body, { detail: detailWithGate(body, { approvals }) }));
+    expect(wizard()).not.toContain("Approved");
+    expect(button("Create the plan, foundation first")).toBeUndefined();
+    expect(container.querySelector('[data-slot="foundation-unbacked"]')?.textContent).toContain("Changes were asked for");
+  });
+
+  it("does not read an archived design as approved either", async () => {
+    const body = bodyFixture(foundationFixture({ status: "approved", profile: { version: 1, digest: "d".repeat(64) } }));
+    const approvals = [approvalFixture(), approvalFixture({ approvalId: "apr_2", decision: "archived", at: "2026-02-04T10:00:00.000Z" })];
+    await render(body, contextFor(body, { detail: detailWithGate(body, { approvals }) }));
+    expect(wizard()).not.toContain("Approved");
+    expect(container.querySelector('[data-slot="foundation-unbacked"]')?.textContent).toContain("archived");
+    expect(button("Create the plan, foundation first")).toBeUndefined();
+  });
+
+  it("reads it as approved again once a fresh decision approves the same bytes", async () => {
+    const body = bodyFixture(foundationFixture({ status: "approved", profile: { version: 1, digest: "d".repeat(64) } }));
+    const approvals = [
+      approvalFixture(),
+      approvalFixture({ approvalId: "apr_2", decision: "changes_requested", at: "2026-02-04T10:00:00.000Z" }),
+      approvalFixture({ approvalId: "apr_3", at: "2026-02-05T10:00:00.000Z" }),
+    ];
+    await render(body, contextFor(body, { detail: detailWithGate(body, { approvals }) }));
+    expect(wizard()).toContain("Approved");
+    expect(container.querySelector('[data-slot="foundation-unbacked"]')).toBeNull();
+    expect(button("Create the plan, foundation first")).toBeDefined();
+  });
+
+  it("ignores a decision that covers other bytes than the ones on screen", async () => {
+    const body = bodyFixture(foundationFixture({ status: "approved", profile: { version: 1, digest: "d".repeat(64) } }));
+    const elsewhere = approvalFixture({
+      approvalId: "apr_2",
+      decision: "changes_requested",
+      at: "2026-02-04T10:00:00.000Z",
+      covers: [{ entityId: "e1", kind: "design", key: "DES-3", revisionId: "r0", digest: "e".repeat(64) }],
+    });
+    await render(body, contextFor(body, { detail: detailWithGate(body, { approvals: [approvalFixture(), elsewhere] }) }));
+    expect(wizard()).toContain("Approved");
+  });
+
   it("says a refused gate refused, and records nothing", async () => {
     gateAnswer = "refused";
     const body = bodyFixture(foundationFixture());

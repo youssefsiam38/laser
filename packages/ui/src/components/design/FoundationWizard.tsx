@@ -263,7 +263,7 @@ export function FoundationWizard({ body, foundation, context, editable, dirty, o
           written on the way to the approval, not by it. When nothing backs it,
           this says so instead of letting a badge imply otherwise. */}
       {approvalState.unbacked !== undefined && !superseded ? (
-        <p role="status" data-slot="foundation-unbacked" className="rounded-md bg-[color-mix(in_oklab,var(--attention)_10%,transparent)] px-2 py-1.5 text-xs leading-4 text-ink-2">
+        <p role="status" data-slot="foundation-unbacked" className="rounded-md border border-line bg-surface-2 px-2 py-1.5 text-xs leading-4 text-ink-2">
           {approvalState.unbacked}
         </p>
       ) : null}

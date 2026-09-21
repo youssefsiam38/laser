@@ -180,6 +180,13 @@ export async function approvedFoundation(foundation: DesignFoundation, at: strin
  * reopened or edited foundation stops reading as approved the moment its
  * bytes differ, and a save that changed nothing does not un-approve what the
  * person already decided.
+ *
+ * The *latest* decision is what counts, whatever it was. The host appends a
+ * `changes_requested` or an `archived` row beside the approval it overrides
+ * without invalidating it (`store.approve`), exactly as its own gate engine
+ * reads it: take the last decision on this gate that is still standing, then
+ * ask whether it was an approval. Filtering for approvals first would
+ * resurrect a superseded one.
  */
 export interface FoundationApprovalReading {
   /** The person approval covering this exact revision, when there is one. */
@@ -204,19 +211,22 @@ export function foundationApprovalState(input: {
 }): FoundationApprovalReading {
   const covers = (approval: ProjectWorkApproval): boolean =>
     approval.covers.some((covered) => covered.entityId === input.entityId && covered.digest === input.digest);
-  const design = [...input.approvals].filter((approval) => approval.gate === "design" && approval.decision === "approved");
-  const approval = [...design].reverse().find((candidate) => candidate.invalidatedAt === undefined && covers(candidate));
+  const design = input.approvals.filter((approval) => approval.gate === "design");
+  // The last standing decision on this gate for the bytes on screen — not the
+  // last approval among them.
+  const latest = [...design].reverse().find((candidate) => candidate.invalidatedAt === undefined && covers(candidate));
+  const approval = latest?.decision === "approved" ? latest : undefined;
   const complete = foundationIsComplete(input.foundation);
   const approved = approval !== undefined && complete && !input.dirty;
   const marked = input.foundation?.status === "approved" || input.foundation?.profile !== undefined;
   if (approved || !marked) return { approval, approved };
-  return { approval, approved, unbacked: unbackedSentence({ dirty: input.dirty, complete, approval, history: design }) };
+  return { approval, approved, unbacked: unbackedSentence({ dirty: input.dirty, complete, latest, history: design }) };
 }
 
 function unbackedSentence(input: {
   dirty: boolean;
   complete: boolean;
-  approval: ProjectWorkApproval | undefined;
+  latest: ProjectWorkApproval | undefined;
   history: readonly ProjectWorkApproval[];
 }): string {
   if (input.dirty) {
@@ -225,7 +235,13 @@ function unbackedSentence(input: {
   if (!input.complete) {
     return "A step of this foundation was reopened, so it is not a settled foundation any more. Accept every step again, then approve it.";
   }
-  if (input.history.some((approval) => approval.invalidatedAt !== undefined)) {
+  if (input.latest?.decision === "changes_requested") {
+    return "Changes were asked for on this exact revision after it was approved. Answer them, save the revision and approve it again.";
+  }
+  if (input.latest?.decision === "archived") {
+    return "This design was archived after the foundation was approved, so the approval no longer stands. Restore it and approve it again if it is still the one you want.";
+  }
+  if (input.history.some((approval) => approval.decision === "approved" && approval.invalidatedAt !== undefined)) {
     return "This foundation changed after it was approved, so that approval no longer covers it. Approve this revision when it is the one you want.";
   }
   return "This revision records a Design Profile digest, but no approval covers it: the decision was not recorded. Nothing is lost — approve it again.";

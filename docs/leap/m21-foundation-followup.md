@@ -340,7 +340,7 @@ work and now proved from the outside:
 
 | File | Change |
 | --- | --- |
-| `packages/ui/src/design/foundation.ts` | new `foundationApprovalState({ foundation, approvals, entityId, digest, dirty })` → `{ approval, approved, unbacked? }`. Approved means: a `design` approval, `decision: "approved"`, **not invalidated**, covering this entity at **the digest on screen**, *and* the foundation is complete, *and* the window holds no unsaved edits. `unbacked` is the sentence for a body that carries the marker with nothing behind it |
+| `packages/ui/src/design/foundation.ts` | new `foundationApprovalState({ foundation, approvals, entityId, digest, dirty })` → `{ approval, approved, unbacked? }`. It takes the **last `design` decision still standing** for the bytes on screen — not invalidated, covering this entity at **the digest on screen** — and only then asks whether that decision was `approved`; approved also requires a complete foundation and no unsaved edits. The order matters: the host appends a `changes_requested` or `archived` row **beside** the approval it overrides without invalidating it (`store.approve`), so filtering for approvals first would resurrect a superseded one. This is the same reading the host's own gate engine uses (`settledApproval`). `unbacked` is the sentence for a body that carries the marker with nothing behind it |
 | `packages/ui/src/components/design/FoundationWizard.tsx` | badge, the profile-digest line, **Create the plan** and the approve block all read that state instead of `foundation.status`/`profile`. A new `[data-slot="foundation-unbacked"]` note says which of the four cases it is (edited here, a step reopened, an approval invalidated, or a decision that was never recorded). The standalone branch now **records the approval**: `request_review` when the design is still a draft, then `project/work/approve` with `covers = [this design at the revision the host just answered with]`, and says so; a host refusal is an error toast and nothing is claimed |
 
 The digest — not the revision id — is what the window matches on, because that
@@ -377,7 +377,13 @@ Router + real store, no worker, **no host production writes**):
   the review spine's rule, named in the test);
 - settling it again records a second, valid approval beside the invalidated one.
 
-`packages/ui/test/design/foundation.test.tsx` (5 new tests): a staged profile
+`packages/ui/test/design/foundation.test.tsx` — decision ordering (4 tests):
+approved then `changes_requested` on the same digest reads as not approved
+with the sentence that says so; approved then `archived` likewise; a fresh
+approval after a change request restores it; a decision covering other bytes
+is ignored.
+
+`packages/ui/test/design/foundation.test.tsx` (5 further tests): a staged profile
 is not an approval (no badge, no plan, the sentence, the offer still there);
 an invalidated approval stops reading as approved; reopening a step in the
 wizard stops it immediately and writes nothing; a refused host gate records no
@@ -406,7 +412,9 @@ one line.
 2. **Entity state is not the badge.** A revised design returns to `draft` even
    when the bytes did not change; the foundation badge follows the approval
    row and its digest, and the two can disagree in exactly that case.
-3. Visual acceptance of the new note and the standalone toast is the person's.
+3. The unbacked note is drawn in tokens only (`border-line`, `bg-surface-2`) —
+   no new colour ratio was introduced for it.
+4. Visual acceptance of the new note and the standalone toast is the person's.
 
 ## Review fix (parent diff inspection)
 
