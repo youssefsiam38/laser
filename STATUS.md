@@ -37,7 +37,7 @@
 
 **Active owners:**
 - T10/T13: done; reviewed source merged `b4ed1003` + correction `d408e8ea`. Parent450 focused tests and merged full verify/identity pass.
-- T18/T19: checkpoint `29032c86` returned; parent found proof-viewer, bounded-page and scope-fencing gaps. Same owner is correcting them (`run_8ce6b95d`). Verification runtime rekey/retention/settlement gaps have a read-only plan owner (`run_b7a4b290`); implementation will serialize. First full T19 review remains pending.
+- T18/T19: checkpoint `29032c86` returned; parent found proof-viewer, bounded-page and scope-fencing gaps. Same owner is correcting them (`run_8ce6b95d`). Verification runtime pin/rekey/settlement plan is approved with D-364 corrections; implementation waits for the proof checkpoint. First full T19 review remains pending.
 - Integrated: T9/T17 mentions, T14 Foundation, T21 interop, image fixture and transcript continuity repairs. Exact ancestry/owners in `STATUS_DETAILED.md`.
 
 **Gate:** integrated Command/mention/transcript **`pnpm verify && pnpm identity:check` pass** (`t-37896cd3`, 141.7s, source `d408e8ea`; clean graphical environment). Current integration branch, **not final main**; excludes pending capture/verification work. Person-owned browser acceptance remains unclaimed (D-342).

@@ -378,3 +378,68 @@ No code, no tests, no merge, no conflict resolution, no full suite, no browser,
 no external command. `commands.ts`'s process handling was read and reasoned
 about, not executed. Nothing in the proof owner's worktree was modified: every
 read above was `read`/`grep` at `b632341a`.
+
+## Parent disposition — approved only with these corrections (D-364)
+
+The original plan is preserved above. Its claims that `commands.ts` already
+waits for termination and that *any* stopped run sends `stopped: true` are
+incorrect. Parent checked `commands.ts:123–138` and `run.ts:217–256` directly.
+The amendment message to the stopped investigator was refused by the runtime;
+these corrections were not delivered there. This section is the approved
+implementation contract, after the current proof-consumer checkpoint.
+
+1. **A1, with an explicit dispatch boundary.** Add the optional protocol
+   `stopping` field and its shared non-terminal wording. Before the host report
+   is dispatched, Stop is accepted: no further command, abort the active one,
+   keep the row running/pinned while it drains and the stopped report settles.
+   Once `verifyReport` has been invoked, a new Stop cannot change its serialized
+   input or revoke a possible `needs_review` transition. Return unchanged /
+   not-accepted for that new Stop, retain a truthful Saving-results line and
+   the pin, and show the actual host outcome. `delivered` still means this
+   worker holds the id, not that cancellation succeeded. Never send a second
+   corrective report or invent rollback. A pre-dispatch accepted Stop remains
+   stopping through its own report. Test both sides with a deferred RPC barrier.
+2. **The runner must really drain.** `onAbort` and timeout currently call
+   `kill(); finish()` without waiting for child/stdio close. Fix that lifecycle
+   before claiming settlement. An already-aborted request must not spawn;
+   synchronous spawn failure must not hit the uninitialized `timer` captured by
+   `finish`. Install lifecycle listeners safely, keep bounded output writable
+   until drain, and settle/hash it once. Reuse existing owned-process-tree
+   facilities, including supported-platform behavior, rather than inventing a
+   second process supervisor. Failed termination is not evidence of exit:
+   preserve the unsettled safety state and an honest problem rather than a
+   manufactured terminal confirmation. Tests use inert spawn doubles for
+   delayed close, late output, abort, timeout, spawn failure and kill failure;
+   no hostile process or external target is needed.
+3. **V8 is required, not deferred.** `pi/session/close` is the host's file-move
+   preparation, not a person's free-standing close operation. Refuse it under
+   the existing session lock while owned commands/verification are unsettled;
+   explain Stop-and-wait before moving. Do not dispose the owner first and then
+   recreate its old row. Unexpected driver closure must stop owned work and
+   suppress publication that would resurrect the closed path, while private
+   settlement/retention still completes. Same-Live fork rekey remains distinct
+   and carries the owner to its new address without stopping it.
+4. **Attribute bridge requests to that owner.** Fix the directly observed
+   verification `executionShape(cwd)` omission. Use the run's explicitly
+   admitted, canonically rekeyed session address for per-run bridge context,
+   never a global current session or a shared mutable caller request. Preserve
+   the immutable logical owner; do not rewrite prior execution/history records.
+   Include a real server/bridge-context regression across rekey.
+5. **Keep the good parts of the plan:** canonical TaskIndex observation before
+   transport notification; run/service rekey without instantiating unused
+   services; actual-settlement retention of at most 20 finished runs with no
+   next start; idempotent Stop/delivered distinction; visible report-write
+   failure; bounded content-free observer diagnostics and no floated rejection.
+   An arbitrary throwing observer cannot promise external delivery: prove
+   canonical state/retention survives, and label that limitation honestly.
+
+Implementation ownership is worker verification service/run/runner and tests,
+narrow server ownership/close hooks, the minimal protocol stopping field and
+schema/tests, and this evidence document. Only touch related Stop presentation
+if needed to avoid claiming a delivered request cancelled a committed report.
+No host-proof/schema/history or proof-viewer edits. First preserve the complete
+proof checkpoint and merged Command fixes in the implementation branch. Use
+focused protocol/verification/server safety and close/move tests, types and
+identity; parent owns full verification. One full T19 review follows all
+corrections, not separate micro-reviews. Ask only if a genuinely different
+host authority or wire operation becomes necessary.
