@@ -173,3 +173,148 @@ with the host. Routing is M21-T3.
 | entities per project | 20 000 | refused with "archive or delete some project work" |
 | events retained per project | 5 000 | older events fall off; a client asking from before them gets `reset: true` and a full page |
 | blob chunking | above 1 MiB | 256 KiB chunks, each with its own digest |
+
+---
+
+## M21-T3 · Host authority, methods, policy and event stream
+
+### What landed
+
+| File | What it owns |
+| --- | --- |
+| `packages/host/src/project-work/methods.ts` | `ProjectWorkMethods.handle(request, caller)`: the whole inventory against the store, actor derivation, project resolution, trust, error mapping, audit |
+| `packages/host/src/project-work/notifier.ts` | store event → `project/work/updated`, plus the attention diff that decides when `project/work/attention` is worth sending |
+| `packages/host/test/project-work/harness.ts` | a Router whose `WorkerPool` throws on `get`/`prepare`/`broadcastRequest` |
+| `packages/host/test/project-work/methods.test.ts` | 20 tests: the inventory worker-free, concurrency, idempotency, the event sequence, policy/reach, authorization, audit |
+
+Edits elsewhere: `router.ts` gained `projectWork`/`projectWorkUnavailable` in
+`RouterDeps` and a 16-case delegating switch (nothing else); `server.ts` wires
+the store's `onEvent` into the notifier and builds the authority with the
+project registry's trust and the log store; `access.ts` gained one refusal
+sentence. In the protocol: `jsonrpc.ts` gained the two error codes,
+`method-policy.ts` the `project_write` scope, `project-work-methods.ts` the
+`cwd` alternative on `list`. In the UI, one sentence in the
+`Record<MethodScope, string>` of `runtime/environment-capabilities.ts`.
+
+### Decisions
+
+1. **`project_write` is its own scope**, replacing T1's `settings` stopgap.
+   An environment may well want a phone that can write and approve project
+   work without being able to change how the machine is configured, or the
+   reverse; `settings` could express neither. `METHOD_SCOPES` is the default
+   for both `local` and `remote`, so nothing a person has configured loses a
+   capability by the addition. Reads stay `read`; every row keeps reach `any`.
+2. **A client connection is always a `person`; only the worker bridge may be
+   an `agent`.** The actor *kind* is decided by the source of the call and
+   never read from the request body, so `origin: { actor: { kind: "person" } }`
+   sent by a tool changes nothing. That is what makes "only a person approves"
+   (D-332) an enforced rule rather than an honour system: the store's
+   transition functions already refuse an agent's approval, and this is the
+   only place that can tell them who is calling. A client *may* supply the
+   label and the session id, which are provenance and confer nothing (D-329).
+3. **`project/work/list` accepts `cwd` as an alternative to `projectId`.**
+   Everything else takes the opaque id only. The host canonicalises the path,
+   maps a worktree to its parent project root, and mints the project id if the
+   folder is new — an empty page with a stable id, which is what a session that
+   has never opened the workspace needs. No other method accepts a path.
+4. **Trust gates mutations, never reads.** A project whose folder a person
+   declined refuses every write with `ErrorCodes.ProjectUntrusted` and a
+   sentence naming the fix. Reads stay open: the store reads no project file,
+   and hiding work the person already wrote would be the worse answer.
+5. **Errors are three shapes.** Conflict → `ErrorCodes.ProjectWorkConflict`
+   (-32010) with `{ conflict: "revision", current, expectedRevisionId }`;
+   quota → `ErrorCodes.ProjectWorkQuota` (-32011) with
+   `{ refused: "quota", scope, recovery, usedBytes, limitBytes }`; not-found
+   and refusals → `InvalidParams` with the store's person-readable message.
+   Both numbers moved into `ErrorCodes`; `PROJECT_WORK_CONFLICT_CODE` and
+   `PROJECT_WORK_QUOTA_CODE` are aliases of those members.
+6. **Delete without `confirm` writes nothing** and answers with the orphan
+   preview, so the typed confirmation has something exact to show.
+7. **Attention is diffed, not repeated.** `project/work/updated` goes out per
+   event; `project/work/attention` only when the exact count or the exact item
+   set changed. A project nothing has been announced for is treated as an
+   empty queue, so a draft nobody is waiting on announces nothing.
+8. **The audit names decisions, not edits.** Approve, delete and archive write
+   a `host` row (`project_work_approved` / `_deleted` / `_archived` /
+   `_unarchived`) naming the actor kind and label, the proven actor class and
+   id, the project, the key, the exact revision ids and digests — and for an
+   approval, every revision it covers as `KEY@revision#digest`. The fields are
+   assembled in the handler rather than passed through, so no body, title or
+   note can reach the log by accident. A comment or a revision writes no row.
+
+### Wire shapes the UI and the tools consume
+
+- `Router.handle` answers all sixteen methods from the host; the delegation is
+  `this.projectWork().handle(req, { actor, source: "client" })`. A host whose
+  store could not be opened refuses with `Unsupported` and the reason, and
+  never starts a worker to compensate.
+- The worker bridge (M21-T17) calls the same `handle` with
+  `{ actor, source: "worker", agent: { label, sessionId?, runId? } }` and gets
+  identical results, minus what only a person may do.
+- `project/work/list { cwd }` → `{ projectId, seq, items, counts, … }`: the
+  first call a session makes, and where the workspace learns the project id.
+- `project/work/list { sinceSeq }` → the entities touched since that sequence,
+  plus `removed[]`, plus `reset: true` when the event window has moved past it.
+- Every mutation result carries `seq`; a replayed idempotent call also carries
+  `replayed: true`.
+
+---
+
+## M21-T4 · Bounded bodies, search and derived projections
+
+### What landed
+
+| File | What it owns |
+| --- | --- |
+| `packages/host/src/project-work/store.ts` | projection fence repair before every search, `releaseDerived`, `projectionFence` |
+| `packages/host/src/project-work/methods.ts` | the ranged blob answer (base64, `nextOffset`, `released`, corrupt refusal) |
+| `packages/host/test/project-work/bodies.test.ts` | 16 tests: ranged bodies and blobs, value-only search, fences, release, quota, containment |
+
+### Decisions
+
+1. **A search repairs before it answers.** Every `search_projection` row names
+   the revision it was built from. A row whose fence is behind its entity is
+   rebuilt from the canonical body *before* anything is scored, bounded to 200
+   rows per call; a row whose entity or revision is gone is deleted rather
+   than searched. Text that cannot be fenced to a stored revision is never
+   served — which is the rule the leap states, and the reason a migration that
+   adds a projected field needs no backfill pass of its own.
+2. **The closed projection is the exclusion mechanism, not a scanner.**
+   `searchableBodyValues` projects the fields that *say* something — briefs,
+   outcomes, requirements, findings, screen and node text, titles. Commands,
+   scopes, paths, assignments, source URLs, digests, blob ids and every blob's
+   bytes are not in it, so a credential in a command or a secret inside an
+   attachment is not searchable and cannot come back in a snippet. No
+   credential heuristic runs over a person's own prose: it would be wrong in
+   both directions, and the projection already excludes the fields where a
+   credential plausibly lands.
+3. **Only derived content is ever released.** `releaseDerived` keeps the blob
+   row, its size, its media type and its digest, drops the bytes, records
+   `{ reason, detail }` and returns the space to the project's budget. A read
+   of it answers `{ totalBytes, released }` with no `data` — labelled, never
+   empty. Canonical revisions, comments and approvals have no such path: a
+   full budget refuses the write instead.
+4. **A ranged body page never re-parses.** `mode: "full"` returns the text and
+   the parsed body; `mode: "range"` returns a UTF-8 slice cut on a character
+   boundary with `totalBytes` and `nextOffset`, and the parsed body only when
+   the range happened to cover everything; `mode: "none"` returns no body and
+   still names the fence.
+5. **Damaged bytes are a refusal.** A blob whose stored chunks no longer match
+   their digests is `ErrorCodes.Internal` with what to do, never a plausible
+   page of whatever was on disk.
+
+### Wire shapes the UI and the tools consume
+
+| Read | Shape |
+| --- | --- |
+| `project/work/get { body: { mode: "range", offset, limit } }` | `body: { encoding: "application/json", totalBytes, offset, bytes, nextOffset?, text }` |
+| `project/work/get` (any mode) | `fence: { entityId, revisionId, digest, seq }` — what the answer was built from |
+| `project/work/blob/read { offset, limit }` | `{ blobId, mediaType, digest, totalBytes, offset, bytes, nextOffset?, data(base64)?, released? }` |
+| `project/work/search` | `{ results: [{ ref, key, title, kind, state, score, exactKey, matches }], truncated }`; `matches[].field` is only `key`, `title` or `body` |
+
+Budgets proved over the wire: 400 items page at 50 with no repeat and no row
+carrying a body; a ~900 KB body pages in 256 KiB slices that rejoin exactly; a
+1.5 MB blob reads in three 512 KiB pages that rehash to its digest; one detail
+read inlines at most 100 related records and names what it cut; a search page
+is capped and says `truncated`; the attention notification carries at most 50
+items while `needsYou` stays exact.

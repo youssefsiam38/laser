@@ -76,7 +76,7 @@ import {
   PROJECT_WORK_KINDS,
 } from "@lasercode/protocol";
 import { ProjectWorkConflictError, ProjectWorkNotFoundError, ProjectWorkQuotaError, ProjectWorkRefusedError } from "./errors.js";
-import { blobBytes, deleteBlob, putBlob, readBlobRange, type BlobRange, type StoredBlob } from "./blobs.js";
+import { blobBytes, deleteBlob, putBlob, readBlobRange, releaseBlob, type BlobRange, type StoredBlob } from "./blobs.js";
 import {
   bodyDigest,
   canonicalJson,
@@ -206,6 +206,8 @@ export interface ProjectWorkDetail {
 
 /** How many related records one `get` inlines before it says it cut the list. */
 const RELATED_MAX = 100;
+/** Projections one search may rebuild before it answers. Keeps a read bounded. */
+const PROJECTION_REPAIR_MAX = 200;
 
 export class ProjectWorkStore {
   private readonly db: ProjectWorkDatabase;
@@ -1806,6 +1808,25 @@ export class ProjectWorkStore {
     return blobBytes(this.db, projectId);
   }
 
+  /**
+   * Let go of a **derived** blob's bytes, keeping its row, its size and the
+   * reason it went (M21-T4).
+   *
+   * This is the only thing a budget may ever reclaim: a preview, a rendered
+   * capture, a cached export. A read of a released blob is answered with that
+   * label and its original size, never with empty bytes pretending to be the
+   * content (leap, "Security, privacy and resource rules"). Canonical
+   * revisions, comments and approvals have no such path — a full budget
+   * refuses the write instead.
+   */
+  releaseDerived(input: { projectId: string; blobId: string; reason: "quota" | "retention" | "migration"; detail: string }): number {
+    return this.write(() => {
+      const freed = releaseBlob(this.db, input.projectId, input.blobId, { reason: input.reason, detail: input.detail });
+      if (freed > 0) this.addBytes(input.projectId, -freed);
+      return freed;
+    });
+  }
+
   // ----------------------------------------------------------------- reads
 
   /** One page of the project's backlog, or everything after `sinceSeq`. */
@@ -2201,6 +2222,10 @@ export class ProjectWorkStore {
     results: ProjectWorkSearchResult[];
     truncated: boolean;
   } {
+    // Every projection is fenced to the revision it was built from, and a
+    // stale one is rebuilt before anything is scored against it — never
+    // served as if it were current (M21-T4).
+    this.repairProjections(query.projectId);
     const limit = Math.min(Math.max(1, query.limit ?? 20), 100);
     const text = query.query.trim();
     const filters: string[] = [];
@@ -2257,6 +2282,62 @@ export class ProjectWorkStore {
     });
     scored.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
     return { results: scored.slice(0, limit), truncated: rows.length > limit };
+  }
+
+  /**
+   * Rebuild the search projections whose fence is behind their entity.
+   *
+   * A projection row names the revision it was built from. They agree after
+   * every create and every revise, so this normally finds nothing; it exists
+   * for the cases where they cannot: a migration that adds a projected field,
+   * a row written by an older release, an entity whose projection was lost.
+   * The repair is bounded per call, and an orphan projection — one whose
+   * entity is gone — is dropped rather than searched.
+   */
+  private repairProjections(projectId?: string): number {
+    const where = projectId ? "s.project_id = ?" : "1 = 1";
+    const params: unknown[] = projectId ? [projectId] : [];
+    const stale = this.statement(
+      `SELECT s.entity_id AS entity_id, s.project_id AS project_id, e.entity_id AS live
+         FROM search_projection s
+         LEFT JOIN entities e ON e.entity_id = s.entity_id AND e.current_revision_id = s.revision_id
+        WHERE ${where} AND e.entity_id IS NULL
+        LIMIT ?`,
+    ).all(...params, PROJECTION_REPAIR_MAX) as Array<{ entity_id: string; project_id: string; live: string | null }>;
+    if (stale.length === 0) return 0;
+    return this.write(() => {
+      let repaired = 0;
+      for (const row of stale) {
+        const entity = this.statement("SELECT * FROM entities WHERE entity_id = ?").get(row.entity_id) as EntityRow | undefined;
+        if (!entity) {
+          this.statement("DELETE FROM search_projection WHERE entity_id = ?").run(row.entity_id);
+          repaired += 1;
+          continue;
+        }
+        const revision = this.statement("SELECT * FROM revisions WHERE revision_id = ?").get(entity.current_revision_id) as RevisionRow | undefined;
+        if (!revision) {
+          // Nothing to rebuild it from. Text that cannot be fenced to a stored
+          // revision is not searched at all.
+          this.statement("DELETE FROM search_projection WHERE entity_id = ?").run(row.entity_id);
+          repaired += 1;
+          continue;
+        }
+        this.writeSearchProjection(entity, revision.revision_id, JSON.parse(revision.body) as ProjectWorkBody);
+        repaired += 1;
+      }
+      return repaired;
+    });
+  }
+
+  /** What one entity's search projection was built from, for the fence tests. */
+  projectionFence(projectId: string, entityId: string): { revisionId: string; current: boolean } | undefined {
+    const row = this.statement(
+      `SELECT s.revision_id AS revision_id, e.current_revision_id AS current_revision_id
+         FROM search_projection s JOIN entities e ON e.entity_id = s.entity_id
+        WHERE s.project_id = ? AND s.entity_id = ?`,
+    ).get(projectId, entityId) as { revision_id: string; current_revision_id: string } | undefined;
+    if (!row) return undefined;
+    return { revisionId: row.revision_id, current: row.revision_id === row.current_revision_id };
   }
 
   // ------------------------------------------------------------- integrity

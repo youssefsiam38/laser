@@ -48,6 +48,7 @@ import { browseExplorer } from "./directory-explorer.js";
 import type { TaskRegister } from "./tasks/register.js";
 import { createPrivateSessionWorkspace, ensureWorkspace, isChatWorkspace, isWithinDirectory, projectRootOf } from "./paths.js";
 import type { PrefsStore } from "./prefs.js";
+import type { ProjectWorkMethods } from "./project-work/methods.js";
 import type { FeatureService } from "./features.js";
 import type { ProjectRegistry } from "./projects.js";
 import type { PushService } from "./push.js";
@@ -141,6 +142,15 @@ export interface RouterDeps {
   access: AccessControl;
   /** The access audit (RP-13). Absent = decisions are not recorded. */
   audit?: AccessAudit | undefined;
+  /**
+   * The project lifecycle authority (M21-T3): specs, research, designs, plans
+   * and tasks, answered from the host's own canonical store. Absent = the
+   * `project/work/*` methods are refused with the reason below rather than
+   * answered with an invented shape.
+   */
+  projectWork?: ProjectWorkMethods | undefined;
+  /** Why project work is missing, so a refusal can say so. */
+  projectWorkUnavailable?: string | undefined;
   /**
    * Per-session route leases (RP-4c), shared with the pool that releases under
    * them. Absent, this Router owns a private one: routing is still serialized
@@ -385,6 +395,17 @@ export class Router {
   private setup(): SetupService {
     if (!this.deps.setup) throw new ProtocolError(ErrorCodes.Unsupported, "this host keeps no first-run state");
     return this.deps.setup;
+  }
+
+  /** The project lifecycle authority (M21-T3), or why this host has none. */
+  private projectWork(): ProjectWorkMethods {
+    if (this.deps.projectWork) return this.deps.projectWork;
+    throw new ProtocolError(
+      ErrorCodes.Unsupported,
+      this.deps.projectWorkUnavailable
+        ? `Project work is not available right now: ${this.deps.projectWorkUnavailable}. Restart the app; nothing you saved was lost.`
+        : "This app is running without its project work, so specs, plans and tasks cannot be opened here.",
+    );
   }
 
   /**
@@ -1135,6 +1156,30 @@ export class Router {
       // The host decides that from what it measured itself.
       case "pi/worker/pressure":
         throw new ProtocolError(ErrorCodes.Unsupported, "The app manages its own session runtimes.");
+
+      // The project lifecycle (M21-T3). Every one of these is answered by the
+      // host's own authority over the canonical store — reads *and* writes —
+      // so nothing here starts, prepares or touches a worker. The rules live
+      // in `project-work/methods.ts`; this switch only delegates.
+      case "project/work/list":
+      case "project/work/get":
+      case "project/work/search":
+      case "project/work/blob/read":
+      case "project/work/create":
+      case "project/work/revise":
+      case "project/work/archive":
+      case "project/work/delete":
+      case "project/work/comment":
+      case "project/work/review":
+      case "project/work/approve":
+      case "project/work/resolve-comment":
+      case "project/work/link":
+      case "project/work/unlink":
+      case "project/task/action":
+      case "project/task/link-execution":
+        // A client connection is always a person: only the worker bridge
+        // (M21-T17) presents an agent, and it does not come through here.
+        return this.projectWork().handle(req, { actor, source: "client" });
 
       default:
         break;

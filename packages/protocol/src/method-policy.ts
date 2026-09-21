@@ -42,6 +42,11 @@ import type { HostNotifications } from "./messages.js";
  * - `settings` — configuration that outlives a turn: projects and trust,
  *   provider sign-in, MCP servers, keybindings, preferences, agent
  *   definitions, the shell's private environment overlay.
+ * - `project_write` — changing a project's own work: specs, research, designs,
+ *   plans and tasks, their comments, reviews, approvals and links. Separate
+ *   from `settings` because an environment may well want a phone that can
+ *   write and approve project work without being able to change how this
+ *   machine is configured, or the reverse (M21-T3, D-332).
  * - `features` — Laser's own feature enablement and the search connection.
  * - `diagnostics` — logs and resource inventory.
  * - `device` — the calling device's own push registration, so a read-only
@@ -55,6 +60,7 @@ export type MethodScope =
   | "work_control"
   | "execution"
   | "settings"
+  | "project_write"
   | "features"
   | "diagnostics"
   | "device";
@@ -67,6 +73,7 @@ export const METHOD_SCOPES: readonly MethodScope[] = [
   "work_control",
   "execution",
   "settings",
+  "project_write",
   "features",
   "diagnostics",
   "device",
@@ -379,18 +386,18 @@ export const METHOD_POLICY = {
   // session's questions. A dedicated `project_write` / `project_review` scope
   // is the right long-term home (docs/leap/m21-spine-plan.md); it needs the
   // environment-capabilities copy in the UI package, which M21-T1 does not own.
-  "project/work/create": { scope: "settings", reach: "any" },
-  "project/work/revise": { scope: "settings", reach: "any" },
-  "project/work/archive": { scope: "settings", reach: "any" },
-  "project/work/delete": { scope: "settings", reach: "any" },
-  "project/work/comment": { scope: "settings", reach: "any" },
-  "project/work/review": { scope: "settings", reach: "any" },
-  "project/work/approve": { scope: "settings", reach: "any" },
-  "project/work/resolve-comment": { scope: "settings", reach: "any" },
-  "project/work/link": { scope: "settings", reach: "any" },
-  "project/work/unlink": { scope: "settings", reach: "any" },
-  "project/task/action": { scope: "settings", reach: "any" },
-  "project/task/link-execution": { scope: "settings", reach: "any" },
+  "project/work/create": { scope: "project_write", reach: "any" },
+  "project/work/revise": { scope: "project_write", reach: "any" },
+  "project/work/archive": { scope: "project_write", reach: "any" },
+  "project/work/delete": { scope: "project_write", reach: "any" },
+  "project/work/comment": { scope: "project_write", reach: "any" },
+  "project/work/review": { scope: "project_write", reach: "any" },
+  "project/work/approve": { scope: "project_write", reach: "any" },
+  "project/work/resolve-comment": { scope: "project_write", reach: "any" },
+  "project/work/link": { scope: "project_write", reach: "any" },
+  "project/work/unlink": { scope: "project_write", reach: "any" },
+  "project/task/action": { scope: "project_write", reach: "any" },
+  "project/task/link-execution": { scope: "project_write", reach: "any" },
 
   // ------------------------------------------------------------- device ---
   "pi/push/config": { scope: "device", reach: "any" },

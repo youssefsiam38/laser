@@ -17,6 +17,7 @@
  *   create two revisions.
  */
 import { z } from "zod";
+import { ErrorCodes } from "./jsonrpc.js";
 import {
   APPROVAL_DECISIONS,
   APPROVAL_GATES,
@@ -110,11 +111,14 @@ export const PROJECT_WORK_ATTENTION_ITEMS_MAX = 50;
 /**
  * A revision conflict, as a JSON-RPC error code.
  *
- * It lives here rather than in `ErrorCodes` because this task may not edit
- * `jsonrpc.ts`; the next task that may should move it there verbatim. The
- * number is in Laser's own range and is not used by any other method.
+ * The number lives in `ErrorCodes` (M21-T3) so the whole wire vocabulary is in
+ * one table; this alias is what the project-work code reads, and it is the
+ * same number it always was.
  */
-export const PROJECT_WORK_CONFLICT_CODE = -32010;
+export const PROJECT_WORK_CONFLICT_CODE: number = ErrorCodes.ProjectWorkConflict;
+
+/** A durable write refused at a budget cap, as a JSON-RPC error code. */
+export const PROJECT_WORK_QUOTA_CODE: number = ErrorCodes.ProjectWorkQuota;
 
 /** The data a conflict carries: what is current, never what was overwritten. */
 export interface ProjectWorkConflict {
@@ -222,7 +226,17 @@ export interface ProjectionFence {
 // ---------------------------------------------------------------------------
 
 export interface ProjectWorkListParams {
-  projectId: string;
+  /** The opaque project id. Omitted only when `cwd` names the directory. */
+  projectId?: string;
+  /**
+   * A directory inside the project, as an alternative to `projectId`.
+   *
+   * The host resolves the project root of the canonical path (a worktree maps
+   * to its parent project) and answers with that project's stable id, which is
+   * what every other method takes. It exists so the first read of a session's
+   * project does not need a round trip to learn an id (M21-T3).
+   */
+  cwd?: string;
   kinds?: ProjectWorkKind[];
   states?: ProjectWorkState[];
   needsYou?: boolean;
@@ -730,7 +744,8 @@ const linkInputSchema = z.discriminatedUnion("type", [
 export const projectWorkParamsSchemas = {
   "project/work/list": z
     .object({
-      projectId: projectIdSchema,
+      projectId: projectIdSchema.optional(),
+      cwd: z.string().min(1).max(4096).optional(),
       kinds: kinds.optional(),
       states: states.optional(),
       needsYou: z.boolean().optional(),
@@ -741,7 +756,11 @@ export const projectWorkParamsSchemas = {
       cursor: cursor.optional(),
       limit: z.number().int().min(1).max(PROJECT_WORK_LIST_LIMIT_MAX).optional(),
     })
-    .strict(),
+    .strict()
+    .refine((params) => params.projectId !== undefined || params.cwd !== undefined, {
+      message: "name the project by id, or the folder it is open at",
+      path: ["projectId"],
+    }),
   "project/work/get": z
     .object({
       projectId: projectIdSchema,

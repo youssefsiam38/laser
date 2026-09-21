@@ -34,7 +34,7 @@ import { totalmem } from "node:os";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type AgentRun, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type ModelProfileMigrationRecord, type ModelProfileMigrationReport, MODEL_PROFILE_MIGRATION_RECORD, NAMING_PROFILE_SETTING, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type AgentRun, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type ModelProfileMigrationRecord, type ModelProfileMigrationReport, MODEL_PROFILE_MIGRATION_RECORD, NAMING_PROFILE_SETTING, type ProjectWorkAttentionNotification, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
@@ -48,6 +48,8 @@ import { PrefsStore } from "./prefs.js";
 import { SessionCatalog, defaultSessionDir } from "./catalog.js";
 import { LogStore } from "./logstore.js";
 import { ProjectWorkStore } from "./project-work/store.js";
+import { ProjectWorkMethods } from "./project-work/methods.js";
+import { ProjectWorkNotifier } from "./project-work/notifier.js";
 import { CaptureAccumulator, type CaptureActor } from "./provider-capture.js";
 import { collectTransportQueues, type TransportQueueSource, type TransportQueues } from "./transport-snapshot.js";
 import { observeCapture } from "./capture-ingress.js";
@@ -303,6 +305,11 @@ export class HostServer {
    */
   readonly projectWork: ProjectWorkStore | undefined;
   readonly projectWorkUnavailable: string | undefined;
+  /**
+   * The project-work method handlers (M21-T3): the host's own authority over
+   * that store. Reads and writes are both answered here, without a worker.
+   */
+  readonly projectWorkMethods: ProjectWorkMethods | undefined;
   /** Background commands the agent left running, per session (docs/ux-fleet.md). */
   readonly tasks: TaskRegister;
   /** Runs, plans and missions read off disk — including sessions with no worker (M3). */
@@ -477,10 +484,20 @@ export class HostServer {
     }
     // The project lifecycle store (M21-T2). Under the state root, partitioned
     // by stable project id, and never by a session or filesystem path.
+    // Its events become the two `project/work/*` notifications (M21-T3); the
+    // notifier holds the attention diff, so a busy project does not repaint
+    // every client's badge on every comment.
+    const projectWorkNotifier = new ProjectWorkNotifier({
+      attention: (projectId) => this.projectWorkAttention(projectId),
+      notifyUpdated: (notification) => this.notify("project/work/updated", notification),
+      notifyAttention: (notification) => this.notify("project/work/attention", notification),
+      log: (message) => this.log(message),
+    });
     try {
       this.projectWork = new ProjectWorkStore({
         file: options.projectWorkFile ?? join(stateDir, "project-work.db"),
         log: (message) => this.log(message),
+        onEvent: (event) => projectWorkNotifier.handle(event),
       });
       this.projectWorkUnavailable = undefined;
     } catch (error) {
@@ -858,6 +875,17 @@ export class HostServer {
     );
 
     const activation = new RuntimeActivationGate(stateDir, this.pool, this.runs, this.tasks);
+    // The project lifecycle authority (M21-T3). It reads the project registry
+    // for trust only — a project whose folder a person declined cannot have
+    // its work changed — and writes approve/delete/archive rows to the log.
+    this.projectWorkMethods = this.projectWork
+      ? new ProjectWorkMethods({
+          store: this.projectWork,
+          trustOf: (projectRoot) => this.projects.trustOf(projectRoot).trust,
+          logs: this.logs,
+        })
+      : undefined;
+
     this.router = new Router(this.pool, this.catalog, {
       attention: this.attention,
       projects: this.projects,
@@ -884,6 +912,8 @@ export class HostServer {
       access: this.access,
       audit: this.audit,
       routeLeases: this.routeLeases,
+      projectWork: this.projectWorkMethods,
+      projectWorkUnavailable: this.projectWorkUnavailable,
     });
 
     this.http = createServer((req, res) => this.serveHttp(req, res));
@@ -1095,6 +1125,14 @@ export class HostServer {
   /** Send one host notification to every connected client. */
   notify<M extends keyof HostNotifications>(method: M, params: HostNotifications[M]): void {
     this.broadcast({ jsonrpc: "2.0", method, params });
+  }
+
+  /**
+   * What is waiting on a person in one project (M21-T3). An empty queue is
+   * the honest answer when this host has no project work at all.
+   */
+  private projectWorkAttention(projectId: string): ProjectWorkAttentionNotification {
+    return this.projectWorkMethods?.attention(projectId) ?? { projectId, seq: 0, needsYou: 0, items: [] };
   }
 
   // ------------------------------------------------------------- attention

@@ -54,6 +54,22 @@ export const ErrorCodes = {
    * window is never returned without its revision instead.
    */
   RevisionUnavailable: -32007,
+  /**
+   * A project-work write named a revision that is no longer current (M21-T3).
+   *
+   * The error data carries {@link ProjectWorkConflict}: what is current now and
+   * what the caller believed was current. Nothing was overwritten, and the
+   * caller chooses between keeping its version as a new revision and starting
+   * from the current one.
+   */
+  ProjectWorkConflict: -32010,
+  /**
+   * A durable project-work write was refused because a budget is full
+   * (M21-T3). Canonical revisions, comments and approvals are never evicted to
+   * make room, so the data carries the recovery action instead: what to export
+   * or delete, and where.
+   */
+  ProjectWorkQuota: -32011,
 } as const;
 
 export function isRequest(m: JsonRpcMessage): m is JsonRpcRequest {
