@@ -2,17 +2,25 @@
   "tool": "resolve_question",
   "task": "Answer the licence question from what the guide declares, and hand the adoption question to the person.",
   "expectedTool": "resolve_question",
-  "allowedTools": ["read_source", "record_finding", "resolve_question"],
+  "allowedTools": [
+    "read_source",
+    "record_finding",
+    "resolve_question"
+  ],
   "wrongToolThreshold": 0,
   "budget": {
     "calls": 7,
-    "inputTokens": 40000,
+    "inputTokens": 70000,
     "outputTokens": 500
   },
-  "measures": ["retry"],
+  "measures": [
+    "retry"
+  ],
   "world": {
     "role": "root",
-    "research": { "project": "project" }
+    "research": {
+      "project": "project"
+    }
   },
   "steps": [
     {
@@ -62,7 +70,9 @@
           "question_id": "q2",
           "state": "answered",
           "answer": "pdf-text is MIT licensed, as its own guide declares.",
-          "findings": ["{{finding}}"]
+          "findings": [
+            "{{finding}}"
+          ]
         }
       }
     },

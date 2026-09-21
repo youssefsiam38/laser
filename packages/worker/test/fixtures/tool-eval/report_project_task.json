@@ -1,0 +1,126 @@
+{
+  "tool": "report_project_task",
+  "task": "You have finished TASK-1 and the export tests pass. Record what you proved and move the task as far as it can honestly go.",
+  "expectedTool": "report_project_task",
+  "allowedTools": [
+    "report_project_task",
+    "inspect_project_work"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 5,
+    "inputTokens": 60000,
+    "outputTokens": 900
+  },
+  "measures": [
+    "retry"
+  ],
+  "world": {
+    "role": "root",
+    "projectWork": {
+      "items": [
+        {
+          "kind": "task",
+          "title": "Failed export rows say why",
+          "body": {
+            "kind": "task",
+            "task": {
+              "outcome": "The export list shows why a failed export failed, and what to do next.",
+              "nonGoals": [
+                "Automatic retry."
+              ],
+              "dependencies": [],
+              "scope": {
+                "packages": [
+                  "exports"
+                ],
+                "repositories": [],
+                "paths": [
+                  "src/exports/list.ts"
+                ],
+                "capabilities": []
+              },
+              "acceptance": [
+                {
+                  "id": "a1",
+                  "text": "A failed export row shows the reason and the next step.",
+                  "machineVerifiable": true,
+                  "command": "pnpm -F exports test"
+                }
+              ],
+              "verificationCommands": [
+                "pnpm -F exports test"
+              ],
+              "visualEvidenceRequired": false,
+              "assignment": {
+                "policy": "agent",
+                "agentName": "worker"
+              }
+            }
+          },
+          "state": "in_progress"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "inspect_project_work",
+        "args": {
+          "action": "get",
+          "key": "TASK-1",
+          "include": [
+            "evidence"
+          ],
+          "activity_label": "Reading the task"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "report_project_task",
+        "args": {
+          "action": "complete",
+          "key": "TASK-1",
+          "expected_revision_id": "rev_2",
+          "idempotency_key": "task-1-complete",
+          "activity_label": "Completing the task"
+        }
+      },
+      "fails": true
+    },
+    {
+      "toolCall": {
+        "name": "report_project_task",
+        "args": {
+          "action": "record_evidence",
+          "key": "TASK-1",
+          "expected_revision_id": "rev_2",
+          "evidence_kind": "test",
+          "evidence_role": "acceptance",
+          "evidence_outcome": "passed",
+          "evidence_summary": "pnpm -F exports test: 42 passed, including the failed-export row.",
+          "idempotency_key": "task-1-evidence",
+          "activity_label": "Recording the test run"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "report_project_task",
+        "args": {
+          "action": "submit_for_review",
+          "key": "TASK-1",
+          "expected_revision_id": "rev_2",
+          "note": "Tests pass; the row shows the reason and the next step.",
+          "idempotency_key": "task-1-review",
+          "activity_label": "Submitting the task for review"
+        }
+      }
+    },
+    {
+      "text": "TASK-1 is with a person to review: the acceptance evidence is recorded, and a task is never marked done by a report alone."
+    }
+  ]
+}

@@ -14,7 +14,8 @@
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { isRecord } from "@lasercode/protocol";
+import { isRecord, projectWorkBodySchema, type ProjectWorkBody, type ProjectWorkKind, type ProjectWorkState } from "@lasercode/protocol";
+import type { ToolEvalProjectWorkItem } from "./project-work-world.js";
 
 /** How many calls and how much context one task may cost. */
 export interface ToolEvalBudget {
@@ -97,6 +98,22 @@ export interface ToolEvalResearchWorld {
   searchConnected?: boolean;
 }
 
+/**
+ * The project work a lifecycle fixture is evaluated against (M21-T17).
+ *
+ * Real tools, real specs, real handlers; the one substitution is the host,
+ * because an evaluation must not write into a person's own project work.
+ * `hasProject: false` is the projectless chat, which gets the read tool only.
+ */
+export interface ToolEvalProjectWorkWorld {
+  /** The items the project already has, with their typed bodies. */
+  items?: ToolEvalProjectWorkItem[];
+  /** False for a projectless chat. Default true. */
+  hasProject?: boolean;
+  /** The Task this session is an attempt on, by key. */
+  taskKey?: string;
+}
+
 /** The state the scripted harness bridge answers from. No real agent is started. */
 export interface ToolEvalWorld {
   /** root: the parent tools are registered. child: only `complete_agent_run` is. */
@@ -115,6 +132,8 @@ export interface ToolEvalWorld {
   designIndex?: ToolEvalDesignWorld;
   /** Present for the Research tools; absent for every other fixture. */
   research?: ToolEvalResearchWorld;
+  /** Present for the four lifecycle tools; absent for every other fixture. */
+  projectWork?: ToolEvalProjectWorkWorld;
 }
 
 export interface ToolEvalFixture {
@@ -220,9 +239,26 @@ function parseWorld(value: unknown, source: string): ToolEvalWorld {
       ...(typeof connected === "boolean" ? { searchConnected: connected } : {}),
     };
   }
+  const projectWorkValue = value["projectWork"];
+  let projectWork: ToolEvalProjectWorkWorld | undefined;
+  if (projectWorkValue !== undefined) {
+    if (!isRecord(projectWorkValue)) fail(source, "world.projectWork must be an object.");
+    const items = projectWorkValue["items"];
+    if (items !== undefined && !Array.isArray(items)) fail(source, "world.projectWork.items must be a list.");
+    const hasProject = projectWorkValue["hasProject"];
+    if (hasProject !== undefined && typeof hasProject !== "boolean") fail(source, "world.projectWork.hasProject must be true or false.");
+    const taskKey = projectWorkValue["taskKey"];
+    if (taskKey !== undefined && typeof taskKey !== "string") fail(source, "world.projectWork.taskKey must be a key like TASK-1.");
+    projectWork = {
+      ...(Array.isArray(items) ? { items: items.map((entry, index) => parseProjectWorkItem(entry, source, index)) } : {}),
+      ...(typeof hasProject === "boolean" ? { hasProject } : {}),
+      ...(typeof taskKey === "string" ? { taskKey } : {}),
+    };
+  }
   return {
     ...(design !== undefined ? { designIndex: design } : {}),
     ...(research !== undefined ? { research } : {}),
+    ...(projectWork !== undefined ? { projectWork } : {}),
     ...(role !== undefined ? { role } : {}),
     ...(search !== undefined ? { search } : {}),
     ...(catalog !== undefined
@@ -237,6 +273,39 @@ function parseWorld(value: unknown, source: string): ToolEvalWorld {
         }
       : {}),
     ...(agents !== undefined ? { agents: agents.map((entry, index) => parseWorldAgent(entry, source, index)) } : {}),
+  };
+}
+
+/**
+ * One item of a lifecycle fixture's project. The body is validated against
+ * the protocol's own schema here, so a fixture whose body is wrong fails at
+ * the file that wrote it rather than inside a tool call.
+ */
+function parseProjectWorkItem(value: unknown, source: string, index: number): ToolEvalProjectWorkItem {
+  const at = `world.projectWork.items[${String(index)}]`;
+  if (!isRecord(value)) fail(source, `${at} must be an object.`);
+  const parsed = projectWorkBodySchema.safeParse(value["body"]);
+  if (!parsed.success) fail(source, `${at}.body is not a valid body: ${parsed.error.issues[0]?.message ?? "it does not match any kind"}.`);
+  const comments = value["comments"];
+  if (comments !== undefined && !Array.isArray(comments)) fail(source, `${at}.comments must be a list.`);
+  const state = value["state"];
+  if (state !== undefined && typeof state !== "string") fail(source, `${at}.state must be a state name.`);
+  return {
+    kind: requireString(value["kind"], source, `${at}.kind`) as ProjectWorkKind,
+    title: requireString(value["title"], source, `${at}.title`),
+    body: parsed.data as ProjectWorkBody,
+    ...(typeof state === "string" ? { state: state as ProjectWorkState } : {}),
+    ...(Array.isArray(comments)
+      ? {
+          comments: comments.map((entry, position) => {
+            if (!isRecord(entry)) fail(source, `${at}.comments[${String(position)}] must be an object.`);
+            return {
+              text: requireString(entry["text"], source, `${at}.comments[${String(position)}].text`),
+              ...(entry["blocking"] === true ? { blocking: true } : {}),
+            };
+          }),
+        }
+      : {}),
   };
 }
 

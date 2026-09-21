@@ -2,17 +2,25 @@
   "tool": "build_design_index",
   "task": "I want to design a new settings page in this project's own style. Get whatever you need first.",
   "expectedTool": "build_design_index",
-  "allowedTools": ["inspect_design_index", "build_design_index"],
+  "allowedTools": [
+    "inspect_design_index",
+    "build_design_index"
+  ],
   "wrongToolThreshold": 0,
   "budget": {
     "calls": 4,
-    "inputTokens": 40000,
+    "inputTokens": 70000,
     "outputTokens": 300
   },
-  "measures": ["retry"],
+  "measures": [
+    "retry"
+  ],
   "world": {
     "role": "root",
-    "designIndex": { "project": "vue-scss", "built": false }
+    "designIndex": {
+      "project": "vue-scss",
+      "built": false
+    }
   },
   "steps": [
     {

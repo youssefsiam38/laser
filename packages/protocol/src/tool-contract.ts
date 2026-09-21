@@ -314,6 +314,9 @@ const PAGE_SIZE_NAMES = new Set([
   "results",
   "depth",
   "top",
+  // M21-T17: `inspect_project_work` reads a body by offset and limit, and the
+  // limit is that page's size like any other.
+  "body_limit",
 ]);
 
 /** Whether a number by this name is a page size. Case- and separator-insensitive. */

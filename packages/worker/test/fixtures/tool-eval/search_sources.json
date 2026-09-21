@@ -2,17 +2,26 @@
   "tool": "search_sources",
   "task": "Find the Node libraries that extract text from a PDF, and note which registries publish them.",
   "expectedTool": "search_sources",
-  "allowedTools": ["search_sources", "read_source", "record_finding", "resolve_question"],
+  "allowedTools": [
+    "search_sources",
+    "read_source",
+    "record_finding",
+    "resolve_question"
+  ],
   "wrongToolThreshold": 0,
   "budget": {
     "calls": 6,
-    "inputTokens": 40000,
+    "inputTokens": 70000,
     "outputTokens": 400
   },
-  "measures": ["retry"],
+  "measures": [
+    "retry"
+  ],
   "world": {
     "role": "root",
-    "research": { "project": "project" }
+    "research": {
+      "project": "project"
+    }
   },
   "steps": [
     {

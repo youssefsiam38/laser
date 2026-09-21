@@ -2,18 +2,26 @@
   "tool": "read_source",
   "task": "Read the pdf-text guide and say what it declares about licensing and Node support.",
   "expectedTool": "read_source",
-  "allowedTools": ["search_sources", "read_source", "record_finding"],
+  "allowedTools": [
+    "search_sources",
+    "read_source",
+    "record_finding"
+  ],
   "wrongToolThreshold": 0,
   "budget": {
     "calls": 5,
-    "inputTokens": 40000,
+    "inputTokens": 70000,
     "outputTokens": 400
   },
-  "measures": ["truncation"],
-  "truncationBytes": 400,
+  "measures": [
+    "truncation"
+  ],
+  "truncationBytes": 1300,
   "world": {
     "role": "root",
-    "research": { "project": "project" }
+    "research": {
+      "project": "project"
+    }
   },
   "steps": [
     {
@@ -32,7 +40,7 @@
         "name": "read_source",
         "args": {
           "source_id": "https://docs.example.org/guides/pdf-text",
-          "limit": 16384,
+          "limit": 300,
           "activity_label": "Reading the guide"
         }
       }
@@ -42,7 +50,9 @@
         "name": "read_source",
         "args": {
           "source_id": "https://docs.example.org/guides/pdf-text",
-          "limit": 256
+          "offset": 300,
+          "limit": 256,
+          "activity_label": "Reading the rest of the guide"
         }
       }
     },

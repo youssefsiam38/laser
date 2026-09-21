@@ -1,0 +1,122 @@
+{
+  "tool": "write_project_artifact",
+  "task": "Record a design for the failed-export row: a brief saying it shows the reason and the one action that fixes it.",
+  "expectedTool": "write_project_artifact",
+  "allowedTools": [
+    "write_project_artifact",
+    "inspect_project_work"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 4,
+    "inputTokens": 50000,
+    "outputTokens": 900
+  },
+  "measures": [
+    "retry"
+  ],
+  "world": {
+    "role": "root",
+    "projectWork": {
+      "items": [
+        {
+          "kind": "spec",
+          "title": "Failed exports say why",
+          "body": {
+            "kind": "spec",
+            "spec": {
+              "form": "full",
+              "brief": "People cannot see which of their exports failed, so a failed export looks like a slow one.",
+              "outcomes": [
+                "A failed export says what failed and what to do next."
+              ],
+              "nonGoals": [
+                "Retrying an export automatically."
+              ],
+              "requirements": [
+                {
+                  "id": "r1",
+                  "text": "An export that fails shows the reason in the export list.",
+                  "level": "must"
+                },
+                {
+                  "id": "r2",
+                  "text": "The reason is written for a person, never a stack trace.",
+                  "level": "must"
+                }
+              ],
+              "acceptance": [
+                {
+                  "id": "a1",
+                  "text": "A failed export row shows the reason and the next step.",
+                  "machineVerifiable": true
+                }
+              ],
+              "constraints": [
+                "No new dependency."
+              ]
+            }
+          }
+        },
+        {
+          "kind": "design",
+          "title": "Failed export row",
+          "body": {
+            "kind": "design",
+            "design": {
+              "brief": "The failed-export row: the reason, and the one action that fixes it.",
+              "screens": [],
+              "flows": [],
+              "sketches": [],
+              "fidelity": "proposed",
+              "fixtures": []
+            }
+          }
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "write_project_artifact",
+        "args": {
+          "action": "revise",
+          "key": "DES-1",
+          "expected_revision_id": "rev_stale",
+          "body_json": "{\"kind\": \"design\", \"design\": {\"brief\": \"The failed-export row: the reason, and the one action that fixes it.\", \"screens\": [], \"flows\": [], \"sketches\": [], \"fidelity\": \"proposed\", \"fixtures\": []}}",
+          "idempotency_key": "des-1-brief",
+          "activity_label": "Revising the design"
+        }
+      },
+      "fails": true
+    },
+    {
+      "toolCall": {
+        "name": "inspect_project_work",
+        "args": {
+          "action": "get",
+          "key": "DES-1",
+          "activity_label": "Reading the design as it is now"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "write_project_artifact",
+        "args": {
+          "action": "revise",
+          "key": "DES-1",
+          "expected_revision_id": "{{revision:DES-1}}",
+          "body_json": "{\"kind\": \"design\", \"design\": {\"brief\": \"The failed-export row: the reason, and the one action that fixes it.\", \"screens\": [], \"flows\": [], \"sketches\": [], \"fidelity\": \"proposed\", \"fixtures\": []}}",
+          "note": "The row shows the reason and the one action that fixes it.",
+          "idempotency_key": "des-1-brief",
+          "activity_label": "Revising the design"
+        }
+      }
+    },
+    {
+      "text": "DES-1 now records that the failed-export row shows the reason and the one action that fixes it."
+    }
+  ]
+}

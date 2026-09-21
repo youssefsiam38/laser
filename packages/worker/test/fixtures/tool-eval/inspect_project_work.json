@@ -1,0 +1,104 @@
+{
+  "tool": "inspect_project_work",
+  "task": "What does SPEC-1 in this project ask for, and is anyone waiting on it?",
+  "expectedTool": "inspect_project_work",
+  "allowedTools": [
+    "inspect_project_work"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 3,
+    "inputTokens": 40000,
+    "outputTokens": 400
+  },
+  "measures": [
+    "truncation"
+  ],
+  "truncationBytes": 1200,
+  "world": {
+    "role": "root",
+    "projectWork": {
+      "items": [
+        {
+          "kind": "spec",
+          "title": "Failed exports say why",
+          "body": {
+            "kind": "spec",
+            "spec": {
+              "form": "full",
+              "brief": "People cannot see which of their exports failed, so a failed export looks like a slow one.",
+              "outcomes": [
+                "A failed export says what failed and what to do next."
+              ],
+              "nonGoals": [
+                "Retrying an export automatically."
+              ],
+              "requirements": [
+                {
+                  "id": "r1",
+                  "text": "An export that fails shows the reason in the export list.",
+                  "level": "must"
+                },
+                {
+                  "id": "r2",
+                  "text": "The reason is written for a person, never a stack trace.",
+                  "level": "must"
+                }
+              ],
+              "acceptance": [
+                {
+                  "id": "a1",
+                  "text": "A failed export row shows the reason and the next step.",
+                  "machineVerifiable": true
+                }
+              ],
+              "constraints": [
+                "No new dependency."
+              ]
+            }
+          },
+          "comments": [
+            {
+              "text": "The reason has to name the file that could not be written.",
+              "blocking": true
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "inspect_project_work",
+        "args": {
+          "action": "get",
+          "key": "SPEC-1",
+          "include": [
+            "body",
+            "comments"
+          ],
+          "body_limit": 4000,
+          "activity_label": "Reading SPEC-1"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "inspect_project_work",
+        "args": {
+          "action": "get",
+          "key": "SPEC-1",
+          "include": [
+            "body"
+          ],
+          "body_limit": 200,
+          "activity_label": "Reading the rest of SPEC-1"
+        }
+      }
+    },
+    {
+      "text": "SPEC-1 asks that a failed export says why it failed and what to do next, written for a person. One blocking comment is open: the reason has to name the file that could not be written."
+    }
+  ]
+}
