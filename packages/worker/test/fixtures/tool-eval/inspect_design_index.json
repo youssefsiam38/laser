@@ -2,20 +2,37 @@
   "tool": "inspect_design_index",
   "task": "What button component does this project already have, and what variants does it support?",
   "expectedTool": "inspect_design_index",
-  "allowedTools": ["inspect_design_index", "build_design_index"],
+  "allowedTools": [
+    "inspect_design_index",
+    "build_design_index"
+  ],
   "wrongToolThreshold": 0,
   "budget": {
-    "calls": 3,
-    "inputTokens": 40000,
+    "calls": 4,
+    "inputTokens": 70000,
     "outputTokens": 300
   },
-  "measures": ["truncation"],
-  "truncationBytes": 20000,
+  "measures": [
+    "truncation"
+  ],
+  "truncationBytes": 6000,
   "world": {
     "role": "root",
-    "designIndex": { "project": "react-tailwind", "built": true }
+    "designIndex": {
+      "project": "react-tailwind",
+      "built": true
+    }
   },
   "steps": [
+    {
+      "toolCall": {
+        "name": "inspect_design_index",
+        "args": {
+          "limit": 20,
+          "activity_label": "Reading the design index"
+        }
+      }
+    },
     {
       "toolCall": {
         "name": "inspect_design_index",
@@ -23,7 +40,7 @@
           "query": "button",
           "kind": "component",
           "limit": 5,
-          "activity_label": "Reading the design index"
+          "activity_label": "Narrowing to buttons"
         }
       }
     },

@@ -32,7 +32,13 @@ import {
 } from "../../src/research/tools.js";
 
 const FIXTURE_ROOT = join(import.meta.dirname, "..", "fixtures", "research");
-const FIXTURES = join(import.meta.dirname, "..", "fixtures", "tool-eval", "research");
+/**
+ * The four research fixtures live in the matrix directory since M21-T17
+ * registered the tools with the engine; this file still replays them against
+ * the handlers directly, which is the cheaper of the two proofs.
+ */
+const FIXTURES = join(import.meta.dirname, "..", "fixtures", "tool-eval");
+const RESEARCH_FIXTURES = ["read_source.json", "record_finding.json", "resolve_question.json", "search_sources.json"];
 const worlds: ScriptedResearchWorld[] = [];
 
 function world(options: Partial<ConstructorParameters<typeof ScriptedResearchWorld>[0]> = {}): ScriptedResearchWorld {
@@ -332,7 +338,7 @@ const HANDLERS: Record<string, Handler> = {
 
 function loadResearchFixtures(): ToolEvalFixture[] {
   return readdirSync(FIXTURES)
-    .filter((name) => name.endsWith(".json"))
+    .filter((name) => RESEARCH_FIXTURES.includes(name))
     .sort()
     .map((name) => parseFixture(JSON.parse(readFileSync(join(FIXTURES, name), "utf8")), join(FIXTURES, name)));
 }

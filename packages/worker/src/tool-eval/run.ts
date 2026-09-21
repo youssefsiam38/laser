@@ -18,7 +18,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PRODUCT_NAME, isRecord, parseToolError, type ModelProfile, type SessionUpdate, type ToolError } from "@lasercode/protocol";
+import { PRODUCT_NAME, RESEARCH_ADAPTER_IDS, defaultResearchSources, isRecord, parseToolError, type ModelProfile, type ResearchAdapterId, type ResearchSources, type SessionUpdate, type ToolError } from "@lasercode/protocol";
 import { fallbackDefaultAgent, fallbackPolicy } from "../agents/definitions.js";
 import { rootRecord } from "../agents/session-config.js";
 import { StableSdkDriver } from "../drivers/stable-sdk.js";
@@ -26,6 +26,11 @@ import type { DriverAgentOptions, DriverEvent } from "../driver.js";
 import type { RecordedStep, ToolEvalFixture } from "./fixture.js";
 import { CHARACTERS_PER_TOKEN, estimateTokens, startRecordedProvider, type RecordedProvider } from "./recorded-provider.js";
 import { ScriptedWorld } from "./world.js";
+import { ScriptedDesignWorld } from "./design-world.js";
+import { ScriptedResearchWorld } from "./research-world.js";
+import { ScriptedProjectWorkWorld } from "./project-work-world.js";
+import { ProjectWorkSession } from "../project-work/session.js";
+import type { ProjectWorkBridge } from "../project-work/bridge.js";
 
 /** One profile of the matrix, as a run needs it. */
 export interface ToolEvalProfile {
@@ -106,6 +111,27 @@ export async function runFixture(options: RunFixtureOptions): Promise<ToolEvalRu
   mkdirSync(sessions, { recursive: true });
 
   const world = new ScriptedWorld(fixture);
+  // The three project-work worlds, each built only for the fixture that
+  // declares it, so a harness fixture pays for none of them (M21-T17).
+  const design = fixture.world.designIndex
+    ? new ScriptedDesignWorld({ projectSource: join(designFixtureRoot(), fixture.world.designIndex.project), built: fixture.world.designIndex.built === true })
+    : undefined;
+  const research = fixture.world.research
+    ? new ScriptedResearchWorld({
+        fixtureRoot: researchFixtureRoot(),
+        ...(fixture.world.research.project !== undefined ? { project: fixture.world.research.project } : {}),
+        ...(fixture.world.research.searchConnected !== undefined ? { searchConnected: fixture.world.research.searchConnected } : {}),
+        ...(fixture.world.research.disabledAdapters
+          ? { sources: disabledAdapterSources(fixture.world.research.disabledAdapters) }
+          : {}),
+      })
+    : undefined;
+  const lifecycle = fixture.world.projectWork
+    ? new ScriptedProjectWorkWorld({
+        ...(fixture.world.projectWork.items ? { items: fixture.world.projectWork.items } : {}),
+        ...(fixture.world.projectWork.hasProject !== undefined ? { hasProject: fixture.world.projectWork.hasProject } : {}),
+      })
+    : undefined;
   const taskIds: string[] = [];
   let provider: RecordedProvider | undefined;
   let driver: StableSdkDriver | undefined;
@@ -158,13 +184,22 @@ export async function runFixture(options: RunFixtureOptions): Promise<ToolEvalRu
       provider = await startRecordedProvider({
         model: profile.model,
         steps: fixture.steps,
-        resolve: (step) => substitute(step, taskIds),
+        resolve: (step) =>
+          substitute(step, {
+            taskIds,
+            design,
+            research,
+            lifecycle,
+            finding: () => lastFinding(observed),
+          }),
       });
       // The sandbox agent dir names the replay provider's address, which only
       // exists once it is listening.
       writeSandboxModels(agentDir, provider.url, profile);
     }
 
+    if (design) await design.prepare();
+    const projectWork = projectWorkSession(fixture, { design, research, lifecycle });
     await driver.open({
       cwd: project,
       agentDir,
@@ -172,6 +207,7 @@ export async function runFixture(options: RunFixtureOptions): Promise<ToolEvalRu
       projectTrusted: true,
       features: search ? ["subagents", "web-search"] : ["subagents"],
       agent: agentOptions(fixture, world, project),
+      ...(projectWork ? { projectWork } : {}),
     });
     await driver.setProfile(profile.id);
     await driver.prompt([{ type: "text", text: fixture.task }]);
@@ -188,6 +224,8 @@ export async function runFixture(options: RunFixtureOptions): Promise<ToolEvalRu
   } finally {
     await driver?.dispose().catch(() => {});
     await provider?.close();
+    design?.dispose();
+    research?.dispose();
     rmSync(base, { recursive: true, force: true });
   }
 
@@ -206,6 +244,52 @@ export async function runFixture(options: RunFixtureOptions): Promise<ToolEvalRu
     overruns: provider?.overruns ?? 0,
     ...(failure !== undefined ? { failure } : {}),
   };
+}
+
+/** The design fixtures a design world copies its project from. */
+function designFixtureRoot(): string {
+  return join(import.meta.dirname, "..", "..", "test", "fixtures", "design");
+}
+
+/** The recordings a research world replays its network, search and git from. */
+function researchFixtureRoot(): string {
+  return join(import.meta.dirname, "..", "..", "test", "fixtures", "research");
+}
+
+/** A research world with some adapters switched off, to exercise the gate. */
+function disabledAdapterSources(disabled: readonly string[]): Partial<ResearchSources> {
+  const adapters = { ...defaultResearchSources().adapters };
+  for (const id of disabled) {
+    if ((RESEARCH_ADAPTER_IDS as readonly string[]).includes(id)) adapters[id as ResearchAdapterId] = false;
+  }
+  return { adapters };
+}
+
+/**
+ * The project-work surface this fixture's session gets (M21-T17).
+ *
+ * Exactly the tools its world declares: a design fixture registers the three
+ * Design Index tools and nothing else, a research fixture the four Research
+ * tools, a lifecycle fixture the four lifecycle ones. That is the contract's
+ * capability gating, evaluated rather than asserted.
+ */
+function projectWorkSession(
+  fixture: ToolEvalFixture,
+  worlds: { design?: ScriptedDesignWorld | undefined; research?: ScriptedResearchWorld | undefined; lifecycle?: ScriptedProjectWorkWorld | undefined },
+): ProjectWorkSession | undefined {
+  const { design, research, lifecycle } = worlds;
+  if (!design && !research && !lifecycle) return undefined;
+  const bridge: ProjectWorkBridge | undefined = lifecycle;
+  const task = lifecycle && fixture.world.projectWork?.taskKey
+    ? lifecycle.entity(fixture.world.projectWork.taskKey)
+    : undefined;
+  return new ProjectWorkSession({
+    ...(bridge ? { bridge } : {}),
+    ...(design ? { design } : {}),
+    ...(research ? { research: { bridge: research, adapters: research.adapters() } } : {}),
+    ...(task ? { task: { entityId: task.entity.entityId, key: task.entity.key } } : {}),
+    reviewActor: { kind: "agent", label: "Evaluation run" },
+  });
 }
 
 /** What the session runs as: an agent at the top, or one agent's own run. */
@@ -276,13 +360,50 @@ function writeSandboxModels(agentDir: string, url: string, profile: ToolEvalProf
   );
 }
 
-/** A recorded call that names a task can only name one the run itself started. */
-function substitute(step: RecordedStep, taskIds: string[]): RecordedStep {
+/**
+ * What a recorded call may not know when it was written.
+ *
+ * A fixture names things the run itself mints — the id of a command it
+ * started, the revision an artifact is at now, the id of the entry the
+ * builder produced — so those are written as placeholders and resolved here,
+ * against the world this run is really using. The same placeholders the
+ * design and research replay tests resolve, so one recording serves both.
+ */
+interface Placeholders {
+  taskIds: string[];
+  design?: ScriptedDesignWorld | undefined;
+  research?: ScriptedResearchWorld | undefined;
+  lifecycle?: ScriptedProjectWorkWorld | undefined;
+  /** The last finding a `record_finding` call in this run produced. */
+  finding: () => string | undefined;
+}
+
+async function substitute(step: RecordedStep, context: Placeholders): Promise<RecordedStep> {
   if (!("toolCall" in step)) return step;
-  const args = Object.fromEntries(
-    Object.entries(step.toolCall.args).map(([name, value]) => [name, typeof value === "string" && value.includes(TASK_ID_PLACEHOLDER) ? value.replace(TASK_ID_PLACEHOLDER, taskIds.at(-1) ?? "task-not-started") : value]),
+  const entries = await Promise.all(
+    Object.entries(step.toolCall.args).map(async ([name, value]) => [name, await resolvePlaceholder(value, context)] as const),
   );
-  return { ...step, toolCall: { ...step.toolCall, args } };
+  return { ...step, toolCall: { ...step.toolCall, args: Object.fromEntries(entries) } };
+}
+
+async function resolvePlaceholder(value: unknown, context: Placeholders): Promise<unknown> {
+  if (Array.isArray(value)) return Promise.all(value.map((entry) => resolvePlaceholder(entry, context)));
+  if (typeof value !== "string") return value;
+  if (value.includes(TASK_ID_PLACEHOLDER)) return value.replace(TASK_ID_PLACEHOLDER, context.taskIds.at(-1) ?? "task-not-started");
+  if (value === "{{revision}}") return context.research?.store.revisionId ?? value;
+  if (value === "{{stale}}") return context.design ? "0".repeat(64) : "rev0";
+  if (value === "{{finding}}") return context.finding() ?? value;
+  const revision = /^\{\{revision:([A-Z]+-\d+)\}\}$/.exec(value);
+  if (revision?.[1] && context.lifecycle) {
+    return context.lifecycle.entity(revision[1])?.entity.currentRevisionId ?? value;
+  }
+  const entry = /^\{\{entry:([a-z]+):([^:]+):(id|digest)\}\}$/.exec(value);
+  if (entry && context.design) {
+    const found = await context.design.entry(entry[1] as never, entry[2] ?? "");
+    if (!found) return value;
+    return entry[3] === "id" ? found.id : found.factsDigest;
+  }
+  return value;
 }
 
 /** A background command the run started: the world lists it, so a model can find it. */
@@ -293,6 +414,21 @@ function noteTask(started: { tool: string; args: Record<string, unknown> }, resu
   taskIds.push(taskId);
   const command = started.args["command"];
   world.noteCommand({ taskId, command: typeof command === "string" ? command : started.tool });
+}
+
+/** The finding id the last `record_finding` of this run produced, if any. */
+function lastFinding(observed: ObservedCall[]): string | undefined {
+  for (const call of [...observed].reverse()) {
+    if (call.tool !== "record_finding" || call.isError) continue;
+    try {
+      const parsed: unknown = JSON.parse(call.text);
+      const id = isRecord(parsed) ? parsed["findingId"] : undefined;
+      if (typeof id === "string") return id;
+    } catch {
+      // The answer was not JSON; nothing to cite from it.
+    }
+  }
+  return undefined;
 }
 
 /** The text of a tool result, whichever way the engine carried it. */

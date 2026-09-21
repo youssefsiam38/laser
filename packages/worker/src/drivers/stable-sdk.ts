@@ -335,9 +335,14 @@ export class StableSdkDriver implements SessionDriver {
           ...(mcp ? ["mcp" as const] : []),
           ...(enabled.has("subagents") ? ["subagents" as const, "background-work" as const] : []),
           ...(enabled.has("goals") ? ["goal" as const] : []),
+          // One module for the whole project lifecycle (M21-T17). It is on
+          // whenever the worker has a link to the host's authority; which
+          // tools it registers is the bridge's own answer, not a flag here.
+          ...(options.projectWork ? ["project-work" as const] : []),
         ],
         ...(agent?.bridge ? { agents: agent.bridge } : {}),
         ...(agent?.backgroundWork ? { backgroundWork: agent.backgroundWork } : {}),
+        ...(options.projectWork ? { projectWork: options.projectWork } : {}),
       };
       return createLaserExtension(companion);
     };

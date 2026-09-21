@@ -18,6 +18,7 @@ import {
   isNotification,
   isResponse,
   nodeLaunchEnvironment,
+  ProtocolError,
   type JsonRpcError,
   type JsonRpcMessage,
   type JsonRpcNotification,
@@ -80,6 +81,16 @@ export interface WorkerClientOptions {
   /** Extra environment for the worker, on top of the host's own. */
   env?: Readonly<Record<string, string>>;
   onNotification: (notification: JsonRpcNotification) => void;
+  /**
+   * A request *from* the worker (M21-T17, D-356.b).
+   *
+   * The link is bidirectional for exactly one family: the project-work
+   * bridge, which is how a model tool reaches the host's authority. The
+   * router decides which methods it answers; a client's method surface and a
+   * worker's are different authorities and never share a table. Absent means
+   * this host answers none, and the worker is told so.
+   */
+  onRequest?: (method: string, params: unknown) => Promise<unknown>;
   onExit: (code: number | null, signal: NodeJS.Signals | null, exit: WorkerExit) => void;
   onStderr?: (text: string) => void;
 }
@@ -281,6 +292,11 @@ export class WorkerClient {
     if (options.stateDir) args.push("--state-dir", options.stateDir);
     if (options.projectTrusted !== undefined) args.push("--project-trusted", options.projectTrusted ? "yes" : "no");
     if (options.agentIsolation) args.push("--agent-isolation", options.agentIsolation);
+    // The worker's model tools reach the host's project-work authority over
+    // this link (M21-T17). Told rather than assumed: a worker whose host does
+    // not answer the bridge registers none of those tools instead of asking
+    // into a pipe nobody is listening on.
+    if (options.onRequest) args.push("--project-work", "yes");
     if (options.environmentId) args.push("--environment-id", options.environmentId);
     if (options.providerPayloads) args.push("--provider-payloads", options.providerPayloads);
     this.workerGeneration = options.workerGeneration;
@@ -342,6 +358,13 @@ export class WorkerClient {
           options.onNotification(message as JsonRpcNotification);
           continue;
         }
+        // A request from the worker: answered here, never routed into the
+        // client path (M21-T17).
+        const inbound = message as { id?: unknown; method?: unknown; params?: unknown };
+        if (inbound.id !== undefined && typeof inbound.method === "string") {
+          void this.answer(inbound.id as string | number, inbound.method, inbound.params);
+          continue;
+        }
         if (isResponse(message)) {
           const entry = this.pending.get(Number(message.id));
           if (!entry) continue;
@@ -392,6 +415,30 @@ export class WorkerClient {
       this.startError ??= error;
       this.settle(rejectReady, null, null, "spawn_error");
     });
+  }
+
+  /**
+   * Answer one worker request, with the error shape the worker's own
+   * `hostResponse` reads back. A handler that throws becomes an error
+   * response, never an unhandled rejection and never a dropped frame: the
+   * worker would wait for ever for an answer that is not coming.
+   */
+  private async answer(id: string | number, method: string, params: unknown): Promise<void> {
+    const handler = this.options.onRequest;
+    try {
+      if (!handler) throw new ProtocolError(ErrorCodes.Unsupported, "This app does not answer that request.");
+      const result = await handler(method, params);
+      this.writeLine(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+    } catch (error) {
+      const rpc = error instanceof ProtocolError
+        ? { code: error.code, message: error.message, ...(error.data !== undefined ? { data: error.data } : {}) }
+        : { code: ErrorCodes.Internal, message: error instanceof Error ? error.message : String(error) };
+      try {
+        this.writeLine(`${JSON.stringify({ jsonrpc: "2.0", id, error: rpc })}\n`);
+      } catch {
+        // The link went while we were answering; the worker dies with it.
+      }
+    }
   }
 
   /**

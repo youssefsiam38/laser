@@ -44,7 +44,7 @@ export interface RecordedProviderOptions {
    * Called just before each answer is written, with its index, so the runner
    * can fill in an id it could only learn from an earlier result.
    */
-  resolve?: (step: RecordedStep, index: number) => RecordedStep;
+  resolve?: (step: RecordedStep, index: number) => RecordedStep | Promise<RecordedStep>;
 }
 
 interface ProviderRequestBody {
@@ -92,7 +92,7 @@ export async function startRecordedProvider(options: RecordedProviderOptions): P
         const recorded = options.steps[index];
         const step: RecordedStep = recorded === undefined
           ? { text: "There is no recorded response for this turn." }
-          : (options.resolve?.(recorded, index) ?? recorded);
+          : ((await options.resolve?.(recorded, index)) ?? recorded);
         if (recorded === undefined) overruns += 1;
         if (step.delayMs !== undefined && step.delayMs > 0) await sleep(step.delayMs);
 

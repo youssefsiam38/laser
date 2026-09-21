@@ -6,13 +6,11 @@
  * contract's own `toolContract()`, the handlers are the real ones, the world
  * is a real project indexed by the real builder, and every refusal is the
  * contract's `{ code, message, committed, next }`. What is *not* exercised
- * here is the engine's own tool loop: the three tools are not registered with
- * the engine yet (that is M21-T17's wiring, see
- * `docs/leap/m21-design-index-plan.md` decision 6), so the fixtures live in
- * `test/fixtures/tool-eval/design-index/` and are replayed by this file
- * rather than by the matrix in `test/tool-eval/fixtures.test.ts`. The moment
- * they are registered, the files move one directory up and the matrix runs
- * them unchanged.
+ * here is the engine's own tool loop: this file replays the three fixtures
+ * against the handlers directly, which is the cheaper of the two proofs. The
+ * matrix in `test/tool-eval/fixtures.test.ts` runs the same files through the
+ * real engine and the real registrations, since M21-T17 registered the tools
+ * (`docs/leap/m21-design-index-plan.md` decision 6, `m21-tools-plan.md`).
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -34,7 +32,8 @@ import {
 } from "../../src/design/index/tools.js";
 import { FIXTURE_ROOT } from "./helpers.js";
 
-const FIXTURES = join(import.meta.dirname, "..", "fixtures", "tool-eval", "design-index");
+const FIXTURES = join(import.meta.dirname, "..", "fixtures", "tool-eval");
+const DESIGN_FIXTURES = ["build_design_index.json", "inspect_design_index.json", "review_design_index.json"];
 const AGENT = { kind: "agent" as const, label: "Design worker" };
 const worlds: ScriptedDesignWorld[] = [];
 
@@ -203,7 +202,7 @@ async function resolve(value: unknown, scripted: ScriptedDesignWorld): Promise<u
 
 function loadDesignFixtures(): ToolEvalFixture[] {
   return readdirSync(FIXTURES)
-    .filter((name) => name.endsWith(".json"))
+    .filter((name) => DESIGN_FIXTURES.includes(name))
     .sort()
     .map((name) => parseFixture(JSON.parse(readFileSync(join(FIXTURES, name), "utf8")), join(FIXTURES, name)));
 }

@@ -2,17 +2,25 @@
   "tool": "record_finding",
   "task": "Record what the pdf-text guide declares about its licence, citing the passage.",
   "expectedTool": "record_finding",
-  "allowedTools": ["search_sources", "read_source", "record_finding"],
+  "allowedTools": [
+    "search_sources",
+    "read_source",
+    "record_finding"
+  ],
   "wrongToolThreshold": 0,
   "budget": {
     "calls": 6,
-    "inputTokens": 40000,
+    "inputTokens": 70000,
     "outputTokens": 500
   },
-  "measures": ["retry"],
+  "measures": [
+    "retry"
+  ],
   "world": {
     "role": "root",
-    "research": { "project": "project" }
+    "research": {
+      "project": "project"
+    }
   },
   "steps": [
     {

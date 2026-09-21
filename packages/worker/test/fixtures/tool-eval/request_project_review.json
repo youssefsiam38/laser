@@ -1,0 +1,117 @@
+{
+  "tool": "request_project_review",
+  "task": "Leave a blocking comment on SPEC-1 saying the reason must name the file, then ask a person to review it. Preview the review request first.",
+  "expectedTool": "request_project_review",
+  "allowedTools": [
+    "request_project_review",
+    "inspect_project_work"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 5,
+    "inputTokens": 60000,
+    "outputTokens": 800
+  },
+  "measures": [],
+  "world": {
+    "role": "root",
+    "projectWork": {
+      "items": [
+        {
+          "kind": "spec",
+          "title": "Failed exports say why",
+          "body": {
+            "kind": "spec",
+            "spec": {
+              "form": "full",
+              "brief": "People cannot see which of their exports failed, so a failed export looks like a slow one.",
+              "outcomes": [
+                "A failed export says what failed and what to do next."
+              ],
+              "nonGoals": [
+                "Retrying an export automatically."
+              ],
+              "requirements": [
+                {
+                  "id": "r1",
+                  "text": "An export that fails shows the reason in the export list.",
+                  "level": "must"
+                },
+                {
+                  "id": "r2",
+                  "text": "The reason is written for a person, never a stack trace.",
+                  "level": "must"
+                }
+              ],
+              "acceptance": [
+                {
+                  "id": "a1",
+                  "text": "A failed export row shows the reason and the next step.",
+                  "machineVerifiable": true
+                }
+              ],
+              "constraints": [
+                "No new dependency."
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "inspect_project_work",
+        "args": {
+          "action": "get",
+          "key": "SPEC-1",
+          "activity_label": "Reading SPEC-1"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "request_project_review",
+        "args": {
+          "action": "comment",
+          "key": "SPEC-1",
+          "expected_revision_id": "rev_2",
+          "text": "The reason must name the file that could not be written.",
+          "blocking": true,
+          "idempotency_key": "spec-1-comment",
+          "activity_label": "Commenting on SPEC-1"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "request_project_review",
+        "args": {
+          "action": "request_review",
+          "key": "SPEC-1",
+          "expected_revision_id": "rev_2",
+          "preview": true,
+          "idempotency_key": "spec-1-review",
+          "activity_label": "Previewing the review request"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "request_project_review",
+        "args": {
+          "action": "request_review",
+          "key": "SPEC-1",
+          "expected_revision_id": "rev_2",
+          "note": "One blocking comment is open; the reason must name the file.",
+          "idempotency_key": "spec-1-review",
+          "activity_label": "Asking for a review"
+        }
+      }
+    },
+    {
+      "text": "SPEC-1 carries a blocking comment about naming the file, and it is now with a person to review."
+    }
+  ]
+}

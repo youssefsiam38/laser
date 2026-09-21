@@ -15,6 +15,9 @@ export const RUNTIME_MODULE_NAMES = [
   "web-access",
   "goal",
   "mcp",
+  // One module for every project-work tool: the lifecycle surface, the Design
+  // Index and Research (AGENTS.md invariant 11, M21-T17).
+  "project-work",
 ] as const;
 export type RuntimeModuleName = (typeof RUNTIME_MODULE_NAMES)[number];
 
