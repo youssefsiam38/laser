@@ -23,6 +23,9 @@ import {
 import { mapUi, useMapUi } from "@/components/agents/map";
 import { useSessionAgent } from "@/agents/hooks";
 import { ContextRingButton } from "@/components/assistant-ui/elements/context-display";
+// The project lifecycle leap (M21-T6): one control for this project's work.
+import { ProjectWorkControl } from "@/components/project-work";
+import { useWorkspaceUi } from "@/project-work";
 import { StatusDot } from "@/components/status";
 import { viewFirstUserText } from "@/view-summary";
 import type { SessionView } from "@/store";
@@ -172,6 +175,10 @@ export function TopBar() {
   // same before and after the session exists.
   const landing = landingWorkspaceOf(destination);
   const landingProject = landing.kind === "project" ? landing.cwd : currentProject;
+  // Project work belongs to a project. A Chat belongs to none, so it carries
+  // no control: its slash commands ask which project first (D-352).
+  const workProject = landing.kind === "chat" || sessionAgent?.kind === "chat" ? undefined : (workerCwd ?? landingProject);
+  const workspaceOpen = useWorkspaceUi().open;
   // The fleet's own count — the open session's tree (M13-T51), plus work
   // whose session was deleted, which the fleet carries because nothing else can.
   const fleet = useFleet();
@@ -313,10 +320,18 @@ export function TopBar() {
             composer carries the same element next to Send. */}
         <ContextRingButton side="bottom" className="me-1 hidden @3xl/topbar:inline-flex" />
 
+        {/* The selected project's work, with its live counts (D-355). A Chat
+            belongs to no project, so it carries no control. */}
+        <ProjectWorkControl cwd={workProject} />
+
         {/* The fleet, immediately left of the monitor, with the same grammar
             as its toggle: a count of what needs a person wins over a count of
-            what is merely going. */}
-        {roomy ? (
+            what is merely going.
+
+            While the workspace has borrowed their room there is nothing for
+            either toggle to open, so neither is offered: a control that does
+            nothing is worse than no control (D-355, R2). */}
+        {roomy && !workspaceOpen ? (
           <>
             <TooltipIconButton
               tooltip={shell.fleetOpen ? "Hide the fleet" : fleetTooltip(fleet)}
@@ -361,7 +376,7 @@ export function TopBar() {
                 <span className="min-w-0 truncate">Open parent: {parentTitle}</span>
               </DropdownMenuItem>
             ) : null}
-            {!roomy ? (
+            {!roomy && !workspaceOpen ? (
               <>
                 <DropdownMenuItem onSelect={shell.toggleFleet} className="pointer-coarse:min-h-11">
                   <Radio />

@@ -8,13 +8,15 @@
  * properties (see `globals.css`, `@theme inline reference`), so `text-sm`,
  * `p-3`, `rounded-lg` and `duration-(--motion-fast)` all move with the theme.
  */
-import { ORIGINS } from "@lasercode/protocol";
+import { ORIGINS, PROJECT_WORK_KINDS } from "@lasercode/protocol";
 import { oklch, pickOnColor, raiseContrast, toHex } from "./color.js";
 import { fontStack } from "./fonts.js";
 import {
   ANSI,
   FLEET_AGENT_HUES,
   FLEET_AGENT_SCALE,
+  KIND_HUES,
+  KIND_SCALE,
   PROVENANCE_HUES,
   PROVENANCE_SCALE,
   CONTENT_MEASURE,
@@ -94,6 +96,12 @@ export function resolveTokens(theme: Theme): Required<ThemeTokens> {
       return [token, t[token] ?? oklch(fleetScale.lightness, fleetScale.chroma, hue)];
     }),
   ) as Record<`fleet-agent-${0 | 1 | 2 | 3 | 4 | 5 | 6 | 7}`, string>;
+  // One colour per kind of project work. Derived like every other categorical
+  // set, so a preset inherits them and may still pin any one of the five.
+  const kindScale = KIND_SCALE[base];
+  const kinds = Object.fromEntries(
+    PROJECT_WORK_KINDS.map((kind) => [`kind-${kind}`, t[`kind-${kind}`] ?? oklch(kindScale.lightness, kindScale.chroma, KIND_HUES[kind])]),
+  ) as Record<`kind-${(typeof PROJECT_WORK_KINDS)[number]}`, string>;
 
   return {
     bg: toHex(t.bg),
@@ -127,6 +135,7 @@ export function resolveTokens(theme: Theme): Required<ThemeTokens> {
     "shadow-float-sm": t["shadow-float-sm"] ?? shadows.floatSm,
     ...fleetAgents,
     "on-fleet-agent": on(fleetAgents["fleet-agent-0"], t["on-fleet-agent"]),
+    ...kinds,
   } as Required<ThemeTokens>;
 }
 

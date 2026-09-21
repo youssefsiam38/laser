@@ -54,6 +54,11 @@ const GROUPS: ReadonlyArray<{ title: string; detail: string; tokens: readonly To
     tokens: ["live", "attention", "danger", "ok"],
   },
   {
+    title: "Project work kinds",
+    detail: "Type identity in the project workspace — one colour per kind, on the icon and the key. Never a status.",
+    tokens: ["kind-spec", "kind-research", "kind-design", "kind-plan", "kind-task"],
+  },
+  {
     title: "Text on a status colour",
     detail: "What is printed on a filled button or badge. Derived from the fill unless you pin it.",
     tokens: ["on-live", "on-attention", "on-danger", "on-ok"],
@@ -130,7 +135,7 @@ function readout(theme: Theme, token: TokenName): { ratio: number; target: numbe
       kind: token === "terminal-line" ? "line" : "text",
     };
   }
-  if (token.startsWith("syntax-")) {
+  if (token.startsWith("kind-") || token.startsWith("syntax-")) {
     const resolved = resolveTokens(theme) as Record<string, string>;
     return {
       ratio: contrastRatio(resolved[token] ?? "", resolved["surface-2"] ?? ""),

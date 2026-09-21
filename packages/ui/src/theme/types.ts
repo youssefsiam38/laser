@@ -4,7 +4,7 @@
  * store persists it, `compileTheme` turns it into the properties.
  */
 
-import type { ORIGINS } from "@lasercode/protocol";
+import type { ORIGINS, ProjectWorkKind } from "@lasercode/protocol";
 
 export type ThemeBase = "dark" | "light";
 export type Density = "comfortable" | "compact";
@@ -58,6 +58,8 @@ export type OptionalColorTokenName =
   | "syntax-variable"
   | "syntax-punctuation"
   | (typeof ORIGINS)[number]["token"]
+  /** One per kind of project work: type identity, never status (D-355). */
+  | `kind-${ProjectWorkKind}`
   | "shadow-float"
   | "shadow-float-sm"
   | `fleet-agent-${0 | 1 | 2 | 3 | 4 | 5 | 6 | 7}`

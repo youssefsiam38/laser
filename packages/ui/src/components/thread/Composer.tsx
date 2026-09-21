@@ -24,6 +24,9 @@ import { ThinkingEffort } from "@/components/assistant-ui/elements/reasoning-eff
 import { useRunsForRoot } from "@/agents";
 import { DictateButton } from "@/components/mobile";
 import { CapabilityNotice } from "@/components/capability-gate";
+// The project lifecycle leap (M21-T6): `/spec`, `/research`, `/design`, `/plan`.
+import { useProjectWorkCommands } from "@/components/project-work";
+import { KIND_ICON } from "@/project-work/vocabulary";
 import { errorText, useShell } from "@/components/shell/shell-context";
 import { useIsMobile, useIsTouch } from "@/hooks/use-mobile";
 import { finishActiveDictation } from "@/pwa";
@@ -411,6 +414,12 @@ function SendOrStop({ mobile = false }: { mobile?: boolean }) {
 const MENTION_ICONS = { agent: Bot, file: FileText, directory: FolderOpen, next: ChevronRight, previous: ChevronLeft } as const;
 
 const SLASH_ICONS = {
+  // The project lifecycle leap (D-352): one row per kind, with the kind's own
+  // icon, so the popover says what the command makes.
+  spec: KIND_ICON.spec,
+  research: KIND_ICON.research,
+  design: KIND_ICON.design,
+  plan: KIND_ICON.plan,
   compact: Shrink,
   fork: GitFork,
   rename: Pencil,
@@ -467,8 +476,27 @@ function useSlashCommands() {
   const addProject = useCapability("pi/project/add");
   const busy = running || compacting;
   const agent = useAgentCommands();
+  const work = useProjectWorkCommands();
   const commands = useMemo(
     () => [
+      // `/spec`, `/research`, `/design`, `/plan`: the text beside the command
+      // is the whole input. The primitive has already removed the typed
+      // `/query` by the time `execute` runs, so what is left in the composer
+      // *is* that text — it is taken, and the composer is cleared, because it
+      // became the artifact's brief rather than a message to anybody.
+      ...work.map((command) => ({
+        id: command.id,
+        label: command.label,
+        description: command.description,
+        icon: command.kind,
+        execute: () => {
+          setTimeout(() => {
+            const text = aui.composer.getState().text;
+            aui.composer.setText("");
+            command.run(text);
+          }, 0);
+        },
+      })),
       { id: "compact", label: "/compact", description: busy ? "Waits for the turn to finish" : "Summarise the conversation so far and keep going", icon: "compact", execute: () => void actions.compact() },
       { id: "fork", label: "/fork", description: "Start a new session from the last prompt", icon: "fork", execute: () => void forkFromLastPrompt() },
       { id: "new", label: "/new", description: "A new session in this project", icon: "new", execute: () => void shell.newSession() },
@@ -494,7 +522,7 @@ function useSlashCommands() {
       })),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `aui` is stable; every other value the callbacks read is a dependency
-    [busy, actions, client, sessionPath, shell, agent, addProject.state],
+    [busy, actions, client, sessionPath, shell, agent, addProject.state, work],
   );
 
   /** The host's tree, at the moment of the command — never the rendered view's. */

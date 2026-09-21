@@ -1,7 +1,11 @@
-import { Activity, Bot, FileClock, FolderPlus, GitBranch, GitFork, MessageSquarePlus, Moon, PanelLeft, Plus, Settings, Shrink, Sun } from "lucide-react";
+import { Activity, Bot, FileClock, FolderPlus, GitBranch, GitFork, Layers, MessageSquarePlus, Moon, PanelLeft, Plus, Settings, Shrink, Sun } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { CommandPalette as CommandPaletteElement, matchesCommand, type PaletteCommand } from "@/components/assistant-ui/elements/command-palette";
+// The project lifecycle leap (M21-T6): the workspace and the four commands.
+import { controlTooltip, useProjectWorkCommands } from "@/components/project-work";
+import { openWorkspace, selectWork, setWorkspaceTab, useProjectWork } from "@/project-work";
+import { KIND_ICON, KIND_LABEL } from "@/project-work/vocabulary";
 import { StatusDot } from "@/components/status";
 import { LAST_PROMPT_MESSAGES, lastPromptEntry, lastPromptMessage } from "@/components/thread/last-prompt";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -98,6 +102,10 @@ function usePaletteCommands(active: boolean): RunnableCommand[] {
   const createSession = useCapability("session/new");
   const compactSession = useCapability("pi/session/compact");
   const forkSession = useCapability("pi/session/fork");
+  // Project work: the destination, its queue, and the four commands, which do
+  // here exactly what they do in the composer (D-355).
+  const { work } = useProjectWork(currentProject);
+  const workCommands = useProjectWorkCommands();
 
   return useMemo<RunnableCommand[]>(() => {
     const session: RunnableCommand[] = view
@@ -119,6 +127,66 @@ function usePaletteCommands(active: boolean): RunnableCommand[] {
       { id: "agents", group: "App", label: "Agents", icon: Bot, run: () => workbench.open("agents") },
       ...(logs.state === "available" ? [{ id: "logs", group: "App", label: "Logs", icon: FileClock, run: () => workbench.open("logs") } satisfies RunnableCommand] : []),
       { id: "theme", group: "App", label: theme === "dark" ? "Light theme" : "Dark theme", icon: theme === "dark" ? Sun : Moon, run: () => toggle() },
+    ];
+    const projectWork: RunnableCommand[] = [
+      ...(work.projectId
+        ? [
+            {
+              id: "project-work",
+              group: "Project work",
+              label: "Project work",
+              detail: controlTooltip(work.counts.total, work.attention.needsYou).replace("Project work \u2014 ", ""),
+              icon: Layers,
+              run: () => openWorkspace({ projectId: work.projectId! }),
+            } satisfies RunnableCommand,
+            ...(work.attention.needsYou > 0
+              ? [
+                  {
+                    id: "project-work-needs-you",
+                    group: "Project work",
+                    label: "What needs you in this project",
+                    detail: `${work.attention.needsYou} waiting`,
+                    icon: Layers,
+                    run: () => {
+                      openWorkspace({ projectId: work.projectId! });
+                      setWorkspaceTab("needs-you");
+                    },
+                  } satisfies RunnableCommand,
+                ]
+              : []),
+          ]
+        : []),
+      // Keys match exactly and rank first (D-355): every item in this project
+      // is a row, labelled with its key, so `TASK-44` in the palette lands on
+      // TASK-44. The rows sit above the sessions for the same reason.
+      ...work.items.slice(0, 50).map(
+        (row) =>
+          ({
+            id: `work-item:${row.ref.entityId}`,
+            group: "Project work",
+            label: `${row.key} · ${row.title}`,
+            detail: `${KIND_LABEL[row.kind]}${row.needsAttention ? " · needs you" : ""}`,
+            icon: KIND_ICON[row.kind],
+            run: () => {
+              openWorkspace({ projectId: row.ref.projectId });
+              setWorkspaceTab("work");
+              selectWork({ entityId: row.ref.entityId, kind: row.kind });
+            },
+          }) satisfies RunnableCommand,
+      ),
+      ...workCommands.map(
+        (command) =>
+          ({
+            id: `work:${command.id}`,
+            group: "Project work",
+            label: `New ${KIND_LABEL[command.kind].toLocaleLowerCase()}`,
+            detail: command.label,
+            icon: KIND_ICON[command.kind],
+            // No text was typed here, so this opens Create with the kind
+            // chosen — the same act the bare command performs.
+            run: () => command.run(""),
+          }) satisfies RunnableCommand,
+      ),
     ];
     const projectRows: RunnableCommand[] = groups.map((g) => ({
       id: `project:${g.cwd}`,
@@ -143,8 +211,8 @@ function usePaletteCommands(active: boolean): RunnableCommand[] {
         },
       })),
     );
-    return [...session, ...app, ...sessionRows, ...projectRows];
-  }, [actions, addProject.state, busy, client, compactSession.state, createSession.state, currentProject, forkSession.state, groups, logs.state, meta.running, shell, theme, toggle, view, workbench]);
+    return [...session, ...projectWork, ...app, ...sessionRows, ...projectRows];
+  }, [actions, addProject.state, busy, client, compactSession.state, createSession.state, currentProject, forkSession.state, groups, logs.state, meta.running, shell, theme, toggle, view, work, workCommands, workbench]);
 }
 
 /**
