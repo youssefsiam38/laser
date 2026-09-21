@@ -7,9 +7,12 @@
  */
 export * from "./canvas.js";
 export * from "./fixtures.js";
+export * from "./host-context.js";
 export * from "./kit.js";
 export * from "./kit-css.js";
 export * from "./prototype.js";
+export * from "./review.js";
 export * from "./sketch.js";
+export * from "./foundation.js";
 export * from "./tokens.js";
 export * from "./tree-model.js";

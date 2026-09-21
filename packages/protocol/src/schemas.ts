@@ -41,6 +41,8 @@ import { sessionLifetimeParamsSchemas } from "./session-lifetime.js";
 import { memoryPressureParamsSchemas } from "./memory-pressure.js";
 import { environmentParamsSchemas } from "./environment-policy.js";
 import { projectWorkParamsSchemas } from "./project-work-methods.js";
+import { projectWorkInteropParamsSchemas } from "./project-work-interop.js";
+import { designWorkspaceParamsSchemas } from "./design-workspace.js";
 import { GIT_PR_MERGE_METHODS, GIT_PROSE_KINDS } from "./git-actions.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX, TASK_LOG_SEGMENTS_MAX } from "./tasks.js";
@@ -1316,6 +1318,11 @@ export const clientParamsSchemas = {
 
   // --- M21 project lifecycle. Shapes live in project-work-methods.ts ---
   ...projectWorkParamsSchemas,
+
+  // --- M21-T21 import, export and publication. Shapes live in project-work-interop.ts ---
+  ...projectWorkInteropParamsSchemas,
+  // --- M21 the design workspace. Shapes live in design-workspace.ts ---
+  ...designWorkspaceParamsSchemas,
 } satisfies Record<ClientMethod, z.ZodTypeAny>;
 
 export const clientMethods = Object.keys(clientParamsSchemas) as ClientMethod[];

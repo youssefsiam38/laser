@@ -83,6 +83,7 @@ import { ModelsAdapter, PackagesAdapter } from "./packages.js";
 import { SettingsAdapter, readEffectiveProductSettings, readProfileSettings, researchSourcesFrom, resolveProfile } from "./settings.js";
 import { ProjectHostGrounding } from "./design/host/ground.js";
 import { ProjectDesignIndex } from "./design/index/bridge.js";
+import { DesignWorkspace, isDesignCommandTaskId } from "./design/workspace.js";
 import { ProjectResearch } from "./research/bridge.js";
 import { enabledResearchAdapters, type ResearchAdapterId } from "@lasercode/protocol";
 import type { ResearchBridge } from "./research/tools.js";
@@ -378,6 +379,8 @@ export class WorkerServer {
   /** This project's design index (M21-T10), built once and read on demand. */
   private projectHostGrounding: ProjectHostGrounding | undefined;
   private projectDesignIndex: ProjectDesignIndex | undefined;
+  /** The design workspace's six methods over those two engines (M21-T13). */
+  private projectDesignWorkspace: DesignWorkspace | undefined;
   /** This worker's research run, with the adapters the person left on. */
   private researchSession: { bridge: ResearchBridge; adapters: ResearchAdapterId[] } | undefined;
 
@@ -1070,6 +1073,12 @@ export class WorkerServer {
         if (isVerificationFleetTaskId(req.params.id)) {
           return { delivered: this.verification().stopByTaskId(req.params.id) } satisfies Result<"pi/task/stop">;
         }
+        // An index build is a Command with no process (D-353): it is this
+        // worker's own loop, so Stop from the fleet row is answered here
+        // rather than delivered to the companion extension.
+        if (isDesignCommandTaskId(req.params.id)) {
+          return { delivered: this.designWorkspace().stopByTaskId(req.params.id) } satisfies Result<"pi/task/stop">;
+        }
         // The companion extension owns the process, so Stop is a command to
         // the session that started it. `delivered: false` means nobody in
         // this session holds that id any more, which the host turns into a
@@ -1184,6 +1193,18 @@ export class WorkerServer {
         this.assertCwd(req.params.cwd);
         return this.verification().stop(req.params) satisfies Result<"pi/project/verify/stop">;
       }
+      // --------------------------------- M21-T13 the design workspace ---
+      // The index, its review, its builds and the grounding of a page are
+      // files inside this project directory, and this process is the one that
+      // owns it. The host resolved the project and forwarded; the `cwd` it
+      // added has to be this worker's own.
+      case "design/index/get":
+      case "design/index/build":
+      case "design/index/stop":
+      case "design/index/review":
+      case "design/host/ground":
+      case "design/sketch/ground":
+        return await this.dispatchDesignWorkspace(req);
 
       // ------------------------------------------- M16-T17 project env ---
       case "pi/project/env/status": {
@@ -2288,12 +2309,63 @@ export class WorkerServer {
     return this.projectHostGrounding;
   }
 
+  /**
+   * The design workspace (M21-T13): the six `design/*` methods over the index
+   * and the grounding engines, with the fleet row an index build takes.
+   */
+  private designWorkspace(): DesignWorkspace {
+    this.projectDesignWorkspace ??= new DesignWorkspace({
+      projectCwd: this.options.cwd,
+      index: () => this.designIndex(),
+      grounding: () => this.hostGrounding(),
+      // The row travels the road every Command row already travels: an
+      // extension message the host's task register folds into `tasks/update`.
+      // Nothing new is invented for it, and a person stops it from the fleet
+      // exactly as they stop a shell command.
+      publishTask: (path, task) => {
+        const { logPath: _logPath, ...rest } = task as typeof task & { logPath?: string };
+        this.notify("pi/extension/message", { path, message: { type: "lasercode/task/update", task: rest } });
+      },
+    });
+    return this.projectDesignWorkspace;
+  }
+
+  /** One `design/*` call, after the host resolved the project it belongs to. */
+  private async dispatchDesignWorkspace(
+    req: Extract<TypedClientRequest, { method: "design/index/get" | "design/index/build" | "design/index/stop" | "design/index/review" | "design/host/ground" | "design/sketch/ground" }>,
+  ): Promise<Result<(typeof req)["method"]>> {
+    if (req.params.cwd !== undefined) this.assertCwd(req.params.cwd);
+    const workspace = this.designWorkspace();
+    switch (req.method) {
+      case "design/index/get":
+        return (await workspace.get(req.params)) satisfies Result<"design/index/get">;
+      case "design/index/build":
+        return (await workspace.build(req.params)) satisfies Result<"design/index/build">;
+      case "design/index/stop":
+        return workspace.stop(req.params) satisfies Result<"design/index/stop">;
+      case "design/index/review":
+        // A `design/*` call arrives from a client connection, which the host
+        // proves is a person (M21-T3); a model reviews through its own tool,
+        // and the review document records which of the two decided.
+        return (await workspace.review(req.params, { kind: "person", label: "You" })) satisfies Result<"design/index/review">;
+      case "design/host/ground":
+        return (await workspace.ground(req.params)) satisfies Result<"design/host/ground">;
+      case "design/sketch/ground":
+        return (await workspace.groundSketchDocument(req.params)) satisfies Result<"design/sketch/ground">;
+    }
+  }
+
   /** This project's design index, built once per worker and read on demand. */
   private designIndex(): ProjectDesignIndex {
     this.projectDesignIndex ??= new ProjectDesignIndex({
       projectCwd: this.options.cwd,
       stateDir: this.stateDir(),
       projectKey: createHash("sha256").update(this.options.cwd).digest("hex").slice(0, 16),
+      // A build is a Command a person can watch and stop (M21-T13): the
+      // workspace turns these two reports into the fleet row. A build a model
+      // started through `build_design_index` takes the same road.
+      onCommand: (command) => this.designWorkspace().observeCommand(command),
+      onProgress: (commandId, progress) => this.designWorkspace().observeProgress(commandId, progress),
     });
     return this.projectDesignIndex;
   }

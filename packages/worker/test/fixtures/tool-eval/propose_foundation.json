@@ -1,0 +1,65 @@
+{
+  "tool": "propose_foundation",
+  "task": "This project has no interface code yet. The person says it is a quiet reading app, their brand colour is #2f6f4f, and it should feel like a paperback rather than a dashboard. Start the foundation and propose the first step.",
+  "expectedTool": "propose_foundation",
+  "allowedTools": [
+    "propose_foundation",
+    "inspect_design_index",
+    "inspect_project_work"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 3,
+    "inputTokens": 70000,
+    "outputTokens": 500
+  },
+  "measures": [
+    "retry"
+  ],
+  "world": {
+    "role": "root",
+    "designIndex": {
+      "project": "greenfield",
+      "built": false
+    },
+    "projectWork": {
+      "items": []
+    }
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "propose_foundation",
+        "args": {
+          "step": "type_scale",
+          "product": "a quiet reading app",
+          "brand_colours": [
+            "#2f6f4f"
+          ],
+          "feels_like": "a paperback rather than a dashboard",
+          "idempotency_key": "foundation-type-scale",
+          "activity_label": "Proposing the type scale"
+        }
+      },
+      "fails": true
+    },
+    {
+      "toolCall": {
+        "name": "propose_foundation",
+        "args": {
+          "product": "a quiet reading app",
+          "brand_colours": [
+            "#2f6f4f"
+          ],
+          "feels_like": "a paperback rather than a dashboard",
+          "title": "Reading app foundation",
+          "idempotency_key": "foundation-principles",
+          "activity_label": "Starting the foundation"
+        }
+      }
+    },
+    {
+      "text": "The foundation is started on DES-1 with its principles proposed — nothing has been written into the project. Read them on the design, change anything you disagree with, and accept them; the primitive tokens come next, anchored on #2f6f4f."
+    }
+  ]
+}

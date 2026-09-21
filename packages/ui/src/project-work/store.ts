@@ -544,6 +544,121 @@ export class ProjectWorkStore {
     });
   }
 
+  // -- import, export and publication (M21-T21) ------------------------------
+
+  /**
+   * What an adapter would create or update. Reads files, writes nothing.
+   *
+   * The preview it answers with carries a `previewDigest`, and the apply
+   * below sends it back: a source file that changed in between is refused by
+   * the host rather than imported behind the person's back.
+   */
+  async importPreview(
+    adapter: ClientRequests["project/work/import/preview"]["params"]["adapter"],
+    options: { path?: string | undefined } = {},
+  ): Promise<ProjectWorkOutcome<ClientRequests["project/work/import/preview"]["result"]>> {
+    return this.#read1("project/work/import/preview", (projectId) => ({
+      projectId,
+      adapter,
+      ...(options.path ? { path: options.path } : {}),
+    }));
+  }
+
+  /** Write the import the person decided on. Every conflict needs a choice. */
+  async importApply(
+    adapter: ClientRequests["project/work/import/apply"]["params"]["adapter"],
+    input: {
+      previewDigest: string;
+      path?: string | undefined;
+      decisions?: ClientRequests["project/work/import/apply"]["params"]["decisions"];
+    },
+  ): Promise<ProjectWorkOutcome<ClientRequests["project/work/import/apply"]["result"]>> {
+    const projectId = this.#snapshot.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
+    return this.#write("project/work/import/apply", {
+      projectId,
+      adapter,
+      ...(input.path ? { path: input.path } : {}),
+      previewDigest: input.previewDigest,
+      confirm: true as const,
+      ...(input.decisions && input.decisions.length > 0 ? { decisions: input.decisions } : {}),
+      idempotencyKey: this.#newKey(),
+    });
+  }
+
+  /** The exact file set an export would write, and what is already there. */
+  async exportPreview(
+    options: { path?: string | undefined; mode?: ClientRequests["project/work/export/preview"]["params"]["mode"] } = {},
+  ): Promise<ProjectWorkOutcome<ClientRequests["project/work/export/preview"]["result"]>> {
+    return this.#read1("project/work/export/preview", (projectId) => ({
+      projectId,
+      ...(options.path ? { path: options.path } : {}),
+      ...(options.mode ? { mode: options.mode } : {}),
+    }));
+  }
+
+  /** Write the export. `mode` is the explicit re-export decision. */
+  async exportApply(input: {
+    previewDigest: string;
+    path?: string | undefined;
+    mode?: ClientRequests["project/work/export/apply"]["params"]["mode"];
+  }): Promise<ProjectWorkOutcome<ClientRequests["project/work/export/apply"]["result"]>> {
+    const projectId = this.#snapshot.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
+    return this.#write("project/work/export/apply", {
+      projectId,
+      ...(input.path ? { path: input.path } : {}),
+      ...(input.mode ? { mode: input.mode } : {}),
+      previewDigest: input.previewDigest,
+      confirm: true as const,
+      idempotencyKey: this.#newKey(),
+    });
+  }
+
+  /** What publishing the export into its repository would record. */
+  async publishPreview(
+    options: { path?: string | undefined } = {},
+  ): Promise<ProjectWorkOutcome<ClientRequests["project/work/publish/preview"]["result"]>> {
+    return this.#read1("project/work/publish/preview", (projectId) => ({ projectId, ...(options.path ? { path: options.path } : {}) }));
+  }
+
+  /**
+   * Record `published_as`, against a commit the host proves carries the
+   * export — or against a checkpoint that names the uncommitted state.
+   */
+  async publishApply(input: {
+    previewDigest: string;
+    commit: string;
+    path?: string | undefined;
+    checkpointId?: string | undefined;
+  }): Promise<ProjectWorkOutcome<ClientRequests["project/work/publish/apply"]["result"]>> {
+    const projectId = this.#snapshot.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
+    return this.#write("project/work/publish/apply", {
+      projectId,
+      ...(input.path ? { path: input.path } : {}),
+      previewDigest: input.previewDigest,
+      confirm: true as const,
+      commit: input.commit,
+      ...(input.checkpointId ? { checkpointId: input.checkpointId } : {}),
+      idempotencyKey: this.#newKey(),
+    });
+  }
+
+  /** One read that needs the project id, with the host's refusal decoded. */
+  async #read1<M extends ProjectWorkMethod>(
+    method: M,
+    params: (projectId: string) => ClientRequests[M]["params"],
+  ): Promise<ProjectWorkOutcome<ClientRequests[M]["result"]>> {
+    const projectId = this.#snapshot.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
+    try {
+      return { ok: true, value: await this.#request(method, params(projectId)) };
+    } catch (error) {
+      return { ok: false, failure: describeProjectWorkError(error) };
+    }
+  }
+
   /** One entity at one exact revision. Reads are never cached behind a fence. */
   async get(params: Omit<ClientRequests["project/work/get"]["params"], "projectId">): Promise<ProjectWorkOutcome<ClientRequests["project/work/get"]["result"]>> {
     const projectId = this.#snapshot.projectId;

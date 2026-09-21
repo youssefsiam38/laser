@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T14:58:10+03:00 · claude-2026-09-21-leap · HEAD: 819d4a5e
-**Current focus:** M21 The project lifecycle leap: spine (T1–T4), task engine (T15), Design Index (T10), Research (T26), workspace (T5–T7, T16) merged; T8, T11, T17 in flight. M22, M23, M26 done and released (0.12.0, 0.13.0).
+**Last updated:** 2026-09-21T18:26:16+03:00 · leap integration · HEAD: 00564380
+**Current focus:** M21 integration and acceptance gaps. T13/T14/T21 checkpoints merged, not yet accepted; T19 checkpoint returned for required corrections. M26 v0.14.0 tagged after exact-source CI; publication blocked on packaging download recovery.
 
 | Milestone | State |
 | --- | --- |
@@ -30,13 +30,14 @@
 | M21 Project lifecycle leap | in-progress |
 | M22 Model profiles | done |
 | M23 Plain Chat | done |
-| M24 Ask Oracle | in-progress |
-| M25 External work links | in-progress |
-| M26 Tool contract conformance | done |
+| M24 Ask Oracle | in-progress (contract only) |
+| M25 External work links | in-progress (contract only) |
+| M26 Tool contract conformance | in-progress (publication pending) |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** M19-T7 source work waits for M19-T6 to release shared `LaserPaths` and migration-storage ownership. M21 remains dependency-gated on the person's M20 sandbox acceptance; the leap goal (`docs/goal-project-lifecycle-leap.md`) proceeds M22 → M23 → M26 → M21 → M24 → M25.
-**In flight:** M21-T8 comments/gates, M21-T11 design canvas/sketch, M21-T17 tools/bridge/execution linking (three workers). Browser acceptance of the workspace, Specs/Research, Plans/Tasks and the board is the person's (D-342).
-**Published:** v0.13.0 is Latest (`842bd911` candidate; 12 verified assets).
-**Next up:** M21-T9 mentions, T12 static host grounding, T13 design workspace, T14 greenfield foundation, T18 checkpoints/evidence, T19 verification, then T20–T25; M24 Ask Oracle; M25 External work links.
-**Recently done:** M21-T16 Plans/Tasks workspace (`faf53146`), T7 Specs/Research (`ae5eac62`), T26 Research adapters/tools (`331962d4`), T15 task engine (`2d2b5778`), T5/T6 workspace (`edac5b5c`, `83f454d3`), T10 Design Index (`9306d0fa`), T3/T4 host authority (`34f011f4`, `ed23525f`), T1/T2 (`fca60c23`, `b8fb9454`); M26 T1–T4 + review fixes (`13b310f7`); v0.13.0 published.
+**Active owners:** T13/T14 design integration review (`bfd81088`); T21 full independent review (`1a157c44`); T19 Command/convergence corrections with durable Native-acceptance contract pending; independent T18 delivery review. Orchestrator: M26-T5 release transaction from reviewed tool-only source `08ebe228` (attempt3 failed; bounded read-only download investigation `run_f428c646`), not yet published. T9/T17 mention-context owner is drafting the admission/cleanup plan. Exact paths/sessions in `STATUS_DETAILED.md`.
+**Gate:** merged build/typecheck, host lifecycle 179/179 and UI design 97/97 pass. Full verify failed CLI timeout (focused 2/2 pass); M26 release preparation initially failed MCP status test (focused 11/11 pass); full staged gate passed on resume without bypass. Browser acceptance remains the person's (D-342).
+**Published:** last confirmed Latest v0.13.0 (M23), with v0.12.0 (M22). M26 candidate `ac098597` passed exact-source CI `35616431166`; release `35616858358` failed three x64 attempts on download HTTP504 (ARM64 passed); exact secondary fetch under investigation. Public assets/Latest are not yet verified. Final main-branch gates remain required.
+**Next dependency-ready work:** finish active corrections/review, publish reviewed M26 checkpoint, close T9/T17 worker mention-context delivery gap (tasks reopened), then T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
+**Recent implementation checkpoints:** T18 `85ee5ea4` (review pending); T9 `222d86c0`; T17 `133d55cd`; T12 `92cc43c9` + `f15eb7d1`; T8 `98a01428`.
+**Other retained blocker:** M19-T7 waits for M19-T6 shared storage ownership. Person-owned M20/visual acceptance must not be inferred from unit tests.

@@ -40,6 +40,13 @@ import {
 } from "../design/index/tools.js";
 import type { ReviewActor } from "../design/index/review.js";
 import {
+  PROPOSE_FOUNDATION_RECOVERY,
+  PROPOSE_FOUNDATION_SPEC,
+  proposeFoundationTool,
+  type FoundationModelAccess,
+  type ProposeFoundationInput,
+} from "../design/foundation/index.js";
+import {
   RESEARCH_TOOL_RECOVERY,
   readSourceTool,
   recordFindingTool,
@@ -87,6 +94,12 @@ export interface ProjectWorkSessionOptions {
   design?: DesignIndexBridge | undefined;
   /** Static host grounding for this project (M21-T12); needs the design index to be offered. */
   hostGrounding?: HostGroundingBridge | undefined;
+  /**
+   * The models Foundation mode proposes with (M21-T14), when this machine has
+   * a Design-index profile. Absent is a working state, not a broken one: each
+   * step falls back to the documented neutral foundation and says so.
+   */
+  foundationModels?: FoundationModelAccess | undefined;
   /** This session's research run, and the adapters it may use. */
   research?: { bridge: ResearchBridge; adapters: readonly ResearchAdapterId[] } | undefined;
   /** The Task this session is an attempt on, when it was opened for one. */
@@ -232,6 +245,26 @@ export class ProjectWorkSession implements ExtensionProjectWorkBridge {
         recovery: DESIGN_INDEX_TOOL_RECOVERY["review_design_index"]!,
         run: (input) => reviewDesignIndexTool(design, input as unknown as ReviewDesignIndexInput, actor),
       },
+      // Foundation mode is the design surface of a project that has no index
+      // to compose from, and its proposals are stored as project work — so it
+      // is offered exactly when this session has both a design surface and a
+      // project to keep the proposal in.
+      ...(this.options.bridge && this.options.bridge.projectId() !== undefined
+        ? [
+            {
+              spec: PROPOSE_FOUNDATION_SPEC,
+              recovery: PROPOSE_FOUNDATION_RECOVERY,
+              run: (input: Record<string, unknown>) =>
+                proposeFoundationTool(
+                  {
+                    work: this.options.bridge!,
+                    ...(this.options.foundationModels ? { access: this.options.foundationModels } : {}),
+                  },
+                  input as unknown as ProposeFoundationInput,
+                ),
+            },
+          ]
+        : []),
       ...(this.options.hostGrounding
         ? [
             {

@@ -162,6 +162,16 @@ export interface RouterDeps {
    */
   projectPaths?: ((projectId: string) => readonly string[]) | undefined;
   /**
+   * An opaque `projectId` → the directory it names (M21-T13).
+   *
+   * The design workspace's six methods are the only `project`-shaped methods
+   * a **worker** answers: the Design Index, the review document and the
+   * templates behind them are files in the project directory, and one worker
+   * owns one project directory. The router needs exactly this one fact to
+   * pick that worker, and it never reads the directory itself.
+   */
+  projectRootOfId?: ((projectId: string) => string | undefined) | undefined;
+  /**
    * Per-session route leases (RP-4c), shared with the pool that releases under
    * them. Absent, this Router owns a private one: routing is still serialized
    * against itself, but only the shared instance can see a release in flight.
@@ -410,6 +420,43 @@ export class Router {
   private setup(): SetupService {
     if (!this.deps.setup) throw new ProtocolError(ErrorCodes.Unsupported, "this host keeps no first-run state");
     return this.deps.setup;
+  }
+
+  /**
+   * One design workspace call, on the worker that owns the project.
+   *
+   * Three refusals before anything is forwarded, each a sentence: this host
+   * has no project work at all, this project id is not one it knows, or the
+   * folder behind it is no longer a project this app may open. A design build
+   * is bounded work in a worker, so it is started the same way any
+   * project-scoped worker call is — `pool.get(cwd)`, never a session.
+   */
+  private async designWorkspace(
+    req: Extract<TypedClientRequest, { method: "design/index/get" | "design/index/build" | "design/index/stop" | "design/index/review" | "design/host/ground" | "design/sketch/ground" }>,
+  ): Promise<unknown> {
+    const resolve_ = this.deps.projectRootOfId;
+    if (!resolve_) {
+      throw new ProtocolError(
+        ErrorCodes.Unsupported,
+        this.deps.projectWorkUnavailable
+          ? `Project work is not available right now: ${this.deps.projectWorkUnavailable}. Restart the app; nothing you saved was lost.`
+          : "This app is running without its project work, so a project's design system cannot be read here.",
+      );
+    }
+    const cwd = resolve_(req.params.projectId);
+    if (cwd === undefined) {
+      throw new ProtocolError(
+        ErrorCodes.InvalidParams,
+        "That project is not one this app knows, so its design system cannot be read. Open the project and try again.",
+      );
+    }
+    const root = projectRootOf(cwd);
+    this.deps.projects.assertProject(root);
+    const worker = await this.pool.get(root);
+    // The directory is the host's answer, never the caller's: whatever `cwd`
+    // arrived on the params is replaced, and the worker refuses any directory
+    // but its own on top of that.
+    return await worker.request(req.method, { ...req.params, cwd: root });
   }
 
   /** The project lifecycle authority (M21-T3), or why this host has none. */
@@ -1177,6 +1224,20 @@ export class Router {
       // here, projected here, and only then does the worker see them.
       case "session/prompt":
         return this.promptWithMentions(req, actor);
+      // The design workspace (M21-T13). The opposite rule to the lifecycle
+      // methods below, and for one reason: these read and write **files in
+      // the project**, which is the worker's authority, not the store's. The
+      // host resolves the project from its opaque id, refuses a project it
+      // does not know, and forwards to that project's worker with the
+      // directory it resolved — the caller's `cwd`, if it sent one, is
+      // discarded rather than trusted.
+      case "design/index/get":
+      case "design/index/build":
+      case "design/index/stop":
+      case "design/index/review":
+      case "design/host/ground":
+      case "design/sketch/ground":
+        return await this.designWorkspace(req);
 
       // The project lifecycle (M21-T3). Every one of these is answered by the
       // host's own authority over the canonical store — reads *and* writes —
@@ -1198,6 +1259,15 @@ export class Router {
       case "project/work/unlink":
       case "project/task/action":
       case "project/task/link-execution":
+      // Import, export and publication (M21-T21) are the same authority over
+      // the same store, and equally worker-free: an adapter reads the
+      // project's own files, an export writes them, and publication reads git.
+      case "project/work/import/preview":
+      case "project/work/import/apply":
+      case "project/work/export/preview":
+      case "project/work/export/apply":
+      case "project/work/publish/preview":
+      case "project/work/publish/apply":
         // A client connection is always a person: only the worker bridge
         // (M21-T17) presents an agent, and it does not come through here.
         return this.projectWork().handle(req, { actor, source: "client" });
