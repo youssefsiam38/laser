@@ -74,7 +74,7 @@ through `pnpm patch` (`patches/@legendapp__list@3.3.5.patch`, registered in
 `pnpm install --frozen-lockfile` reproduces it). The patch carries **only** the
 `react.js` and `react.mjs` hunks of the reference's patch — its React Native,
 `keyboard.*` and `reanimated.*` hunks do not apply, because Laser has no React
-Native app. Three corrections, and why each one matters here:
+Native app. Four corrections, and why each one matters here:
 
 1. **Anchored end space that shrank before it was ready.** When the trailing
    space is not yet resolved and the computed size has *shrunk*, publish the
@@ -86,7 +86,27 @@ Native app. Three corrections, and why each one matters here:
    restarts CSS `@starting-style` transitions and reloads iframes inside a row.
    `moveBefore` moves the subtree with its state; `insertBefore`/`appendChild`
    remain the fallback where it does not exist.
-3. **Record the padding that was applied, not the padding that was asked
+3. **What the fallback move loses, put back.** `moveBefore` is not Baseline —
+   Safari and iOS Safari have none, so on a phone the fallback is the only
+   path. There, the insert *is* a removal: the browser blurs whatever had focus
+   inside the row being moved (focus lands on `<body>`, so a keyboard restarts
+   at the top of the document and an assistive-technology cursor leaves the
+   conversation) and collapses a selection with an endpoint in it. The fallback
+   therefore holds the focused node, its caret if it has one, and the
+   selection's two endpoints, and restores them after the move — the same
+   nodes, `preventScroll: true`, for the moved subtree only. What a removal
+   leaves is not an empty selection: the standard relocates a boundary inside
+   the removed subtree to (its parent, the node's old index), and the insertion
+   then shifts boundaries after the insertion point, so that point is computed
+   before the move and recognised as the move's own. One check gates focus and
+   selection together: if something took focus while the move happened, a blur
+   handler moved the person into another control with its own caret and its own
+   selection, and neither is put back over it; a selection made in nodes of
+   somebody else's choosing stays, focus change or not. Held offsets are checked
+   against their nodes' current text first, so a selection that no longer fits
+   is dropped instead of throwing inside the sort. The list's pass is a re-sort,
+   not a scroll, and this keeps it that way.
+4. **Record the padding that was applied, not the padding that was asked
    for.** The scroll-adjust trick writes a temporary end padding and reads it
    back to undo it; recording the requested string instead of the node's own
    value leaves a residue when the browser normalises it.
