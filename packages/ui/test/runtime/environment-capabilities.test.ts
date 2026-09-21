@@ -147,6 +147,14 @@ const EXPECTED_METHOD_CAPABILITIES = {
   "models/profiles/migrate": [],
   "project/task/action": [],
   "project/task/link-execution": [],
+  // M21-T13: the design workspace is answered by the project's own worker and
+  // needs no capability bit of its own — scope alone decides.
+  "design/index/get": [],
+  "design/index/build": [],
+  "design/index/stop": [],
+  "design/index/review": [],
+  "design/host/ground": [],
+  "design/sketch/ground": [],
   "project/work/approve": [],
   "project/work/archive": [],
   "project/work/blob/read": [],

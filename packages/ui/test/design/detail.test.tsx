@@ -15,9 +15,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, type DesignBody } from "@lasercode/protocol";
 
-import { DesignDetail, IMPLEMENT_PENDING_SENTENCE, INDEX_PENDING_SENTENCE } from "../../src/components/project-work/bodies/DesignDetail.js";
+import { DesignDetail, IMPLEMENT_SENTENCE } from "../../src/components/project-work/bodies/DesignDetail.js";
 import type { WorkBodyContext } from "../../src/components/project-work/bodies/context.js";
-import { GROUND_PENDING_SENTENCE } from "../../src/components/design/ScreenInspector.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { SKETCH_GATE_REFUSAL } from "../../src/design/sketch.js";
 import { ProjectWorkStore, type ProjectWorkMethod } from "../../src/project-work/store.js";
@@ -161,7 +160,7 @@ describe("DesignDetail", () => {
     expect(container.querySelector('[data-slot="sketch-gate-refusal"]')?.textContent).toBe(SKETCH_GATE_REFUSAL);
     await click(button("Implement"));
     expect(document.body.querySelector('[data-slot="implement-refusal"]')?.textContent).toBe(SKETCH_GATE_REFUSAL);
-    expect(document.body.textContent).not.toContain(IMPLEMENT_PENDING_SENTENCE);
+    expect(document.body.textContent).not.toContain(IMPLEMENT_SENTENCE);
     // The bytes were read through the blob route and rendered only in the frame.
     expect(blobRequests).toContain("project/work/blob/read:blob_sk_1");
     const frame = container.querySelector<HTMLIFrameElement>("iframe");
@@ -171,19 +170,22 @@ describe("DesignDetail", () => {
     expect(container.textContent).not.toContain("filter demo");
   });
 
-  it("draws what waits on the model tools as designed states with the honest sentence", async () => {
+  it("says why the index could not be read, and offers the hand-off rather than a dead button", async () => {
     const body = designFixture();
     await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={contextFor(body)} /></TooltipProvider>));
     await settle();
-    expect(container.querySelector('[data-slot="design-index-panel"]')?.textContent).toContain(INDEX_PENDING_SENTENCE);
-    expect(container.querySelector('[data-slot="design-index-panel"]')?.querySelector("button")).toBeNull();
-    // Select the sketch screen: Ground it is the pending sentence, not a button.
+    // This window's fixture client answers nothing but blob reads, so the
+    // index read fails — and the panel says so in the host's own words rather
+    // than showing an empty index.
+    const panel = container.querySelector('[data-slot="design-index-panel"]');
+    expect(panel?.textContent).toContain("The design index could not be read");
+    // Ground it is a button now the wire exists, and the hand-off is real.
     const sketchName = [...container.querySelectorAll("button")].find((node) => node.textContent === "Filter demo");
     await click(sketchName);
-    expect(container.querySelector('[data-slot="ground-pending"]')?.textContent).toBe(GROUND_PENDING_SENTENCE);
-    expect(button("Ground it")).toBeUndefined();
+    expect(container.querySelector('[data-slot="ground-pending"]')).toBeNull();
     await click(button("Implement"));
-    expect(document.body.textContent).toContain(IMPLEMENT_PENDING_SENTENCE);
+    expect(document.body.textContent).toContain(IMPLEMENT_SENTENCE);
+    expect(document.body.textContent).toContain("/design implement @DES-3");
     expect(document.body.querySelector('[data-slot="implement-refusal"]')).toBeNull();
     // Without a token document, the frame says it is drawn in this app's tokens.
     expect(container.textContent).toContain("Drawn in this app's own tokens");

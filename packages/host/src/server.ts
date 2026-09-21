@@ -939,6 +939,12 @@ export class HostServer {
       // opened at, and a mention's provenance names a project a person
       // recognises (M21-T9).
       ...(this.projectWork ? { projectPaths: (projectId: string) => this.projectWork!.projectPaths(projectId) } : {}),
+      // M21-T13: the design workspace's methods are answered by the project's
+      // own worker, so the router needs one fact the store owns — which
+      // directory an opaque `projectId` names. The current path first: a
+      // project that moved is relinked there, and a stale one never reaches a
+      // worker.
+      projectRootOfId: this.projectWork ? (projectId) => this.projectWork?.projectPaths(projectId)[0] : undefined,
     });
 
     this.http = createServer((req, res) => this.serveHttp(req, res));

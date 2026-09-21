@@ -588,7 +588,8 @@ export interface DesignBody {
   fixtures: Array<{ id: string; name: string; rows: number; blobId?: string }>;
 }
 
-const designScreenSchema = z
+/** One screen of a design. Exported so a method result can carry exactly one. */
+export const designScreenSchema = z
   .object({
     id: opaqueId,
     name: z.string().min(1).max(200),

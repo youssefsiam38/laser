@@ -413,6 +413,23 @@ export const METHOD_POLICY = {
   "project/work/export/apply": { scope: "project_write", reach: "any" },
   "project/work/publish/preview": { scope: "project_write", reach: "any" },
   "project/work/publish/apply": { scope: "project_write", reach: "any" },
+  // ------------------------------------------ M21 · the design workspace ---
+  // Reading a project's Design Index is reading derived product state, so it
+  // is `read` and reaches every authenticated connection: a phone reviews the
+  // same index a desktop does (`docs/design-phase.md`, "What a person sees" —
+  // the phone is a read-only canvas plus review actions).
+  "design/index/get": { scope: "read", reach: "any" },
+  // Everything else changes this project's own design facts: a build writes
+  // `.laser/design/index.json`, a review writes `review.json`, and grounding
+  // reads the project's templates to produce a record a Design will carry.
+  // They are `project_write` for the same reason the lifecycle mutations are
+  // (D-332): an environment may grant editing project work without granting
+  // this machine's settings, or the reverse.
+  "design/index/build": { scope: "project_write", reach: "any" },
+  "design/index/stop": { scope: "project_write", reach: "any" },
+  "design/index/review": { scope: "project_write", reach: "any" },
+  "design/host/ground": { scope: "project_write", reach: "any" },
+  "design/sketch/ground": { scope: "project_write", reach: "any" },
 
   // ------------------------------------------------------------- device ---
   "pi/push/config": { scope: "device", reach: "any" },
