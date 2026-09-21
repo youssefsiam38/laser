@@ -1,5 +1,5 @@
 diff --git a/react.js b/react.js
-index 914d2dafaafa001c9ab6791a0a0581659295e333..7f0d56c67ce632e2715713b068b413d0f6a71195 100644
+index 914d2dafaafa001c9ab6791a0a0581659295e333..a03907e68c6d28d35f5cfe1f285443f074c43ef3 100644
 --- a/react.js
 +++ b/react.js
 @@ -4702,7 +4702,8 @@ function maybeUpdateAnchoredEndSpace(ctx) {
@@ -25,11 +25,10 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..7f0d56c67ce632e2715713b068b413d0
    }
    return nextSize;
  }
-@@ -5651,7 +5658,95 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5651,6 +5658,117 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  });
  
  // src/utils/reordering.ts
--function sortDOMElements(container, indexByElement) {
 +// Element.moveBefore keeps the moved subtree's state and does not count as an
 +// insertion, so CSS @starting-style transitions and iframes inside a row do not
 +// restart when the list reorders its containers. insertBefore is the fallback.
@@ -40,12 +39,13 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..7f0d56c67ce632e2715713b068b413d0
 +  }
 +  // Without the state-preserving move (Safari, and test DOMs), an insert is a
 +  // removal and an insertion: the browser blurs whatever had focus inside the
-+  // subtree being moved and collapses a selection with an endpoint inside it.
-+  // Hold both, for this subtree only, and put them back on the same nodes —
-+  // never over a focus or a selection something else took while the move
-+  // happened, and never by scrolling. `contains` does not cross a shadow
-+  // boundary, and refocusing an iframe element restores the outer focus only;
-+  // the moveBefore path above is the one that keeps inner state.
++  // subtree being moved, and relocates a selection boundary that was inside it.
++  // Hold focus, caret and both selection endpoints for this subtree only, and
++  // put them back on the same nodes afterwards — never over a focus or a
++  // selection something else took while the move happened, and never by
++  // scrolling. `contains` does not cross a shadow boundary, and refocusing an
++  // iframe element restores the outer focus only; the moveBefore path above is
++  // the one that keeps inner state.
 +  const doc = container.ownerDocument;
 +  const activeBefore = doc ? doc.activeElement : null;
 +  const focused = activeBefore && activeBefore !== doc.body && typeof activeBefore.focus === "function"
@@ -65,6 +65,21 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..7f0d56c67ce632e2715713b068b413d0
 +        focusOffset: selection.focusOffset
 +      }
 +    : null;
++  // Where the DOM itself will leave a boundary that was inside this subtree.
++  // Removing a node sets every live boundary inside it to (that node's parent,
++  // that node's old index); inserting the node again raises by one every
++  // boundary in the parent that sits after the insertion point (DOM standard,
++  // "removing steps" and "insertion steps"). Both indices only exist before
++  // the move, so the point is computed here, not guessed afterwards.
++  let relocated = null;
++  if (held) {
++    const index = Array.prototype.indexOf.call(container.childNodes, element);
++    let insertedAt = reference ? Array.prototype.indexOf.call(container.childNodes, reference) : -1;
++    if (insertedAt > index) {
++      insertedAt -= 1;
++    }
++    relocated = { node: container, offset: reference && index > insertedAt ? index + 1 : index };
++  }
 +  if (reference) {
 +    container.insertBefore(element, reference);
 +  } else {
@@ -75,11 +90,36 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..7f0d56c67ce632e2715713b068b413d0
 +  }
 +  const activeAfter = doc.activeElement;
 +  // Something took focus while the move happened — a synchronous blur handler
-+  // moving on to another control, which may have brought its own selection or
++  // moving on to another control, which may have brought its own selection and
 +  // caret with it. After that neither the focus nor the selection is ours to
 +  // put back: restoring either would overwrite what that handler chose.
 +  if (activeAfter && activeAfter !== doc.body && activeAfter !== activeBefore) {
 +    return;
++  }
++  // Everything is judged before anything is restored: putting focus back can
++  // move the selection itself (focusing a field collapses it), so the selection
++  // is read as the move left it, not as the focus repair left it.
++  let restoreSelection = false;
++  if (held && held.anchorNode.isConnected && held.focusNode.isConnected) {
++    // The offsets are held, not the text: a handler that rewrote a node while
++    // the row was out of the tree leaves them past its end, where
++    // setBaseAndExtent throws. A selection that no longer fits is not restored.
++    const extentOf = (node) => node.nodeType === 3 ? (node.data ? node.data.length : 0) : node.childNodes.length;
++    const fits = held.anchorOffset <= extentOf(held.anchorNode) && held.focusOffset <= extentOf(held.focusNode);
++    const emptied = !selection.rangeCount || !selection.anchorNode || !selection.focusNode;
++    // A boundary is still the move's own if it never changed, if it is still
++    // inside this subtree, or if it is exactly where the DOM relocated it.
++    const fromTheMove = (node, offset, heldNode, heldOffset) => (node === heldNode && offset === heldOffset)
++      || element.contains(node)
++      || (node === relocated.node && offset === relocated.offset);
++    const changed = emptied || selection.anchorNode !== held.anchorNode || selection.anchorOffset !== held.anchorOffset
++      || selection.focusNode !== held.focusNode || selection.focusOffset !== held.focusOffset;
++    // Anything else is a selection somebody made while the move happened, in
++    // nodes of their own choosing, and it stays.
++    const ours = emptied
++      || (fromTheMove(selection.anchorNode, selection.anchorOffset, held.anchorNode, held.anchorOffset)
++        && fromTheMove(selection.focusNode, selection.focusOffset, held.focusNode, held.focusOffset));
++    restoreSelection = fits && changed && ours;
 +  }
 +  // A repair is never the reason the list stops sorting its rows.
 +  try {
@@ -90,39 +130,20 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..7f0d56c67ce632e2715713b068b413d0
 +        focused.setSelectionRange(caret.start, caret.end, caret.direction || void 0);
 +      }
 +    }
-+    if (!held || !held.anchorNode.isConnected || !held.focusNode.isConnected) {
-+      return;
++    if (restoreSelection) {
++      // setBaseAndExtent restores the endpoints in the order they were made, so
++      // a backward selection stays backward.
++      selection.setBaseAndExtent(held.anchorNode, held.anchorOffset, held.focusNode, held.focusOffset);
 +    }
-+    const unchanged = selection.anchorNode === held.anchorNode && selection.anchorOffset === held.anchorOffset
-+      && selection.focusNode === held.focusNode && selection.focusOffset === held.focusOffset;
-+    if (unchanged) {
-+      return;
-+    }
-+    // A selection made while the move happened, in nodes outside the rows that
-+    // moved, is somebody else's and stays.
-+    if (selection.rangeCount && selection.anchorNode && selection.focusNode
-+      && selection.anchorNode !== held.anchorNode && selection.focusNode !== held.focusNode
-+      && !element.contains(selection.anchorNode) && !element.contains(selection.focusNode)) {
-+      return;
-+    }
-+    // The offsets are held, not the text: a handler that edited a node while it
-+    // was out of the tree leaves them past its end, where setBaseAndExtent
-+    // throws. A selection that no longer fits its own text is not restorable.
-+    const extentOf = (node) => node.nodeType === 3 ? (node.data ? node.data.length : 0) : node.childNodes.length;
-+    if (held.anchorOffset > extentOf(held.anchorNode) || held.focusOffset > extentOf(held.focusNode)) {
-+      return;
-+    }
-+    // setBaseAndExtent restores the endpoints in the order they were made, so a
-+    // backward selection stays backward. Nothing outside this subtree is read.
-+    selection.setBaseAndExtent(held.anchorNode, held.anchorOffset, held.focusNode, held.focusOffset);
 +  } catch {
 +    // A DOM that refuses the repair still keeps the move, and the sort goes on.
 +  }
-+}function sortDOMElements(container, indexByElement) {
++}
++
+ function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
-   const items = elements.map((element) => {
-@@ -5690,9 +5785,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5690,9 +5808,9 @@ function sortDOMElements(container, indexByElement) {
          }
        }
        if (nextStableElement) {
@@ -134,7 +155,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..7f0d56c67ce632e2715713b068b413d0
        }
      }
    }
-@@ -6446,8 +6541,8 @@ function ScrollAdjust() {
+@@ -6446,8 +6564,8 @@ function ScrollAdjust() {
                window.getComputedStyle(contentNode)[axis.paddingEndProp]
              );
              const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
@@ -145,7 +166,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..7f0d56c67ce632e2715713b068b413d0
              scrollBy();
              if (resetPaddingRafRef.current !== void 0) {
 diff --git a/react.mjs b/react.mjs
-index 95465f2ab89ce41a10553f58af83618f7310e83c..b7dd46b0dae11795ee0b9b2455c10aef3c2cb34f 100644
+index 95465f2ab89ce41a10553f58af83618f7310e83c..79ddaebee3c67d48dcfdf50b422da3e91a1ff3d6 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -4681,7 +4681,8 @@ function maybeUpdateAnchoredEndSpace(ctx) {
@@ -171,11 +192,10 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..b7dd46b0dae11795ee0b9b2455c10aef
    }
    return nextSize;
  }
-@@ -5630,7 +5637,95 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5630,6 +5637,117 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  });
  
  // src/utils/reordering.ts
--function sortDOMElements(container, indexByElement) {
 +// Element.moveBefore keeps the moved subtree's state and does not count as an
 +// insertion, so CSS @starting-style transitions and iframes inside a row do not
 +// restart when the list reorders its containers. insertBefore is the fallback.
@@ -186,12 +206,13 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..b7dd46b0dae11795ee0b9b2455c10aef
 +  }
 +  // Without the state-preserving move (Safari, and test DOMs), an insert is a
 +  // removal and an insertion: the browser blurs whatever had focus inside the
-+  // subtree being moved and collapses a selection with an endpoint inside it.
-+  // Hold both, for this subtree only, and put them back on the same nodes —
-+  // never over a focus or a selection something else took while the move
-+  // happened, and never by scrolling. `contains` does not cross a shadow
-+  // boundary, and refocusing an iframe element restores the outer focus only;
-+  // the moveBefore path above is the one that keeps inner state.
++  // subtree being moved, and relocates a selection boundary that was inside it.
++  // Hold focus, caret and both selection endpoints for this subtree only, and
++  // put them back on the same nodes afterwards — never over a focus or a
++  // selection something else took while the move happened, and never by
++  // scrolling. `contains` does not cross a shadow boundary, and refocusing an
++  // iframe element restores the outer focus only; the moveBefore path above is
++  // the one that keeps inner state.
 +  const doc = container.ownerDocument;
 +  const activeBefore = doc ? doc.activeElement : null;
 +  const focused = activeBefore && activeBefore !== doc.body && typeof activeBefore.focus === "function"
@@ -211,6 +232,21 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..b7dd46b0dae11795ee0b9b2455c10aef
 +        focusOffset: selection.focusOffset
 +      }
 +    : null;
++  // Where the DOM itself will leave a boundary that was inside this subtree.
++  // Removing a node sets every live boundary inside it to (that node's parent,
++  // that node's old index); inserting the node again raises by one every
++  // boundary in the parent that sits after the insertion point (DOM standard,
++  // "removing steps" and "insertion steps"). Both indices only exist before
++  // the move, so the point is computed here, not guessed afterwards.
++  let relocated = null;
++  if (held) {
++    const index = Array.prototype.indexOf.call(container.childNodes, element);
++    let insertedAt = reference ? Array.prototype.indexOf.call(container.childNodes, reference) : -1;
++    if (insertedAt > index) {
++      insertedAt -= 1;
++    }
++    relocated = { node: container, offset: reference && index > insertedAt ? index + 1 : index };
++  }
 +  if (reference) {
 +    container.insertBefore(element, reference);
 +  } else {
@@ -221,11 +257,36 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..b7dd46b0dae11795ee0b9b2455c10aef
 +  }
 +  const activeAfter = doc.activeElement;
 +  // Something took focus while the move happened — a synchronous blur handler
-+  // moving on to another control, which may have brought its own selection or
++  // moving on to another control, which may have brought its own selection and
 +  // caret with it. After that neither the focus nor the selection is ours to
 +  // put back: restoring either would overwrite what that handler chose.
 +  if (activeAfter && activeAfter !== doc.body && activeAfter !== activeBefore) {
 +    return;
++  }
++  // Everything is judged before anything is restored: putting focus back can
++  // move the selection itself (focusing a field collapses it), so the selection
++  // is read as the move left it, not as the focus repair left it.
++  let restoreSelection = false;
++  if (held && held.anchorNode.isConnected && held.focusNode.isConnected) {
++    // The offsets are held, not the text: a handler that rewrote a node while
++    // the row was out of the tree leaves them past its end, where
++    // setBaseAndExtent throws. A selection that no longer fits is not restored.
++    const extentOf = (node) => node.nodeType === 3 ? (node.data ? node.data.length : 0) : node.childNodes.length;
++    const fits = held.anchorOffset <= extentOf(held.anchorNode) && held.focusOffset <= extentOf(held.focusNode);
++    const emptied = !selection.rangeCount || !selection.anchorNode || !selection.focusNode;
++    // A boundary is still the move's own if it never changed, if it is still
++    // inside this subtree, or if it is exactly where the DOM relocated it.
++    const fromTheMove = (node, offset, heldNode, heldOffset) => (node === heldNode && offset === heldOffset)
++      || element.contains(node)
++      || (node === relocated.node && offset === relocated.offset);
++    const changed = emptied || selection.anchorNode !== held.anchorNode || selection.anchorOffset !== held.anchorOffset
++      || selection.focusNode !== held.focusNode || selection.focusOffset !== held.focusOffset;
++    // Anything else is a selection somebody made while the move happened, in
++    // nodes of their own choosing, and it stays.
++    const ours = emptied
++      || (fromTheMove(selection.anchorNode, selection.anchorOffset, held.anchorNode, held.anchorOffset)
++        && fromTheMove(selection.focusNode, selection.focusOffset, held.focusNode, held.focusOffset));
++    restoreSelection = fits && changed && ours;
 +  }
 +  // A repair is never the reason the list stops sorting its rows.
 +  try {
@@ -236,39 +297,20 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..b7dd46b0dae11795ee0b9b2455c10aef
 +        focused.setSelectionRange(caret.start, caret.end, caret.direction || void 0);
 +      }
 +    }
-+    if (!held || !held.anchorNode.isConnected || !held.focusNode.isConnected) {
-+      return;
++    if (restoreSelection) {
++      // setBaseAndExtent restores the endpoints in the order they were made, so
++      // a backward selection stays backward.
++      selection.setBaseAndExtent(held.anchorNode, held.anchorOffset, held.focusNode, held.focusOffset);
 +    }
-+    const unchanged = selection.anchorNode === held.anchorNode && selection.anchorOffset === held.anchorOffset
-+      && selection.focusNode === held.focusNode && selection.focusOffset === held.focusOffset;
-+    if (unchanged) {
-+      return;
-+    }
-+    // A selection made while the move happened, in nodes outside the rows that
-+    // moved, is somebody else's and stays.
-+    if (selection.rangeCount && selection.anchorNode && selection.focusNode
-+      && selection.anchorNode !== held.anchorNode && selection.focusNode !== held.focusNode
-+      && !element.contains(selection.anchorNode) && !element.contains(selection.focusNode)) {
-+      return;
-+    }
-+    // The offsets are held, not the text: a handler that edited a node while it
-+    // was out of the tree leaves them past its end, where setBaseAndExtent
-+    // throws. A selection that no longer fits its own text is not restorable.
-+    const extentOf = (node) => node.nodeType === 3 ? (node.data ? node.data.length : 0) : node.childNodes.length;
-+    if (held.anchorOffset > extentOf(held.anchorNode) || held.focusOffset > extentOf(held.focusNode)) {
-+      return;
-+    }
-+    // setBaseAndExtent restores the endpoints in the order they were made, so a
-+    // backward selection stays backward. Nothing outside this subtree is read.
-+    selection.setBaseAndExtent(held.anchorNode, held.anchorOffset, held.focusNode, held.focusOffset);
 +  } catch {
 +    // A DOM that refuses the repair still keeps the move, and the sort goes on.
 +  }
-+}function sortDOMElements(container, indexByElement) {
++}
++
+ function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
-   const items = elements.map((element) => {
-@@ -5669,9 +5764,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5669,9 +5787,9 @@ function sortDOMElements(container, indexByElement) {
          }
        }
        if (nextStableElement) {
@@ -280,7 +322,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..b7dd46b0dae11795ee0b9b2455c10aef
        }
      }
    }
-@@ -6425,8 +6520,8 @@ function ScrollAdjust() {
+@@ -6425,8 +6543,8 @@ function ScrollAdjust() {
                window.getComputedStyle(contentNode)[axis.paddingEndProp]
              );
              const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;

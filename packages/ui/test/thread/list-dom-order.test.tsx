@@ -260,6 +260,60 @@ function duringMoves(during: (moved: HTMLElement) => void): { moved: HTMLElement
   return { moved, release: () => { Reflect.deleteProperty(node, "insertBefore"); Reflect.deleteProperty(node, "appendChild"); } };
 }
 
+/**
+ * The DOM's own range mutation around a move, which happy-dom does not
+ * implement, written out from the standard and applied at the two moments it
+ * happens rather than predicted:
+ *
+ * - *removing steps*: every live boundary whose node is an inclusive descendant
+ *   of the node being removed becomes (that node's parent, that node's index);
+ * - *insertion steps*: every live boundary in the parent whose offset is
+ *   greater than the index the node is inserted at rises by one.
+ *
+ * Nothing is dropped: a browser leaves a collapsed selection at that point, and
+ * that is the state the repair has to recognise as its own. `applies` chooses
+ * which moved container is treated as removed, so a case can hold one endpoint
+ * inside the row that moves and leave the other one untouched.
+ */
+function withDomRangeMutation(applies: (moved: HTMLElement) => boolean): { relocations: number; release: () => void } {
+  const node = track();
+  const selection = document.getSelection()!;
+  const state = { relocations: 0, release: () => {} };
+  for (const name of ["insertBefore", "appendChild"] as const) {
+    const original = (Node.prototype as unknown as Record<string, (...args: unknown[]) => unknown>)[name]!;
+    Object.defineProperty(node, name, {
+      configurable: true,
+      value: function mutating(this: HTMLElement, ...args: unknown[]) {
+        const moved = args[0] as HTMLElement;
+        const inside = (endpoint: Node | null) => !!endpoint && (endpoint === moved || moved.contains(endpoint));
+        const had = selection.rangeCount > 0 && !!selection.anchorNode && !!selection.focusNode;
+        const touches = had && applies(moved) && (inside(selection.anchorNode) || inside(selection.focusNode));
+        const index = [...this.childNodes].indexOf(moved);
+        let anchor = { node: selection.anchorNode as Node, offset: selection.anchorOffset };
+        let focus = { node: selection.focusNode as Node, offset: selection.focusOffset };
+        if (touches) {
+          if (inside(anchor.node)) anchor = { node: this, offset: index };
+          if (inside(focus.node)) focus = { node: this, offset: index };
+        }
+        const out = original.apply(this, args);
+        if (touches) {
+          const insertedAt = [...this.childNodes].indexOf(moved);
+          const shift = (point: { node: Node; offset: number }) => point.node === this && point.offset > insertedAt
+            ? { node: point.node, offset: point.offset + 1 }
+            : point;
+          anchor = shift(anchor);
+          focus = shift(focus);
+          selection.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset);
+          state.relocations += 1;
+        }
+        return out;
+      },
+    });
+  }
+  state.release = () => { Reflect.deleteProperty(node, "insertBefore"); Reflect.deleteProperty(node, "appendChild"); };
+  return state;
+}
+
 /** The longest text node inside a row: what a person's selection lands in. */
 function textIn(row: HTMLElement): Text {
   let best: Text | undefined;
@@ -405,6 +459,78 @@ describe("the list's own DOM-order pass", () => {
       expect(selection.focusOffset).toBe(3);
     } finally {
       taking.release();
+    }
+  });
+
+  it("restores a selection the DOM relocated to the container, which is what a browser actually leaves", async () => {
+    const { viewport, held, action } = await reading();
+    const text = textIn(rowOf(held)!);
+    const selection = document.getSelection()!;
+    await act(async () => { action.focus(); action.dispatchEvent(new FocusEvent("focusin", { bubbles: true })); });
+    selection.setBaseAndExtent(text, 4, text, 19);
+    // Removal does not empty the selection: both endpoints end up in the track,
+    // outside the row, at the index the row used to have. A repair that only
+    // recognised an emptied selection would walk away from this one.
+    const mutation = withDomRangeMutation(moved => moved.contains(text));
+    try {
+      await sortPass(viewport);
+      expect(mutation.relocations, "the row holding the selection is one the pass moved").toBeGreaterThan(0);
+      expect(selection.anchorNode).toBe(text);
+      expect(selection.anchorOffset).toBe(4);
+      expect(selection.focusNode).toBe(text);
+      expect(selection.focusOffset).toBe(19);
+      expect(selection.toString()).toBe(text.data.slice(4, 19));
+      expect(document.activeElement).toBe(action);
+    } finally {
+      mutation.release();
+    }
+  });
+
+  it("restores a relocated endpoint and leaves the endpoint the move never touched where it is", async () => {
+    const { viewport, held } = await reading();
+    const order = readingOrder();
+    const other = order[order.indexOf(held) + 1]!;
+    const inside = textIn(rowOf(held)!);
+    const untouched = textIn(rowOf(other)!);
+    const selection = document.getSelection()!;
+    // Selected downwards out of the row that moves into a row that did not:
+    // only the first endpoint is relocated, the second keeps its own node.
+    selection.setBaseAndExtent(inside, 5, untouched, 11);
+    const mutation = withDomRangeMutation(moved => moved.contains(inside));
+    try {
+      await sortPass(viewport);
+      expect(mutation.relocations).toBeGreaterThan(0);
+      expect(selection.anchorNode).toBe(inside);
+      expect(selection.anchorOffset).toBe(5);
+      expect(selection.focusNode).toBe(untouched);
+      expect(selection.focusOffset).toBe(11);
+    } finally {
+      mutation.release();
+    }
+  });
+
+  it("keeps a selection somebody else made during the move, even without a focus change", async () => {
+    const { viewport, held } = await reading();
+    const text = textIn(rowOf(held)!);
+    const prose = document.createElement("p");
+    prose.textContent = "the selection something else made meanwhile";
+    document.body.append(prose);
+    const selection = document.getSelection()!;
+    selection.setBaseAndExtent(text, 4, text, 19);
+    // No focus moves here at all: the only signal that this is not the move's
+    // own leftover is that the endpoints are nodes the move never had.
+    const taking = duringMoves(moved => {
+      if (!moved.contains(text)) return;
+      selection.setBaseAndExtent(prose.firstChild!, 2, prose.firstChild!, 9);
+    });
+    try {
+      await sortPass(viewport);
+      expect(selection.anchorNode).toBe(prose.firstChild);
+      expect(selection.anchorOffset).toBe(2);
+      expect(selection.focusOffset).toBe(9);
+    } finally {
+      taking.release();
+      prose.remove();
     }
   });
 

@@ -94,13 +94,18 @@ Native app. Four corrections, and why each one matters here:
    conversation) and collapses a selection with an endpoint in it. The fallback
    therefore holds the focused node, its caret if it has one, and the
    selection's two endpoints, and restores them after the move — the same
-   nodes, `preventScroll: true`, for the moved subtree only. One check gates
-   focus and selection together: if something took focus while the move
-   happened, a blur handler moved the person into another control with its own
-   caret and its own selection, and neither is put back over it. Held offsets
-   are checked against their nodes' current text first, so a selection that no
-   longer fits is dropped instead of throwing inside the sort. The list's pass
-   is a re-sort, not a scroll, and this keeps it that way.
+   nodes, `preventScroll: true`, for the moved subtree only. What a removal
+   leaves is not an empty selection: the standard relocates a boundary inside
+   the removed subtree to (its parent, the node's old index), and the insertion
+   then shifts boundaries after the insertion point, so that point is computed
+   before the move and recognised as the move's own. One check gates focus and
+   selection together: if something took focus while the move happened, a blur
+   handler moved the person into another control with its own caret and its own
+   selection, and neither is put back over it; a selection made in nodes of
+   somebody else's choosing stays, focus change or not. Held offsets are checked
+   against their nodes' current text first, so a selection that no longer fits
+   is dropped instead of throwing inside the sort. The list's pass is a re-sort,
+   not a scroll, and this keeps it that way.
 4. **Record the padding that was applied, not the padding that was asked
    for.** The scroll-adjust trick writes a temporary end padding and reads it
    back to undo it; recording the requested string instead of the node's own
