@@ -640,7 +640,9 @@ describe("what a decision rests on", () => {
     await click(button("What decisions here rest on"));
     await click(button("Open this proof"));
     expect(text()).toContain("This proof's bytes were released to make room.");
-    expect(text()).toContain("The decision that rests on it stands");
+    expect(text(), "the record is kept; it is the proof that cannot be read").toContain("The record of this decision is kept");
+    expect(text()).toContain("Review the work before relying on this decision.");
+    expect(text(), "and nothing claims the decision is still safe to rely on").not.toContain("stands");
 
     // …and a blob the store cannot answer for at all, which is what a deleted
     // or damaged one looks like from here.
@@ -710,6 +712,8 @@ describe("what a decision rests on", () => {
     getAnswers = [page({ of: "decisions", bindings: [], known: false }, { approvals: [approval()] })];
     await click(named);
     expect(text()).toContain("no record of what this decision rested on");
+    expect(text(), "and no cause is invented for an absence").not.toContain("it was decided before that record was kept");
+    expect(text()).toContain("it may predate the record, or the record may not have survived");
     expect(text()).toContain("Review it again if it matters");
   });
 

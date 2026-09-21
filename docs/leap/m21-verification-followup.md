@@ -1237,3 +1237,102 @@ Host `test/project-work` (311) and protocol (752) were last run green at
 
 **Still the person's (D-342):** how the source reader looks in both themes and
 at both widths, including a long line and a file of one enormous line.
+
+### Bounded is not hidden, and the bytes are read once (parent review of `bedf8b40`)
+
+UI only: `ProofTrail.tsx`, the new `ProofReader.tsx` it renders,
+`verification-model.ts` and the verification UI tests. No host, protocol or
+worker change (`36e163ed` stays the settled backend checkpoint; the D-364
+verification runtime and the canonical quota accounting belong to their own
+owners).
+
+**1 · Every cap pages; nothing captured is unreachable.** A cap on what is
+*shown* had become a cap on what could be *read*: the first twenty retained
+files, the first twenty omission reasons and the five newest decisions were
+all a person could ever reach, with a count of the rest standing in for them.
+Evidence that cannot be opened is not evidence, so each of the three now turns
+a page.
+
+- `proofSourceEntries` and `proofOmissions` return the **whole** index — path,
+  side, note, size, characters, and the reason a file was not kept — and never
+  a body. The index is metadata for at most the hundred sources and five
+  hundred files a capture may hold; `proofPageOf`/`proofPageLine` slice it into
+  pages of `PROOF_CAPTURE_FILES_SHOWN` with `Previous`/`Next` (each carrying
+  the name of the list it turns, for a person who hears the page) and
+  `Files 21–24 of 24.`
+- Decisions are offered `PROOF_DECISIONS_OFFERED` at a time with
+  `Newer`/`Older` and `Decisions 6–6 of 6.`, so the sixth decision can be asked
+  about by name like the first.
+- A page *replaces* the page before it — the previous page's rows are gone from
+  the document, never stacked under the new ones — while the one body a person
+  is reading stays open, because the index moved and the file did not.
+- What is held is unchanged: the bounded index plus **one** file's retained
+  text (a capture file is at most 128 KB). The parsed capture is still a local
+  that goes out of scope, so the four megabytes a capture may hold are never
+  retained, and a page turn re-reads nothing.
+
+**2 · One decode per capture, and it is fatal.** `fetchCapture` used to append
+`decode(page)` per 512 KB page, each with its own `TextDecoder`: a valid
+multi-byte character whose bytes straddled a page boundary was silently turned
+into replacement characters — a proof that reads differently from the source it
+is a proof of. Now the pages are kept as bytes (`proofPageBytes`, strict base64
+rather than `Buffer`'s lossy decode), assembled once, and decoded in a single
+`new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })` pass
+(`proofTextFrom`). Consequences, all of them deliberate:
+
+- bytes that are not valid UTF-8 are a refusal a person is told about — "not
+  the text they are stored as… It may be damaged" — never `\uFFFD` standing in
+  for what the file said;
+- a byte order mark the file itself carries survives into what is read
+  (`ignoreBOM: true`), and JSON that carries one still parses;
+- a page that is not base64 is its own refusal, before any parse;
+- the order of the checks is the honest one: the host's refusal (damaged bytes
+  never come back as a page), then release, then absent bytes;
+- the read is bounded by both the page count (`PROOF_CAPTURE_MAX_PAGES`) **and**
+  this window's own byte count (`PROOF_CAPTURE_MAX_BYTES`), so a server that
+  answers with more than it was asked for still cannot make this surface hold
+  more than 4 MB. Neither limit was raised to make anything fit.
+- `proofSourceWindow` cuts the 2 000-character display parts on whole
+  characters: a surrogate pair is never split, so an emoji is never shown as
+  half of itself, the parts still join back into exactly the retained text, and
+  no part exceeds the bound.
+
+**3 · Copy that does not overclaim.** A proof that cannot be read used to say
+the decision "stands", which reads as "still reliable" precisely when its
+evidence is missing. It now says the **record** of the decision is kept, that
+it is the proof it was made on that cannot be read, and to review the work
+before relying on it. `known: false` no longer invents a cause ("it was decided
+before that record was kept"): the absence may predate the record or the record
+may not have survived, this app does not know which, and it says so. The
+known-empty/unknown distinction and the record/proof separation are unchanged.
+
+**Structure.** The reader came out of `ProofTrail.tsx` into `ProofReader.tsx`
+(opened proof, its two pagers, the source reader); the trail keeps the scope
+key (store identity, project, entity, revision), the generation fence and the
+cursor trail exactly as they were, and `ProofReader` is keyed by blob id so
+opening another proof starts at its first page.
+
+New `packages/ui/test/project-work/proof-reader.test.tsx` (8) drives the real
+`ProofTrail` over the real store against a blob server that pages exactly like
+the host: the twenty-first retained file opened and read out of the bound
+proof, the twenty-first omission and its reason, the sixth decision asked about
+by its own id, a three-byte character placed deliberately across the 512 KB
+boundary read as itself, a blob cut inside a character refused, a page that is
+not base64 refused, a file's own BOM preserved, and parts that never end in
+half a character (re-joined and compared with the source). Each one was checked
+against the previous behaviour: restoring the per-page decode fails three of
+them, restoring the hard slices fails the other three.
+
+| Command | Result |
+| --- | --- |
+| `pnpm install --frozen-lockfile` + `pnpm -r build` | clean |
+| `env -i … pnpm -F @lasercode/ui exec vitest run test/project-work/{native-acceptance,verification,proof-reader}.test.tsx` | 52 passed (44 preserved + 8 new) |
+| `pnpm -F @lasercode/ui typecheck` + `test:types` | clean |
+| `pnpm identity:check` | passes |
+
+Host, protocol and worker suites were not re-run: nothing outside
+`packages/ui` changed. The full gate is the parent's.
+
+**Still the person's (D-342):** how the pagers and the new refusals read in
+both themes and at both widths, including a proof with a hundred files and a
+file of one enormous line.
