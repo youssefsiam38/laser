@@ -19,11 +19,17 @@ import {
   projectWorkRefSchema,
   projectWorkRefText,
   projectWorkRevisionSchema,
+  REPOSITORY_CAPTURE_ATTACH_REASONS,
+  REPOSITORY_CAPTURE_HISTORY_MAX,
+  REQUIRED_PATHS_MAX,
+  repositoryCaptureSchema,
   repositoryLinkSchema,
   sameProjectWorkRevision,
   statesForKind,
   type ProjectWorkEntity,
   type ProjectWorkRef,
+  type RepositoryLinkAcceptance,
+  type RepositoryLinkCaptureRevision,
 } from "../src/project-work.js";
 import {
   DESIGN_FIDELITIES,
@@ -402,6 +408,98 @@ describe("bodies", () => {
     expect(projectTaskBodySchema.safeParse({ ...task.task, assignment: { policy: "agent", agentName: "Builder" } }).success).toBe(true);
     // A Task never embeds a session or run id: attempts are links.
     expect(projectTaskBodySchema.safeParse({ ...task.task, sessionId: "ses_1" }).success).toBe(false);
+  });
+});
+
+describe("a capture says what a decision rests on, and can be read back", () => {
+  const state = { vcs: "git" as const, objectFormat: "sha1" as const, commitObjectId: "a".repeat(40) };
+  const capture = {
+    version: 1 as const,
+    createdAt: "2026-03-01T09:00:00.000Z",
+    repositoryId: "rep_1",
+    state,
+    files: [{ path: "src/a.ts", status: "present" as const, added: null, removed: null }],
+    sources: [{ path: "src/a.ts", bytes: 4, contentDigest: "b".repeat(64), text: "two\n", side: "after" as const }],
+    required: {
+      basis: "attempt_base_to_state" as const,
+      from: { baseCommitObjectId: "c".repeat(40), executionLinkId: "lnk_1", taskEntityId: "ent_1" },
+      entries: [{ path: "src/a.ts", status: "modified" as const, side: "after" as const, contentDigest: "b".repeat(64) }],
+      complete: true as const,
+    },
+  };
+
+  it("parses a capture of a state with its required set, both sides and all", () => {
+    const parsed = repositoryCaptureSchema.safeParse(capture);
+    expect(parsed.success).toBe(true);
+    expect(
+      repositoryCaptureSchema.safeParse({
+        ...capture,
+        sources: [{ ...capture.sources[0]!, side: "before" }],
+        required: { ...capture.required, entries: [{ ...capture.required.entries[0]!, side: "before", status: "deleted" }] },
+      }).success,
+      "a delete is kept by the body at the base, which is a side and says so",
+    ).toBe(true);
+  });
+
+  it("has no half-complete form, and no shape that is both a change and a state", () => {
+    // `complete` exists only as `true`: a capture that could not keep every
+    // source whole is not stored with a weaker flag, the decision is refused.
+    expect(repositoryCaptureSchema.safeParse({ ...capture, required: { ...capture.required, complete: false } }).success).toBe(false);
+    expect(repositoryCaptureSchema.safeParse({ ...capture, required: { ...capture.required, basis: "whatever" } }).success).toBe(false);
+    expect(
+      repositoryCaptureSchema.safeParse({ ...capture, change: { base: state, head: state, diffDigest: "d".repeat(64) } }).success,
+      "exactly one of a change and a state",
+    ).toBe(false);
+    const { state: _state, ...neither } = capture;
+    void _state;
+    expect(repositoryCaptureSchema.safeParse(neither).success).toBe(false);
+  });
+
+  it("bounds the set a decision may rest on", () => {
+    const entries = Array.from({ length: REQUIRED_PATHS_MAX + 1 }, (_, index) => ({
+      path: `src/f-${String(index)}.ts`,
+      status: "added" as const,
+      side: "after" as const,
+      contentDigest: "b".repeat(64),
+    }));
+    expect(repositoryCaptureSchema.safeParse({ ...capture, required: { ...capture.required, entries } }).success).toBe(false);
+  });
+
+  it("names the reasons one capture became a link's proof, and keeps the history bounded", () => {
+    // The vocabulary is closed and each word means one thing: what a link was
+    // written with, a correction taken while a gate was being prepared — which
+    // is never read as a gate that succeeded — and the one association a
+    // migration can honestly attest for a link older than this history
+    // (D-363).
+    expect([...REPOSITORY_CAPTURE_ATTACH_REASONS]).toEqual(["first_capture", "gate_preparation", "legacy_baseline"]);
+    expect(REPOSITORY_CAPTURE_HISTORY_MAX).toBeGreaterThan(0);
+
+    const revision: RepositoryLinkCaptureRevision = {
+      revisionId: "rlc_1",
+      linkId: "lnk_1",
+      blobId: "blb_2",
+      supersedesBlobId: "blb_1",
+      supersedesRevisionId: "rlc_0",
+      attachedAt: "2026-03-01T09:00:00.000Z",
+      seq: 2,
+      reason: "gate_preparation",
+      gate: "Marking this task done",
+      actor: { kind: "person", label: "You" },
+    };
+    expect(revision.supersedesBlobId, "a correction names what it replaced").toBe("blb_1");
+
+    // An acceptance binds the capture it was taken against, so a later
+    // correction of the link's pointer cannot become what a person looked at.
+    const acceptance: RepositoryLinkAcceptance = {
+      kind: "checkpoint_preview",
+      confirmedAt: "2026-03-01T09:00:00.000Z",
+      checkpointRef: "refs/x/checkpoints/s/1",
+      commitObjectId: "a".repeat(40),
+      subjectDigest: "b".repeat(64),
+      acceptedBy: { kind: "person", label: "You" },
+      captureBlobId: "blb_1",
+    };
+    expect(acceptance.captureBlobId).not.toBe(revision.blobId);
   });
 });
 

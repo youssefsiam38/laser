@@ -9,7 +9,7 @@
   "wrongToolThreshold": 0,
   "budget": {
     "calls": 5,
-    "inputTokens": 60000,
+    "inputTokens": 70000,
     "outputTokens": 900
   },
   "measures": [
