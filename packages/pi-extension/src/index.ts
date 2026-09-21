@@ -25,6 +25,10 @@ import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-ag
 import type { AgentHarnessBridge, BackgroundWorkOptions } from "./agents-bridge.js";
 import type { PromptProvenanceObserver } from "./prompt-provenance.js";
 export { createPromptProvenanceObserver, recordInstructionWrite } from "./prompt-provenance.js";
+// The one door every Laser tool goes through (D-350), exported so a
+// conformance fixture can read a tool's spec without starting a session.
+export { LaserToolFailure, laserToolSpec, registerLaserTool, toolFailure } from "./register-tool.js";
+export type { LaserToolDefinition, LaserToolExecute, LaserToolRecovery } from "./register-tool.js";
 import { WIRE_NAMESPACE, type ProviderCaptureLink, type RuntimeFailure, type RuntimeFailureCategory, type RuntimeFailureStage } from "@lasercode/protocol";
 import {
   modules,
