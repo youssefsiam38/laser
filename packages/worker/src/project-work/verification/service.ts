@@ -272,16 +272,27 @@ export class VerificationService {
    * *publishing*, not the work — and that is the point. Without it, closing a
    * driver would make a live host write invisible to the one predicate that
    * decides whether this whole worker may retire, and the process could end
-   * in the middle of writing a project's record.
+   * in the middle of writing a project's record. A conversation that is open
+   * again at the same path is the same case: its new runtime's fleet index is
+   * empty, so the work is owed and nothing there accounts for it.
+   *
+   * What is answered is the **identities** — each run's own fleet task id —
+   * and not a count, because the caller has to tell owed work apart from work
+   * its own index is already pinning the session for. A number cannot be
+   * deduplicated: it would either pin a running run twice or, if the caller
+   * guessed, drop a pin that was the only thing standing between a live host
+   * write and this process ending.
    */
-  unsettledWork(): Array<{ sessionPath: string; runs: number }> {
-    const byPath = new Map<string, number>();
+  unsettledWork(): Array<{ sessionPath: string; taskIds: string[] }> {
+    const byPath = new Map<string, string[]>();
     for (const held of this.runs.values()) {
       if (held.settled === true) continue;
-      const path = held.run.snapshot().sessionPath;
-      byPath.set(path, (byPath.get(path) ?? 0) + 1);
+      const state = held.run.snapshot();
+      const owed = byPath.get(state.sessionPath);
+      if (owed) owed.push(state.fleetTaskId);
+      else byPath.set(state.sessionPath, [state.fleetTaskId]);
     }
-    return [...byPath].map(([sessionPath, runs]) => ({ sessionPath, runs }));
+    return [...byPath].map(([sessionPath, taskIds]) => ({ sessionPath, taskIds }));
   }
 
   /**

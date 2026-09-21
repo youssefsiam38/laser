@@ -228,6 +228,18 @@ export function VerificationPanel({
    * words the run's own line uses, from the same state.
    */
   const settling = running && (run.stopping === true || run.phase === "reporting");
+  /**
+   * Something has gone wrong in a run that has **not** ended: a command this
+   * app asked to stop is still there, or its output has not closed.
+   *
+   * The run's own state carries the sentence, so it is shown while it is true
+   * and gone when the run settles — from the same poll the live line comes
+   * from, with no second copy to go stale. There is nothing to retry: the run
+   * is still going, and Verify… is disabled for exactly that reason, so the
+   * block says what is being waited for instead of offering an act that
+   * cannot happen.
+   */
+  const waiting = running ? run.problem : undefined;
 
   return (
     <Section title="Verification">
@@ -261,6 +273,13 @@ export function VerificationPanel({
       <p role="status" aria-live="polite" data-slot="verification-progress" className="min-h-5 text-sm leading-5 text-ink-2">
         {running ? run.line : ""}
       </p>
+
+      {waiting ? (
+        <WorkRefusal
+          message={waiting}
+          recovery="Nothing has been recorded yet. This run stays open, and stays in the fleet, until that work closes."
+        />
+      ) : null}
 
       {problem ? (
         <WorkRefusal

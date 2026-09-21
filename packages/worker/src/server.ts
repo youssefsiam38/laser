@@ -2792,14 +2792,36 @@ export class WorkerServer {
    * mid-flight to the host. Ending this process there would cut a project's
    * own record in half, so the lifetime hears about it as a pin, in the one
    * vocabulary that decides both release and retirement. Nothing is published,
-   * reopened or re-created to say it: the registry is read, and a run whose
-   * conversation is still loaded is left to that session's own pins.
+   * reopened or re-created to say it: the registry is read, and a run this
+   * worker's own fleet index already counts is left to that session's pins.
+   *
+   * Which is the whole of the deduplication, and why it is by identity: a
+   * conversation can be **open again at the same path** after an unexpected
+   * close — a person clicked back into it, or the host reloaded it — and that
+   * new runtime's fleet index is empty, because a detached run publishes
+   * nothing. "This path is loaded" therefore says nothing about whether the
+   * work is accounted for. Each owed run is matched against the exact row id
+   * the index is holding for that path: the ones it is already pinning the
+   * session for are dropped here, so nothing is counted twice, and the ones it
+   * has never heard of are reported, so nothing is silently unpinned.
    */
   private detachedWork(): SessionSafety[] {
-    return (this.verificationRuns?.unsettledWork() ?? []).map((owed) => ({
-      path: owed.sessionPath,
-      pins: [{ kind: "task" as const, detail: `${String(owed.runs)} verification run(s) still settling` }],
-    }));
+    const out: SessionSafety[] = [];
+    for (const owed of this.verificationRuns?.unsettledWork() ?? []) {
+      const counted = new Set(
+        this.tasks
+          .tasksOf(owed.sessionPath)
+          .filter((task) => task.status === "running")
+          .map((task) => task.id),
+      );
+      const unaccounted = owed.taskIds.filter((id) => !counted.has(id)).length;
+      if (unaccounted === 0) continue;
+      out.push({
+        path: owed.sessionPath,
+        pins: [{ kind: "task" as const, detail: `${String(unaccounted)} verification run(s) still settling` }],
+      });
+    }
+    return out;
   }
 
   /**

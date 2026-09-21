@@ -27,7 +27,11 @@ import { isVerificationFleetTaskId, type BackgroundTask } from "@lasercode/proto
 import type { ProjectWorkBridge, ProjectWorkExecutionShape, ProjectWorkSessionIdentity } from "../../src/project-work/bridge.js";
 import { ProjectWorkToolFailure } from "../../src/project-work/bridge.js";
 import { VerificationRefused } from "../../src/project-work/verification/service.js";
-import { killVerificationTree, runVerificationCommand } from "../../src/project-work/verification/commands.js";
+import {
+  COMMAND_STILL_RUNNING_PROBLEM,
+  killVerificationTree,
+  runVerificationCommand,
+} from "../../src/project-work/verification/commands.js";
 import { VERIFICATION_RUNS_KEPT } from "../../src/project-work/verification/service.js";
 import { VerificationService } from "../../src/project-work/verification/service.js";
 import { verifyProjectTask } from "../../src/project-work/verification/tools.js";
@@ -604,6 +608,104 @@ describe("a stop, and the ending it does not publish early", () => {
   });
 });
 
+describe("a command this app could not stop, while the run is still going", () => {
+  /**
+   * The one thing a person watching a stuck run needs, and the one thing it
+   * must not become.
+   *
+   * A command whose tree would not end, or whose output will not close, is
+   * *live work*: the record is not made, the pin is not released and the row
+   * is still a running one. What the app owes the person is the reason, in
+   * the state they are already watching — not a line on stderr they will
+   * never see, and not a fabricated ending.
+   */
+  it("puts the reason in the run's own visible state, settles nothing, and drops the sentence once the work really closes", async () => {
+    const host = new BarrierHost(["pnpm test"]);
+    const commandGate = deferred();
+    const rows: Array<{ sessionPath: string; task: BackgroundTask }> = [];
+    const service = new VerificationService({
+      bridgeFor: () => host,
+      holdsSession: () => true,
+      publishTask: (sessionPath, task) => rows.push({ sessionPath, task }),
+      // The runner's own seam, saying exactly what the real one says when a
+      // kill is refused. The command has *not* ended: it goes on until the
+      // gate opens, which is what a tree that would not die looks like.
+      runner: async ({ command, onProblem }) => {
+        onProblem?.(COMMAND_STILL_RUNNING_PROBLEM.cannotEnd("EPERM"));
+        await commandGate.promise;
+        return {
+          command,
+          status: "passed" as const,
+          exitCode: 0,
+          startedAt: "2026-03-01T09:00:00.000Z",
+          endedAt: "2026-03-01T09:00:01.000Z",
+          outputBytes: 0,
+          outputDigest: "d".repeat(64),
+          tail: "",
+        };
+      },
+    });
+    const started = service.start({ cwd: repository(), key: "TASK-1", sessionPath: SESSION });
+    host.planGate.resolve();
+    await until(
+      "the run said why it is still going",
+      () => service.state({ cwd: "x", runId: started.runId })[0]!.problem !== undefined,
+    );
+
+    const live = service.state({ cwd: "x", runId: started.runId })[0]!;
+    expect(live.problem, "what the app could not do").toContain("could not be stopped");
+    expect(live.problem, "with the platform's own code and no more").toContain("EPERM");
+    expect(live.problem, "and nothing the command read or where it ran").not.toContain("pnpm test");
+    expect(live.phase, "the run has not ended: an unstoppable command is live work").toBe("running");
+    expect(live.endedAt, "so nothing says when it ended").toBeUndefined();
+    expect(live.report, "and no report was invented from a diagnostic").toBeUndefined();
+    expect(service.hasUnsettled(SESSION), "the conversation is still pinned").toBe(true);
+    expect(service.unsettledWork(), "and the worker still owes this path exactly one run").toEqual([
+      { sessionPath: SESSION, taskIds: [started.fleetTaskId] },
+    ]);
+    expect(rows.at(-1)!.task.status, "the fleet row is still a running one").toBe("running");
+    expect(rows.every((row) => row.task.error === undefined), "no failure was published for work that has not failed").toBe(true);
+
+    // It really closes.
+    commandGate.resolve();
+    host.reportGate.resolve();
+    await until("the run settled", () => service.state({ cwd: "x", runId: started.runId })[0]!.phase === "done");
+    const settled = service.state({ cwd: "x", runId: started.runId })[0]!;
+    expect(settled.problem, "“still waiting to close” is not true of a run that closed").toBeUndefined();
+    expect(settled.report, "and what it proved was recorded").toBeDefined();
+    expect(service.hasUnsettled(SESSION), "nothing is owed any more").toBe(false);
+  });
+
+  it("keeps the problem the ending itself carries, rather than clearing it with the live one", async () => {
+    const host = new BarrierHost(["pnpm test"]);
+    const service = new VerificationService({
+      bridgeFor: () => host,
+      holdsSession: () => true,
+      runner: async ({ command, onProblem }) => {
+        onProblem?.(COMMAND_STILL_RUNNING_PROBLEM.lingering);
+        return {
+          command,
+          status: "passed" as const,
+          exitCode: 0,
+          startedAt: "2026-03-01T09:00:00.000Z",
+          endedAt: "2026-03-01T09:00:01.000Z",
+          outputBytes: 0,
+          outputDigest: "e".repeat(64),
+          tail: "",
+        };
+      },
+    });
+    const started = service.start({ cwd: repository(), key: "TASK-1", sessionPath: SESSION });
+    host.planGate.resolve();
+    await until("the report was dispatched", () => host.reportCalls === 1);
+    host.reportGate.reject(new Error("The app could not reach this project's work."));
+    await until("the run settled", () => service.state({ cwd: "x", runId: started.runId })[0]!.phase === "failed");
+    const state = service.state({ cwd: "x", runId: started.runId })[0]!;
+    expect(state.problem, "the ending's own reason is the one a person needs").toContain("could not reach");
+    expect(state.problem, "and it is not overwritten by a sentence about waiting").not.toContain("still has its output open");
+  });
+});
+
 describe("the conversation a run belongs to", () => {
   it("follows a fork, republishes once under the new path and never names the old one again", async () => {
     const host = new BarrierHost(["pnpm test"]);
@@ -1142,6 +1244,175 @@ describe("ending a process tree this worker owns", () => {
     child.close(null, "SIGKILL");
     const run = await running;
     expect(run.status, "and the record is still made if the tree does go").toBe("stopped");
+  });
+});
+
+/**
+ * Anything that escaped to the process while the body ran.
+ *
+ * A diagnostic in an abort listener or an asynchronous kill callback has
+ * nobody above it to catch a throw: it leaves as a worker-wide unhandled
+ * error, carrying whatever a project's own command printed, and the run it
+ * was about is left with no record and nobody waiting on its promise.
+ */
+async function withNoGlobalErrors(what: string, body: () => Promise<void>): Promise<void> {
+  const escaped: unknown[] = [];
+  const onEscape = (error: unknown): void => {
+    escaped.push(error);
+  };
+  process.on("unhandledRejection", onEscape);
+  process.on("uncaughtException", onEscape);
+  try {
+    await body();
+  } finally {
+    process.off("unhandledRejection", onEscape);
+    process.off("uncaughtException", onEscape);
+  }
+  expect(
+    escaped.map((error) => (error instanceof Error ? error.message : String(error))),
+    what,
+  ).toEqual([]);
+}
+
+/**
+ * A sink that takes what it is given and then breaks.
+ *
+ * Both halves matter: the message is asserted, *and* the failure is real. A
+ * double that only threw could not prove the sentence was the right one, and
+ * one that only recorded could not prove a broken observer decides nothing.
+ */
+function brokenSink(seen: string[], why: string): (line: string) => void {
+  return (line: string) => {
+    seen.push(line);
+    throw new Error(why);
+  };
+}
+
+describe("what a stuck command tells, and who it cannot take down with it", () => {
+  it("reports a kill the platform refused on the spot, and is not derailed by sinks that throw", async () => {
+    await withNoGlobalErrors("nothing escaped from an abort listener", async () => {
+      const { child, as } = inert();
+      const controller = new AbortController();
+      const logged: string[] = [];
+      const problems: string[] = [];
+      let settled = false;
+      const running = runVerificationCommand({
+        command: "pnpm test",
+        cwd: "/tmp",
+        signal: controller.signal,
+        spawnProcess: () => as,
+        killTree: () => {
+          const error: NodeJS.ErrnoException = new Error("kill EPERM");
+          error.code = "EPERM";
+          throw error;
+        },
+        log: brokenSink(logged, "this worker's log is broken"),
+        onProblem: brokenSink(problems, "whoever was watching is broken"),
+      }).then((run) => {
+        settled = true;
+        return run;
+      });
+      await turn();
+      // Synchronous, in this test's own stack: the listener runs here, and a
+      // throw from either sink would leave from here.
+      expect(() => controller.abort()).not.toThrow();
+      await turn();
+
+      expect(problems, "the person watching is told, once").toHaveLength(1);
+      expect(problems[0]).toBe(COMMAND_STILL_RUNNING_PROBLEM.cannotEnd("EPERM"));
+      expect(problems[0], "in words about what is happening now").toContain("still running");
+      expect(problems[0], "and nothing the command read, ran or ran in").not.toContain("pnpm test");
+      expect(logged, "and the bounded line was still attempted").toHaveLength(1);
+      expect(settled, "no record is made: nothing witnessed an exit").toBe(false);
+
+      // The tree does go in the end, and the record is the close's.
+      child.close(null, "SIGKILL");
+      const run = await running;
+      expect(run.status, "a broken observer changed nothing about the run").toBe("stopped");
+      expect(run.detail).toContain("You stopped");
+    });
+  });
+
+  it("reports a kill that failed after it returned — the Windows shape — through sinks that throw", async () => {
+    await withNoGlobalErrors("nothing escaped from the kill's own callback", async () => {
+      const { child, as } = inert();
+      const controller = new AbortController();
+      const logged: string[] = [];
+      const problems: string[] = [];
+      let settled = false;
+      const running = runVerificationCommand({
+        command: "pnpm test",
+        cwd: "/tmp",
+        signal: controller.signal,
+        spawnProcess: () => as,
+        // `taskkill` is another process: the call returns, and the refusal
+        // arrives later, in a microtask with nobody above it.
+        killTree: (_child, onProblem) => {
+          void Promise.resolve().then(() => onProblem("EPERM"));
+        },
+        log: brokenSink(logged, "this worker's log is broken"),
+        onProblem: brokenSink(problems, "whoever was watching is broken"),
+      }).then((run) => {
+        settled = true;
+        return run;
+      });
+      await turn();
+      controller.abort();
+      await turn();
+      await turn();
+
+      expect(problems, "a refusal that arrives late is still told").toHaveLength(1);
+      expect(problems[0]).toBe(COMMAND_STILL_RUNNING_PROBLEM.cannotEnd("EPERM"));
+      expect(logged).toHaveLength(1);
+      expect(settled, "and a kill that failed is not an exit, whenever its failure arrives").toBe(false);
+
+      child.close(null, "SIGKILL");
+      const run = await running;
+      expect(run.status).toBe("stopped");
+    });
+  });
+
+  it("says the output has not closed, and the timer that says it takes nothing down", async () => {
+    vi.useFakeTimers();
+    try {
+      await withNoGlobalErrors("nothing escaped from the waiting timer", async () => {
+        const { child, as } = inert();
+        const logged: string[] = [];
+        const problems: string[] = [];
+        let settled = false;
+        const running = runVerificationCommand({
+          command: "pnpm test",
+          cwd: "/tmp",
+          stdioGraceMs: 500,
+          spawnProcess: () => as,
+          killTree: () => {},
+          log: brokenSink(logged, "this worker's log is broken"),
+          onProblem: brokenSink(problems, "whoever was watching is broken"),
+        }).then((run) => {
+          settled = true;
+          return run;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        child.say("before it exited\n");
+        child.emit("exit", 0, null);
+        await vi.advanceTimersByTimeAsync(5_000);
+
+        expect(problems, "the wait is explained where a person is watching").toHaveLength(1);
+        expect(problems[0]).toBe(COMMAND_STILL_RUNNING_PROBLEM.lingering);
+        expect(problems[0], "and carries nothing the command printed").not.toContain("before it exited");
+        expect(logged).toHaveLength(1);
+        expect(settled, "no clock settles a run, and no broken sink settles one either").toBe(false);
+
+        child.say("the line that says why\n");
+        child.emit("close", 0, null);
+        await vi.advanceTimersByTimeAsync(0);
+        const run = await running;
+        expect(run.status, "the close is what records it, with every byte").toBe("passed");
+        expect(run.outputBytes).toBe(Buffer.byteLength("before it exited\nthe line that says why\n"));
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

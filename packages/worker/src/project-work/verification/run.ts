@@ -89,6 +89,16 @@ export class VerificationRun {
   private reportDispatched = false;
   /** One run runs once: starting it and awaiting it are the same run. */
   private running: Promise<VerificationRunState> | undefined;
+  /**
+   * What a command that is still there told this run, in words.
+   *
+   * A problem about work **in flight** — the tree would not end, the output
+   * has not closed — and never an ending: it is shown while it is true and
+   * dropped when the run settles, because "still waiting to close" is not
+   * what happened to a run that has closed. Kept so settlement can tell this
+   * sentence apart from a problem the ending itself carries.
+   */
+  private liveProblem: string | undefined;
 
   constructor(private readonly options: VerificationRunOptions) {
     this.id = mintRunId();
@@ -221,6 +231,11 @@ export class VerificationRun {
   private settle(over: Partial<VerificationRunState> & { phase: VerificationRunState["phase"] }): VerificationRunState {
     const { stopping: _stopping, ...rest } = { ...this.state, ...over };
     void _stopping;
+    // A live command's problem was about something that had not happened yet:
+    // a tree that would not end, output that had not closed. This run has now
+    // ended, so that sentence is no longer true of it and goes — unless the
+    // ending brought a problem of its own, which is the one a person needs.
+    if (over.problem === undefined && this.liveProblem !== undefined && rest.problem === this.liveProblem) delete rest.problem;
     this.state = { ...rest, line: verificationRunLine(rest) };
     this.options.onProgress?.(this.state);
     return this.state;
@@ -289,12 +304,31 @@ export class VerificationRun {
         command,
         cwd: this.options.cwd,
         signal: this.controller.signal,
+        onProblem: (problem) => this.noteLiveProblem(problem),
         ...(this.options.now ? { now: this.options.now } : {}),
       });
       results.push(result);
       this.publish({ commandsRun: this.state.commandsRun + 1 });
     }
     return results;
+  }
+
+  /**
+   * A command this run is still waiting on has something to say (M21-T19).
+   *
+   * It reaches the state a person is already watching, and it changes nothing
+   * else: no phase, no ending, no report, no release of the pin this run
+   * holds on its conversation. The run is genuinely still going, and this is
+   * the honest reason it has not finished. A sentence that arrives after the
+   * run has ended is dropped rather than contradicting a settled record, and
+   * the same sentence twice is not published twice.
+   */
+  private noteLiveProblem(problem: string): void {
+    if (isVerificationPhaseTerminal(this.state.phase)) return;
+    const text = problem.trim().slice(0, 500);
+    if (text === "" || text === this.liveProblem) return;
+    this.liveProblem = text;
+    this.publish({ problem: text });
   }
 
   /** Hand the facts to the host, and take back what it decided. */

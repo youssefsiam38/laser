@@ -181,6 +181,43 @@ describe("stopping a verification run", () => {
     expect(hostCalls.some((call) => call.method === "pi/project/verify/stop"), "and asks for nothing").toBe(false);
   });
 
+  it("shows why a run that will not stop is still going, and stops saying it once the work closes", async () => {
+    // The state a worker publishes when a command's process tree refused to
+    // end: the run has *not* finished, nothing has been recorded, and the app
+    // knows exactly why. Saying nothing here leaves a person watching a live
+    // line that never changes.
+    const stuck =
+      "This run's command could not be stopped (EPERM), so it is still running. The run stays open until that process closes \u2014 nothing has been recorded for it.";
+    await started(runState({ phase: "running", stopping: true, problem: stuck, line: "Stopping \u2014 ending this run's commands" }));
+
+    const alert = [...document.body.querySelectorAll("[role='alert']")].find((node) => (node.textContent ?? "").includes("EPERM"));
+    expect(alert, "the reason reaches the person watching, not only a log").toBeDefined();
+    expect(alert!.textContent, "in words about what is happening now").toContain("could not be stopped");
+    expect(alert!.textContent, "and it says nothing was recorded, because nothing was").toContain("Nothing has been recorded");
+    expect(alert!.querySelector("button"), "there is nothing to retry: the run is still going").toBeNull();
+    expect(
+      buttons().find((node) => (node.textContent ?? "").includes("Verify"))!.disabled,
+      "so no second run is offered either",
+    ).toBe(true);
+    expect(
+      document.querySelector("[data-slot='verification-progress']")?.textContent,
+      "the live line is still the run's own",
+    ).toContain("Stopping");
+
+    // The work really closes: the run ends, and a sentence about waiting is
+    // not true of it any more.
+    hostAnswers["pi/project/verify/state"] = {
+      runs: [runState({ phase: "done", endedAt: "2026-03-01T09:05:00.000Z", line: "Verification of TASK-44 finished" })],
+    };
+    await act(async () => {
+      await settle(30);
+    });
+    expect(
+      [...document.body.querySelectorAll("[role='alert']")].some((node) => (node.textContent ?? "").includes("EPERM")),
+      "the waiting is over, so the app stops saying it is waiting",
+    ).toBe(false);
+  });
+
   it("shows the run's own line while it winds up, so the wait is never silent", async () => {
     await started(runState({ stopping: true, line: "Stopping — ending the commands and writing what this run proved" }));
     const live = document.querySelector("[data-slot='verification-progress']");

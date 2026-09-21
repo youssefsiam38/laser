@@ -682,3 +682,91 @@ parent's gate, not this session's. Browser acceptance remains the person's
 mints ids that cannot repeat across a restarted module registry, and the host
 test shows what a repeated key really does to the record — but no test starts
 two real worker processes.
+
+## The parent's two follow-up holes, as implemented
+
+The same approved batch, finished by a second owner on a tree that merges the
+whole of `13514908` (and therefore `33d3163e` and `59468295`) into the parent.
+The contract is the *Parent follow-up* section of
+[`m21-verification-runtime-corrections.md`](m21-verification-runtime-corrections.md).
+
+**Claim above that is superseded.** Finding 4's *"any such path no loaded
+runtime already accounts for"* was read as *"any path that is not loaded"*,
+which is not the same sentence. A conversation can be opened again at the
+path an unexpected close just took down; the new runtime's fleet index is
+empty because the detached run publishes nothing into it, so the session's own
+pins said nothing was owed while a report was still being written. Safety is
+now the union of a session's own pins **and** the work owed under its path,
+deduplicated by the exact fleet row identities the index is holding.
+
+1. *Owed work survives a reload.* `unsettledWork()` answers the run
+   **identities** per owning path, not a count — a number cannot be
+   deduplicated. `server.detachedWork()` drops every owed run that this
+   worker's own task index already lists as running under that path, so a live
+   session is pinned once by its own row and never twice.
+   `WorkerLifetime.pinsOf()` is the one place both halves are read, and it is
+   what `safety()`, `unload()`'s first check and `unload()`'s recheck inside
+   the release fence all use; `retire()` still re-reads `safety()` under the
+   retirement fence after accepted handlers drain. Nothing is published,
+   reopened or re-created: a detached run stays detached across a reload, so
+   no row appears under a path its own conversation no longer serves, and a
+   fork is still the other case entirely.
+2. *Command diagnostics cannot own settlement, and the problem is visible.*
+   `commands.ts` now speaks through two guarded sinks: `note` for the bounded
+   log line and `raise` for a new `onProblem` callback. Both are called from
+   an abort listener and from an asynchronous kill callback, where a throw had
+   nobody above it and would have left as a worker-wide unhandled error with
+   the run unrecorded. `COMMAND_STILL_RUNNING_PROBLEM` holds the two sentences
+   — *could not be stopped … still running* and *something it started still
+   has its output open* — each carrying at most the platform's own short code,
+   never the command, its output, a path, a stack or an error's own words.
+   `VerificationRun` publishes that sentence into its existing `problem`
+   field: no phase change, no ending, no report, no release of the pin. It is
+   dropped at settlement unless the ending brought a problem of its own,
+   because "still waiting to close" is not true of a run that closed.
+   `VerificationPanel` shows it while the run is running, with no retry — the
+   run is still going and Verify… is disabled for that reason.
+
+### Evidence (follow-up)
+
+| Command | Result |
+| --- | --- |
+| `pnpm install --frozen-lockfile`, `pnpm -r build` | ok, all packages built |
+| worker: `vitest run test/project-work test/session-safety.test.ts test/session-unload.test.ts test/session-retire.test.ts test/server.test.ts test/process-guards.test.ts` | 203 passed (11 files) |
+| protocol: `vitest run test/project-work-verification.test.ts` | 19 passed, no type errors |
+| ui: `vitest run test/project-work/verification.test.tsx test/project-work/native-acceptance.test.tsx test/project-work/proof-reader.test.tsx test/project-work/verification-stop.test.tsx` | 57 passed |
+| `typecheck` (worker, ui), `pnpm identity:check`, `pnpm direction:check` | clean |
+
+Seven new tests, each seen red against the unfixed source before it was kept:
+
+- `verify-server.test.ts` — crash → `session/load` at the **same path** →
+  `pi/worker/safety` holds one `task` pin for that conversation → `unload`
+  refused → `retire explicit` and `retire automatic` refused → plan and report
+  answered → nothing republished → pin gone → unload and retirement allowed.
+  Red without the merge (`expected [] to have a length of 1`).
+- `verify-server.test.ts` — a run this worker's own index is already pinning is
+  counted exactly once. Red with the deduplication removed (`+ 2`).
+- `verification.test.ts` — a stuck command's sentence reaches the run's
+  visible state while the phase stays `running`, `unsettledWork()` still owes
+  the path, the row is still a running one with no `error`, and the sentence is
+  gone once the run really settles. Red without the `onProblem` wiring.
+- `verification.test.ts` — the ending's own problem is not cleared by the live
+  one.
+- `verification.test.ts` × 3 — a synchronous kill refusal, the asynchronous
+  Windows-shaped one, and the lingering-output timer, each with a log **and** a
+  watcher that record and then throw: no `unhandledRejection` or
+  `uncaughtException` escapes, the run is unsettled, and the record is still
+  made from the real `close`. All three red with the sinks unguarded.
+- `verification-stop.test.tsx` — the live problem is shown with no retry while
+  the run is going, and stops being shown when it settles. Red without the
+  panel change.
+
+**Limits (follow-up).** Same gate boundary: no full suite and no `pnpm verify`
+here. No host, protocol, store or accounting file was touched, so no host test
+was re-run in this session. Termination failures and lingering output are
+driven through the runner's seams with inert doubles — there is still no test
+that ends a real process tree, and the reload case is proved through
+`WorkerServer`'s own dispatch with a fake driver, not a real engine.
+`releaseEphemeralCaches` still reads only a session's own snapshot: it decides
+whether a `git status` memo is dropped, not whether a runtime or this process
+goes away, and it was deliberately left alone.

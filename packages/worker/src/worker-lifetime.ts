@@ -83,6 +83,13 @@ export interface WorkerLifetimeDeps<Live extends LifetimeSession> {
    * predicate that decides retirement sees it exactly as it sees a running
    * command of a live session. Nothing here publishes, reopens or re-creates
    * anything; it is read.
+   *
+   * The rows are **not** "paths that are not loaded": the answer has already
+   * dropped every run the caller's own fleet index accounts for, so what is
+   * left is owed whether or not a conversation is open at that path. A path
+   * that is loaded again after an unexpected close is exactly the case that
+   * needs it: the new runtime's index is empty, and its own pins would say
+   * the session is free while a report is still being written.
    */
   detachedWork?: () => SessionSafety[];
 }
@@ -110,7 +117,11 @@ export class WorkerLifetime<Live extends LifetimeSession> {
       }
       out.push(row);
     };
-    for (const live of this.deps.runtimes.values()) add({ path: live.path, pins: sessionPins(this.deps.safetySnapshot(live)) });
+    // Read once for the whole answer: it is the same moment for every row,
+    // and a per-session re-read would ask the fleet index the same question
+    // once per loaded conversation.
+    const owed = this.owedWork();
+    for (const live of this.deps.runtimes.values()) add({ path: live.path, pins: this.pinsOf(live, false, owed) });
     const listed = new Set(out.map((row) => row.path));
     for (const path of this.deps.runtimes.openPaths()) {
       if (!listed.has(path)) {
@@ -124,15 +135,43 @@ export class WorkerLifetime<Live extends LifetimeSession> {
         listed.add(path);
       }
     }
-    // Last, and only for what the loop above did not already account for: a
-    // conversation that is still loaded reports its work through its own pins,
-    // and one row per path is what a diagnostic can read.
-    for (const row of this.deps.detachedWork?.() ?? []) {
+    // Last: work no runtime accounts for. A path that is loaded already has a
+    // row — its own pins are there, and the owed pins were added with them by
+    // `pinsOf` — so what is left here is the paths this worker owes something
+    // under and holds no runtime for. One row per path, which is what a
+    // diagnostic can read.
+    for (const row of owed) {
       if (listed.has(row.path) || row.pins.length === 0) continue;
       add(row);
       listed.add(row.path);
     }
     return { sessions: out, complete };
+  }
+
+  /** Every owed row, once, whatever the caller does with it. */
+  private owedWork(): SessionSafety[] {
+    return this.deps.detachedWork?.() ?? [];
+  }
+
+  /**
+   * Everything one session holds: its own snapshot's pins, **plus** the work
+   * this worker owes under its path that nothing there accounts for.
+   *
+   * Both halves, in one place, because release and retirement have to read the
+   * same list. A conversation that closed unexpectedly and was then opened
+   * again at the same path is served by a new runtime with an empty fleet
+   * index, while the run the old one left behind is still draining its command
+   * and may still be writing its report. Reading only the snapshot would call
+   * that session free and release it — or end this process — under a live host
+   * write. The owed rows are already deduplicated by the row identities the
+   * index is holding, so a run that *is* counted there is not pinned twice.
+   */
+  private pinsOf(live: Live, releasing = false, owed: SessionSafety[] = this.owedWork()): SessionPin[] {
+    const pins = sessionPins(this.deps.safetySnapshot(live, releasing));
+    for (const row of owed) {
+      if (row.path === live.path) pins.push(...row.pins);
+    }
+    return pins;
   }
 
   /**
@@ -148,7 +187,7 @@ export class WorkerLifetime<Live extends LifetimeSession> {
     // Not held here at all: idempotent, and never an error. The host may be
     // acting on bookkeeping a crash recovery already changed.
     if (!live) return { unloaded: false, pins: [] };
-    const pins = sessionPins(this.deps.safetySnapshot(live));
+    const pins = this.pinsOf(live);
     if (pins.length > 0) return { unloaded: false, pins };
     try {
       // From here the path is fenced: a request naming this session is refused
@@ -162,7 +201,7 @@ export class WorkerLifetime<Live extends LifetimeSession> {
           // Re-checked under both fences: preflight, a queued message or a
           // handler accepted before the fence may have taken the session
           // between the first check and here.
-          const held = sessionPins(this.deps.safetySnapshot(current, true));
+          const held = this.pinsOf(current, true);
           if (held.length > 0) return { unloaded: false, pins: held };
           // Somebody asked for this conversation while the fence was closed.
           // They were refused with a retryable sentence, and this is the other

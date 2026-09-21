@@ -86,7 +86,35 @@ export interface RunCommandOptions {
   killTree?: (child: ChildProcess, onProblem: (code: string) => void) => void;
   /** One bounded diagnostic line. Never the command, never its output. */
   log?: (line: string) => void;
+  /**
+   * Something a person watching this run should be told while it is still
+   * happening: the tree would not end, or its output has not closed.
+   *
+   * A sentence, bounded and written here — never a command line, a path, a
+   * byte of output or an error's own words. It is deliberately *not* an
+   * ending: this command is still unsettled, its session is still pinned and
+   * its record will still be made from the close when the close comes. An
+   * observer that throws changes none of that (see {@link RunCommandOptions.log}):
+   * a diagnostic does not decide whether work settles.
+   */
+  onProblem?: (problem: string) => void;
 }
+
+/**
+ * What a person is told while a command this app asked to end is still there.
+ *
+ * Two sentences, and both of them true of a run that has *not* finished: what
+ * the app could not do, and what it is now waiting for. Neither carries the
+ * command, its output, a path or an error's message — the platform's own short
+ * code is the most a refusal says, because a code is a fact and a message is
+ * a sentence somebody else wrote about this machine.
+ */
+export const COMMAND_STILL_RUNNING_PROBLEM = {
+  cannotEnd: (code: string) =>
+    `This run's command could not be stopped (${code}), so it is still running. The run stays open until that process closes — nothing has been recorded for it.`,
+  lingering:
+    "This command has ended, but something it started still has its output open. The run stays open until that closes — nothing has been recorded for it.",
+} as const;
 
 /** One command, as a run records it. A seam, so a test can script pass/fail. */
 export type VerificationCommandRunner = (options: RunCommandOptions) => Promise<VerificationCommandRun>;
@@ -220,7 +248,33 @@ export const runVerificationCommand: VerificationCommandRunner = async (options)
   const output = new BoundedOutput();
   const timeoutMs = options.timeoutMs ?? VERIFICATION_COMMAND_TIMEOUT_MS;
   const graceMs = options.stdioGraceMs ?? VERIFICATION_STDIO_GRACE_MS;
-  const log = options.log ?? ((line: string) => console.error(line));
+  /**
+   * Say one bounded line, and survive a sink that cannot take it.
+   *
+   * Every caller of this is somewhere a failure has *already* happened: a
+   * kill that was refused, or output that will not close. Those places run
+   * inside an abort listener and inside an asynchronous kill callback, where a
+   * throw has nobody to catch it — it would escape as a worker-wide unhandled
+   * error, and the run it was about would be left with no record made and no
+   * one waiting on its promise. So the observer is guarded, exactly as the
+   * registry's is: a diagnostic never decides whether work settles.
+   */
+  const note = (line: string): void => {
+    try {
+      (options.log ?? ((text: string) => console.error(text)))(line);
+    } catch {
+      // Nothing left to say it with, and nothing here depends on having said
+      // it. The command's own lifecycle is untouched.
+    }
+  };
+  /** Tell whoever is watching, and survive them too. Same rule as `note`. */
+  const raise = (problem: string): void => {
+    try {
+      options.onProblem?.(problem);
+    } catch {
+      // An observer that threw has lost this sentence, not this run.
+    }
+  };
 
   const record = (status: VerificationCommandRun["status"], exitCode?: number, detail?: string): VerificationCommandRun => {
     const bounded = output.done();
@@ -328,7 +382,11 @@ export const runVerificationCommand: VerificationCommandRunner = async (options)
     const cannotEnd = (error: unknown): void => {
       if (settled || terminationProblem !== undefined) return;
       terminationProblem = terminationCode(error);
-      log(`a verification command's process tree could not be ended (${terminationProblem}); the run stays unsettled until it closes`);
+      note(`a verification command's process tree could not be ended (${terminationProblem}); the run stays unsettled until it closes`);
+      // And to the person watching, not only to a log they will never open: a
+      // run that sits there with a live line and no explanation is the app
+      // knowing something and not saying it.
+      raise(COMMAND_STILL_RUNNING_PROBLEM.cannotEnd(terminationProblem));
     };
 
     const kill = (): void => {
@@ -391,9 +449,10 @@ export const runVerificationCommand: VerificationCommandRunner = async (options)
         if (settled) return;
         lingered = true;
         kill();
-        log(
+        note(
           `a verification command's output was still open ${String(graceMs)}ms after it ended; the run stays unsettled until it closes`,
         );
+        raise(COMMAND_STILL_RUNNING_PROBLEM.lingering);
       }, graceMs);
       waiting.unref?.();
     });

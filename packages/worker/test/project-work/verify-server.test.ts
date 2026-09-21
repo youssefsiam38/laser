@@ -378,6 +378,86 @@ describe("a verification run, as the worker dispatches it", () => {
     expect(retire.retiring, "the worker retires once the work it owed is really done").toBe(true);
   });
 
+  it("still holds the work when the same conversation is open again after an unexpected close", async () => {
+    const h = harness();
+    const { path } = await startedRun(h);
+    const rowsBefore = h.rows().length;
+
+    // The runtime goes on its own, and the run it owned keeps draining and
+    // still owes the host its report.
+    h.drivers[0]!.crash();
+
+    // And the conversation is opened again at the same file — a person clicked
+    // back into it, or the host reloaded it. This is a **new** runtime with an
+    // empty fleet index: the detached run publishes nothing into it, so its
+    // own pins know nothing about the report still being written. "That path
+    // is loaded" must not be read as "that work is accounted for".
+    const reloaded = (await h.call(3, "session/load", { path })).result as { state: { path: string } } | undefined;
+    expect(reloaded?.state.path, "the same conversation, open again at the same file").toBe(path);
+
+    const safety = (await h.call(4, "pi/worker/safety")).result as {
+      sessions: Array<{ path: string; pins: Array<{ kind: string; detail?: string }> }>;
+    };
+    const rows = safety.sessions.filter((entry) => entry.path === path);
+    expect(rows, "one row for one conversation, whatever is owed under it").toHaveLength(1);
+    const pins = rows[0]!.pins.filter((pin) => pin.kind === "task");
+    expect(pins, "the work this worker owes is not invisible because the path was loaded again").toHaveLength(1);
+    expect(pins[0]!.detail, "and it is counted once, not once per place it could be seen").toContain("1 verification run");
+
+    const unload = (await h.call(5, "pi/session/unload", { path })).result as { unloaded: boolean; pins: Array<{ kind: string }> };
+    expect(unload.unloaded, "the reloaded conversation is not released under a live host write").toBe(false);
+    expect(unload.pins.map((pin) => pin.kind)).toContain("task");
+
+    const explicit = (await h.call(6, "pi/worker/retire", { mode: "explicit" })).result as { retiring: boolean; reason?: string };
+    expect(explicit.retiring, "nor may the process end in the middle of writing a project's record").toBe(false);
+    expect(explicit.reason).toBe("pinned");
+    const automatic = (await h.call(7, "pi/worker/retire", { mode: "automatic" })).result as { retiring: boolean };
+    expect(automatic.retiring, "and the idle sweep is no less careful").toBe(false);
+
+    // The work finishes for real: the stopped run writes what it proved.
+    await h.answer(PLAN_ANSWER);
+    await h.answer(REPORT_ANSWER);
+
+    expect(
+      h.rows().slice(rowsBefore),
+      "and nothing was ever republished for it — a run detached from the fleet stays detached, reload or no reload",
+    ).toHaveLength(0);
+
+    const after = (await h.call(8, "pi/worker/safety")).result as {
+      sessions: Array<{ path: string; pins: Array<{ kind: string }> }>;
+    };
+    expect(
+      after.sessions.find((entry) => entry.path === path)!.pins.map((pin) => pin.kind),
+      "once the work is really done, nothing holds the conversation",
+    ).not.toContain("task");
+    const unloaded = (await h.call(9, "pi/session/unload", { path })).result as { unloaded: boolean; pins: unknown[] };
+    expect(unloaded.pins, "nothing is holding it any more").toEqual([]);
+    expect(unloaded.unloaded, "so the ordinary release works again").toBe(true);
+    const retire = (await h.call(10, "pi/worker/retire", { mode: "explicit" })).result as { retiring: boolean };
+    expect(retire.retiring, "and so does retirement").toBe(true);
+  });
+
+  it("counts a run its own fleet index is already pinning exactly once", async () => {
+    const h = harness();
+    const { path } = await startedRun(h);
+
+    // Nothing has closed here: the run is publishing its row into this
+    // worker's own index, so the session's own pins already account for it.
+    // The owed-work reading must not add a second one — a phantom pin is a
+    // count a person reads, and one run is one run.
+    const safety = (await h.call(3, "pi/worker/safety")).result as {
+      sessions: Array<{ path: string; pins: Array<{ kind: string; detail?: string }> }>;
+    };
+    const pins = safety.sessions.find((entry) => entry.path === path)!.pins.filter((pin) => pin.kind === "task");
+    expect(pins, "one running command, one pin").toHaveLength(1);
+    expect(pins[0]!.detail, "and it is the session's own, from the index the fleet reads").toContain("running");
+
+    await h.answer(PLAN_ANSWER);
+    await h.answer(REPORT_ANSWER);
+    const after = (await h.call(4, "pi/worker/safety")).result as { sessions: Array<{ path: string; pins: Array<{ kind: string }> }> };
+    expect(after.sessions.find((entry) => entry.path === path)!.pins.map((pin) => pin.kind)).not.toContain("task");
+  });
+
   it("tells a moved conversation apart from a closed one: a fork keeps its own pins and adds none", async () => {
     const h = harness();
     const { path } = await startedRun(h);
