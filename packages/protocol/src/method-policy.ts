@@ -310,8 +310,6 @@ export const METHOD_POLICY = {
   "agents/delete": { scope: "settings", reach: "any" },
   "agents/set-default": { scope: "settings", reach: "any" },
   "agents/set-policy": { scope: "settings", reach: "any" },
-  "agents/builtin/set-profile": { scope: "settings", reach: "any" },
-  "agents/builtin/set-instructions": { scope: "settings", reach: "any" },
   // Writing the person's profiles is configuration that outlives a turn, and
   // it goes to the global settings file through `SettingsManager`.
   "models/profiles/save": { scope: "settings", reach: "any" },

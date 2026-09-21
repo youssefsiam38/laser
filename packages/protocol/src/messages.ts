@@ -8,7 +8,7 @@
  * `seq`. Clients resume with `session/load { fromSeq }`.
  */
 
-import type { AgentWorktreeStatus, SessionAgentInfo, SessionWorktreeDisposition } from "./agents.js";
+import type { AgentWorktreeStatus, SessionAgentInfo, SessionKind, SessionWorktreeDisposition } from "./agents.js";
 import type { ProviderFailureClass } from "./provider-failure.js";
 import type { RuntimeFailure, WorkerMode } from "./runtime-recovery.js";
 import { WIRE_NAMESPACE } from "./identity.js";
@@ -1249,8 +1249,17 @@ export interface ClientRequests {
   "pi/host/version": { params: {}; result: { version: string } };
   /** Local non-browser launchers only. Never persisted or sent to frontends. */
   "pi/host/environment": { params: HostEnvironmentParams; result: { applied: number } };
-  /** `agentName` picks a definition; omitted means the default agent. */
-  "session/new": { params: { cwd: string; parentPath?: string; agentName?: string }; result: { state: SessionState } };
+  /**
+   * `agentName` picks a definition; omitted means the default agent.
+   *
+   * `sessionKind: "chat"` starts the plain conversation of
+   * `docs/plain-chat.md` instead: no definition, no project and no name here.
+   * Sending both is refused, because they are two different intents.
+   */
+  "session/new": {
+    params: { cwd: string; parentPath?: string; agentName?: string; sessionKind?: SessionKind };
+    result: { state: SessionState };
+  };
   /**
    * `replayFrom` is the earliest seq this reply actually covers; `seq` is the
    * worker's current watermark for the session at the moment it answered.
@@ -1268,8 +1277,8 @@ export interface ClientRequests {
    *
    * `owner` names *which surface of this connection* is holding the session, so
    * membership is reference-counted per connection and scope (RP-6): the main
-   * view sends `view`, a Beam bubble sends its own opaque scope label, and the
-   * session leaves this connection's delivery only when its last owner detaches.
+   * view sends `view`, a secondary surface sends its own opaque scope label,
+   * and the session leaves this connection's delivery only when its last owner detaches.
    * It is a local label, never a session, path, run or device value, and it
    * grants nothing: the method's own authorization has already run. Omitted
    * means `view`. */

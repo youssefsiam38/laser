@@ -8,21 +8,21 @@ import {
 } from "../src/instruction-templates.js";
 
 describe("instruction templates", () => {
-  it("offers only fields that can be rendered for the selected agent", () => {
-    expect(instructionTemplateFields("agent").map((field) => field.key)).toContain("availableTools");
-    expect(instructionTemplateFields("agent").map((field) => field.key)).not.toContain("logsFile");
-    expect(instructionTemplateFields("beam").map((field) => field.key)).toContain("logsFile");
-    expect(instructionTemplateFields("beam").find((field) => field.key === "agentDefinitionsFile")).toMatchObject({
-      label: "Agent definitions folder",
-      description: expect.stringContaining("folder"),
-    });
-    expect(instructionTemplateFields("namer").map((field) => field.key)).toContain("sourceText");
+  it("offers one catalogue, the agent's, with nothing a removed built-in owned", () => {
+    const keys = instructionTemplateFields().map((field) => field.key);
+    expect(keys).toContain("availableTools");
+    expect(keys).toContain("availableAgents");
+    // The state-location fields and the naming source text left with the
+    // built-ins that owned them (docs/plain-chat.md).
+    for (const gone of ["logsFile", "agentDefinitionsFile", "agentRunsFile", "preferencesFile", "projectsFile", "sessionHistoryDirectory", "sourceText"]) {
+      expect(keys).not.toContain(gone);
+    }
     expect(instructionTemplateToken("workingDirectory")).toBe("{{workingDirectory}}");
   });
 
   it("renders prompt text without HTML escaping paths or tool syntax", () => {
     expect(
-      renderInstructionTemplate("Work in {{workingDirectory}}.\n\n{{availableTools}}", "agent", {
+      renderInstructionTemplate("Work in {{workingDirectory}}.\n\n{{availableTools}}", {
         workingDirectory: "/work/a&b",
         availableTools: "- read: Read <path>",
       }),
@@ -33,7 +33,7 @@ describe("instruction templates", () => {
     const template = String.raw`😀 escaped: \{{agentName}}
 {{! {{agentName}} }} {{!-- {{model}} --}}
 {{ agentName }} {{{productName}}} {{~model~}}`;
-    const ranges = instructionTemplateFieldRanges(template, "agent");
+    const ranges = instructionTemplateFieldRanges(template);
     expect(ranges.map(({ key, start, end }) => [key, template.slice(start, end)])).toEqual([
       ["agentName", "{{ agentName }}"],
       ["productName", "{{{productName}}}"],
@@ -42,15 +42,15 @@ describe("instruction templates", () => {
   });
 
   it("exposes no live ranges when nested braces or another invalid expression makes the template unsafe", () => {
-    expect(instructionTemplateFieldRanges("{{{{agentName}}}}", "agent")).toEqual([]);
-    expect(instructionTemplateFieldRanges("{{agentName}} {{madeUp}}", "agent")).toEqual([]);
-    expect(instructionTemplateFieldRanges("{{agentName other}}", "agent")).toEqual([]);
+    expect(instructionTemplateFieldRanges("{{{{agentName}}}}")).toEqual([]);
+    expect(instructionTemplateFieldRanges("{{agentName}} {{madeUp}}")).toEqual([]);
+    expect(instructionTemplateFieldRanges("{{agentName other}}")).toEqual([]);
   });
 
   it("refuses unknown fields, incomplete tokens and template commands in plain language", () => {
-    expect(instructionTemplateIssue("{{madeUp}}", "agent")).toContain("not available");
-    expect(instructionTemplateIssue("{{workingDirectory", "agent")).toContain("incomplete");
-    expect(instructionTemplateIssue("{{#if model}}x{{/if}}", "agent")).toContain("inserted fields only");
-    expect(instructionTemplateIssue("{{sourceText}}", "agent")).toContain("not available");
+    expect(instructionTemplateIssue("{{madeUp}}")).toContain("not available");
+    expect(instructionTemplateIssue("{{workingDirectory")).toContain("incomplete");
+    expect(instructionTemplateIssue("{{#if model}}x{{/if}}")).toContain("inserted fields only");
+    expect(instructionTemplateIssue("{{sourceText}}")).toContain("not available");
   });
 });

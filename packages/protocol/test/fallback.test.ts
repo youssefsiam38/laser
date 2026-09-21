@@ -221,7 +221,7 @@ describe("the wire shapes", () => {
   it("no longer answers to the methods profiles replaced", () => {
     expect("agents/builtin/set-model" in clientParamsSchemas).toBe(false);
     expect("agents/namer/qualify" in clientParamsSchemas).toBe(false);
-    expect("agents/builtin/set-profile" in clientParamsSchemas).toBe(true);
+    expect("models/profiles/save" in clientParamsSchemas).toBe(true);
   });
 });
 

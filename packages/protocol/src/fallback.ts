@@ -309,9 +309,8 @@ export function validateModelProfiles(value: unknown): ModelProfileIssue[] {
 
 /**
  * The rule Laser uses to fill the three seeded profiles from what a person has
- * just connected — the same rule onboarding has always used to propose a model
- * (it began as the Beam suggestion), kept in one place so the seeds, the
- * migration and onboarding cannot disagree.
+ * just connected — the same rule onboarding has always used to propose a model,
+ * kept in one place so the seeds, the migration and onboarding cannot disagree.
  *
  * It is deliberately coarse: price is the only comparable signal every
  * provider's catalogue carries, and a model id that names the fast tier of its
@@ -603,9 +602,9 @@ export interface ModelProfileMigrationRecord {
   at: string;
   settings: ModelProfileMigrationReport;
   /**
-   * Built-in agents whose model choice became a profile id. `from` is the
-   * model they were on, written as `provider/id`; a built-in that had no
-   * choice of its own is not listed at all.
+   * Model choices the app itself held before profiles existed, and the profile
+   * each became. `from` is the model, written as `provider/id`. Retained
+   * because a record written by the M22 migration must stay readable.
    */
   builtins?: Array<{ name: string; from: string | null; to: string | null }>;
   /** Definition files whose `model:` became `profile:`. Only files actually rewritten. */
