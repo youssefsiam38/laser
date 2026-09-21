@@ -38,6 +38,11 @@ export interface ProjectWorkHarnessOptions {
    * not be opened: the methods must refuse with the reason, not answer.
    */
   unavailable?: string;
+  /**
+   * Reopen an existing harness directory, as a restarted host would. The
+   * caller owns the directory; this harness only closes its own store.
+   */
+  dir?: string;
 }
 
 export interface ProjectWorkHarness {
@@ -61,7 +66,8 @@ export interface ProjectWorkHarness {
 const LOCAL_APP: ActorIdentity = { class: "local_app", id: "l1.app" };
 
 export function projectWorkHarness(options: ProjectWorkHarnessOptions = {}): ProjectWorkHarness {
-  const dir = mkdtempSync(join(tmpdir(), "project-work-router-"));
+  const owned = options.dir === undefined;
+  const dir = options.dir ?? mkdtempSync(join(tmpdir(), "project-work-router-"));
   const notifications: Array<{ method: string; params: unknown }> = [];
   const logs: LogInput[] = [];
   let workerAttempts = 0;
@@ -140,7 +146,7 @@ export function projectWorkHarness(options: ProjectWorkHarnessOptions = {}): Pro
     call: (method, params, actor = LOCAL_APP) => router.handle({ jsonrpc: "2.0", id: ++id, method, params }, { actor }),
     cleanup: () => {
       store.close();
-      rmSync(dir, { recursive: true, force: true });
+      if (owned) rmSync(dir, { recursive: true, force: true });
     },
   };
 }
