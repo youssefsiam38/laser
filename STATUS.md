@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T10:09:00+03:00 · claude-2026-09-21-leap · HEAD: 660e5b54
-**Current focus:** M23 Plain Chat is implemented, reviewed and fixed (`pnpm verify` green); M23-T6 is releasing 0.13.0. M26-T1/T2 tool-contract lint runs in parallel; M21 follows.
+**Last updated:** 2026-09-22 · claude-2026-09-22-forensics · HEAD: see `git log -1 fix/session-forensics` (branch from `v0.14.0`, not merged)
+**Current focus:** `fix/session-forensics` — three defects diagnosed from the person's own sessions, fixed and proven on a tag-based branch (D-360): M16-T100 scroll-up after a compaction, M13-T129 `send_agent_message` to a released child, M18-T20 catalog paging and worker compile cache. The integration line (`work/fallback-update`, M21) is untouched by this session.
 
 | Milestone | State |
 | --- | --- |
@@ -35,8 +35,8 @@
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** M19-T7 source work waits for M19-T6 to release shared `LaserPaths` and migration-storage ownership. M21 remains dependency-gated on the person's M20 sandbox acceptance; the leap goal (`docs/goal-project-lifecycle-leap.md`) proceeds M22 → M23 → M26 → M21 → M24 → M25.
-**In flight:** M23-T6 release of 0.13.0; M26-T1/T2 (worker). Browser acceptance of the Chat entry points, the Agents empty state and the profile surfaces is the person's (D-342).
-**Published:** v0.13.0 is Latest (`842bd911` candidate; 12 verified assets).
-**Next up:** M26-T3 evaluation harness and M26-T4 UI error/preview rendering; M21-T1 protocol domain for the lifecycle; M24-T1 after M26-T1.
-**Recently done:** M23-T1–T5 Plain Chat: protocol (`5aebaee4`), worker chat prompt + one-shot naming (`0051d591`), host without built-ins (`79404b7c`), UI without Beam (`72f0a3a1`), docs/guard (`c91eec1b`, `70d8f4ad`), review fixes (`3a27fe38`), naming kept on the person's choice (`40eabcee`); M22 released as v0.12.0 (`19cdd565`).
+**Blockers:** M19-T7 source work waits for M19-T6 (T6B unstarted) — this is also the "An update was installed. Restart…" gate the person hit. Not on this branch.
+**In flight:** nothing on this branch. Person-owned acceptance (D-342): open a compacted long session, scroll to its start; let a child agent finish, wait >2 min, `send_agent_message` it; watch a 500+ session sidebar refresh stay a page.
+**Published:** v0.14.0 is Latest (`ac098597`); this branch is v0.14.0 + 4 commits.
+**Next up:** merge or point-release `fix/session-forensics` (person's call); from the same forensics, still open: worker bundling / prewarm / view-before-attach / per-session stream subscription (M18-T20 notes).
+**Recently done:** M16-T100 `408894a6`; M13-T129 `d2e2346a`; M18-T20 `0e572bf4`. Gate on this branch: `pnpm -r build` clean; worker 1284/1284, host 1031/1031, protocol 548/548, pi-extension 228/228, UI 3006/3006 (+1 skipped); `pnpm identity:check` clean. Note: the host suite spawns real workers and must run with `LASERCODE_*` stripped from a shell started inside Laser, else 64 tests fail on generation mismatch.
