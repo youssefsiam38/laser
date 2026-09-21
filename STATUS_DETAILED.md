@@ -5986,7 +5986,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T6 | Embedded workspace shell | done | claude-2026-09-21-leap | `83f454d3` (merged `f9e50378`); `pnpm -F @lasercode/ui test` (3055 passed, 50 new) | see notes |
 | M21-T7 | Specs and Research experience | done | claude-2026-09-21-leap | `ae5eac62` (merged `cfd92e9f`); `pnpm -F @lasercode/ui test` (3086 passed; 30 new in `test/project-work/`) | see notes |
 | M21-T8 | Comments, reviews and approval gates | done | claude-2026-09-21-leap | `98a01428` (merged with T16 conflicts resolved in `Inspector.tsx`); protocol 643 (`project-work-gates.test.ts` 12), host 1139 (`project-work/gates.test.ts` 18), ui (`test/project-work/{comments,gates,approval}*` 24) | see notes |
-| M21-T9 | Cross-session and cross-project mentions | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T9 | Cross-session and cross-project mentions | done | claude-2026-09-21-leap | `222d86c0`; protocol 663 (`project-work-mentions.test.ts` 11), host 1133 (`project-work/mentions.test.ts` 12), ui 3197 (`test/project-work/mentions*` 21) | see notes |
 | M21-T10 | Design Index: static facts, synthesis, review, storage | done | claude-2026-09-21-leap | `9306d0fa`; `pnpm -F @lasercode/worker test` (1344 passed; `test/design/*` 70 incl. the parse-only module-graph and side-effect-marker proofs) | see notes |
 | M21-T11 | DesignTree, canvas, primitive kit, prototypes and Sketch | done | claude-2026-09-21-leap | `05e270d7` (merged `66348ae2`); protocol 652 (`design-tree.test.ts` 21), `pnpm -F @lasercode/ui test` 3176 (`test/design/*` 48) | see notes |
 | M21-T12 | Static host grounding and source selection | done | claude-2026-09-21-leap | `92cc43c9` + `f15eb7d1`; protocol 674 (`host-page.test.ts` 10), worker `test/design/*` 128 incl. parse-only for `design/host`; matrix 22 fixtures | see notes |
@@ -6014,6 +6014,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap (row title aligned with `PLAN.md` as amended by D-354): UI worker on `components/design/**` — validated DesignTree editing, DOM infinite canvas, Shadow DOM frames skinned by index tokens, primitive kit, Prototype mode, sandboxed Sketch frame, Sketch→Tree ladder; write set disjoint from T8 (comments/gates) and T17 (backend).
 
 #### M21-T9 notes
+- 2026-09-21 done (`222d86c0`): the typed ref lives at the foot of the message as a Markdown link-reference definition (`[TASK-44]: laser://work/... "sha256-…"`) parsed by the host at send time (project/entity/revision/digest/read scope; mismatch re-pins; stale sent as named), bounded per-kind projection with `[from project KEY@rev]` provenance delivered as host-supplied `session/prompt.projectWork` (worker-side consumption in the T17 packet is an open item named in the plan); one adapter with `@KEY`/prefix/title queries ranking exact key → current project → labelled others; `MentionChip`/`ArtifactCard`, sidebar TASK chip, global search keys first, search index stores prose once.
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI mention adapter (`@spec:` … `@task:` and `@KEY`), typed pinned refs in the stored message, transcript chip, sidebar TASK chip, global search; host-side send-time validation rides on the spine's `get` fences.
 
 #### M21-T13 notes
