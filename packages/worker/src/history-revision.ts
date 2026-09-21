@@ -33,7 +33,10 @@ import { nodeRevisionHasher } from "@lasercode/protocol/revision-node";
  * How far back a client's cached revision can still be proved a prefix.
  * Must outrun a single long turn (hundreds of tool rows) or an ordinary
  * refresh of a still-current base classifies as stale. Compaction still
- * invalidates: it changes `barrierCount`, which classify treats as a rewrite.
+ * invalidates a *suffix* merge: it changes `barrierCount`, which classify
+ * treats as a rewrite. The checkpoint behind the base is still returned, so
+ * the rows before it — byte-identical, the file is append-only — can serve
+ * an older page.
  */
 const CHECKPOINTS_MAX = 4096;
 /** States this process issued that the durable leaf rule cannot reconstruct. */
@@ -52,7 +55,18 @@ export interface SessionRevisionResult {
 
 export interface ResolvedLiveRevisionBase {
   base: RevisionBase;
+  /**
+   * The exact state behind the base, when the fold proves it a canonical
+   * prefix of the current entries with a leaf still on the branch. Present on
+   * `current` and `prefix`; also present on a `stale` answer whose only
+   * disqualification is a compaction/branch-summary barrier appended after
+   * it (`barrier`). Such a base cannot take a suffix merge — content before
+   * the barrier is now represented by the summary — but every row before its
+   * count is unchanged, so an older page read against it is exact.
+   */
   state?: RevisionState;
+  /** Set when `state` is proved but a barrier forbids a delta. */
+  barrier?: true;
 }
 
 /** One conversation's fold, checkpoints and issued states. */
@@ -114,9 +128,15 @@ export class SessionRevisionTracker {
     for (const candidate of [...this.issued, ...this.checkpoints].reverse()) {
       if (candidate.count > state.count) continue;
       if (sessionRevisionOf(this.hash, this.tag, candidate) !== baseRevision) continue;
-      if ((candidate.barrierCount ?? 0) !== (state.barrierCount ?? 0)) return { base: "stale" };
       const onBranch = candidate.leafId === null ? leafId === null : branch.has(candidate.leafId);
-      return onBranch ? { base: "prefix", state: candidate } : { base: "stale" };
+      if (!onBranch) return { base: "stale" };
+      // Pi appends compaction and branch-summary records. The old leaf remains
+      // an ancestor and the prefix is byte-identical, but content before the
+      // barrier is represented by the summary: no ordinary suffix merge, while
+      // pages of the unchanged prefix stay readable (the person can still
+      // scroll up after an auto-compaction).
+      if ((candidate.barrierCount ?? 0) !== (state.barrierCount ?? 0)) return { base: "stale", state: candidate, barrier: true };
+      return { base: "prefix", state: candidate };
     }
     return { base: "stale" };
   }

@@ -410,6 +410,35 @@ describe("WorkerServer", () => {
     } finally { await h.server.dispose(); }
   });
 
+  it("keeps serving older pages after a compaction, from the base the window still holds", async () => {
+    // The person's window holds the pre-compaction revision (a streamed
+    // compaction record drops the validated suffix, not the base). Scrolling
+    // up must still page: the rows before the cursor are unchanged.
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    driver.header = { id: "s1", cwd: "/tmp/fake", version: 3 };
+    const rows = Array.from({ length: 6 }, (_, i) => ({ type: "message", id: `e${i}`, parentId: i ? `e${i - 1}` : null, message: { role: i % 2 ? "assistant" : "user", content: String(i) } }));
+    driver.history = { entries: rows, leafId: "e5" };
+    try {
+      const initial = (await h.call(2, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 2 } })).result as { window: { revision: string; before: string } };
+      const compaction = { type: "compaction", id: "compact-1", parentId: "e5", timestamp: "2026-01-01T00:00:02.000Z", summary: "Earlier context summarized", tokensBefore: 1000 };
+      driver.history = { entries: [...rows, compaction], leafId: "compact-1" };
+      for (const window of [{ before: initial.window.before, limit: 2 }, { beforeEntry: "e4", limit: 2 }]) {
+        const older = (await h.call(3, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window, baseRevision: initial.window.revision })).result as { entries: unknown[]; window: { mode: string } };
+        expect(older.entries).toEqual(rows.slice(2, 4));
+        expect(older.window.mode).toBe("replace");
+      }
+      // The same base is not a delta base any more: the tail is a replacement.
+      const tail = (await h.call(4, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { tail: 2 }, baseRevision: initial.window.revision })).result as { window: { mode: string } };
+      expect(tail.window.mode).toBe("replace");
+      // A base whose leaf left the branch is refused, compaction or not.
+      driver.history = { entries: [...rows, compaction, { type: "message", id: "f0", parentId: "e1", message: { role: "user", content: "elsewhere" } }], leafId: "f0" };
+      const refused = await h.call(5, "pi/session/entries", { path: "/tmp/fake/s1.jsonl", window: { beforeEntry: "e1", limit: 2 }, baseRevision: initial.window.revision });
+      expect(refused.error?.code).toBe(ErrorCodes.RevisionUnavailable);
+    } finally { await h.server.dispose(); }
+  });
+
   it("applies replacement byte/row bounds to live pages, splitting an oversized turn but never oversized context", async () => {
     const h = harness();
     await h.call(1, "session/new", { cwd: "/tmp/fake" });

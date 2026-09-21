@@ -150,6 +150,14 @@ export interface SessionHost {
   openChild(options: { cwd: string; parentSessionPath: string; agent: DriverAgentOptions }): Promise<SessionState>;
   /** The live driver serving a session path, when it is open in this worker. */
   driver(sessionPath: string): SessionDriver | undefined;
+  /**
+   * Open a stored child session again from its canonical record, so a parent
+   * can speak to an agent whose runtime was released while it was idle
+   * (RP-4). Resolves once the session is attached; rejects when the record is
+   * gone or the engine refuses. Absent on a host that cannot reopen, in
+   * which case a cold child is reported unavailable rather than unknown.
+   */
+  reopen?(sessionPath: string): Promise<void>;
   notify<M extends keyof HostNotifications>(method: M, params: HostNotifications[M]): void;
   /** True when the model exists and its provider has credentials. */
   modelAvailable(model: ModelIdentity): Promise<boolean>;
@@ -1443,15 +1451,7 @@ export class AgentHarness {
     const mode = input.mode;
     if (message === "") throw new HarnessError("message is required.");
     if (message.length > AGENT_MESSAGE_MAX) throw new HarnessError(`message must be at most ${AGENT_MESSAGE_MAX} characters.`);
-    const child = [...this.byPath.values()].find((entry) => entry.sessionId === sessionId && entry.record.parentPath === parent.path);
-    if (!child || !child.path) {
-      // Nothing was delivered and nothing was queued: the agent was not found.
-      throw new HarnessError(`No agent session is called "${sessionId}" among the agents this session started. Use the sessionId that start_agent returned.`, ErrorCodes.InvalidParams, {
-        code: "no_such_agent_session",
-        committed: false,
-        next: "call inspect_fleet to list the agents under you with their sessionIds, then send_agent_message with one of them",
-      });
-    }
+    const child = await this.resolveChildForMessage(parent, sessionId);
     type Plan =
       | { kind: "result"; result: SendAgentMessageResult }
       | { kind: "queued"; state: RunState }
@@ -1462,13 +1462,7 @@ export class AgentHarness {
     // finish by taking the same lock.
     const plan = await this.withEntry(child, async (): Promise<Plan> => {
       const driver = this.host.driver(child.path!);
-      if (!driver) {
-        throw new HarnessError(`The agent session "${sessionId}" is no longer open.`, ErrorCodes.InvalidParams, {
-          code: "agent_session_closed",
-          committed: false,
-          next: "call inspect_fleet to see what is still under you, and start_agent again if that work still needs doing",
-        });
-      }
+      if (!driver) throw this.unavailableChild(sessionId, "its runtime closed while this message was being routed");
       const ownerId = child.lifecycle.owner();
       const executing = ownerId ? this.runStates.get(ownerId) : undefined;
       const active = executing ?? this.activeRunState(child.path!);
@@ -1910,6 +1904,55 @@ export class AgentHarness {
    * its worktree), or any row of the `tree` under it (the read-only
    * `inspect_agent`, D-163). Never another session's work.
    */
+  /**
+   * The child a message is for, resolved from the durable run record like
+   * every other agent verb (`inspect_agent`, `stop_agent`), never from what
+   * happens to be loaded. A child released while idle (RP-4: two quiet
+   * minutes, or a full worker) is reopened from its canonical record and
+   * takes the message as a new run; "unknown id" is reserved for an id no run
+   * under this session ever had. Before this, the live-map lookup reported a
+   * merely cold child as `no_such_agent_session` with `next: start_agent`,
+   * and parents respawned finished work into fresh worktrees.
+   */
+  private async resolveChildForMessage(parent: Entry, sessionId: string): Promise<Entry> {
+    const loaded = (): Entry | undefined => [...this.byPath.values()].find((entry) => entry.sessionId === sessionId && entry.record.parentPath === parent.path && entry.path !== undefined);
+    const live = loaded();
+    if (live) return live;
+    let target: ReturnType<AgentHarness["childOf"]>;
+    try {
+      target = this.childOf(parent, { sessionId });
+    } catch (error) {
+      // Nothing was delivered and nothing was queued: no run under this
+      // session ever carried that id.
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new HarnessError(reason, ErrorCodes.InvalidParams, {
+        code: "no_such_agent_session",
+        committed: false,
+        next: "call inspect_fleet to list the agents under you with their sessionIds, then send_agent_message with one of them",
+      });
+    }
+    if (!this.host.reopen) throw this.unavailableChild(sessionId, "its runtime was released and this host cannot reopen it");
+    this.diagnose(parent, "info", "child-reopen", { sessionPath: target.sessionPath, sessionId, runId: target.runId });
+    try {
+      await this.host.reopen(target.sessionPath);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw this.unavailableChild(sessionId, reason);
+    }
+    const reopened = loaded() ?? this.byPath.get(target.sessionPath);
+    if (!reopened || !reopened.path) throw this.unavailableChild(sessionId, "it did not come back after being reopened");
+    return reopened;
+  }
+
+  /** A child that exists in the record but cannot take a message right now. Never advises `start_agent` for a merely cold session. */
+  private unavailableChild(sessionId: string, reason: string): HarnessError {
+    return new HarnessError(`The agent session "${sessionId}" cannot take a message right now: ${reason}.`, ErrorCodes.InvalidParams, {
+      code: "agent_session_unavailable",
+      committed: false,
+      next: `call inspect_agent with sessionId ${sessionId} to read its record and last words; if its work is still needed and it cannot be reopened, start_agent a fresh agent and hand it that branch`,
+    });
+  }
+
   private childOf(
     parent: Entry,
     input: Pick<RemoveAgentWorktreeInput, "sessionId" | "runId">,

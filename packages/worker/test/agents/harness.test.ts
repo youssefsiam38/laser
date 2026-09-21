@@ -20,7 +20,7 @@ import { rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { WorktreeManager, worktreeSlug, type CreateWorktreeInput, type Worktree, type WorktreeFacts } from "../../src/agents/worktrees.js";
 import { projectBashPrefix } from "../../src/project-env.js";
 import type { IndexedTask } from "../../src/agents/tasks.js";
-import { AGENT_EVENT_MESSAGE_TYPE, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, TOOL_ERROR_COMMITTED_SENTENCE, carriedToolError, renderToolError, type AgentDefinition, type AgentIsolationDefault, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionState, type UiDialogRequest, type UiDialogResponse, type WorkspaceShape } from "@lasercode/protocol";
+import { AGENT_EVENT_MESSAGE_TYPE, PROJECT_DIR_NAME, SESSION_AGENT_ENTRY_TYPE, SESSION_RUN_ENTRY_TYPE, TOOL_ERROR_COMMITTED_SENTENCE, carriedToolError, renderToolError, type AgentDefinition, type AgentIsolationDefault, type AgentRun, type AgentsSnapshot, type ContentBlock, type SessionAgentRecord, type SessionState, type UiDialogRequest, type UiDialogResponse, type WorkspaceShape } from "@lasercode/protocol";
 
 class FakeDriver implements SessionDriver {
   readonly kind = "stable-sdk" as const;
@@ -196,6 +196,8 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true, isolationDefault
   let facts: WorktreeFacts = { exists: true, unmergedCommits: 0, uncommittedFiles: 0 };
   /** git refusing to give the directory back: what makes a cleanup dishonest if it is not reported. */
   let removalFails: string | undefined;
+  /** What the worker does for a released child the parent speaks to (RP-4); unset, the host cannot reopen. */
+  let reopen: ((path: string) => Promise<void>) | undefined;
   let root: string | undefined = "/repo";
   let workspaceShape: WorkspaceShape = {
     cwd: projectCwd,
@@ -243,6 +245,10 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true, isolationDefault
       return driver.state();
     },
     driver: (path) => drivers.get(path),
+    async reopen(path) {
+      if (!reopen) throw new Error("this host cannot reopen sessions");
+      await reopen(path);
+    },
     notify: (method, params) => notifications.push({ method, params }),
     modelAvailable: async () => !unavailable,
     resolveProfile: (profileId: string | null) => (unavailable && profileId
@@ -281,6 +287,19 @@ function makeWorld(projectCwd = "/repo", projectTrusted = true, isolationDefault
     setWorktreeRoot: (next: string | undefined) => { root = next; },
     /** git cannot remove the directory: the worktree survives a cleanup. */
     setRemovalFails: (message: string | undefined) => { removalFails = message; },
+    setReopen: (next: ((path: string) => Promise<void>) | undefined) => { reopen = next; },
+    /** The worker released this session's runtime (RP-4): the harness forgets it and its driver is gone. */
+    release: (path: string) => { harness.detachSession(path); drivers.delete(path); },
+    /** A parent's message to a cold child: what `sessionLoad` does, without the engine. */
+    recover: (path: string, sessionId: string, record: SessionAgentRecord, role: HarnessSessionRole) => {
+      const handle = harness.prepareSession({ role, definition: definitions.definition(role.agentName)!, record, projectCwd });
+      const driver = new FakeDriver(stateFor(path, sessionId, projectCwd));
+      driver.autoResolvePrompts = autoResolveChildPrompts;
+      drivers.set(path, driver);
+      driver.subscribe((event) => harness.onDriverEvent(path, event));
+      handle.attach(path, sessionId);
+      return driver;
+    },
   };
 }
 
@@ -1393,6 +1412,50 @@ describe("AgentHarness", () => {
     await expect(root.handle.bridge.sendAgentMessage({ sessionId: "nope", message: "x", mode: "queue" })).rejects.toThrow(/No agent session is called "nope"/);
     // One session, one row, standing on its newest run.
     expect((await root.handle.bridge.inspectFleet()).rows.map((r) => (r.kind === "agent" ? r.runId : r.taskId))).toEqual([followUp.runId]);
+  });
+
+  it("reopens a released child for a parent's message instead of calling it unknown", async () => {
+    // RP-4 releases a finished child nobody follows after two quiet minutes.
+    // The parent still holds its sessionId; `inspect_agent` answers for it
+    // from the durable record, and so must `send_agent_message`.
+    const root = world.openRoot("lead");
+    const { sessionId, runId } = await root.handle.bridge.startAgent({ agentName: "worker", subagentName: "w", task: "t" });
+    const path = "/sessions/child-1.jsonl";
+    await flushLifecycle();
+    await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "done" });
+    // What the session file keeps, and what `recoverAgent` rebuilds from it.
+    const record = world.opened[0]!.agent.record;
+    const role = world.harness.roleOf(path)!;
+    world.release(path);
+    expect(world.harness.bridgeOf(path)).toBeUndefined();
+    expect(world.harness.run(runId)?.status).toBe("completed");
+
+    // A host that cannot reopen says so honestly: unavailable, not unknown,
+    // and never "start_agent again".
+    world.setReopen(undefined);
+    await expect(root.handle.bridge.sendAgentMessage({ sessionId, message: "carry on", mode: "queue" })).rejects.toMatchObject({
+      toolError: { code: "agent_session_unavailable", committed: false, next: expect.stringContaining("inspect_agent") },
+    });
+    await expect(root.handle.bridge.sendAgentMessage({ sessionId, message: "carry on", mode: "queue" })).rejects.not.toThrow(/start_agent again/);
+
+    // The worker reopens it from the record; the message is a new run there.
+    const reopened: string[] = [];
+    world.setReopen(async (target) => { reopened.push(target); world.recover(target, sessionId, record, role); });
+    const resumed = await root.handle.bridge.sendAgentMessage({ sessionId, message: "carry on", mode: "queue" });
+    expect(reopened).toEqual([path]);
+    expect(resumed).toMatchObject({ sessionId, status: "running", delivery: "delivered" });
+    expect(resumed.runId).not.toBe(runId);
+    expect(world.harness.activeRun(path)).toMatchObject({ runId: resumed.runId, origin: "agent", task: "carry on", parent: { sessionPath: root.path } });
+    expect(world.drivers.get(path)!.prompted.at(-1)?.text).toBe("carry on");
+    // Reopened once; a second message finds it loaded.
+    await world.harness.bridgeOf(path)!.completeRun({ status: "completed", message: "done again" });
+    await root.handle.bridge.sendAgentMessage({ sessionId, message: "and again", mode: "queue" });
+    expect(reopened).toEqual([path]);
+
+    // An id no run under this session ever had is still unknown.
+    await expect(root.handle.bridge.sendAgentMessage({ sessionId: "nope", message: "x", mode: "queue" })).rejects.toMatchObject({
+      toolError: { code: "no_such_agent_session" },
+    });
   });
 
   it("serializes completion and immediate repeated resumes behind the engine boundary", async () => {

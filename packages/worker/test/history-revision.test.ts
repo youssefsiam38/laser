@@ -52,6 +52,14 @@ describe("a live conversation's revision", () => {
       const after = tracker.compute(header, appended, barrier.id);
       expect(after.revision).not.toBe(before);
       expect(tracker.classify(before, header, appended, barrier.id)).toBe("stale");
+      // Stale for a suffix merge, but the state behind the base is still
+      // proved: the rows before it are unchanged, so an older page against it
+      // is exact. This is what keeps "scroll up" alive after an auto-compaction.
+      const resolved = tracker.resolve(before, header, appended, barrier.id);
+      expect(resolved).toMatchObject({ base: "stale", barrier: true, state: { count: history.length, leafId: "e2" } });
+      // A base whose leaf left the branch carries nothing, barrier or not.
+      const forked = [...appended, entry("f0", "e0", "elsewhere")];
+      expect(tracker.resolve(before, header, forked, "f0")).toEqual({ base: "stale" });
     }
   });
 
@@ -102,8 +110,10 @@ describe("a live conversation's revision", () => {
       tokensBefore: 1000,
     }];
     expect(tracker.classify(before, header, compacted, "compact-1")).toBe("stale");
+    expect(tracker.resolve(before, header, compacted, "compact-1")).toMatchObject({ base: "stale", barrier: true, state: { count: history.length } });
     const tip = tracker.compute(header, long, parent).revision;
     expect(tracker.classify(tip, header, compacted, "compact-1")).toBe("stale");
+    expect(tracker.resolve(tip, header, compacted, "compact-1")).toMatchObject({ base: "stale", barrier: true, state: { count: long.length, leafId: parent } });
   });
 
   it("refuses a base it cannot prove instead of assuming it is old", () => {

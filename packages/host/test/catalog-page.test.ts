@@ -42,6 +42,23 @@ describe("catalog pages", () => {
     expect(second.sessions).toHaveLength(12);
     expect(second.groups?.[0]).toMatchObject({ remaining: 0 });
   });
+  it("does not let finished, unread children defeat the page quota", () => {
+    // Ten old roots, each with a finished child nobody opened. Before, every
+    // child was quota-exempt and dragged its root in: the whole catalog on
+    // every refresh.
+    const roots = Array.from({ length: 10 }, (_, index) => row(index, { path: `/sessions/root-${index}`, modifiedAt: `2026-06-${String(index + 1).padStart(2, "0")}` }));
+    const children = roots.map((parent, index) => row(index + 100, { path: `/sessions/child-${index}`, parentPath: parent.path, attention: "finished_unread", modifiedAt: parent.modifiedAt }));
+    const rows = roots.flatMap((root, index) => [root, children[index]!]);
+    const first = pageCatalog(rows, { page: { size: 3 } }, groupOf);
+    expect(first.sessions).toHaveLength(6);
+    expect(first.groups?.[0]).toMatchObject({ remaining: 7 });
+    // A child that needs a person now, or a root that finished unread, is still pinned with its branch.
+    const pinned = [...rows, row(200, { path: "/sessions/child-asks", parentPath: roots[0]!.path, attention: "waiting_for_input", modifiedAt: "2026-06-01" }),
+      row(201, { path: "/sessions/root-finished", attention: "finished_unread", modifiedAt: "2026-05-01" })];
+    const page = pageCatalog(pinned, { page: { size: 3 } }, groupOf);
+    expect(page.sessions.map(item => item.path)).toEqual(expect.arrayContaining(["/sessions/child-asks", "/sessions/root-0", "/sessions/root-finished"]));
+    expect(page.sessions).toHaveLength(6 + 3);
+  });
   it("supports expanded refreshes, deterministic ties, and malformed cursor refusal", () => {
     const rows = Array.from({ length: 20 }, (_, i) => row(i)).reverse();
     const page = pageCatalog(rows, { page: { sizes: { "/project": 14 } } }, groupOf);
