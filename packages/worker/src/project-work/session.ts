@@ -77,6 +77,13 @@ import {
   type RequestProjectReviewInput,
   type WriteProjectArtifactInput,
 } from "./tools.js";
+import {
+  VERIFY_PROJECT_TASK_SPEC,
+  VERIFY_TOOL_RECOVERY,
+  VerificationService,
+  verifyProjectTask,
+  type VerifyProjectTaskInput,
+} from "./verification/index.js";
 
 export interface ProjectWorkSessionOptions {
   /** The typed bridge to the host authority. Absent: no tools at all. */
@@ -103,8 +110,22 @@ export interface ProjectWorkSessionOptions {
   task?: { entityId: string; key: string } | undefined;
   /** The project's own instructions, for the context packet. */
   projectInstructions?: () => string | undefined;
+  /**
+   * This session's own file, for a verification run started from it
+   * (M21-T19). A run belongs to the conversation that asked for it and
+   * appears in the fleet under it; the path is the worker's, never a model's.
+   */
+  sessionPath?: () => string | undefined;
   /** Who a design review decision is recorded as. */
   reviewActor?: ReviewActor;
+  /**
+   * The worker's verification runs (M21-T19).
+   *
+   * Shared with the person's own `pi/project/verify/*` surface on purpose:
+   * a run a model starts and a run a person starts are the same run, in the
+   * same registry, stoppable from either side.
+   */
+  verification?: VerificationService | undefined;
 }
 
 /** The worker's implementation of what the companion module consumes. */
@@ -113,6 +134,8 @@ export class ProjectWorkSession implements ExtensionProjectWorkBridge {
   private attemptLinked = false;
   /** Hand-offs already delivered, keyed by the prompt that asked for them. */
   private readonly handedOff = new Set<string>();
+  /** This session's verification runs, once something has asked for them. */
+  private ownVerification: VerificationService | undefined;
 
   constructor(private readonly options: ProjectWorkSessionOptions) {}
 
@@ -168,6 +191,27 @@ export class ProjectWorkSession implements ExtensionProjectWorkBridge {
         recovery: PROJECT_WORK_TOOL_RECOVERY["report_project_task"]!,
         run: (input) => reportProjectTask(bridge, input as unknown as ReportProjectTaskInput),
       },
+      // Verifying needs a checkout to run the task's commands in, so it is
+      // offered only to a session that has one. An absent tool is absent,
+      // never listed as unavailable (D-356.g).
+      ...(this.verification() && this.options.cwd !== undefined
+        ? [
+            {
+              spec: VERIFY_PROJECT_TASK_SPEC,
+              recovery: VERIFY_TOOL_RECOVERY,
+              run: (input: Record<string, unknown>) =>
+                verifyProjectTask(
+                  {
+                    bridge,
+                    service: this.verification()!,
+                    cwd: this.options.cwd!,
+                    sessionPath: () => this.options.sessionPath?.(),
+                  },
+                  input as unknown as VerifyProjectTaskInput,
+                ),
+            },
+          ]
+        : []),
     ];
   }
 
@@ -175,6 +219,20 @@ export class ProjectWorkSession implements ExtensionProjectWorkBridge {
   private foundationAccess(): FoundationModelAccess | undefined {
     const models = this.options.foundationModels;
     return typeof models === "function" ? models() : models;
+  }
+
+  /**
+   * This session's verification runs.
+   *
+   * Supplied by the worker when it has one; a session assembled without it
+   * (a narrow test, a fixture) gets its own, over this session's own bridge,
+   * so the tool exists wherever the bridge does.
+   */
+  private verification(): VerificationService | undefined {
+    const bridge = this.options.bridge;
+    if (!bridge) return undefined;
+    this.ownVerification ??= this.options.verification ?? new VerificationService({ bridgeFor: () => bridge });
+    return this.ownVerification;
   }
 
   designTools(): ProjectWorkToolBinding[] {

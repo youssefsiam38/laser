@@ -624,7 +624,24 @@ export type ProjectWorkLinkInput =
        * about nothing in particular, and a `verified_at` link with no evidence
        * behind it is a claim.
        */
-      verifiedAt?: { repositoryId: string; state: RepositoryStateRef };
+      verifiedAt?: {
+        repositoryId: string;
+        state: RepositoryStateRef;
+        /**
+         * Ask the host to record this state as native visual evidence a
+         * person accepted (M21-T19, D-361).
+         *
+         * It is a **request for an action**, not the proof of one. The host
+         * validates it — person caller, the exact subject revision and digest,
+         * a checkpoint ref git really holds resolving to the named commit, and
+         * a bounded canonical capture stored before anything is accepted — and
+         * writes its own `RepositoryLink.acceptance` record. A caller cannot
+         * mint that record by sending this field, and a write without this
+         * field is a plain `verified_at` link: still validated, still
+         * captured, but not native visual evidence.
+         */
+        acceptance?: { kind: "checkpoint_preview" };
+      };
     }
   | {
       type: "decision";
@@ -890,7 +907,14 @@ const linkInputSchema = z.discriminatedUnion("type", [
       blobId: projectWorkIdSchema.optional(),
       outcome: z.enum(["passed", "failed", "inconclusive"]),
       repositoryLinkId: projectWorkIdSchema.optional(),
-      verifiedAt: z.object({ repositoryId: projectWorkIdSchema, state: repositoryStateRefSchema }).strict().optional(),
+      verifiedAt: z
+        .object({
+          repositoryId: projectWorkIdSchema,
+          state: repositoryStateRefSchema,
+          acceptance: z.object({ kind: z.literal("checkpoint_preview") }).strict().optional(),
+        })
+        .strict()
+        .optional(),
     })
     .strict(),
   z

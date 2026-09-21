@@ -26,7 +26,7 @@ import { PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
 import { ProjectWorkUnavailableError } from "./errors.js";
 
 /** The shape of the tables this file owns. Bump with a migration step. */
-export const PROJECT_WORK_SCHEMA_VERSION = 2;
+export const PROJECT_WORK_SCHEMA_VERSION = 3;
 
 export interface ProjectWorkDatabase {
   exec(sql: string): void;
@@ -128,6 +128,17 @@ export function migrate(db: ProjectWorkDatabase, file: string, log: (message: st
 }
 
 function step(db: ProjectWorkDatabase, from: number): void {
+  if (from === 2) {
+    // M21-T19 / D-361. What the host proved when a person accepted a state as
+    // native visual evidence: the ref it really found, the commit that ref
+    // really pointed at, and the revision digest the acceptance was about. A
+    // column on the link it belongs to, because it is one row's fact and it is
+    // read every time that link is.
+    db.exec(`
+      ALTER TABLE repository_links ADD COLUMN acceptance_json TEXT;
+    `);
+    return;
+  }
   if (from === 1) {
     // M21-T18. What an attempt did in each repository, read from git at record
     // time, and the session whose checkpoint refs it was read from; plus the

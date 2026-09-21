@@ -40,6 +40,11 @@ import {
   type ProjectWorkMethod,
 } from "./project-work-methods.js";
 import { researchOperationSchema, type ResearchAttention, type ResearchOperation } from "./research.js";
+import {
+  verificationEnvelopeSchema,
+  type VerificationBridgeResult,
+  type VerificationEnvelope,
+} from "./project-work-verification.js";
 
 /** The one method the worker link carries for project work. */
 export const PROJECT_WORK_BRIDGE_METHOD = "project/work/bridge";
@@ -88,6 +93,22 @@ export interface ProjectWorkBridgeParams {
   research?: ResearchOperation;
   /** Present only with `project/task/link-execution`. */
   attempt?: ProjectWorkBridgeAttempt;
+  /**
+   * A verification step (M21-T19).
+   *
+   * Like a research write, it crosses as what it *is* rather than as its
+   * result: `plan` asks the host to derive the criteria from its own store at
+   * exact revisions, and `report` hands back the command runs a verifier alone
+   * can produce. The host evaluates every criterion itself and decides whether
+   * anything converged, so a tool that skipped the worker's own rules — or
+   * lied about an exit code's meaning — changes nothing about the verdict.
+   *
+   * `plan` travels with a `project/work/get` of the Task; `report` with the
+   * `project/work/link` that stores the report as evidence. The host uses the
+   * link only for its fence and its idempotency key: the record's kind, role,
+   * summary and outcome are the host's own.
+   */
+  verify?: VerificationEnvelope;
 }
 
 export interface ProjectWorkBridgeResult {
@@ -103,6 +124,8 @@ export interface ProjectWorkBridgeResult {
     /** Spec/Design decisions the host marked stale because of this write. */
     staleRefs: string[];
   };
+  /** A verification step's answer: the plan, or the stored report (M21-T19). */
+  verifyResult?: VerificationBridgeResult;
 }
 
 /**
@@ -155,6 +178,7 @@ export const projectWorkBridgeParamsSchema = z
     request: bridgeRequestSchema,
     research: researchOperationSchema.optional(),
     attempt: bridgeAttemptSchema.optional(),
+    verify: verificationEnvelopeSchema.optional(),
   })
   .strict();
 

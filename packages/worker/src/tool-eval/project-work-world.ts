@@ -33,6 +33,16 @@ import {
   type ProjectWorkRevision,
   type ProjectWorkState,
   type ResearchOperation,
+  convergenceOf,
+  verificationSummary,
+  type ClientRequests as Requests,
+  type VerificationBridgeResult,
+  type VerificationCriterion,
+  type VerificationEnvelope,
+  type VerificationFinding,
+  type VerificationPlan,
+  type VerificationReport,
+  type VerificationSourceRef,
 } from "@lasercode/protocol";
 import { projectWorkFailure, type ProjectWorkBridge, type ProjectWorkExecutionShape, type ProjectWorkSessionIdentity } from "../project-work/bridge.js";
 
@@ -110,6 +120,167 @@ export class ScriptedProjectWorkWorld implements ProjectWorkBridge {
 
   lastResearchResult(): { attention?: never; staleRefs: string[] } | undefined {
     return this.research as { attention?: never; staleRefs: string[] } | undefined;
+  }
+
+  /**
+   * The verification plan, as the host derives it (M21-T19).
+   *
+   * The same shape and the same rule the real authority uses for what a
+   * fixture exercises: the criteria come from the Task's own revision, the
+   * commands are the ones it declared, and a run cannot add to either.
+   */
+  async verify(
+    params: Requests["project/work/get"]["params"],
+    envelope: Extract<VerificationEnvelope, { action: "plan" }>,
+  ): Promise<{ result: Requests["project/work/get"]["result"]; verify: VerificationBridgeResult }> {
+    void envelope;
+    const result = (await this.call("project/work/get", params)) as Requests["project/work/get"]["result"];
+    const stored = this.items.get(result.entity.entityId)!;
+    return { result, verify: { plan: this.planFor(stored) } };
+  }
+
+  /**
+   * The report, evaluated here rather than taken from the caller: a verifier
+   * hands back exit codes, and the authority decides what they mean.
+   */
+  async verifyReport(
+    params: Requests["project/work/link"]["params"],
+    envelope: Extract<VerificationEnvelope, { action: "report" }>,
+  ): Promise<{ result: Requests["project/work/link"]["result"]; verify: VerificationBridgeResult }> {
+    const link = params.link as { entityId: string };
+    const stored = this.items.get(link.entityId)!;
+    const plan = this.planFor(stored);
+    const runs = new Map(envelope.commands.map((run) => [run.command, run]));
+    const findings: VerificationFinding[] = plan.criteria.map((criterion) => {
+      if (criterion.kind === "review") {
+        const blocking = (stored.entity.blockingComments ?? 0) > 0;
+        return {
+          criterionId: criterion.id,
+          outcome: blocking ? ("failed" as const) : ("satisfied" as const),
+          detail: blocking ? "A blocking comment is open." : "Nothing is open.",
+          evidenceIds: [],
+        };
+      }
+      const run = criterion.command ? runs.get(criterion.command) : undefined;
+      if (!run) {
+        return {
+          criterionId: criterion.id,
+          outcome: "needs_person" as const,
+          detail: "No command decides this one.",
+          evidenceIds: [],
+          steps: ["Check it and record what you saw."],
+        };
+      }
+      return {
+        criterionId: criterion.id,
+        outcome: run.status === "passed" ? ("satisfied" as const) : ("failed" as const),
+        detail: `${run.command} exited ${String(run.exitCode ?? "without a code")}.`,
+        evidenceIds: [],
+        commands: [run.command],
+      };
+    });
+    const convergence = convergenceOf({ criteria: plan.criteria, findings, blockers: plan.blockers });
+    const withoutSummary: Omit<VerificationReport, "summary"> = {
+      version: 1,
+      runId: envelope.runId,
+      task: plan.task,
+      startedAt: envelope.startedAt,
+      endedAt: envelope.endedAt,
+      authorities: plan.authorities,
+      criteria: plan.criteria,
+      commands: envelope.commands,
+      findings,
+      deviations: (envelope.deviations ?? []).map((deviation) => ({ ...deviation, state: "proposed" as const })),
+      blockers: plan.blockers,
+      personDecisions: findings
+        .filter((finding) => finding.outcome === "needs_person")
+        .map((finding) => ({ criterionId: finding.criterionId, question: finding.detail, steps: finding.steps ?? [] })),
+      converged: convergence.converged,
+      outcome: convergence.outcome,
+      truncated: [],
+    };
+    const report: VerificationReport = { ...withoutSummary, summary: verificationSummary(withoutSummary) };
+    const evidence = {
+      projectId: PROJECT_ID,
+      evidenceId: `evd_${String(this.nextId++)}`,
+      entityId: stored.entity.entityId,
+      revisionId: stored.entity.currentRevisionId,
+      kind: "verification",
+      role: report.converged ? "acceptance" : "supporting",
+      summary: `Verification: ${report.summary}`,
+      outcome: report.converged ? "passed" : report.outcome === "failed" ? "failed" : "inconclusive",
+      at: AT,
+      origin: this.origin(),
+    };
+    stored.evidence.push(evidence);
+    if (report.converged && stored.entity.state === "in_progress") {
+      stored.entity = { ...stored.entity, state: "needs_review" };
+    }
+    this.seq += 1;
+    return {
+      result: { link: { type: "evidence", evidence } as never, seq: this.seq },
+      verify: { report, evidenceId: evidence.evidenceId, blobId: "blb_eval", taskState: stored.entity.state },
+    };
+  }
+
+  /** The criteria one Task declares: its acceptance, its commands, its reviews. */
+  private planFor(stored: Stored): VerificationPlan {
+    const body = stored.bodies.get(stored.entity.currentRevisionId)!;
+    const task = body.kind === "task" ? body.task : undefined;
+    const source: VerificationSourceRef = {
+      authority: "task",
+      entityId: stored.entity.entityId,
+      kind: stored.entity.kind,
+      key: stored.entity.key,
+      revisionId: stored.entity.currentRevisionId,
+      digest: stored.entity.currentDigest,
+      title: stored.entity.title,
+    };
+    const criteria: VerificationCriterion[] = [];
+    for (const item of task?.acceptance ?? []) {
+      criteria.push({
+        id: `task:${item.id}`,
+        authority: "task",
+        kind: "acceptance",
+        text: item.text,
+        required: true,
+        machineVerifiable: item.machineVerifiable,
+        source,
+        ...(item.command !== undefined ? { command: item.command } : {}),
+      });
+    }
+    (task?.verificationCommands ?? []).forEach((command, index) => {
+      criteria.push({
+        id: `task:command:${String(index)}`,
+        authority: "task",
+        kind: "command",
+        text: `${command} passes.`,
+        required: true,
+        machineVerifiable: true,
+        source,
+        command,
+      });
+    });
+    criteria.push({
+      id: "task:review",
+      authority: "task",
+      kind: "review",
+      text: "Nothing blocking is left on this task.",
+      required: true,
+      machineVerifiable: true,
+      source,
+    });
+    return {
+      task: source,
+      authorities: [source],
+      criteria,
+      commands: task?.verificationCommands ?? [],
+      blockers:
+        (stored.entity.blockingComments ?? 0) > 0
+          ? [{ kind: "blocking_comment" as const, detail: `${stored.entity.key} has a blocking comment nobody has resolved.`, key: stored.entity.key }]
+          : [],
+      truncated: [],
+    };
   }
 
   async call<M extends ProjectWorkMethod>(
