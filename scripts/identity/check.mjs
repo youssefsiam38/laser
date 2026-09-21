@@ -255,7 +255,6 @@ const VOCABULARY_EXEMPT_LINES = new Set([
   // key the purge list must keep naming, and the legacy state key the
   // naming carry reads once.
   "packages/ui/src/runtime/device-storage.ts:beam-session",
-  "packages/host/src/paths.ts:beam",
   "packages/host/src/agents/store.ts:namer",
   "packages/worker/src/agents/session-config.ts:beam",
 ]);
