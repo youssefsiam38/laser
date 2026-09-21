@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProtocolError, type BackgroundTask, type BackgroundTaskUpdate } from "@lasercode/protocol";
-import { MAX_REGISTER_BYTES, MAX_SESSIONS_WITH_TASKS, TaskRegister } from "../../src/tasks/register.js";
+import { MAX_REGISTER_BYTES, MAX_SESSIONS_WITH_TASKS, MAX_TASKS_PER_SESSION, TaskRegister } from "../../src/tasks/register.js";
 
 const PATH = "/sessions/a.jsonl";
 const OTHER = "/sessions/b.jsonl";
+/** Where a fork puts the conversation that used to live at `PATH`. */
+const FORKED = "/sessions/a-forked.jsonl";
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -232,6 +234,143 @@ describe("TaskRegister", () => {
     expect(retained.overflow).toBeUndefined();
     expect(w.register.list(PATH).map((task) => task.id)).toEqual(["t-live"]);
     expect(w.register.list().some((task) => task.id === "t-live")).toBe(true);
+  });
+
+  // ------------------------------------------------ a fork moved the session
+
+  /**
+   * RP-4: a fork changes a session's *file*, not its commands.
+   *
+   * The register is keyed by path, so without this transition the row of a
+   * command that is still running stays under a path no runtime serves: a
+   * ghost the fleet can never lose, a `tasks/list` that hands a reconnecting
+   * client a stale *running* row, and a Stop that reaches nothing.
+   */
+  describe("when a fork moves a session's file", () => {
+    it("takes the commands with it and leaves no row behind", () => {
+      const w = world();
+      w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-live" }) });
+      w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-done", status: "completed", exitCode: 0, endedAt: "2026-09-08T10:01:00.000Z" }) });
+      w.register.observeExtensionMessage(OTHER, { type: "lasercode/task/update", task: update({ id: "t-elsewhere" }) });
+      const before = w.broadcast().length;
+
+      w.register.rekeySession(PATH, FORKED);
+
+      // One row per command, under the conversation that exists.
+      expect(w.register.list(PATH)).toEqual([]);
+      expect(w.register.list(FORKED).map((task) => task.id)).toEqual(["t-live", "t-done"]);
+      expect(w.register.list(FORKED).every((task) => task.sessionPath === FORKED)).toBe(true);
+      expect(w.register.list().map((task) => task.id).sort()).toEqual(["t-done", "t-elsewhere", "t-live"]);
+      expect(w.register.get(FORKED, "t-live")?.status).toBe("running");
+      expect(w.register.get(PATH, "t-live")).toBeUndefined();
+      // Another conversation's command never moved.
+      expect(w.register.list(OTHER).map((task) => task.id)).toEqual(["t-elsewhere"]);
+
+      // Every client is told where each moved command hangs now, and nothing
+      // private travels with it.
+      const told = w.broadcast().slice(before);
+      expect(told.map((task) => task.id)).toEqual(["t-live", "t-done"]);
+      expect(told.every((task) => task.sessionPath === FORKED)).toBe(true);
+      expect(JSON.stringify(told)).not.toContain("logPath");
+
+      // Idempotent, and a path it never held moves nothing.
+      w.register.rekeySession(PATH, FORKED);
+      w.register.rekeySession("/sessions/never.jsonl", OTHER);
+      w.register.rekeySession(FORKED, FORKED);
+      expect(w.broadcast().length).toBe(before + 2);
+      expect(w.register.list(FORKED).map((task) => task.id)).toEqual(["t-live", "t-done"]);
+      expect(w.register.list(OTHER).map((task) => task.id)).toEqual(["t-elsewhere"]);
+    });
+
+    it("keeps the row published after the move, and never turns a finished command back into a running one", () => {
+      const w = world();
+      // The worker re-keys its own structures before it answers the fork, so a
+      // row can already have arrived under the new path — including the one
+      // that says the command ended — before the host learns the session moved.
+      w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-1", outputBytes: 10 }) });
+      w.register.observeExtensionMessage(FORKED, {
+        type: "lasercode/task/update",
+        task: update({ id: "t-1", status: "completed", exitCode: 0, endedAt: "2026-09-08T10:01:00.000Z", outputBytes: 4_096, terminalReason: "exit code 0" }),
+      });
+      // And the same command's *stale* running row is still under the old path.
+      w.register.rekeySession(PATH, FORKED);
+
+      const moved = w.register.list(FORKED);
+      expect(moved).toHaveLength(1);
+      expect(moved[0]).toMatchObject({ id: "t-1", status: "completed", outputBytes: 4_096, terminalReason: "exit code 0", sessionPath: FORKED });
+      // The newer row was already broadcast when it arrived; the move does not
+      // re-tell a client something it has.
+      expect(w.broadcast().filter((task) => task.status === "completed")).toHaveLength(1);
+      expect(w.broadcast().some((task) => task.status === "running" && task.sessionPath === FORKED)).toBe(false);
+
+      // The guard from the other side: a command that ended before the fork is
+      // not resurrected by a running row that happens to sit at the new path.
+      const other = world();
+      other.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-2", status: "failed", exitCode: 2, endedAt: "2026-09-08T10:02:00.000Z" }) });
+      other.register.observeExtensionMessage(FORKED, { type: "lasercode/task/update", task: update({ id: "t-2" }) });
+      other.register.rekeySession(PATH, FORKED);
+      expect(other.register.list(FORKED)).toEqual([expect.objectContaining({ id: "t-2", status: "failed", sessionPath: FORKED })]);
+    });
+
+    it("keeps reading the moved command's output, and refuses it from the path it left", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "task-register-fork-"));
+      dirs.push(dir);
+      const logPath = join(dir, "t-1");
+      writeFileSync(`${logPath}.0.log`, "hello world");
+      const w = world(dir);
+      w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ logPath, logSegments: [0], outputBytes: 11 }) });
+      // The row that arrived under the new path before the fork was answered
+      // need not repeat where the bytes are.
+      w.register.observeExtensionMessage(FORKED, { type: "lasercode/task/update", task: update({ outputBytes: 11, activity: "hello world" }) });
+
+      w.register.rekeySession(PATH, FORKED);
+
+      expect(await w.register.read(FORKED, "t-1", 0)).toMatchObject({ chunk: "hello world", eof: true });
+      await expect(w.register.read(PATH, "t-1", 0), "the old path owns nothing now").rejects.toThrow(/does not belong to this session/);
+      expect(JSON.stringify(w.register.list(FORKED))).not.toContain(dir);
+    });
+
+    it("holds exactly the bytes of what it kept, and prunes at the path it moved to", () => {
+      const w = world();
+      for (let index = 0; index < MAX_TASKS_PER_SESSION + 20; index++) {
+        w.register.observeExtensionMessage(PATH, {
+          type: "lasercode/task/update",
+          task: update({ id: `t-${index}`, status: "completed", exitCode: 0, endedAt: "2026-09-08T10:01:00.000Z", command: "pnpm \u{1f680} test" }),
+        });
+      }
+      w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-live" }) });
+
+      w.register.rekeySession(PATH, FORKED);
+
+      // The same rows a register that had only ever seen the new path would
+      // hold, and the same exact UTF-8 bytes — the emoji costs more bytes than
+      // characters on both sides.
+      const mirror = world();
+      for (const task of w.register.list(FORKED)) mirror.register.upsert(FORKED, task);
+      expect(w.register.retained().count).toBe(mirror.register.retained().count);
+      expect(w.register.retained().bytes).toBe(mirror.register.retained().bytes);
+      // The per-session bound applies where the rows now live, and the command
+      // still running is never one of the forgotten.
+      expect(w.register.list(FORKED).length).toBe(MAX_TASKS_PER_SESSION);
+      expect(w.register.list(FORKED).some((task) => task.id === "t-live")).toBe(true);
+      expect(w.register.list(PATH)).toEqual([]);
+    });
+
+    it("does not end a moved command when the file it came from is closed", () => {
+      const w = world();
+      w.register.observeExtensionMessage(PATH, { type: "lasercode/task/update", task: update({ id: "t-live" }) });
+      w.register.rekeySession(PATH, FORKED);
+
+      // The old path is closed — it is a file nothing serves — and the command
+      // that moved keeps running, because it did.
+      w.register.sessionClosed(PATH);
+      w.register.workerLost([PATH]);
+      expect(w.register.get(FORKED, "t-live")?.status).toBe("running");
+
+      // Losing the worker that really runs it still ends it, at the path it is.
+      w.register.workerLost([FORKED]);
+      expect(w.register.get(FORKED, "t-live")).toMatchObject({ status: "stopped", terminalReason: "the worker stopped" });
+    });
   });
 
   it("lists one session or every session", () => {

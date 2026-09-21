@@ -51,6 +51,9 @@ export const DEFAULT_BUILD_MS = 5 * 60_000;
 /** Files parsed between two turns of the event loop. */
 export const YIELD_EVERY_FILES = 8;
 
+/** Builds started by this process, so no two commands share an id. */
+let started = 0;
+
 export interface DesignBuildOptions {
   projectCwd: string;
   /** The app root inside the project, for a monorepo. Defaults to the project. */
@@ -79,7 +82,23 @@ export interface DesignBuildResult {
   /** Where the index was written, when it was. */
   indexPath?: string;
   l0: L0Build;
+  /**
+   * The build did not run to its end.
+   *
+   * True when the person stopped it *at any point it could be stopped* — not
+   * only inside the file loop — and when a budget cut it short. A build that
+   * really finished everything it set out to do is never `stopped`, and a Stop
+   * that arrives after the outcome is settled does not relabel it.
+   */
   stopped: boolean;
+  /**
+   * Why it did not finish, when it did not.
+   *
+   * A fleet row says "you stopped it" about a person's Stop; it must not say
+   * that about a build that ran into its own budget. Absent when the build
+   * finished.
+   */
+  stoppedBy?: "person" | "budget";
   /** Files whose digest changed (or were new) and were therefore re-parsed. */
   reparsed: string[];
 }
@@ -131,7 +150,12 @@ export async function buildDesignIndex(options: DesignBuildOptions): Promise<Des
   const facts: DesignFact[] = [];
   const gaps: Gap[] = [];
   const reparsed: string[] = [];
-  let stopped = options.signal?.aborted === true || scan.truncated;
+  // Asked, never remembered: `stopped` is derived from the signal at each point
+  // the build could have been stopped, so an abort that lands between two of
+  // them is still the truth by the time the outcome is written.
+  const aborted = (): boolean => options.signal?.aborted === true;
+  let stoppedByPerson = aborted();
+  let stoppedByBudget = scan.truncated && !stoppedByPerson;
   let fromCache = 0;
   let sinceYield = 0;
 
@@ -147,11 +171,12 @@ export async function buildDesignIndex(options: DesignBuildOptions): Promise<Des
         setTimeout(resolve, 0);
       });
     }
-    if (options.signal?.aborted === true || now() - startedAt > maxMs) {
-      stopped = true;
+    if (aborted() || now() - startedAt > maxMs) {
+      if (aborted()) stoppedByPerson = true;
+      else stoppedByBudget = true;
       gaps.push({
         path: file.path,
-        reason: options.signal?.aborted === true
+        reason: aborted()
           ? "you stopped this build here; everything parsed before it is in the index."
           : "the build reached its time budget here; everything parsed before it is in the index.",
       });
@@ -182,11 +207,11 @@ export async function buildDesignIndex(options: DesignBuildOptions): Promise<Des
     parsedFiles: progress.filesParsed,
     cachedFiles: fromCache,
     ...(options.builtFrom !== undefined ? { builtFrom: options.builtFrom } : {}),
-    ...(stopped ? { stoppedEarly: true } : {}),
+    ...(stoppedByPerson || stoppedByBudget ? { stoppedEarly: true } : {}),
   });
 
   let index = l0.index;
-  if (options.synthesis && options.signal?.aborted !== true) {
+  if (options.synthesis && !aborted()) {
     report({ phase: "describing" });
     const result = await synthesise(index, l0.facts, {
       models: options.synthesis.models,
@@ -195,6 +220,11 @@ export async function buildDesignIndex(options: DesignBuildOptions): Promise<Des
       ...(options.signal ? { signal: options.signal } : {}),
     });
     index = applySynthesis(index, result, options.synthesis.profileId);
+    // Describing is the long await, and it is abortable: a Stop accepted while
+    // the model was answering ended this build, whatever the descriptions that
+    // came back look like. Without this the outcome would read *completed* for
+    // a command the person watched themselves stop.
+    if (aborted()) stoppedByPerson = true;
   }
 
   report({ phase: "writing" });
@@ -205,6 +235,16 @@ export async function buildDesignIndex(options: DesignBuildOptions): Promise<Des
     indexPath = writeIndex(options.projectCwd, reviewed);
     writeReview(options.projectCwd, review);
   }
+  // The last question, after the last thing that could have been interrupted
+  // and before the outcome exists: everything from here to the return is one
+  // synchronous run, so nothing can arrive after this and still be a Stop of a
+  // build that had not settled. A Stop that lands later is a Stop of something
+  // already over, and it changes nothing — settled is settled.
+  //
+  // A write that failed threw before this point and is reported as the failure
+  // it is; being stopped never hides one.
+  if (aborted()) stoppedByPerson = true;
+  const stopped = stoppedByPerson || stoppedByBudget;
   report({ phase: stopped ? "stopped" : "done", currentPath: undefined });
 
   return {
@@ -214,6 +254,7 @@ export async function buildDesignIndex(options: DesignBuildOptions): Promise<Des
     ...(indexPath !== undefined ? { indexPath } : {}),
     l0,
     stopped,
+    ...(stopped ? { stoppedBy: stoppedByPerson ? ("person" as const) : ("budget" as const) } : {}),
     reparsed,
   };
 }
@@ -237,7 +278,11 @@ export function startDesignIndexBuild(options: DesignBuildOptions): DesignBuildC
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   let latest: DesignBuildProgress = { phase: "scanning", filesParsed: 0, filesFound: 0, filesFromCache: 0, elapsedMs: 0 };
-  const id = stableId("cmd", options.projectCwd, options.appRoot ?? ".", String(Date.now()));
+  // The counter, not only the clock: this id is a Command's identity — the
+  // fleet row it publishes under and the Stop that finds it — and two builds
+  // started in the same millisecond would otherwise be the same command.
+  started += 1;
+  const id = stableId("cmd", options.projectCwd, options.appRoot ?? ".", String(Date.now()), String(started));
   const done = buildDesignIndex({
     ...options,
     signal,

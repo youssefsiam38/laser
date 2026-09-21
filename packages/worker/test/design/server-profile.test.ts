@@ -177,16 +177,24 @@ function harness(designRuntime: CompletionRuntime, options: { projectWork?: bool
 
 const PROJECT_ID = "pw_9f2c1a0400000000000000000000";
 
-/** Build the index and wait for the command to finish. */
+/**
+ * Build the index and wait for the command to finish.
+ *
+ * A build belongs to a conversation — it is a Command the person watches and
+ * stops — so one is opened first and owns it, exactly as the window does.
+ */
 async function buildIndex(call: ReturnType<typeof harness>["call"]): Promise<DesignIndex | undefined> {
-  const started = await call(1, "design/index/build", { projectId: PROJECT_ID });
+  const opened = (await call(1, "session/new", { cwd: projectCwd })) as { result?: { state?: { path?: string } } };
+  const sessionPath = opened.result?.state?.path;
+  expect(typeof sessionPath, "the owning conversation opened").toBe("string");
+  const started = await call(2, "design/index/build", { projectId: PROJECT_ID, sessionPath });
   expect(started.error, JSON.stringify(started.error)).toBeUndefined();
   for (let attempt = 0; attempt < 400; attempt += 1) {
     const answer = (await call(100 + attempt, "design/index/get", { projectId: PROJECT_ID })) as {
-      result?: { state: string; index?: DesignIndex; commands: Array<{ state: string }> };
+      result?: { state: string; index?: DesignIndex; commands: Array<{ running: boolean }> };
     };
     const result = answer.result;
-    if (result && result.commands.every((command) => command.state !== "running") && result.index) return result.index;
+    if (result && result.commands.every((command) => !command.running) && result.index) return result.index;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   return undefined;

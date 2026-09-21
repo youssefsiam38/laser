@@ -18,12 +18,19 @@
  *   grounding are `project_write`; a connection without it gets the access
  *   object with those verbs absent and one sentence saying why — never a
  *   button that fails.
+ * - **A build always names the conversation that owns it.** An index build is
+ *   a Command, and a Command lives in a session's fleet group: this passes the
+ *   session that will own it, and when none of this window's conversations
+ *   can, it hands the panel the sentence to show in the button's place rather
+ *   than starting work nobody could watch or stop.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ClientRequests, DesignIndex, DesignIndexCommand } from "@lasercode/protocol";
 
+import { closeWorkspace } from "@/project-work";
 import { useCapability, useLaserStable } from "@/runtime";
 
+import { designBuildOwnerHasSession, useDesignBuildOwner } from "./build-owner.js";
 import type { DesignIndexAccess, DesignIndexState, DesignReviewVerb } from "./DesignIndexPanel.js";
 
 type Request = <M extends keyof ClientRequests>(method: M, params: ClientRequests[M]["params"]) => Promise<ClientRequests[M]["result"]>;
@@ -54,6 +61,10 @@ function messageOf(error: unknown): string {
 }
 
 export function useDesignAccess(projectId: string, options: { sessionPath?: string | undefined } = {}): DesignWorkspaceAccess {
+  const derivedOwner = useDesignBuildOwner(options.sessionPath === undefined ? projectId : "");
+  const owner = options.sessionPath !== undefined ? { sessionPath: options.sessionPath } : derivedOwner;
+  const ownerPath = designBuildOwnerHasSession(owner) ? owner.sessionPath : undefined;
+  const ownerRefusal = designBuildOwnerHasSession(owner) ? undefined : owner.refusal;
   const { client } = useLaserStable() as { client?: { request: Request } };
   // The reads depend on *having* a client, not on its identity: a provider
   // that hands out a fresh object each render must not restart them.
@@ -123,11 +134,14 @@ export function useDesignAccess(projectId: string, options: { sessionPath?: stri
   const reindex = useCallback(async (): Promise<{ ok: true; commandId: string } | { ok: false; message: string }> => {
     const request = clientRef.current?.request;
     if (!request) return { ok: false, message: "This window is not connected right now." };
+    // Never sent without one: the control that calls this is only offered when
+    // a conversation can own the build.
+    if (ownerPath === undefined) return { ok: false, message: ownerRefusal ?? "" };
     try {
       const answer = await request("design/index/build", {
         projectId,
         rebuild: false,
-        ...(options.sessionPath !== undefined ? { sessionPath: options.sessionPath } : {}),
+        sessionPath: ownerPath,
       });
       setCommands((current) => [...current.filter((command) => command.commandId !== answer.command.commandId), answer.command]);
       refresh();
@@ -135,7 +149,7 @@ export function useDesignAccess(projectId: string, options: { sessionPath?: stri
     } catch (error) {
       return { ok: false, message: messageOf(error) };
     }
-  }, [options.sessionPath, projectId, refresh]);
+  }, [ownerPath, ownerRefusal, projectId, refresh]);
 
   const stopReindex = useCallback(
     (commandId: string): void => {
@@ -169,7 +183,19 @@ export function useDesignAccess(projectId: string, options: { sessionPath?: stri
   const access: DesignIndexAccess = useMemo(
     () => ({
       state,
-      ...(writable ? { review, reindex, stopReindex } : {}),
+      ...(writable ? { review, stopReindex } : {}),
+      ...(writable && ownerPath !== undefined ? { reindex } : {}),
+      ...(writable && ownerPath === undefined && ownerRefusal !== undefined
+        ? {
+            reindexRefusal: {
+              sentence: ownerRefusal,
+              // The way back to a conversation is the one the workspace
+              // already has: closing it returns to the conversation, where a
+              // session is opened or started as usual (D-355).
+              act: { label: "Back to the conversation", run: () => closeWorkspace() },
+            },
+          }
+        : {}),
       ...(running !== undefined
         ? {
             reindexing: {
@@ -181,7 +207,7 @@ export function useDesignAccess(projectId: string, options: { sessionPath?: stri
         : {}),
       ...(writable ? {} : { writeRefusal: canWrite.state === "explained" ? canWrite.explanation : "This connection can read this project's design system but not change it." }),
     }),
-    [canWrite, reindex, review, running, state, stopReindex, writable],
+    [canWrite, ownerPath, ownerRefusal, reindex, review, running, state, stopReindex, writable],
   );
 
   return {
