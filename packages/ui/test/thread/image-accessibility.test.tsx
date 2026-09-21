@@ -58,6 +58,57 @@ const refOf = (index: number, decoded = PICTURE_SURFACE) => ({
 /** Let the pool's deferred pass run: it decides what to read one microtask later. */
 const settled = () => new Promise(resolve => setTimeout(resolve, 0));
 
+/**
+ * Every pool a test makes, so the file can retire them all when that test ends.
+ *
+ * A pool is a live thing: a read it started keeps going until it lands, and a
+ * release at the end of a test can start another one a microtask later. None
+ * of that belongs to the next test, whose `URL.createObjectURL` is a different
+ * spy writing into a different array — so every pool is made through here and
+ * cleared when the test that made it ends, in the `afterEach` below. That
+ * fence is what makes an assertion about what *this* test created, or did not
+ * create, mean what it says. A pool made with `new ImageBlobs` directly is
+ * outside it.
+ */
+const pools: ImageBlobs[] = [];
+function pool(request: unknown, environmentKey = "env"): ImageBlobs {
+  const blobs = new ImageBlobs(request as never, environmentKey);
+  pools.push(blobs);
+  return blobs;
+}
+
+/**
+ * A conversation that has been asked and has not answered yet: the test says
+ * when the bytes arrive, so a read can be left genuinely in flight rather than
+ * hopefully still running.
+ */
+function deferredAuthority() {
+  let arrived!: () => void;
+  const asked = new Promise<void>(resolve => { arrived = resolve; });
+  let answer!: () => void;
+  const held = new Promise<void>(resolve => { answer = resolve; });
+  const request = vi.fn(async (params: Record<string, unknown>) => {
+    arrived();
+    await held;
+    const text = WHOLE;
+    return {
+      authority: "durable", revision: "r", entryId: params.entryId as string, component: params.component,
+      totalBytes: CHARS, offset: 0, bytes: CHARS, truncated: false,
+      sliceDigest: await digestOf(text), contentDigest: await digestOf(WHOLE), text,
+    };
+  });
+  return {
+    request,
+    /** Resolves once the authority has actually been asked. */
+    asked,
+    /** Answer it, and say when the reply itself has been handed back. */
+    answer: async (): Promise<void> => {
+      answer();
+      await (request.mock.results[0]?.value as Promise<unknown> | undefined);
+    },
+  };
+}
+
 /** Wait for one image to reach a state, through the pool's own notifications. */
 function reaches(blobs: ImageBlobs, key: string, matches: (state: ImageState) => boolean): Promise<ImageState> {
   return new Promise((resolve, reject) => {
@@ -76,12 +127,26 @@ function reaches(blobs: ImageBlobs, key: string, matches: (state: ImageState) =>
 
 let created: string[];
 let revoked: string[];
+const nativeCreateObjectURL = globalThis.URL.createObjectURL;
+const nativeRevokeObjectURL = globalThis.URL.revokeObjectURL;
 
 beforeEach(() => {
   created = []; revoked = [];
   let counter = 0;
   globalThis.URL.createObjectURL = vi.fn(() => { const url = `blob:${++counter}`; created.push(url); return url; });
   globalThis.URL.revokeObjectURL = vi.fn((url: string) => { revoked.push(url); });
+});
+
+afterEach(() => {
+  // Retire every pool this test made, before the next test's spy is installed.
+  // `clear()` bumps the generation, and a read checks it again after its last
+  // byte arrives and before it publishes anything — so work still out at the
+  // authority gives its bytes up instead of allocating an object URL into
+  // somebody else's window. Then the window's own helpers go back, so nothing
+  // between tests is writing into a test's arrays at all.
+  for (const blobs of pools.splice(0, pools.length)) blobs.clear();
+  globalThis.URL.createObjectURL = nativeCreateObjectURL;
+  globalThis.URL.revokeObjectURL = nativeRevokeObjectURL;
 });
 
 describe("the order a window decodes pictures in", () => {
@@ -119,7 +184,7 @@ describe("the order a window decodes pictures in", () => {
         totalBytes: CHARS, offset: 0, bytes: CHARS, truncated: false,
         sliceDigest: await digestOf(text), contentDigest: await digestOf(WHOLE), text };
     });
-    const blobs = new ImageBlobs(request as never, "env");
+    const blobs = pool(request);
     // Eight rows mount in one pass: the offscreen ones happen to be asked for
     // first, which is exactly the case a queue exists for.
     const loads = [
@@ -142,7 +207,7 @@ const HALF = Math.floor(IMAGE_SURFACE_MAX_BYTES / 2);
 describe("a window that cannot decode everything at once", () => {
 
   it("takes room from the least recently visible picture, not from one on screen", async () => {
-    const blobs = new ImageBlobs(authority() as never, "env");
+    const blobs = pool(authority());
     expect((await blobs.load("a", SESSION, refOf(1, HALF), "image/png", IMAGE_PRIORITY.background)).state).toBe("ready");
     expect((await blobs.load("b", SESSION, refOf(2, HALF), "image/png", IMAGE_PRIORITY.background)).state).toBe("ready");
     const before = blobs.url("a");
@@ -160,7 +225,7 @@ describe("a window that cannot decode everything at once", () => {
   });
 
   it("never refuses a picture for good: it comes back when there is room", async () => {
-    const blobs = new ImageBlobs(authority() as never, "env");
+    const blobs = pool(authority());
     await blobs.load("held-1", SESSION, refOf(1, HALF), "image/png", IMAGE_PRIORITY.visible);
     await blobs.load("held-2", SESSION, refOf(2, HALF), "image/png", IMAGE_PRIORITY.visible);
     // A third visible picture: nothing off screen to give up, so it waits.
@@ -175,7 +240,7 @@ describe("a window that cannot decode everything at once", () => {
   });
 
   it("speculative work never takes a picture from a row that wants one", async () => {
-    const blobs = new ImageBlobs(authority() as never, "env");
+    const blobs = pool(authority());
     await blobs.load("shown", SESSION, refOf(1, HALF), "image/png", IMAGE_PRIORITY.visible);
     await blobs.load("also-shown", SESSION, refOf(2, HALF), "image/png", IMAGE_PRIORITY.visible);
     const speculative = await blobs.load("ahead", SESSION, refOf(3, HALF), "image/png", IMAGE_PRIORITY.nearby);
@@ -185,7 +250,7 @@ describe("a window that cannot decode everything at once", () => {
   });
 
   it("shows a twenty-five picture prompt whole, and keeps only a bounded residue when it is gone", async () => {
-    const blobs = new ImageBlobs(authority() as never, "env");
+    const blobs = pool(authority());
     const keys = Array.from({ length: 25 }, (_, index) => `shot-${index}`);
     const states = await Promise.all(keys.map((key, index) =>
       blobs.load(key, SESSION, refOf(index), "image/png", IMAGE_PRIORITY.visible)));
@@ -215,7 +280,7 @@ describe("a window that cannot decode everything at once", () => {
     // The residue budget bounds what nobody is looking at. A screen full of
     // pictures must not spend it, or the lookahead is dead in exactly the
     // conversation it exists for.
-    const blobs = new ImageBlobs(authority() as never, "env");
+    const blobs = pool(authority());
     const visible = Array.from({ length: IMAGE_BLOB_MAX + 1 }, (_, index) => `seen-${index}`);
     const states = await Promise.all(visible.map((key, index) =>
       blobs.load(key, SESSION, refOf(index), "image/png", IMAGE_PRIORITY.visible)));
@@ -232,7 +297,7 @@ describe("a window that cannot decode everything at once", () => {
   });
 
   it("gives the pictures nobody is looking at back under memory pressure", async () => {
-    const blobs = new ImageBlobs(authority() as never, "env");
+    const blobs = pool(authority());
     await blobs.load("seen", SESSION, refOf(1), "image/png", IMAGE_PRIORITY.visible);
     await blobs.load("ahead", SESSION, refOf(2), "image/png", IMAGE_PRIORITY.nearby);
     await blobs.load("gone", SESSION, refOf(3), "image/png", IMAGE_PRIORITY.background);
@@ -261,7 +326,7 @@ describe("a window that cannot decode everything at once", () => {
   });
 
   it("lets go of a picture again once the person closes it", async () => {
-    const blobs = new ImageBlobs(authority() as never, "env");
+    const blobs = pool(authority());
     await blobs.load("opened", SESSION, refOf(1, HALF), "image/png", IMAGE_PRIORITY.background);
     const viewer = await blobs.open("opened", SESSION, refOf(1, HALF), "image/png");
     if ("failed" in viewer) throw new Error("the window was holding this picture");
@@ -280,7 +345,7 @@ describe("a window that cannot decode everything at once", () => {
   });
 
   it("gives every object URL back and never drives its counters negative", async () => {
-    const blobs = new ImageBlobs(authority() as never, "env");
+    const blobs = pool(authority());
     await blobs.load("once", SESSION, refOf(1), "image/png");
     await blobs.load("once", SESSION, refOf(1), "image/png");
     const url = blobs.url("once");
@@ -300,7 +365,7 @@ describe("opening an image a person asked for", () => {
 
   it("reads its bytes even when the pool has no room to decode it", async () => {
     const request = authority();
-    const blobs = new ImageBlobs(request as never, "env");
+    const blobs = pool(request);
     await blobs.load("shown", SESSION, refOf(1, HALF), "image/png", IMAGE_PRIORITY.visible);
     await blobs.load("also-shown", SESSION, refOf(2, HALF), "image/png", IMAGE_PRIORITY.visible);
     const waiting = await blobs.load("wanted", SESSION, refOf(3, HALF), "image/png", IMAGE_PRIORITY.visible);
@@ -336,7 +401,7 @@ describe("opening an image a person asked for", () => {
 
   it("reads a picture for a viewer once, however many times a person clicks", async () => {
     const request = authority();
-    const blobs = new ImageBlobs(request as never, "env");
+    const blobs = pool(request);
     await blobs.load("shown", SESSION, refOf(1, HALF), "image/png", IMAGE_PRIORITY.visible);
     await blobs.load("also-shown", SESSION, refOf(2, HALF), "image/png", IMAGE_PRIORITY.visible);
     await blobs.load("wanted", SESSION, refOf(3, HALF), "image/png", IMAGE_PRIORITY.visible);
@@ -370,7 +435,7 @@ describe("opening an image a person asked for", () => {
 
   it("hands over the picture the window already has, without reading it again", async () => {
     const request = authority();
-    const blobs = new ImageBlobs(request as never, "env");
+    const blobs = pool(request);
     await blobs.load("here", SESSION, refOf(1), "image/png");
     const reads = request.mock.calls.length;
     const opened = await blobs.open("here", SESSION, refOf(1), "image/png");
@@ -385,7 +450,7 @@ describe("opening an image a person asked for", () => {
   });
 
   it("is never evicted under the viewer showing it", async () => {
-    const blobs = new ImageBlobs(authority() as never, "env");
+    const blobs = pool(authority());
     await blobs.load("open-me", SESSION, refOf(1, HALF), "image/png", IMAGE_PRIORITY.background);
     const opened = await blobs.open("open-me", SESSION, refOf(1, HALF), "image/png");
     if ("failed" in opened) throw new Error("the window had this picture");
@@ -405,7 +470,7 @@ describe("an image that genuinely cannot be shown", () => {
       if (moved) throw Object.assign(new Error("revision moved"), { code: -32007 });
       return good(params);
     });
-    const blobs = new ImageBlobs(request as never, "env");
+    const blobs = pool(request);
     expect(await blobs.load("gone", SESSION, refOf(1), "image/png")).toEqual({ state: "failed", reason: "moved" });
     // A failure is remembered rather than re-read on every render.
     expect(await blobs.load("gone", SESSION, refOf(1), "image/png")).toEqual({ state: "failed", reason: "moved" });
@@ -422,7 +487,7 @@ describe("an image that genuinely cannot be shown", () => {
       totalBytes: CHARS, offset: 0, bytes: CHARS, truncated: false,
       sliceDigest: await digestOf(WHOLE), contentDigest: await digestOf("another image entirely"), text: WHOLE,
     }));
-    const blobs = new ImageBlobs(wrong as never, "env");
+    const blobs = pool(wrong);
     expect(await blobs.load("not-it", SESSION, refOf(1), "image/png")).toEqual({ state: "failed", reason: "corrupt" });
     expect(created).toHaveLength(0);
     // Nothing published, and opening it says the same thing rather than
@@ -431,7 +496,7 @@ describe("an image that genuinely cannot be shown", () => {
   });
 
   it("refuses a picture past what any window may rebuild, and does not offer a retry for it", async () => {
-    const blobs = new ImageBlobs(authority() as never, "env");
+    const blobs = pool(authority());
     const huge = { ...refOf(1), image: { decodedBytes: IMAGE_SURFACE_MAX_BYTES + 1 } };
     expect(await blobs.load("huge", SESSION, huge, "image/png")).toEqual({ state: "failed", reason: "too-large" });
     expect(await blobs.open("huge", SESSION, huge, "image/png")).toEqual({ failed: "too-large" });
@@ -513,5 +578,55 @@ describe("what the row says while a picture is not on screen", () => {
     />));
     expect(seen).toEqual([0, 1, 2, 3]);
     expect(container.querySelectorAll('[data-slot="message-image-tile"]')).toHaveLength(4);
+  });
+});
+
+/**
+ * The fixture's own contract, stated at a real test boundary.
+ *
+ * A pool outlives the test that made it unless the test retires it: the read
+ * it had out at the authority lands later, into whatever window is installed
+ * by then. That is correct of the pool and wrong of the fixture — it is how a
+ * picture one test read arrived in the next test's `created` list and made
+ * "separates bytes that are not this image…" above flicker under load.
+ *
+ * These two tests are one statement and only mean anything in this order: the
+ * first leaves a read genuinely out at an authority that has not answered, and
+ * the second answers it and then looks at its own, freshly installed, window.
+ */
+describe("what one test leaves half-read", () => {
+  let inFlight: (ReturnType<typeof deferredAuthority> & { state: Promise<ImageState> }) | undefined;
+
+  it("is still out at the authority when that test ends", async () => {
+    const waiting = deferredAuthority();
+    const blobs = pool(waiting.request);
+    const state = blobs.load("still-reading", SESSION, refOf(1), "image/png", IMAGE_PRIORITY.visible);
+    await waiting.asked;
+    // Really in flight: charged against the pool, with nothing decoded yet.
+    expect(blobs.committed.images).toBe(1);
+    expect(blobs.held.images).toBe(0);
+    expect(created).toEqual([]);
+    inFlight = { ...waiting, state };
+  });
+
+  it("never reaches the next test's window", async () => {
+    const left = inFlight;
+    inFlight = undefined;
+    if (!left) throw new Error("the previous test must leave a read in flight");
+    // This test's window is its own: a new spy, and nothing in it yet.
+    expect(created).toEqual([]);
+
+    // The bytes the last test asked for arrive now — whole, verifiable, and
+    // belonging to a pool that has been retired.
+    await left.answer();
+    // Everything that reply can still do is a microtask: one turn of the loop
+    // is all of it, not a wait for something that might not happen.
+    await settled();
+
+    expect(left.request).toHaveBeenCalledTimes(1);
+    expect(created).toEqual([]);
+    expect(revoked).toEqual([]);
+    // And the row that asked for it was told, at the moment the pool went.
+    expect(await left.state).toEqual({ state: "waiting", reason: "retired" });
   });
 });
