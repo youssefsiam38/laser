@@ -53,8 +53,17 @@ export interface DesignIndexAccess {
   state: DesignIndexState;
   /** Absent when this connection cannot write reviews. */
   review?: ((verb: DesignReviewVerb) => Promise<{ ok: true } | { ok: false; message: string }>) | undefined;
-  /** Absent when this connection cannot start a build. */
+  /** Absent when this connection cannot start a build, or when none could be owned. */
   reindex?: (() => Promise<{ ok: true; commandId: string } | { ok: false; message: string }>) | undefined;
+  /**
+   * Why a build cannot be started from here, with the way to fix it.
+   *
+   * A build is a Command in a conversation, so without one there is nothing to
+   * press — and the panel says so in the button's place, with the act that
+   * leads to a conversation. Never a hidden control, and never one that would
+   * start work nobody could see.
+   */
+  reindexRefusal?: { sentence: string; act?: { label: string; run: () => void } | undefined } | undefined;
   reindexing?: DesignReindexState | undefined;
   stopReindex?: ((commandId: string) => void) | undefined;
   /** Why a review or a re-index is not offered here, in one sentence. */
@@ -79,6 +88,7 @@ export function DesignIndexPanel({ access, usedEntryIds, className }: { access: 
         <h3 className="eyebrow">Design index</h3>
         <ReindexControl access={access} />
       </header>
+      <BuildRefusal access={access} />
       <IndexBody access={access} usedEntryIds={usedEntryIds} />
     </section>
   );
@@ -222,6 +232,28 @@ function IndexEntries({ access, index, usedEntryIds }: { access: DesignIndexAcce
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/**
+ * Why a build cannot be started from here, in the place the button would have
+ * been — a full line of its own, because it is a sentence and the header is a
+ * row of controls (the 12px floor holds; it wraps rather than shrinks).
+ */
+function BuildRefusal({ access }: { access: DesignIndexAccess }) {
+  const refusal = access.reindexRefusal;
+  if (access.reindex || !refusal) return null;
+  return (
+    <div data-slot="design-index-build-refusal" className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <p role="status" className="min-w-0 flex-1 text-xs leading-xs text-ink-3">
+        {refusal.sentence}
+      </p>
+      {refusal.act ? (
+        <Button size="xs" variant="outline" onClick={refusal.act.run}>
+          {refusal.act.label}
+        </Button>
+      ) : null}
     </div>
   );
 }
