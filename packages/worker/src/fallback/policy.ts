@@ -1,6 +1,7 @@
 /**
- * The fallback chain state machine, as pure functions (M15-T3,
- * `docs/model-fallback-chains.md` §2).
+ * The state machine a session moves through its Model Profile with, as pure
+ * functions (`docs/model-profiles.md` "Runtime"; the mechanics are the M15-T3
+ * ones recorded in `docs/model-fallback-chains.md` §2).
  *
  * Nothing here touches the engine, the clock or a file: an activation, what a
  * failure did to a model's standing, which model is tried next and why one is
@@ -14,23 +15,23 @@
  */
 
 import {
-  chainFor,
   FALLBACK_DEFAULT_COOLDOWN_MS,
   isFallbackEligible,
   modelKey,
   NON_TRANSIENT_FAILURES,
   type FallbackActivation,
-  type FallbackChain,
   type FallbackEvent,
   type FallbackModelMemory,
-  type FallbackModelRef,
+  type ModelIdentity,
+  type ModelProfile,
+  type ProfileModelRef,
   type ProviderFailure,
   type ProviderFailureClass,
 } from "@lasercode/protocol";
 
 /** What the engine's catalogue says about one model, for eligibility only. */
 export interface CandidateModel {
-  ref: FallbackModelRef;
+  ref: ModelIdentity;
   /** Absent when the catalogue does not state one; then it never disqualifies. */
   contextWindow?: number | undefined;
   /** The provider has a credential. `setModel` refuses the rest outright. */
@@ -58,14 +59,14 @@ export const CONTEXT_TOO_LONG_REASON = "the conversation is longer than this mod
 
 /** One candidate the traversal passed over, with the sentence a person reads. */
 export interface SkippedCandidate {
-  model: FallbackModelRef;
+  model: ProfileModelRef;
   reason: string;
 }
 
 export type Traversal =
   | {
       kind: "attempt";
-      model: FallbackModelRef;
+      model: ProfileModelRef;
       /** Index in the activation's snapshot. */
       position: number;
       /**
@@ -79,26 +80,46 @@ export type Traversal =
   | { kind: "exhausted"; skipped: SkippedCandidate[] };
 
 /**
- * The chain a session's selected model starts, as an activation.
+ * One profile, bound to one session.
  *
- * Only a person's selection reaches this: a fallback-caused switch keeps the
- * activation it already has, which is what stops chains merging or nesting.
+ * The snapshot is taken here and never re-read: editing a profile must not
+ * re-order a conversation that is already running (`docs/model-profiles.md`,
+ * "Runtime"). A later activation picks the new list up.
  */
 export function activate(
-  chains: readonly FallbackChain[],
-  model: FallbackModelRef | null | undefined,
-  options: { id: string; at: string },
+  profile: ModelProfile | null | undefined,
+  options: { id: string; at: string; position?: number },
 ): FallbackActivation | null {
-  const chain = chainFor(chains, model);
-  const first = chain?.models[0];
-  if (!chain || !first) return null;
+  if (!profile || profile.models.length === 0) return null;
+  const models = profile.models.map((entry) => ({ ...entry }));
+  const position = Math.min(Math.max(options.position ?? 0, 0), models.length - 1);
   return {
     id: options.id,
-    chainKey: modelKey(first),
-    models: chain.models.map((entry) => ({ provider: entry.provider, id: entry.id })),
-    position: 0,
+    profileId: profile.id,
+    models,
+    position,
     startedAt: options.at,
   };
+}
+
+/**
+ * Where a session that is just starting should begin inside its profile.
+ *
+ * The first model the profile prefers, unless it cannot be used right now (no
+ * credential, switched off, not in the catalogue) — then the next, and so on,
+ * with every model passed over recorded exactly as a move would record it. A
+ * profile whose every model is unusable starts on the first one anyway, so the
+ * failure a person sees is the provider's, not a silent refusal to start.
+ */
+export function startPosition(context: Omit<CandidateContext, "event">): { position: number; skipped: SkippedCandidate[] } {
+  const models = context.activation.models;
+  const skipped: SkippedCandidate[] = [];
+  for (const [index, model] of models.entries()) {
+    const reason = ineligibleReason(model, { ...context, event: { attempts: [] } });
+    if (reason === undefined) return { position: index, skipped };
+    skipped.push({ model, reason });
+  }
+  return { position: 0, skipped };
 }
 
 /** Whether this failure is one a chain may act on at all (the table in §2.4). */
@@ -116,7 +137,7 @@ export function opensFailover(failure: ProviderFailureClass): boolean {
  */
 export function rememberFailure(
   memory: ModelMemory,
-  model: FallbackModelRef,
+  model: ModelIdentity,
   failure: ProviderFailure,
   options: { now: number; cooldownMs?: number },
 ): Record<string, FallbackModelMemory> {
@@ -153,7 +174,7 @@ export function clearActivationMarks(memory: ModelMemory): Record<string, Fallba
 }
 
 /** Why this candidate cannot be used right now, or undefined when it can. */
-export function ineligibleReason(model: FallbackModelRef, context: CandidateContext): string | undefined {
+export function ineligibleReason(model: ModelIdentity, context: CandidateContext): string | undefined {
   const key = modelKey(model);
   if (context.event.attempts.some((attempt) => attempt.model === key && attempt.outcome !== "skipped")) {
     return "already tried in this switch";
@@ -211,7 +232,7 @@ export function nextCandidate(context: CandidateContext): Traversal {
 }
 
 /**
- * `return` is an earlier model than the one the chain is standing on; `advance`
+ * `return` is an earlier model than the one the profile is standing on; `advance`
  * is a later fallback. Same mapping {@link nextCandidate} uses, so a size
  * recovery can join the shared attempt path without asking the traversal for
  * a model it has just moved onto.
@@ -224,10 +245,10 @@ export function attemptDirection(position: number, index: number): "return" | "a
  * One sentence for a person when a chain could not help: what was tried, and
  * what stood in the way. Never a provider payload, never a credential.
  */
-export function exhaustionDetail(skipped: readonly SkippedCandidate[], names: (model: FallbackModelRef) => string): string {
-  if (skipped.length === 0) return "No other model in this chain was available.";
+export function exhaustionDetail(skipped: readonly SkippedCandidate[], names: (model: ModelIdentity) => string): string {
+  if (skipped.length === 0) return "No other model in this profile was available.";
   const parts = skipped.map((entry) => `${names(entry.model)} ${entry.reason}`);
-  return `Fallback could not help: ${parts.join(", ")}.`;
+  return `No other model in this profile could take over: ${parts.join(", ")}.`;
 }
 
 function nonTransientReason(failure: ProviderFailureClass | undefined): string {

@@ -74,10 +74,31 @@ function fakeNamerRuntime(answer: () => string | Promise<string>): NamerModelRun
   return runtime;
 }
 
-/** The snapshot a host sends once Namer has a model. */
+/** The snapshot a host sends once naming has a profile, plus the profile itself. */
+const NAMING_PROFILE_ID = "mp_testnaming000000000000";
+
+function writeNamingProfile(): void {
+  mkdirSync(join(base, "agent"), { recursive: true });
+  writeFileSync(
+    join(base, "agent", "settings.json"),
+    JSON.stringify({
+      modelProfiles: [{
+        id: NAMING_PROFILE_ID,
+        name: "Fast",
+        models: [{ provider: "stub", id: "stub-1" }],
+        origin: "seeded",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }],
+      defaultProfileId: NAMING_PROFILE_ID,
+      namingProfileId: NAMING_PROFILE_ID,
+    }),
+  );
+}
+
 function namedSnapshot() {
+  writeNamingProfile();
   const snapshot = fallbackSnapshot();
-  return { ...snapshot, namer: { ...snapshot.namer, status: "ready" as const, model: { provider: "stub", id: "stub-1" } } };
+  return { ...snapshot, builtinProfiles: { ...snapshot.builtinProfiles, namer: NAMING_PROFILE_ID } };
 }
 
 /** Let every floated naming/labelling promise settle. */

@@ -1,15 +1,12 @@
 /**
- * M13-T22 · Namer qualifies without a sign-in.
- *
- * The regression: qualification only ever ran from a `pi/providers/login/event`
- * of type `done`, so an installation whose providers were already connected —
- * credentials on disk, or connected under an earlier host process — never
- * qualified, `namer.model` stayed null, and nothing was ever named. Any
- * worker coming up is now enough.
+ * M22-T5 · the host runs the one-way migration onto Model Profiles behind the
+ * first worker, and offers the seeded profiles for review when a provider is
+ * connected (`docs/model-profiles.md`, "Migration").
  *
  * Against a fake worker (a real child process speaking the fd-3 protocol), so
  * the spawn, the priming and the request are the real ones and no engine is
- * involved.
+ * involved. The worker is the only writer of the settings file, so what it
+ * answers is what the host has to believe.
  */
 import { PRODUCT_NAME, type AgentsSnapshot } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,7 +17,17 @@ import WebSocket from "ws";
 import type { JsonRpcMessage } from "@lasercode/protocol";
 import { HostServer } from "../../src/index.js";
 
-const READY_NAMER = { status: "ready", model: { provider: "stub", id: "stub-nano" }, candidates: [], qualifiedAt: "2026-01-01T00:00:00.000Z" };
+const BALANCED = "mp_testbalanced000000000";
+const FAST = "mp_testfast00000000000000";
+const MIGRATION_REPORT = {
+  ran: true,
+  profiles: [
+    { id: BALANCED, name: "Balanced", models: [{ provider: "stub", id: "stub-1" }], origin: "seeded", updatedAt: "2026-01-01T00:00:00.000Z" },
+    { id: FAST, name: "Fast", models: [{ provider: "stub", id: "stub-nano" }], origin: "seeded", updatedAt: "2026-01-01T00:00:00.000Z" },
+  ],
+  assignments: { defaultProfileId: BALANCED, namingProfileId: FAST, oracleProfileId: BALANCED, designIndexProfileId: BALANCED },
+  notes: ["Created Balanced and Fast from the models you have connected."],
+};
 
 /**
  * A worker that answers the three requests this path needs and logs every
@@ -52,7 +59,7 @@ socket.on("data", (chunk) => {
     appendFileSync(LOG, req.method + "\\n");
     let result = { ok: true };
     if (req.method === "pi/providers/list") result = { providers: [{ id: "stub", name: "Stub", configured, methods: [] }] };
-    else if (req.method === "agents/namer/qualify") result = ${JSON.stringify(READY_NAMER)};
+    else if (req.method === "models/profiles/migrate") result = { report: ${JSON.stringify(MIGRATION_REPORT)} };
     else if (req.method === "agents/skills") result = { skills: [], roots: [] };
     send({ jsonrpc: "2.0", id: req.id, result });
     if (LOGIN_AFTER && req.method === LOGIN_AFTER) {
@@ -93,6 +100,9 @@ class Client {
       on();
     });
   }
+  notifications(method: string): unknown[] {
+    return this.inbound.filter((m) => "method" in m && m.method === method).map((m) => (m as { params: unknown }).params);
+  }
   close() {
     this.ws.close();
   }
@@ -122,10 +132,10 @@ async function startHost(): Promise<Client> {
   return client;
 }
 
-const namerOf = async (c: Client) => (await c.request<AgentsSnapshot>("agents/list", {})).namer;
+const builtinProfilesOf = async (c: Client) => (await c.request<AgentsSnapshot>("agents/list", {})).builtinProfiles;
 
 beforeEach(() => {
-  base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-namer-qualify-`));
+  base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-profiles-migration-`));
   project = join(base, "project");
   for (const dir of ["project", "agent", "sessions", "state"]) mkdirSync(join(base, dir), { recursive: true });
   workerMain = join(base, "fake-worker.mjs");
@@ -140,49 +150,48 @@ afterEach(async () => {
   rmSync(base, { recursive: true, force: true });
 });
 
-describe("Namer qualification", () => {
-  it("qualifies from a worker that comes up, with no sign-in in this host run", async () => {
+describe("the model-profile migration at host start", () => {
+  it("runs once behind the first worker and gives every built-in a profile", async () => {
     writeFileSync(workerMain, fakeWorker({ log, configured: true }));
     const c = await startHost();
-    expect((await namerOf(c)).status).toBe("unqualified");
+    expect(await builtinProfilesOf(c)).toEqual({ beam: null, chat: null, namer: null });
     // Anything that needs this project's worker is enough; nothing waits on
-    // the benchmark, so the request itself answers first.
+    // the migration, so the request itself answers first.
     await c.request("agents/skills", { cwd: project });
-    await vi.waitFor(async () => expect((await namerOf(c)).status).toBe("ready"), { timeout: 10_000, interval: 25 });
-    expect((await namerOf(c)).model).toEqual({ provider: "stub", id: "stub-nano" });
-    expect(methodsSeen().filter((m) => m === "agents/namer/qualify")).toHaveLength(1);
-    // A second worker request does not benchmark again.
-    await c.request("agents/skills", { cwd: project });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(methodsSeen().filter((m) => m === "agents/namer/qualify")).toHaveLength(1);
+    await vi.waitFor(async () => expect((await builtinProfilesOf(c)).beam).toBe(BALANCED), { timeout: 10_000, interval: 25 });
+    // Naming takes the naming assignment; the conversational built-ins take
+    // the profile new conversations use.
+    expect(await builtinProfilesOf(c)).toEqual({ beam: BALANCED, chat: BALANCED, namer: FAST });
+    expect(methodsSeen().filter((m) => m === "models/profiles/migrate")).toHaveLength(1);
+
+    // The preview a person reads is written under the state directory, once.
+    const record = JSON.parse(readFileSync(join(base, "state", "model-profiles-migration.json"), "utf8")) as {
+      version: number;
+      settings: { ran: boolean; notes: string[] };
+      builtins?: Array<{ name: string; to: string | null }>;
+    };
+    expect(record.version).toBe(1);
+    expect(record.settings.ran).toBe(true);
+    expect(record.settings.notes.join(" ")).toContain("Balanced");
+    expect(record.builtins?.some((entry) => entry.name === "namer")).toBe(true);
   });
 
-  it("waits for a provider, then qualifies when one is connected", async () => {
-    // The sign-in is announced from a second, separate request, so the state
-    // before it is observable rather than a race with the worker's start.
+  it("offers the seeded profiles for review when a provider is connected, once", async () => {
     writeFileSync(workerMain, fakeWorker({ log, configured: false, loginAfter: "pi/keybindings/get" }));
     const c = await startHost();
-    // The worker starts, the provider list has no credentials in it, and Namer
-    // is left alone rather than benchmarking nothing.
-    await c.request("agents/skills", { cwd: project });
-    await vi.waitFor(() => expect(methodsSeen()).toContain("pi/providers/list"), { timeout: 10_000, interval: 25 });
-    expect(methodsSeen()).not.toContain("agents/namer/qualify");
-    expect((await namerOf(c)).status).toBe("unqualified");
-    // A provider is connected: a new provider set is a new attempt.
     await c.request("pi/keybindings/get", { cwd: project });
-    await vi.waitFor(async () => expect((await namerOf(c)).status).toBe("ready"), { timeout: 10_000, interval: 25 });
-    expect(methodsSeen().filter((m) => m === "agents/namer/qualify")).toHaveLength(1);
+    await vi.waitFor(async () => expect((await builtinProfilesOf(c)).beam).toBe(BALANCED), { timeout: 10_000, interval: 25 });
+    // The seeded set is offered, never applied silently.
+    expect(c.notifications("models/profiles/seeded")).toHaveLength(1);
+    expect(c.notifications("models/profiles/seeded")[0]).toMatchObject({ profiles: [{ name: "Balanced" }, { name: "Fast" }] });
   });
 
-  it("never benchmarks over a model that is already chosen", async () => {
-    // A model picked by a person (or by an earlier run's benchmark) is what
-    // the store loads with; nothing may spend a completion over it.
-    writeFileSync(join(base, "state", "agents.json"), JSON.stringify({ namer: { status: "ready", model: { provider: "stub", id: "picked-1" }, candidates: [] } }));
+  it("never overrules a built-in profile a person already chose", async () => {
+    writeFileSync(join(base, "state", "agents.json"), JSON.stringify({ builtinProfiles: { beam: null, chat: null, namer: "mp_testpicked00000000000" } }));
     writeFileSync(workerMain, fakeWorker({ log, configured: true }));
     const c = await startHost();
     await c.request("agents/skills", { cwd: project });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(methodsSeen()).not.toContain("agents/namer/qualify");
-    expect(await namerOf(c)).toMatchObject({ status: "ready", model: { provider: "stub", id: "picked-1" } });
+    await vi.waitFor(async () => expect((await builtinProfilesOf(c)).beam).toBe(BALANCED), { timeout: 10_000, interval: 25 });
+    expect((await builtinProfilesOf(c)).namer).toBe("mp_testpicked00000000000");
   });
 });

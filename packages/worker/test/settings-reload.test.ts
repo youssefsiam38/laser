@@ -115,19 +115,19 @@ describe("a Settings write and a live session (real engine)", () => {
   }, 60_000);
 
   it("after a project write, the fresh project-file values become the durable overrides", async () => {
-    writeGlobal({ steeringMode: "one-at-a-time", defaultThinkingLevel: "low" });
+    writeGlobal({ steeringMode: "one-at-a-time", hideThinkingBlock: false });
     await open();
-    expect(engineSettings().getDefaultThinkingLevel()).toBe("low");
+    expect(engineSettings().getHideThinkingBlock()).toBe(false);
 
     const settings = new SettingsAdapter({ cwd, agentDir, hostTrusted: true });
-    await settings.apply("project", [{ path: "defaultThinkingLevel", op: "set", value: "high" }]);
+    await settings.apply("project", [{ path: "hideThinkingBlock", op: "set", value: true }]);
     expect(existsSync(join(cwd, PROJECT_DIR_NAME, "settings.json"))).toBe(true);
     // Not yet: the durable set still holds what `.laser` said at open time.
-    expect(engineSettings().getDefaultThinkingLevel()).toBe("low");
+    expect(engineSettings().getHideThinkingBlock()).toBe(false);
 
     await driver.reloadSettings();
-    expect(engineSettings().getDefaultThinkingLevel()).toBe("high");
-    expect(durableOverrides(engineSettings())).toMatchObject({ defaultThinkingLevel: "high", packages: [], extensions: [], skills: [], prompts: [], themes: [] });
+    expect(engineSettings().getHideThinkingBlock()).toBe(true);
+    expect(durableOverrides(engineSettings())).toMatchObject({ hideThinkingBlock: true, packages: [], extensions: [], skills: [], prompts: [], themes: [] });
     // What the project did not override still comes from the global file.
     expect(engineSettings().getSteeringMode()).toBe("one-at-a-time");
     // The engine still never discovers `<cwd>/.pi`.
@@ -135,37 +135,37 @@ describe("a Settings write and a live session (real engine)", () => {
     expect(engineSettings().getProjectSettings()).toEqual({});
 
     // Unsetting replaces the durable set rather than stacking on it.
-    await settings.apply("project", [{ path: "defaultThinkingLevel", op: "unset" }]);
+    await settings.apply("project", [{ path: "hideThinkingBlock", op: "unset" }]);
     await driver.reloadSettings();
-    expect(engineSettings().getDefaultThinkingLevel()).toBe("low");
-    expect(durableOverrides(engineSettings())).not.toHaveProperty("defaultThinkingLevel");
+    expect(engineSettings().getHideThinkingBlock()).toBe(false);
+    expect(durableOverrides(engineSettings())).not.toHaveProperty("hideThinkingBlock");
   }, 60_000);
 
   it("keeps the project-file values durable across the engine's own later reloads", async () => {
-    writeLaser({ defaultModel: "from-project" });
+    writeLaser({ shellPath: "from-project" });
     await open();
     const settings = new SettingsAdapter({ cwd, agentDir, hostTrusted: true });
     await settings.apply("global", [{ path: "compaction.enabled", op: "set", value: false }]);
     await driver.reloadSettings();
-    expect(engineSettings().getDefaultModel()).toBe("from-project");
+    expect(engineSettings().getShellPath()).toBe("from-project");
     expect(engineSettings().getCompactionEnabled()).toBe(false);
 
     // An extension's ctx.reload(), a resource refresh: the engine's reload.
     await engineSettings().reload();
-    expect(engineSettings().getDefaultModel()).toBe("from-project");
+    expect(engineSettings().getShellPath()).toBe("from-project");
     expect(engineSettings().getCompactionEnabled()).toBe(false);
     expect(engineSettings().getPackages()).toEqual([]);
     expect(engineSettings().getExtensionPaths()).toEqual([]);
   }, 60_000);
 
   it("an untrusted project contributes nothing, before or after a reload", async () => {
-    writeLaser({ defaultThinkingLevel: "high" });
+    writeLaser({ hideThinkingBlock: true });
     await open(false);
-    expect(engineSettings().getDefaultThinkingLevel()).toBeUndefined();
-    writeLaser({ defaultThinkingLevel: "high", defaultModel: "from-project" });
+    expect(engineSettings().getHideThinkingBlock()).toBe(false);
+    writeLaser({ hideThinkingBlock: true, shellPath: "from-project" });
     await driver.reloadSettings();
-    expect(engineSettings().getDefaultThinkingLevel()).toBeUndefined();
-    expect(engineSettings().getDefaultModel()).toBeUndefined();
+    expect(engineSettings().getHideThinkingBlock()).toBe(false);
+    expect(engineSettings().getShellPath()).toBeUndefined();
     expect(engineSettings().getPackages()).toEqual([]);
   }, 60_000);
 

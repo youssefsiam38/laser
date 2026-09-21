@@ -1,8 +1,8 @@
 /**
- * The fallback chain's window onto a live Pi session (M15-T3,
- * `docs/model-fallback-chains.md` §3).
+ * The profile runtime's window onto a live engine session
+ * (`docs/model-profiles.md` "Runtime").
  *
- * Everything engine-shaped about a fallback is here: reading the catalogue,
+ * Everything engine-shaped about a move is here: reading the catalogue,
  * changing the model, and continuing the interrupted turn. The controller
  * above it is pure policy, and the driver below it supplies one thing — the
  * session — plus the small set of callbacks that belong to it (emitting an
@@ -26,13 +26,26 @@ import {
   type ThinkingLevel,
 } from "@lasercode/protocol";
 
-import { disabledModelRefs, modelSwitchedOff, readEffectiveProductSettings, readFallbackChains } from "../settings.js";
+import {
+  disabledModelRefs,
+  modelSwitchedOff,
+  readEffectiveProductSettings,
+  readProfileSettings,
+  resolveProfile,
+} from "../settings.js";
 import type { FallbackEngine } from "./controller.js";
 import type { CandidateModel } from "./policy.js";
 
 export interface FallbackPortOptions {
   /** The live session. Read each time: a runtime replacement swaps it. */
   session: () => AgentSession;
+  /**
+   * What this session was anchored to: a profile id, `null` when a person
+   * pinned it to one model, and `undefined` when it has made no choice and
+   * follows the assignment for new sessions. Read each time: a person may
+   * re-anchor it mid-session.
+   */
+  profileId: () => string | null | undefined;
   /** Latest person-chosen intent, read after the asynchronous model switch. */
   explicitThinkingLevel?: () => ThinkingLevel | undefined;
   agentDir: string;
@@ -48,7 +61,15 @@ export interface FallbackPortOptions {
 export function createFallbackEnginePort(options: FallbackPortOptions): FallbackEngine {
   const { session, emit } = options;
   return {
-    chains: () => readFallbackChains(options.agentDir),
+    profile: () => {
+      const chosen = options.profileId();
+      // A pinned session has no profile, and must not be handed one back: a
+      // pin is the person saying "this model, nothing standing in for it".
+      if (chosen === null) return null;
+      const { profiles, assignments } = readProfileSettings(options.agentDir);
+      if (chosen !== undefined) return profiles.find((profile) => profile.id === chosen) ?? null;
+      return resolveProfile(profiles, assignments) ?? null;
+    },
     selectedModel: () => {
       const model = session().model;
       return model && model.provider !== "unknown" ? { provider: model.provider, id: model.id } : null;

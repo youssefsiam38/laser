@@ -19,6 +19,12 @@ import { effectiveAgents, type AgentDefinition, type AgentWarning } from "@laser
 export interface SkillsCheckOptions {
   /** The current definitions, custom and built-in. */
   agents(): readonly AgentDefinition[];
+  /**
+   * The ids of the person's Model Profiles. A definition naming one that is
+   * gone runs on the profile assigned to new sessions; this pass is what says
+   * so (`docs/model-profiles.md`, "Assignments"). Omit to skip the check.
+   */
+  profileIds?(): ReadonlySet<string>;
   /** Hand the full warning list over; the receiver decides whether it changed. */
   report(warnings: AgentWarning[]): void;
   intervalMs?: number;
@@ -79,6 +85,21 @@ export class SkillsCheck {
           if (exists(skill.path)) continue;
           warnings.push(
             this.warning(live, agent.path, agent.name, "skills", skill.name, `Skill "${skill.name}" is no longer at ${skill.path}. Choose it again or remove it from this agent.`),
+          );
+        }
+      }
+      if (agent.profileId) {
+        const known = this.options.profileIds?.();
+        if (known && known.size > 0 && !known.has(agent.profileId)) {
+          warnings.push(
+            this.warning(
+              live,
+              agent.path,
+              agent.name,
+              "profile",
+              agent.profileId,
+              `The model profile this agent used is gone, so it runs on the profile new conversations use. Choose a profile for it.`,
+            ),
           );
         }
       }

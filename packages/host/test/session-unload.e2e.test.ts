@@ -296,12 +296,12 @@ describe.skipIf(!existsSync(defaultWorkerMain()))("releasing a session's runtime
   }, 120_000);
 
   it("releases a conversation nothing can name, on the first ask, with its record intact", async () => {
-    // Deterministically Namer-less, and not by what a model answers: this
-    // fixture connects no provider credential at all, so the host's benchmark
-    // stops before it runs (`configured.length === 0` in `qualifyNamer`) and
-    // the worker's naming model stays null for the whole test. A first prompt's
-    // words are then parked in case one ever appears — a retained record, which
-    // the diagnostics count, and not a hold on the runtime (RP-4, M18-T17).
+    // Deterministically nameless, and not by what a model answers: this
+    // fixture connects no provider credential at all, so every model of the
+    // naming profile fails and no title arrives. A first prompt's words are
+    // then parked in case naming ever becomes possible — a retained record,
+    // which the diagnostics count, and not a hold on the runtime (RP-4,
+    // M18-T17; `docs/model-profiles.md` for the one-shot walk).
     writeFileSync(
       join(base, "agent", "models.json"),
       JSON.stringify({ providers: { stub: { baseUrl: stub.url, api: "openai-completions", models: [{ id: "stub-1", contextWindow: 8000, maxTokens: 500 }] } } }),

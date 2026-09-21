@@ -13,6 +13,7 @@ import {
   PRODUCT_DISPLAY_NAME,
   canReferenceAgent,
   instructionTemplateIssue,
+  isModelProfileId,
   isBuiltinAgentName,
   type AgentDefinition,
   type AgentDefinitionInput,
@@ -133,11 +134,12 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
     });
   }
 
-  // ---- model
-  if (input.model !== null) {
-    if (!input.model.provider || !input.model.id) {
-      push("model", "Choose a model, or leave it empty to follow the default model.");
-    }
+  // ---- profile
+  // An id nothing answers to is a warning on the running agent, not a refusal
+  // to save: a person may delete a profile after writing the definition, and
+  // the agent keeps working on the profile new conversations use.
+  if (input.profileId !== null && !isModelProfileId(input.profileId)) {
+    push("profile", "Choose one of your model profiles, or leave it empty to follow the default.");
   }
 
   return issues;

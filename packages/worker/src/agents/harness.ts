@@ -53,7 +53,7 @@ import {
   isTerminalRunStatus,
   type AgentDefinition,
   type AgentEvent,
-  type AgentModelChoice,
+  type ModelIdentity,
   type AgentRun,
   type AgentRunInitiator,
   type AgentRunQuestion,
@@ -149,7 +149,14 @@ export interface SessionHost {
   driver(sessionPath: string): SessionDriver | undefined;
   notify<M extends keyof HostNotifications>(method: M, params: HostNotifications[M]): void;
   /** True when the model exists and its provider has credentials. */
-  modelAvailable(model: AgentModelChoice): Promise<boolean>;
+  modelAvailable(model: ModelIdentity): Promise<boolean>;
+  /**
+   * The profile a child should run on: the one its definition names, or the
+   * profile assigned to new sessions when that id answers to nothing. The
+   * substitution comes back so the run, and the fleet row drawn from it, say
+   * what happened (`docs/model-profiles.md`, "Assignments").
+   */
+  resolveProfile(profileId: string | null): { profileId: string | null; substituted?: { requested: string; used: string | null } };
   /**
    * The background commands one session published, oldest first, from the
    * worker's task index (D-163). Absent when the worker keeps none: the fleet
@@ -338,7 +345,7 @@ function isTransientModelError(message: string): boolean {
   return !NON_TRANSIENT_LIMIT.test(message) && TRANSIENT_MODEL_ERROR.test(message);
 }
 
-export function modelUnavailableMessage(model: AgentModelChoice): string {
+export function modelUnavailableMessage(model: ModelIdentity): string {
   return `The model ${model.provider}/${model.id} is not available: connect ${model.provider} in Settings → Providers and models, or choose another model for this agent.`;
 }
 
@@ -1199,9 +1206,10 @@ export class AgentHarness {
     if (parent.role.depth >= policy.maxDepth) {
       throw new HarnessError(`Agents may nest at most ${policy.maxDepth} deep and this session is already at depth ${parent.role.depth}; do the work here instead.`);
     }
-    if (definition.model && !(await this.host.modelAvailable(definition.model))) {
-      throw new HarnessError(modelUnavailableMessage(definition.model));
-    }
+    // A definition naming a profile that is no longer there does not stop the
+    // work: the child runs on the profile assigned to new sessions, and the
+    // substitution is on its run for every reader to see.
+    const childProfile = this.host.resolveProfile(definition.profileId);
     const parentDriver = this.host.driver(parent.path);
     if (!parentDriver) throw new HarnessError("This session is no longer open, so it cannot start agents.");
     signal?.throwIfAborted();
@@ -1282,7 +1290,14 @@ export class AgentHarness {
     const childDriver = this.host.driver(state.path);
     if (childDriver) await childDriver.rename(subagentName).catch(() => undefined);
 
-    const runState = this.createRun(entry, { origin: "agent", task, goal, parentRunId: this.activeRun(parent.path)?.runId, isolation });
+    const runState = this.createRun(entry, {
+      origin: "agent",
+      task,
+      goal,
+      parentRunId: this.activeRun(parent.path)?.runId,
+      isolation,
+      ...(childProfile.substituted ? { substitutedProfile: childProfile.substituted } : {}),
+    });
     this.event({
       kind: "started",
       sessionPath: state.path,
@@ -1924,7 +1939,15 @@ export class AgentHarness {
 
   private createRun(
     entry: Entry,
-    init: { origin: AgentRun["origin"]; task: string; goal?: { id: string; objective: string } | null; parentRunId?: string | undefined; isolation?: AgentIsolation },
+    init: {
+      origin: AgentRun["origin"];
+      task: string;
+      goal?: { id: string; objective: string } | null;
+      parentRunId?: string | undefined;
+      isolation?: AgentIsolation;
+      /** Set when the definition's profile was gone and the default stood in. */
+      substitutedProfile?: { requested: string; used: string | null };
+    },
     queued = false,
   ): RunState {
     const path = entry.path!;
@@ -1959,7 +1982,11 @@ export class AgentHarness {
       status: queued ? "queued" : "running",
       task: excerpt(init.task, AGENT_TASK_EXCERPT),
       ...(init.goal ? { goal: init.goal } : {}),
+      // Intent and evidence, side by side: the profile this run was started
+      // on, and the model that is actually answering for it.
       model: driver?.state().model ?? null,
+      profileId: driver?.state().profile?.id ?? null,
+      ...(init.substitutedProfile ? { substitutedProfile: init.substitutedProfile } : {}),
       activity: { turns: 0, tools: 0, lastAt: startedAt },
       startedAt,
       updatedAt: startedAt,

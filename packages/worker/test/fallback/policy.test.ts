@@ -13,9 +13,9 @@ import {
   FALLBACK_DEFAULT_COOLDOWN_MS,
   modelKey,
   type FallbackActivation,
-  type FallbackChain,
   type FallbackModelMemory,
-  type FallbackModelRef,
+  type ModelIdentity,
+  type ModelProfile,
 } from "@lasercode/protocol";
 
 import {
@@ -28,12 +28,14 @@ import {
   nextCandidate,
   opensFailover,
   rememberFailure,
+  startPosition,
   type CandidateContext,
   type CandidateModel,
 } from "../../src/fallback/policy.js";
 import {
   EMPTY_FALLBACK_STATE,
   entryFor,
+  hasLegacyActivation,
   restoreFallbackState,
   summaryFor,
 } from "../../src/fallback/state.js";
@@ -46,10 +48,20 @@ const deepseek = { provider: "deepseek", id: "deepseek-chat" };
 const gemini = { provider: "google", id: "gemini-2.5-pro" };
 const openrouter = { provider: "openrouter", id: "auto" };
 
-const chains: FallbackChain[] = [
-  { models: [sonnet, deepseek, gemini, openrouter] },
-  { models: [deepseek, gemini] },
-];
+const balanced: ModelProfile = {
+  id: "mp_01jbalanced0000000000000",
+  name: "Balanced",
+  models: [sonnet, deepseek, gemini, openrouter],
+  origin: "seeded",
+  updatedAt: iso(NOW - 600_000),
+};
+const fast: ModelProfile = {
+  id: "mp_01jfast00000000000000000",
+  name: "Fast",
+  models: [deepseek, gemini],
+  origin: "seeded",
+  updatedAt: iso(NOW - 600_000),
+};
 
 const catalogue = (
   overrides: Partial<Record<string, Partial<CandidateModel>>> = {},
@@ -67,8 +79,8 @@ const catalogue = (
 
 const activation = (position: number): FallbackActivation => ({
   id: "act-1",
-  chainKey: modelKey(sonnet),
-  models: chains[0]!.models,
+  profileId: balanced.id,
+  models: balanced.models,
   position,
   startedAt: iso(NOW - 60_000),
 });
@@ -83,14 +95,55 @@ const context = (over: Partial<CandidateContext> & { position?: number } = {}): 
 });
 
 describe("activation", () => {
-  it("only a chain's first model starts one, and the snapshot is the chain as it is now", () => {
-    const started = activate(chains, sonnet, { id: "a", at: iso(NOW) });
-    expect(started).toEqual({ id: "a", chainKey: "anthropic/claude-sonnet-4-5", models: chains[0]!.models, position: 0, startedAt: iso(NOW) });
-    // Gemini is a fallback in both chains and starts neither.
-    expect(activate(chains, gemini, { id: "a", at: iso(NOW) })).toBeNull();
-    // DeepSeek starts its own chain — never the one it is a fallback in.
-    expect(activate(chains, deepseek, { id: "a", at: iso(NOW) })?.models).toEqual(chains[1]!.models);
-    expect(activate([], sonnet, { id: "a", at: iso(NOW) })).toBeNull();
+  it("binds the profile by id, with its list snapshotted as it is now", () => {
+    const started = activate(balanced, { id: "a", at: iso(NOW) });
+    expect(started).toEqual({ id: "a", profileId: balanced.id, models: balanced.models, position: 0, startedAt: iso(NOW) });
+    // The snapshot is a copy: editing the profile afterwards cannot re-order
+    // a conversation that is already running.
+    balanced.models.push({ provider: "later", id: "added" });
+    expect(started!.models).toHaveLength(4);
+    balanced.models.pop();
+    // A different profile is a different intent, with its own list.
+    expect(activate(fast, { id: "a", at: iso(NOW) })?.models).toEqual(fast.models);
+    expect(activate(null, { id: "a", at: iso(NOW) })).toBeNull();
+    expect(activate({ ...balanced, models: [] }, { id: "a", at: iso(NOW) })).toBeNull();
+  });
+
+  it("starts on the first model it can actually use, and says what it passed over", () => {
+    // The profile prefers Sonnet, but this machine has no credential for it
+    // and DeepSeek is switched off: the session starts on Gemini and both
+    // skips are recorded, exactly as a move would record them.
+    const walked = startPosition({
+      activation: activation(0),
+      memory: {},
+      catalogue: catalogue({
+        [modelKey(sonnet)]: { signedIn: false },
+        [modelKey(deepseek)]: { offered: false },
+      }),
+      contextTokens: 1_000,
+      now: NOW,
+    });
+    expect(walked.position).toBe(2);
+    expect(walked.skipped).toEqual([
+      { model: sonnet, reason: "not signed in" },
+      { model: deepseek, reason: "switched off in Settings" },
+    ]);
+    // Nothing usable: the session still starts, so the failure a person sees
+    // is the provider's rather than a refusal to open the conversation.
+    const none = startPosition({
+      activation: activation(0),
+      memory: {},
+      catalogue: catalogue({
+        [modelKey(sonnet)]: { signedIn: false },
+        [modelKey(deepseek)]: { signedIn: false },
+        [modelKey(gemini)]: { signedIn: false },
+        [modelKey(openrouter)]: { signedIn: false },
+      }),
+      contextTokens: 1_000,
+      now: NOW,
+    });
+    expect(none.position).toBe(0);
+    expect(none.skipped).toHaveLength(4);
   });
 
   it("acts only on failures that are about reaching the model", () => {
@@ -162,7 +215,7 @@ describe("traversal order", () => {
       { model: deepseek, reason: "switched off in Settings" },
     ]);
     expect(exhaustionDetail(decision.skipped, (model) => model.id)).toBe(
-      "Fallback could not help: claude-sonnet-4-5 not signed in, deepseek-chat switched off in Settings.",
+      "No other model in this profile could take over: claude-sonnet-4-5 not signed in, deepseek-chat switched off in Settings.",
     );
   });
 
@@ -254,14 +307,30 @@ describe("the durable state", () => {
     expect(restored.failover!.attempts).toEqual(state.failover.attempts);
   });
 
-  it("restores the chain verbatim rather than resolving one from the model in use", () => {
-    // Position 1 is DeepSeek, which starts a chain of its own. Restoring must
-    // keep Sonnet's chain, at Sonnet's position, or a reload would quietly
-    // change which models this conversation can reach.
+  it("restores the profile verbatim rather than resolving one from the model in use", () => {
+    // Position 1 is DeepSeek, which another profile prefers. Restoring must
+    // keep this profile, at this position, or a reload would quietly change
+    // which models this conversation can reach.
     const restored = restoreFallbackState(entry(entryFor({ event: "switched", at: iso(NOW), state })));
-    expect(restored.activation!.chainKey).toBe(modelKey(sonnet));
-    expect(restored.activation!.models).toEqual(chains[0]!.models);
+    expect(restored.activation!.profileId).toBe(balanced.id);
+    expect(restored.activation!.models).toEqual(balanced.models);
     expect(restored.activation!.position).toBe(1);
+  });
+
+  it("reads a record written before profiles as history, and never re-activates it", () => {
+    // A conversation from the previous generation keeps its model and reads
+    // as pinned: its old traversal is history, not an activation.
+    const legacy = {
+      version: 1,
+      event: "switched",
+      at: iso(NOW),
+      activation: { id: "act-0", chainKey: modelKey(sonnet), models: [sonnet, deepseek], position: 1, startedAt: iso(NOW - 1000) },
+      models: {},
+    };
+    const restored = restoreFallbackState(entry(legacy));
+    expect(restored.activation).toBeNull();
+    expect(hasLegacyActivation(entry(legacy))).toBe(true);
+    expect(hasLegacyActivation(entry(entryFor({ event: "switched", at: iso(NOW), state })))).toBe(false);
   });
 
   it("takes the last record, and nothing at all from one it cannot read", () => {
@@ -276,11 +345,13 @@ describe("the durable state", () => {
 
   it("summarises for the UI with catalogue names, and says nothing without an activation", () => {
     const names = new Map([[modelKey(deepseek), { ...deepseek, name: "DeepSeek V3" }]]);
-    const summary = summaryFor(state, { catalogue: names, switching: true, lastSwitch: { from: sonnet, to: deepseek, reason: "rate_limit", at: iso(NOW) } })!;
+    const summary = summaryFor(state, { catalogue: names, profile: balanced, switching: true, lastSwitch: { from: sonnet, to: deepseek, reason: "rate_limit", at: iso(NOW) } })!;
     expect(summary.position).toBe(1);
-    expect(summary.chain[1]).toEqual({ ...deepseek, name: "DeepSeek V3" });
+    expect(summary.profileId).toBe(balanced.id);
+    expect(summary.profileName).toBe("Balanced");
+    expect(summary.models[1]).toEqual({ ...deepseek, name: "DeepSeek V3" });
     // A model the catalogue no longer has is still shown by its identity.
-    expect(summary.chain[0]).toEqual(sonnet);
+    expect(summary.models[0]).toEqual(sonnet);
     expect(summary.switching).toBe(true);
     expect(summary.lastSwitch).toMatchObject({ reason: "rate_limit" });
     expect(summaryFor(EMPTY_FALLBACK_STATE, { catalogue: names })).toBeUndefined();

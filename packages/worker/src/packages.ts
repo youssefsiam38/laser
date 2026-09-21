@@ -31,12 +31,14 @@ import type {
   ProviderAuthInfo,
   ProviderLoginEvent,
   ProviderLoginMethod,
+  ModelProfile,
+  ProfileAssignments,
   ThinkingLevel,
 } from "@lasercode/protocol";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { disabledModelRefs, modelSwitchedOff, type SettingsAdapter } from "./settings.js";
+import { disabledModelRefs, modelSwitchedOff, readProfileSettings, type SettingsAdapter } from "./settings.js";
 
 export class PackagesError extends Error {
   override readonly name = "PackagesError";
@@ -304,9 +306,9 @@ export interface ModelCatalogResult {
   enabledPatterns: string[] | null;
   /** Exact `provider/id` references a person switched off; empty when none. */
   disabledModels: string[];
-  defaultProvider?: string;
-  defaultModel?: string;
-  defaultThinkingLevel?: ThinkingLevel;
+  /** The person's Model Profiles, and which surface uses which. */
+  profiles: ModelProfile[];
+  assignments: ProfileAssignments;
   refreshedAt: string;
   errors: string[];
 }
@@ -494,7 +496,15 @@ export class ModelsAdapter {
     const patterns = Array.isArray(effective["enabledModels"])
       ? (effective["enabledModels"] as unknown[]).filter((p): p is string => typeof p === "string")
       : null;
-    const perModelThinking = (effective["modelThinkingLevels"] ?? {}) as Record<string, unknown>;
+    // A model's startup thinking level comes from the profile entry that names
+    // it, and from nowhere else (docs/model-profiles.md, "Runtime").
+    const profileThinking = new Map<string, ThinkingLevel>();
+    for (const profile of readProfileSettings(this.settings.agentDir).profiles) {
+      for (const entry of profile.models) {
+        const key = `${entry.provider}/${entry.id}`;
+        if (entry.thinking && !profileThinking.has(key)) profileThinking.set(key, entry.thinking);
+      }
+    }
     // The product's own switches (M13-T49): exact references, applied after
     // the allow-list so a picker reads one `enabled` and the tab still knows
     // which of the two hid a row.
@@ -514,7 +524,7 @@ export class ModelsAdapter {
 
     const models = runtime.getModels().map((model): ModelCatalogEntry => {
       const ref = `${model.provider}/${model.id}`;
-      const saved = perModelThinking[ref];
+      const saved = profileThinking.get(ref);
       return {
         provider: model.provider,
         id: model.id,
@@ -538,14 +548,16 @@ export class ModelsAdapter {
     });
     models.sort((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 
-    const defaultThinking = effective["defaultThinkingLevel"];
+    // The person's profiles travel with the catalogue so a picker can draw
+    // both halves — the profile as intent, the model as evidence — without a
+    // second request (docs/model-profiles.md).
+    const { profiles, assignments } = readProfileSettings(this.settings.agentDir);
     return {
       models,
       enabledPatterns: patterns,
       disabledModels: disabledList,
-      ...(typeof effective["defaultProvider"] === "string" ? { defaultProvider: effective["defaultProvider"] } : {}),
-      ...(typeof effective["defaultModel"] === "string" ? { defaultModel: effective["defaultModel"] } : {}),
-      ...(isThinkingLevel(defaultThinking) ? { defaultThinkingLevel: defaultThinking } : {}),
+      profiles,
+      assignments,
       refreshedAt: this.refreshedAt,
       errors,
     };

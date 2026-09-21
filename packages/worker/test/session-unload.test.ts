@@ -7,10 +7,13 @@
  * alive and that what pinned it — a turn, a question, an approval, a tray
  * message, a running command, a request in flight — is untouched afterwards.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SESSION_PIN_DETAIL_MAX, SESSION_SAFETY_MAX, sessionPinSchema } from "@lasercode/protocol";
 import type { DriverReleaseReadiness } from "../src/driver.js";
-import { ErrorCodes, LIFETIME_RETRY } from "@lasercode/protocol";
+import { ErrorCodes, LIFETIME_RETRY, PRODUCT_NAME } from "@lasercode/protocol";
 import type { AgentsSnapshot, ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, SessionUpdateParams, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
 import { fallbackSnapshot } from "../src/agents/definitions.js";
@@ -18,11 +21,36 @@ import type { NamerCompletion, NamerContext, NamerModelRuntime } from "../src/ag
 import type { DriverEvent, DriverListener, SessionDriver } from "../src/driver.js";
 
 const PATH = "/tmp/unload/s1.jsonl";
+const NAMING_PROFILE_ID = "mp_testunloadnaming000000";
 
-/** The agents snapshot the host sends with, and without, a model Namer may use. */
+/** A private agent directory holding one naming profile, for this file only. */
+let agentDir = "";
+
+beforeEach(() => {
+  agentDir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-unload-agent-`));
+  writeFileSync(
+    join(agentDir, "settings.json"),
+    JSON.stringify({
+      modelProfiles: [{
+        id: NAMING_PROFILE_ID,
+        name: "Fast",
+        models: [{ provider: "stub", id: "stub-1" }],
+        origin: "seeded",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }],
+      defaultProfileId: NAMING_PROFILE_ID,
+    }),
+  );
+});
+
+afterEach(() => {
+  rmSync(agentDir, { recursive: true, force: true });
+});
+
+/** The agents snapshot the host sends with, and without, a profile naming may use. */
 function namerSnapshot(model: { provider: string; id: string } | null): AgentsSnapshot {
   const snapshot = fallbackSnapshot();
-  return { ...snapshot, namer: { ...snapshot.namer, status: model ? "ready" : "unqualified", model } };
+  return { ...snapshot, builtinProfiles: { ...snapshot.builtinProfiles, namer: model ? NAMING_PROFILE_ID : null } };
 }
 
 /**
@@ -149,6 +177,7 @@ function world(options: { namer?: NamerModelRuntime } = {}) {
   let pendingOpenGate: Promise<void> | undefined;
   const server = new WorkerServer({
     cwd: "/tmp/unload",
+    agentDir,
     createDriver: () => {
       const driver = new FakeDriver();
       if (pendingOpenGate) {

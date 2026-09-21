@@ -49,7 +49,7 @@ function input(name: string, patch: Partial<AgentDefinitionInput> = {}): AgentDe
     instructions: `Act as ${name}.\n`,
     engineInstructions: false,
     excludeCoreInstructions: false,
-    model: null,
+    profileId: null,
     thinkingLevel: null,
     supportsSubagents: false,
     allowedAgents: [],
@@ -106,7 +106,7 @@ describe("AgentStore Markdown files", () => {
     await eventually(() => expect(store.get("reviewer")?.description).toBe("hand edited"));
 
     const goodRevision = store.currentRevision;
-    writeFileSync(saved.path!, "---\nmodel: [broken\n---\nNope\n");
+    writeFileSync(saved.path!, "---\nprofile: [broken\n---\nNope\n");
     await eventually(() => expect(store.warnings()).toEqual([
       expect.objectContaining({ agentName: "reviewer", field: "file", path: saved.path, target: saved.path, message: expect.stringContaining("Fix the YAML frontmatter") }),
     ]));
@@ -151,9 +151,7 @@ describe("AgentStore Markdown files", () => {
       agents: [fileDefinition("default", { instructions: "", engineInstructions: true }), fileDefinition("reviewer")],
       defaultAgent: "reviewer",
       policy: { maxDepth: 2, foregroundCommandSeconds: 90 },
-      namer: { status: "unqualified", model: null, candidates: [] },
-      beam: { model: null, suggested: null, needsChoice: false },
-      chat: { model: null },
+      builtinProfiles: { beam: null, chat: null, namer: null },
       builtinInstructions: { beam: null, chat: null, namer: null },
       renamedAgents: {},
     }, null, 2);

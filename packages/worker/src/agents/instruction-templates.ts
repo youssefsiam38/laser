@@ -124,7 +124,7 @@ export function createInstructionTemplateExtension(options: TemplateExtensionOpt
           systemPrompt = renderInstructionTemplate(template, target, values);
         } catch (error) {
           if (!isBuiltinAgentName(definition.name) || definition.name === "namer") throw error;
-          const shipped = definition.name === "beam" ? fallbackBeamAgent({ model: definition.model }) : fallbackChatAgent(definition.model);
+          const shipped = definition.name === "beam" ? fallbackBeamAgent({ profileId: definition.profileId }) : fallbackChatAgent(definition.profileId);
           prompt = agentPrompt(shipped, event.systemPromptOptions.customPrompt ?? "");
           template = prompt.template;
           console.error(`${PRODUCT_NAME} worker: ${definition.name}'s saved instructions could not be rendered; using the shipped prompt for this turn:`, error instanceof Error ? error.message : error);

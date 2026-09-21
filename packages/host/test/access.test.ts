@@ -302,6 +302,7 @@ describe("the descriptor", () => {
       // releases runtime state, so it is the app's own call as well.
       expect(descriptor.localOnly).toEqual([
         "agents/sync",
+        "models/profiles/migrate",
         "pi/host/environment",
         "pi/runtime/activation/cancel",
         "pi/runtime/activation/prepare",

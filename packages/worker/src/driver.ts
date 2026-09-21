@@ -230,7 +230,17 @@ export interface SessionDriver {
   abort(): Promise<void>;
 
   listModels(): Promise<ModelRef[]>;
+  /**
+   * **Pin** this session to one model (`docs/model-profiles.md`,
+   * "Per-session override"). The session leaves its profile and has nothing
+   * standing in for this model when it stops answering.
+   */
   setModel(model: ModelRef): Promise<SessionState>;
+  /**
+   * Re-anchor this session to a Model Profile: it continues on the first model
+   * of that profile it can use, and moves within it from then on.
+   */
+  setProfile(profileId: string): Promise<SessionState>;
   setThinkingLevel(level: ThinkingLevel): Promise<SessionState>;
   rename(name: string): Promise<void>;
   compact(instructions?: string): Promise<void>;

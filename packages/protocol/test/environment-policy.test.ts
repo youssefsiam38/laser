@@ -62,6 +62,8 @@ describe("the method table", () => {
     // to give memory back releases runtime state, so it is the app's own call.
     expect(restricted).toEqual([
       "agents/sync",
+      // Host → worker: the settings half of the one-way profile migration.
+      "models/profiles/migrate",
       "pi/host/environment",
       "pi/runtime/activation/cancel",
       "pi/runtime/activation/prepare",

@@ -21,7 +21,6 @@ import {
   instructionTemplateToken,
   isBuiltinAgentName,
   type AgentDefinition,
-  type AgentModelChoice,
   type AgentPolicy,
   type AgentsSnapshot,
 } from "@lasercode/protocol";
@@ -51,7 +50,7 @@ function base(name: string, kind: AgentDefinition["kind"], partial: Partial<Agen
     instructions: "",
     engineInstructions: false,
     excludeCoreInstructions: false,
-    model: null,
+    profileId: null,
     thinkingLevel: null,
     supportsSubagents: false,
     allowedAgents: [],
@@ -74,7 +73,7 @@ export function fallbackDefaultAgent(): AgentDefinition {
   });
 }
 
-export function fallbackBeamAgent(options: { model: AgentModelChoice | null }): AgentDefinition {
+export function fallbackBeamAgent(options: { profileId: string | null }): AgentDefinition {
   const app = PRODUCT_DISPLAY_NAME;
   return base("beam", "builtin", {
     description: `${app}'s assistant for the app itself.`,
@@ -87,13 +86,13 @@ export function fallbackBeamAgent(options: { model: AgentModelChoice | null }): 
       instructionTemplateToken("toolGuidelines"),
       instructionTemplateToken("availableSkills"),
     ].join("\n"),
-    model: options.model,
+    profileId: options.profileId,
     scopedSkills: false,
     skills: [],
   });
 }
 
-export function fallbackChatAgent(model: AgentModelChoice | null = null): AgentDefinition {
+export function fallbackChatAgent(profileId: string | null = null): AgentDefinition {
   return base("chat", "builtin", {
     description: "A general assistant for conversations not tied to a project.",
     instructions: [
@@ -103,16 +102,16 @@ export function fallbackChatAgent(model: AgentModelChoice | null = null): AgentD
       instructionTemplateToken("toolGuidelines"),
       instructionTemplateToken("availableSkills"),
     ].join("\n"),
-    model,
+    profileId,
   });
 }
 
 /** Namer is a service, never a session: never startable. */
-export function fallbackNamerAgent(model: AgentModelChoice | null): AgentDefinition {
+export function fallbackNamerAgent(profileId: string | null): AgentDefinition {
   return base("namer", "builtin", {
-    description: "Names sessions with a fast, inexpensive model. Not a session agent.",
+    description: "Names sessions on the profile chosen for session names. Not a session agent.",
     instructions: FALLBACK_NAMER_INSTRUCTIONS,
-    model,
+    profileId,
   });
 }
 
@@ -125,16 +124,14 @@ export function fallbackSnapshot(): AgentsSnapshot {
     revision: 0,
     agents: [
       fallbackDefaultAgent(),
-      fallbackBeamAgent({ model: null }),
+      fallbackBeamAgent({ profileId: null }),
       fallbackChatAgent(),
       fallbackNamerAgent(null),
     ],
     defaultAgent: DEFAULT_AGENT_NAME,
     warnings: [],
     policy: fallbackPolicy(),
-    namer: { status: "unqualified", model: null, candidates: [] },
-    beam: { model: null, suggested: null, needsChoice: false },
-    chat: { model: null },
+    builtinProfiles: { beam: null, chat: null, namer: null },
     builtinInstructions: { beam: null, chat: null, namer: null },
     renamedAgents: {},
     workspaces: { beam: "", chat: "" },
@@ -182,9 +179,9 @@ export class DefinitionsCache {
     const names = new Set(agents.map((agent) => agent.name));
     for (const name of BUILTIN_AGENT_NAMES) {
       if (names.has(name)) continue;
-      if (name === "beam") agents.push(fallbackBeamAgent({ model: snapshot.beam.model }));
-      else if (name === "chat") agents.push(fallbackChatAgent(snapshot.chat?.model ?? null));
-      else agents.push(fallbackNamerAgent(snapshot.namer.model));
+      if (name === "beam") agents.push(fallbackBeamAgent({ profileId: snapshot.builtinProfiles?.beam ?? null }));
+      else if (name === "chat") agents.push(fallbackChatAgent(snapshot.builtinProfiles?.chat ?? null));
+      else agents.push(fallbackNamerAgent(snapshot.builtinProfiles?.namer ?? null));
     }
     this.current = { ...snapshot, agents };
     this.synced = true;
@@ -221,9 +218,12 @@ export class DefinitionsCache {
     return this.current.policy;
   }
 
-  /** Namer's model once a person or the qualifier chose one; null means "do not name". */
-  namerModel(): AgentModelChoice | null {
-    return this.current.namer.model;
+  /**
+   * The profile session naming runs on; null follows the profile assigned to
+   * naming in Settings (`docs/model-profiles.md`, "Assignments").
+   */
+  namerProfileId(): string | null {
+    return this.current.builtinProfiles?.namer ?? null;
   }
 
   /** Namer is a service rather than a session, so it reads its prompt here. */
@@ -232,13 +232,13 @@ export class DefinitionsCache {
     return instructions || FALLBACK_NAMER_INSTRUCTIONS;
   }
 
-  beamModel(): AgentModelChoice | null {
-    return this.current.beam.model;
+  beamProfileId(): string | null {
+    return this.current.builtinProfiles?.beam ?? null;
   }
 
-  /** Chat's model; null means the Chat agent follows the configured default. */
-  chatModel(): AgentModelChoice | null {
-    return this.current.chat?.model ?? null;
+  /** Chat's profile; null means Chat follows the profile assigned to new sessions. */
+  chatProfileId(): string | null {
+    return this.current.builtinProfiles?.chat ?? null;
   }
 
   onChange(listener: (snapshot: AgentsSnapshot) => void): () => void {

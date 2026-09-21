@@ -144,7 +144,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
           const { runId, reason } = params as { runId: string; reason?: string };
           return { run: { ...run(runId), status: "cancelled", endedBy: { initiator: "user", ...(reason ? { reason } : {}) } } };
         }
-        if (method === "agents/namer/qualify") return { status: "ready", model: { provider: "openai", id: "gpt-5-nano" }, candidates: [] };
+        if (method === "models/profiles/delete") return { ok: true };
         return { commands: [{ name: "skill:test", source: "skill" }] };
       },
     }),
@@ -762,7 +762,7 @@ describe("Router · agents (docs/agents-leap)", () => {
     try {
       const listed = (await rpc(h.router, "agents/list")) as { result: { agents: Array<{ name: string }>; defaultAgent: string } };
       expect(listed.result.agents.map((a) => a.name)).toEqual(["default", "beam", "chat", "namer"]);
-      const input = { name: "reviewer", scope: "global" as const, description: "", instructions: "Review.", engineInstructions: false, excludeCoreInstructions: false, model: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] };
+      const input = { name: "reviewer", scope: "global" as const, description: "", instructions: "Review.", engineInstructions: false, excludeCoreInstructions: false, profileId: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] };
       expect(await rpc(h.router, "agents/validate", { agent: { ...input, scopedSkills: true }, originalName: null })).toMatchObject({ result: { issues: [{ field: "skills" }] } });
       const saved = await rpc(h.router, "agents/save", { agent: input, originalName: null });
       expect(saved).toMatchObject({ result: { agent: { name: "reviewer", kind: "custom" }, snapshot: { revision: 1 } } });
@@ -770,17 +770,16 @@ describe("Router · agents (docs/agents-leap)", () => {
       expect(await rpc(h.router, "agents/set-default", { name: "reviewer" })).toMatchObject({ result: { snapshot: { defaultAgent: "reviewer" } } });
       expect(await rpc(h.router, "agents/delete", { name: "reviewer", location: { scope: "global" } })).toMatchObject({ error: { message: "This agent starts new sessions. Choose another default first." } });
       expect(await rpc(h.router, "agents/set-policy", { policy: { maxDepth: 2 } })).toMatchObject({ result: { snapshot: { policy: { maxDepth: 2 } } } });
-      // One method, three built-ins: each carries its choice to the agent of that name.
-      expect(await rpc(h.router, "agents/builtin/set-model", { name: "beam", model: { provider: "openai", id: "gpt-5-mini" } })).toMatchObject({
-        result: { snapshot: { beam: { model: { provider: "openai", id: "gpt-5-mini" }, needsChoice: false } } },
+      // One method, three built-ins: each carries its profile to the agent of that name.
+      expect(await rpc(h.router, "agents/builtin/set-profile", { name: "beam", profileId: "mp_testbalanced000000000" })).toMatchObject({
+        result: { snapshot: { builtinProfiles: { beam: "mp_testbalanced000000000" } } },
       });
-      const chatSet = (await rpc(h.router, "agents/builtin/set-model", { name: "chat", model: { provider: "openai", id: "gpt-5-nano" } })) as {
-        result: { snapshot: { chat: { model: unknown }; agents: Array<{ name: string; model: unknown }> } };
+      const chatSet = (await rpc(h.router, "agents/builtin/set-profile", { name: "chat", profileId: "mp_testfast00000000000000" })) as {
+        result: { snapshot: { builtinProfiles: { chat: unknown }; agents: Array<{ name: string; profileId: unknown }> } };
       };
-      expect(chatSet.result.snapshot.chat).toEqual({ model: { provider: "openai", id: "gpt-5-nano" } });
-      expect(chatSet.result.snapshot.agents.find((a) => a.name === "chat")?.model).toEqual({ provider: "openai", id: "gpt-5-nano" });
-      expect(await rpc(h.router, "agents/builtin/set-model", { name: "chat", model: null })).toMatchObject({ result: { snapshot: { chat: { model: null } } } });
-      expect(await rpc(h.router, "agents/builtin/set-model", { name: "namer", model: null })).toMatchObject({ result: { snapshot: { namer: { status: "unqualified" } } } });
+      expect(chatSet.result.snapshot.builtinProfiles.chat).toBe("mp_testfast00000000000000");
+      expect(chatSet.result.snapshot.agents.find((a) => a.name === "chat")?.profileId).toBe("mp_testfast00000000000000");
+      expect(await rpc(h.router, "agents/builtin/set-profile", { name: "chat", profileId: null })).toMatchObject({ result: { snapshot: { builtinProfiles: { chat: null } } } });
       expect(await rpc(h.router, "agents/builtin/set-instructions", { name: "chat", instructions: "Answer as an editor." })).toMatchObject({
         result: { snapshot: { builtinInstructions: { chat: "Answer as an editor." }, agents: expect.arrayContaining([expect.objectContaining({ name: "chat", instructions: "Answer as an editor." })]) } },
       });
@@ -829,15 +828,31 @@ describe("Router · agents (docs/agents-leap)", () => {
     }
   });
 
-  it("routes the engine-owned methods by cwd and keeps the Namer verdict", async () => {
+  it("routes the engine-owned methods by cwd", async () => {
     const h = harness({ agents: true });
     try {
       await rpc(h.router, "agents/skills", { cwd: CWD_A });
       await rpc(h.router, "agents/engine-instructions", { cwd: CWD_B });
-      const qualified = await rpc(h.router, "agents/namer/qualify", { cwd: CWD_A });
-      expect(qualified).toMatchObject({ result: { status: "ready" } });
-      expect(h.workerRequests.map((r) => `${r.method}@${r.cwd}`)).toEqual(["agents/skills@/projects/a", "agents/engine-instructions@/projects/b", "agents/namer/qualify@/projects/a"]);
-      expect(h.agents!.snapshot().namer).toMatchObject({ status: "ready", model: { provider: "openai", id: "gpt-5-nano" } });
+      expect(h.workerRequests.map((r) => `${r.method}@${r.cwd}`)).toEqual(["agents/skills@/projects/a", "agents/engine-instructions@/projects/b"]);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("refuses to delete a profile something still uses, and moves every reference with a replacement", async () => {
+    const h = harness({ agents: true });
+    try {
+      const BALANCED = "mp_testbalanced000000000";
+      const FAST = "mp_testfast00000000000000";
+      await rpc(h.router, "agents/builtin/set-profile", { name: "namer", profileId: FAST });
+      const refused = await rpc(h.router, "models/profiles/delete", { cwd: CWD_A, id: FAST });
+      expect(refused).toMatchObject({ error: { message: expect.stringContaining("still used by Namer") } });
+      // Nothing was asked of the worker, so nothing was written.
+      expect(h.workerRequests.some((r) => r.method === "models/profiles/delete")).toBe(false);
+
+      const deleted = await rpc(h.router, "models/profiles/delete", { cwd: CWD_A, id: FAST, replacementId: BALANCED });
+      expect(deleted).toMatchObject({ result: { ok: true } });
+      expect(h.agents!.snapshot().builtinProfiles.namer).toBe(BALANCED);
     } finally {
       h.cleanup();
     }

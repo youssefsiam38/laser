@@ -27,7 +27,7 @@ function custom(name: string, patch: Partial<AgentDefinitionInput> = {}): AgentD
     instructions: `You are ${name}.`,
     engineInstructions: false,
     excludeCoreInstructions: false,
-    model: null,
+    profileId: null,
     thinkingLevel: null,
     supportsSubagents: false,
     allowedAgents: [],
@@ -64,8 +64,7 @@ describe("AgentStore · seeding", () => {
     expect(namer.instructions).toContain("name sessions");
     expect(`${namer.description} ${namer.instructions}`).not.toMatch(/running action|tool call/i);
     expect(snapshot.policy).toEqual({ maxDepth: 3, foregroundCommandSeconds: 120 });
-    expect(snapshot.beam).toEqual({ model: null, suggested: null, needsChoice: true });
-    expect(snapshot.namer).toEqual({ status: "unqualified", model: null, candidates: [] });
+    expect(snapshot.builtinProfiles).toEqual({ beam: null, chat: null, namer: null });
     expect(snapshot.builtinInstructions).toEqual({ beam: null, chat: null, namer: null });
     expect(snapshot.workspaces).toEqual(WORKSPACES);
     expect(snapshot.warnings).toEqual([]);
@@ -146,7 +145,7 @@ describe("AgentStore · save and validate", () => {
     ]);
     const skill = { name: "review", path: "/skills/review/SKILL.md", scope: "global" as const };
     expect(s.validate(custom("a", { scopedSkills: true, skills: [skill, skill] }))).toEqual([{ field: "skills[1]", message: '"review" is listed twice.' }]);
-    expect(s.validate(custom("a", { model: { provider: "", id: "x" } }))).toEqual([{ field: "model", message: "Choose a model, or leave it empty to follow the default model." }]);
+    expect(s.validate(custom("a", { profileId: "Balanced" }))).toEqual([{ field: "profile", message: "Choose one of your model profiles, or leave it empty to follow the default." }]);
   });
 
   it("lets the seeded default be edited but never a second one be created", () => {
@@ -249,25 +248,30 @@ describe("AgentStore · policy, Beam and Namer", () => {
     expect(issuesOf(() => s.setPolicy({ foregroundCommandSeconds: 5 }))[0]?.field).toBe("foregroundCommandSeconds");
   });
 
-  it("a Beam choice or dismissal closes the dialog; Namer follows the person or the benchmark", () => {
+  it("each built-in holds a profile id, and a replacement moves every reference at once", () => {
     const s = store();
-    s.setBeamSuggestion({ provider: "openai", id: "gpt-5-mini" });
-    expect(s.snapshot().beam).toEqual({ model: null, suggested: { provider: "openai", id: "gpt-5-mini" }, needsChoice: true });
-    s.setBeamModel(null);
-    expect(s.snapshot().beam.needsChoice).toBe(false);
-    s.setBeamModel({ provider: "openai", id: "gpt-5-mini" });
-    expect(s.get("beam")?.model).toEqual({ provider: "openai", id: "gpt-5-mini" });
+    const BALANCED = "mp_testbalanced000000000";
+    const FAST = "mp_testfast00000000000000";
+    s.setBuiltinProfile("beam", BALANCED);
+    expect(s.get("beam")?.profileId).toBe(BALANCED);
+    expect(s.snapshot().builtinProfiles).toEqual({ beam: BALANCED, chat: null, namer: null });
 
-    s.setBuiltinModel("beam", { provider: "openai", id: "gpt-5-mini" });
-    expect(s.get("beam")?.model).toEqual({ provider: "openai", id: "gpt-5-mini" });
+    s.setBuiltinProfile("namer", FAST);
+    expect(s.get("namer")?.profileId).toBe(FAST);
+    // `null` returns a built-in to the profile new conversations use.
+    s.setBuiltinProfile("beam", null);
+    expect(s.get("beam")?.profileId).toBeNull();
 
-    s.setNamerModel({ provider: "google", id: "gemini-flash-lite" });
-    expect(s.snapshot().namer).toMatchObject({ status: "ready", model: { provider: "google", id: "gemini-flash-lite" } });
-    expect(s.get("namer")?.model).toEqual({ provider: "google", id: "gemini-flash-lite" });
-    s.setNamerModel(null);
-    expect(s.snapshot().namer).toMatchObject({ status: "unqualified", model: null });
-    s.setNamerState({ status: "ready", model: { provider: "openai", id: "gpt-5-nano" }, candidates: [{ model: { provider: "openai", id: "gpt-5-nano" }, latencyMs: 300, valid: true }] });
-    expect(s.snapshot().namer.candidates).toHaveLength(1);
+    // A profile is chosen by id, never by name or by a model.
+    expect(issuesOf(() => s.setBuiltinProfile("chat", "Balanced"))).toEqual([
+      { field: "profile", message: "Choose one of your model profiles." },
+    ]);
+
+    // Deleting a profile moves everything that pointed at it, in one write.
+    s.setBuiltinProfile("chat", FAST);
+    expect(s.replaceBuiltinProfile(FAST, BALANCED)).toBe(true);
+    expect(s.snapshot().builtinProfiles).toEqual({ beam: null, chat: BALANCED, namer: BALANCED });
+    expect(s.replaceBuiltinProfile(FAST, BALANCED)).toBe(false);
   });
 
   it("edits and restores each built-in's effective instructions", () => {
@@ -310,9 +314,9 @@ describe("AgentStore · persistence", () => {
     first.save(custom("lead", { supportsSubagents: true, allowedAgents: ["reviewer"] }));
     first.setDefault("lead");
     first.setPolicy({ maxDepth: 2 });
-    first.setBuiltinModel("beam", { provider: "openai", id: "gpt-5-mini" });
-    first.setBuiltinModel("chat", { provider: "anthropic", id: "claude-haiku" });
-    first.setBuiltinModel("namer", { provider: "openai", id: "gpt-5-nano" });
+    first.setBuiltinProfile("beam", "mp_testbeam0000000000000");
+    first.setBuiltinProfile("chat", "mp_testchat0000000000000");
+    first.setBuiltinProfile("namer", "mp_testnamer000000000000");
     first.setBuiltinInstructions("beam", "Read first, then answer.");
     first.setBuiltinInstructions("chat", "Write with warmth.");
     first.setBuiltinInstructions("namer", "Prefer concrete nouns.");
@@ -332,14 +336,12 @@ describe("AgentStore · persistence", () => {
     expect(snapshot.agents.map((a) => a.name)).toEqual(["default", "lead", "reviewer", "beam", "chat", "namer"]);
     expect(snapshot.defaultAgent).toBe("lead");
     expect(snapshot.policy.maxDepth).toBe(2);
-    expect(snapshot.beam).toEqual({ model: { provider: "openai", id: "gpt-5-mini" }, suggested: null, needsChoice: false });
-    expect(snapshot.namer).toMatchObject({ status: "ready", model: { provider: "openai", id: "gpt-5-nano" } });
-    expect(snapshot.chat).toEqual({ model: { provider: "anthropic", id: "claude-haiku" } });
+    expect(snapshot.builtinProfiles).toEqual({ beam: "mp_testbeam0000000000000", chat: "mp_testchat0000000000000", namer: "mp_testnamer000000000000" });
     expect(snapshot.builtinInstructions).toEqual({ beam: "Read first, then answer.", chat: "Write with warmth.", namer: "Prefer concrete nouns." });
-    expect(second.get("beam")?.model).toEqual({ provider: "openai", id: "gpt-5-mini" });
+    expect(second.get("beam")?.profileId).toBe("mp_testbeam0000000000000");
     // The choice reaches the definition the worker runs, not only the snapshot's state block.
-    expect(second.get("chat")?.model).toEqual({ provider: "anthropic", id: "claude-haiku" });
-    expect(second.get("namer")?.model).toEqual({ provider: "openai", id: "gpt-5-nano" });
+    expect(second.get("chat")?.profileId).toBe("mp_testchat0000000000000");
+    expect(second.get("namer")?.profileId).toBe("mp_testnamer000000000000");
     expect(second.get("beam")?.instructions).toBe("Read first, then answer.");
     expect(second.get("chat")?.instructions).toBe("Write with warmth.");
     expect(second.get("namer")?.instructions).toBe("Prefer concrete nouns.");
@@ -388,24 +390,26 @@ describe("AgentStore · persistence", () => {
     expect(third.snapshot().defaultAgent).toBe("lead");
   });
 
-  it("reads a file written before Chat had a model, and drops a chat value it cannot read", () => {
+  it("reads a file written before profiles existed, and drops a value it cannot read", () => {
     const file = join(dir, "old-agents.json");
-    // Exactly what an earlier release wrote: no `chat` key at all.
-    writeFile(file, { version: 1, revision: 4, agents: [], defaultAgent: "default", beam: { model: null, suggested: null, needsChoice: false } });
+    // Exactly what an earlier release wrote: model choices, no profiles.
+    writeFile(file, { version: 1, revision: 4, agents: [], defaultAgent: "default", beam: { model: { provider: "openai", id: "gpt-5-mini" }, suggested: null, needsChoice: false } });
     const old = store({ storePath: file });
-    expect(old.snapshot().chat).toEqual({ model: null });
+    // The built-ins follow the profile new conversations use until the
+    // migration or a person gives them one; a raw model is never adopted.
+    expect(old.snapshot().builtinProfiles).toEqual({ beam: null, chat: null, namer: null });
     expect(old.snapshot().builtinInstructions).toEqual({ beam: null, chat: null, namer: null });
-    expect(old.get("chat")?.model).toBeNull();
+    expect(old.get("chat")?.profileId).toBeNull();
 
     // Hand-edited nonsense is dropped, never thrown on: the store must still boot.
-    for (const chat of [{ model: { provider: "openai" } }, { model: "gpt-5-mini" }, {}]) {
-      const junk = join(dir, `junk-${JSON.stringify(chat).length}-agents.json`);
-      writeFile(junk, { version: 1, revision: 1, agents: [], defaultAgent: "default", chat });
-      expect(store({ storePath: junk }).snapshot().chat).toEqual({ model: null });
+    for (const builtinProfiles of [{ chat: { provider: "openai" } }, { chat: "Balanced" }, {}]) {
+      const junk = join(dir, `junk-${JSON.stringify(builtinProfiles).length}-agents.json`);
+      writeFile(junk, { version: 1, revision: 1, agents: [], defaultAgent: "default", builtinProfiles });
+      expect(store({ storePath: junk }).snapshot().builtinProfiles).toEqual({ beam: null, chat: null, namer: null });
     }
     const wrongType = join(dir, "wrong-agents.json");
-    writeFile(wrongType, { version: 1, revision: 1, agents: [], defaultAgent: "default", chat: "gpt-5-mini" });
-    expect(store({ storePath: wrongType }).snapshot().chat).toEqual({ model: null });
+    writeFile(wrongType, { version: 1, revision: 1, agents: [], defaultAgent: "default", builtinProfiles: "Balanced" });
+    expect(store({ storePath: wrongType }).snapshot().builtinProfiles).toEqual({ beam: null, chat: null, namer: null });
   });
 
   it("starts from the seed on a corrupt file and recovers on the next write", () => {
