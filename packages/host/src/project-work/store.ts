@@ -161,13 +161,40 @@ const ITEM_LIMIT_RECOVERY =
  *
  * The capture was written by an earlier transaction and is still there; only
  * the decision's own transaction rolled back. Saying "nothing was saved" here
- * would be a lie about a blob the person can still read.
+ * would be a lie about a blob the person can still read — and it stays a lie
+ * when it is the whole app's budget that is full rather than this project's,
+ * so the sentence exists for both scopes and only the way to make room
+ * changes (M21-T2 corrections, item 2).
  */
-export function decisionRefusedRecovery(gate: string): string {
+export function decisionRefusedRecovery(gate: string, scope: "project" | "global" = "project"): string {
+  const room =
+    scope === "project"
+      ? "Export or permanently delete some of this project's saved work — attachments and sketches first — and decide again. "
+      : "Export or permanently delete project work you no longer need from another project, and decide again. ";
   return (
     `The evidence ${gate} prepared is kept and can still be read; the decision itself was not recorded. ` +
-    "Export or permanently delete some of this project's saved work — attachments and sketches first — and decide again. " +
+    room +
     "Archiving an item hides it and keeps its history, so it frees nothing."
+  );
+}
+
+/**
+ * Why one item cannot be deleted while another item's record rests on its
+ * proof (M21-T2 corrections, item 4).
+ *
+ * It names the dependent item, because "another item" is not something a
+ * person can act on, and it does not offer a recovery that does not exist:
+ * superseding a decision, recording a correction or capturing a state again
+ * all leave the original reference exactly where it is — that is what makes
+ * the history worth keeping. The two things that really work are keeping this
+ * item, or deleting the dependent work as explicitly as this deletion was
+ * asked for. The store rewrites nobody's history to make room for a deletion.
+ */
+function dependentProofRefusal(key: string, rests: string): string {
+  return (
+    `${key}'s ${rests}, so deleting this item would leave ${key} naming proof nobody can read. ` +
+    `Superseding a decision or capturing that state again does not remove the reference — it is part of ${key}'s own history and stays. ` +
+    `Keep this item, or permanently delete ${key} first if that work should go as well.`
   );
 }
 
@@ -404,7 +431,7 @@ export class ProjectWorkStore {
   private write<T>(work: () => T): T {
     this.pending = [];
     this.ledger.clear();
-    this.recovery = undefined;
+    this.preparedGate = undefined;
     let result: T;
     try {
       // Admission is settled inside the transaction, after the work and before
@@ -421,7 +448,7 @@ export class ProjectWorkStore {
       throw error;
     } finally {
       this.ledger.clear();
-      this.recovery = undefined;
+      this.preparedGate = undefined;
     }
     const events = this.pending;
     this.pending = [];
@@ -675,13 +702,15 @@ export class ProjectWorkStore {
    */
   private ledger = new Map<string, { bytes: number; entities: number; records: number }>();
   /**
-   * The recovery sentence this transaction's refusal should carry.
+   * The gate whose preparation this transaction is deciding on, if any.
    *
    * A door whose gate already stored evidence in an **earlier** transaction
-   * sets one that does not claim that preparation was rolled back: only this
-   * transaction's own work was.
+   * records it here, and every ceiling this transaction can reach — this
+   * project's bytes or records, or the whole app's — refuses in words that do
+   * not claim that preparation was rolled back. Only this transaction's own
+   * work was.
    */
-  private recovery: string | undefined;
+  private preparedGate: string | undefined;
 
   private note(projectId: string, delta: { bytes?: number; entities?: number; records?: number }): void {
     const current = this.ledger.get(projectId) ?? { bytes: 0, entities: 0, records: 0 };
@@ -751,7 +780,10 @@ export class ProjectWorkStore {
       globalBytes += delta.bytes;
       globalRecords += delta.records;
     }
-    const recovery = this.recovery ?? PROJECT_FULL_RECOVERY;
+    // The same truth in both scopes: a capture a gate stored in an earlier
+    // transaction is still there, whichever budget is full.
+    const recovery = this.preparedGate ? decisionRefusedRecovery(this.preparedGate) : PROJECT_FULL_RECOVERY;
+    const globalRecovery = this.preparedGate ? decisionRefusedRecovery(this.preparedGate, "global") : GLOBAL_FULL_RECOVERY;
     for (const [projectId, delta] of this.ledger) {
       const entry = this.statement("SELECT bytes, entity_count, record_count FROM projects WHERE project_id = ?").get(projectId) as
         | { bytes: number; entity_count: number; record_count: number }
@@ -785,20 +817,48 @@ export class ProjectWorkStore {
       const bytes = Number(whole.b);
       const records = Number(whole.r);
       if (globalRecords > 0 && records + globalRecords > this.quota.globalRecords) {
-        throw new ProjectWorkQuotaError("global", bytes, this.quota.globalBytes, GLOBAL_FULL_RECOVERY, {
+        throw new ProjectWorkQuotaError("global", bytes, this.quota.globalBytes, globalRecovery, {
           measure: "records",
           used: records + globalRecords,
           limit: this.quota.globalRecords,
         });
       }
       if (globalBytes > 0 && bytes + globalBytes > this.quota.globalBytes) {
-        throw new ProjectWorkQuotaError("global", bytes + globalBytes, this.quota.globalBytes, GLOBAL_FULL_RECOVERY);
+        throw new ProjectWorkQuotaError("global", bytes + globalBytes, this.quota.globalBytes, globalRecovery);
       }
     }
+    // Counters move by exactly the transaction's delta. There is no `MAX(0,
+    // …)` here on purpose: clamping a negative total would turn an accounting
+    // fault into a ledger that merely *looks* right, and every later refusal
+    // and every later credit would be computed from a number nobody could
+    // trust. A total that would end below zero means this store's counters and
+    // its rows disagree, so the whole transaction is refused and rolled back —
+    // the rows it was going to write are not saved, and not one row that was
+    // already there is changed or removed (M21-T2 corrections, item 3).
     for (const [projectId, delta] of this.ledger) {
       this.statement(
-        "UPDATE projects SET bytes = MAX(0, bytes + ?), entity_count = MAX(0, entity_count + ?), record_count = MAX(0, record_count + ?) WHERE project_id = ?",
+        "UPDATE projects SET bytes = bytes + ?, entity_count = entity_count + ?, record_count = record_count + ? WHERE project_id = ?",
       ).run(delta.bytes, delta.entities, delta.records, projectId);
+      const settled = this.statement("SELECT bytes, entity_count, record_count FROM projects WHERE project_id = ?").get(projectId) as
+        | { bytes: number; entity_count: number; record_count: number }
+        | undefined;
+      if (!settled) continue;
+      const negative =
+        Number(settled.bytes) < 0
+          ? "size"
+          : Number(settled.record_count) < 0
+            ? "number of saved records"
+            : Number(settled.entity_count) < 0
+              ? "number of items"
+              : undefined;
+      if (negative) {
+        throw new ProjectWorkRefusedError(
+          `This change was not saved: it would leave this project's stored ${negative} counted as less than nothing, ` +
+            "which means the tally of what is saved no longer matches what is really there. " +
+            "Nothing already saved was changed or removed, and all of it is still readable. " +
+            "Export this project's work before changing more of it.",
+        );
+      }
     }
   }
 
@@ -1354,56 +1414,85 @@ export class ProjectWorkStore {
 
   /**
    * Would deleting this entity destroy proof a **surviving other** item's
-   * decision was made on? (D-365, A-2)
+   * record rests on? (D-365, A-2; M21-T2 corrections, item 4)
    *
    * Explicit deletion is a person's act and it is allowed to take this item's
    * own captures, bindings and links with it. It is not allowed to make
-   * another record unreadable: a decision elsewhere that bound one of these
-   * links or blobs, or acceptance evidence elsewhere that names one of them,
-   * would be left pointing at nothing. The refusal names what to do instead;
-   * nothing is deleted and nothing is quietly rewritten.
+   * another item's record unreadable. Every way one item's record can name
+   * another item's proof is checked here, and each of them is a reference a
+   * person really can create:
+   *
+   * - a decision elsewhere that **bound** one of these links or blobs (D-363);
+   * - evidence elsewhere that names one of these links, or whose attachment
+   *   **is** one of these blobs — evidence takes a `blobId` without requiring
+   *   that the blob belongs to the same item;
+   * - another link's **current** capture pointer;
+   * - a Native acceptance elsewhere, which binds the exact capture it was
+   *   confirmed against and keeps naming it after the pointer moves on;
+   * - an **older** association in another link's capture history: append-only
+   *   provenance (D-363) is read by every decision taken before the pointer
+   *   was corrected, including a legacy acceptance that names no capture of
+   *   its own and whose proof is therefore the link's first association.
+   *
+   * The refusal names the dependent item by key and tells the truth about
+   * recovery: none of these references can be superseded, recaptured or
+   * rewritten away, because they are that item's own immutable history. The
+   * two honest ways forward are keeping this item, or deleting the dependent
+   * work explicitly as well. Nothing here deletes or rewrites another item's
+   * history on a person's behalf.
    *
    * Bounded: one statement per relationship, each an indexed lookup against
-   * this entity's own links and blobs.
+   * this entity's own links and blobs, each returning at most one key.
    */
   private proofConsumedElsewhere(projectId: string, entityId: string): string | undefined {
-    const boundLink = this.statement(
-      "SELECT b.decision_kind AS kind FROM decision_capture_bindings b " +
-        "WHERE b.project_id = ? AND b.entity_id <> ? " +
-        "AND b.link_id IN (SELECT link_id FROM repository_links WHERE project_id = ? AND entity_id = ?) LIMIT 1",
-    ).get(projectId, entityId, projectId, entityId) as { kind: string } | undefined;
-    const boundBlob = this.statement(
-      "SELECT b.decision_kind AS kind FROM decision_capture_bindings b " +
-        "WHERE b.project_id = ? AND b.entity_id <> ? " +
-        "AND b.blob_id IN (SELECT blob_id FROM blobs WHERE project_id = ? AND entity_id = ?) LIMIT 1",
-    ).get(projectId, entityId, projectId, entityId) as { kind: string } | undefined;
-    const bound = boundLink ?? boundBlob;
+    const ourLinks = "SELECT link_id FROM repository_links WHERE project_id = ? AND entity_id = ?";
+    const ourBlobs = "SELECT blob_id FROM blobs WHERE project_id = ? AND entity_id = ?";
+    const first = (sql: string): { key: string; kind?: string } | undefined =>
+      this.statement(sql).get(projectId, entityId, projectId, entityId) as { key: string; kind?: string } | undefined;
+
+    // The most exact answer first: a decision recorded what it was decided on.
+    const bound =
+      first(
+        "SELECT e.key AS key, b.decision_kind AS kind FROM decision_capture_bindings b JOIN entities e ON e.entity_id = b.entity_id " +
+          `WHERE b.project_id = ? AND b.entity_id <> ? AND b.link_id IN (${ourLinks}) ORDER BY e.key LIMIT 1`,
+      ) ??
+      first(
+        "SELECT e.key AS key, b.decision_kind AS kind FROM decision_capture_bindings b JOIN entities e ON e.entity_id = b.entity_id " +
+          `WHERE b.project_id = ? AND b.entity_id <> ? AND b.blob_id IN (${ourBlobs}) ORDER BY e.key LIMIT 1`,
+      );
     if (bound) {
-      return (
-        `Another item's ${bound.kind === "approval" ? "approval" : "completion"} was decided on evidence this one holds, so deleting it ` +
-        "would leave that decision resting on proof nobody can read. Supersede or remove that decision first, then delete this item."
-      );
+      return dependentProofRefusal(bound.key, `${bound.kind === "approval" ? "approval" : "completion"} was decided on evidence this item holds`);
     }
-    const named = this.statement(
-      "SELECT 1 AS present FROM evidence WHERE project_id = ? AND entity_id <> ? " +
-        "AND repository_link_id IN (SELECT link_id FROM repository_links WHERE project_id = ? AND entity_id = ?) LIMIT 1",
-    ).get(projectId, entityId, projectId, entityId) as { present: number } | undefined;
-    if (named) {
-      return (
-        "Another item's evidence points at a record this one holds, so deleting it would leave that evidence naming something that is gone. " +
-        "Record the correction on that item first, then delete this one."
-      );
-    }
-    const usesBlob = this.statement(
-      "SELECT 1 AS present FROM repository_links WHERE project_id = ? AND entity_id <> ? " +
-        "AND capture_blob_id IN (SELECT blob_id FROM blobs WHERE project_id = ? AND entity_id = ?) LIMIT 1",
-    ).get(projectId, entityId, projectId, entityId) as { present: number } | undefined;
-    if (usesBlob) {
-      return (
-        "Another item's record is proved by a capture this one holds, so deleting it would leave that record unprovable. " +
-        "Capture that item's state again first, then delete this one."
-      );
-    }
+    const namesLink = first(
+      "SELECT e.key AS key FROM evidence v JOIN entities e ON e.entity_id = v.entity_id " +
+        `WHERE v.project_id = ? AND v.entity_id <> ? AND v.repository_link_id IN (${ourLinks}) ORDER BY e.key LIMIT 1`,
+    );
+    if (namesLink) return dependentProofRefusal(namesLink.key, "evidence points at a repository record this item holds");
+    const namesBlob = first(
+      "SELECT e.key AS key FROM evidence v JOIN entities e ON e.entity_id = v.entity_id " +
+        `WHERE v.project_id = ? AND v.entity_id <> ? AND v.blob_id IN (${ourBlobs}) ORDER BY e.key LIMIT 1`,
+    );
+    if (namesBlob) return dependentProofRefusal(namesBlob.key, "evidence is kept as a capture this item holds");
+    const provedNow = first(
+      "SELECT e.key AS key FROM repository_links l JOIN entities e ON e.entity_id = l.entity_id " +
+        `WHERE l.project_id = ? AND l.entity_id <> ? AND l.capture_blob_id IN (${ourBlobs}) ORDER BY e.key LIMIT 1`,
+    );
+    if (provedNow) return dependentProofRefusal(provedNow.key, "repository record is proved by a capture this item holds");
+    const accepted = first(
+      "SELECT e.key AS key FROM repository_links l JOIN entities e ON e.entity_id = l.entity_id " +
+        "WHERE l.project_id = ? AND l.entity_id <> ? AND l.acceptance_json IS NOT NULL " +
+        `AND json_extract(l.acceptance_json, '$.captureBlobId') IN (${ourBlobs}) ORDER BY e.key LIMIT 1`,
+    );
+    if (accepted) return dependentProofRefusal(accepted.key, "accepted state was confirmed against a capture this item holds");
+    // Last, the history behind another link's pointer: an association this
+    // item's capture is named by is what every decision taken before a later
+    // correction was read against, and it is never rewritten.
+    const inHistory = first(
+      "SELECT e.key AS key FROM repository_link_captures c JOIN repository_links l ON l.link_id = c.link_id " +
+        "JOIN entities e ON e.entity_id = l.entity_id " +
+        `WHERE c.project_id = ? AND l.entity_id <> ? AND c.blob_id IN (${ourBlobs}) ORDER BY e.key LIMIT 1`,
+    );
+    if (inHistory) return dependentProofRefusal(inHistory.key, "capture history records a capture this item holds");
     return undefined;
   }
 
@@ -1757,7 +1846,7 @@ export class ProjectWorkStore {
       // The gate stored its capture in an earlier transaction, so a refusal
       // here must not claim that nothing was kept: the evidence is still
       // readable and it is the decision that did not happen.
-      if (input.proof) this.recovery = decisionRefusedRecovery(input.proof.gate);
+      if (input.proof) this.preparedGate = input.proof.gate;
       const entity = this.entityRow(input.projectId, input.entityId);
       this.requireCurrent(entity, input.expectedRevisionId);
       // Every revision the decision covers must be exactly what the store has:
@@ -2779,7 +2868,7 @@ export class ProjectWorkStore {
       // As in `approve`: evidence the gate kept in an earlier transaction is
       // still there, so a refusal here says the completion was not recorded,
       // not that nothing was saved.
-      if (input.proof) this.recovery = decisionRefusedRecovery(input.proof.gate);
+      if (input.proof) this.preparedGate = input.proof.gate;
       const entity = this.entityRow(input.projectId, input.entityId);
       this.requireCurrent(entity, input.expectedRevisionId);
       if (entity.kind !== "task") throw new ProjectWorkRefusedError("Only a task has task actions.");

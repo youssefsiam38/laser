@@ -28,12 +28,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CANONICAL_TABLES,
   BOOKKEEPING_TABLES,
+  CHARGE_SCAN_BATCH_ROWS,
   DERIVED_TABLES,
   UNPARTITIONED_TABLES,
   ROW_OVERHEAD_BYTES,
+  recomputeProjectUsage,
+  rechargeProject,
 } from "../../src/project-work/accounting.js";
-import { ProjectWorkQuotaError } from "../../src/project-work/errors.js";
+import type { ProjectWorkDatabase } from "../../src/project-work/schema.js";
+import { ProjectWorkQuotaError, ProjectWorkRefusedError } from "../../src/project-work/errors.js";
 import { ProjectWorkStore } from "../../src/project-work/store.js";
+import { CHECKPOINT_REF_NAMESPACE } from "@lasercode/protocol";
 import { person, specBody, taskBody } from "./fixtures.js";
 
 let base: string;
@@ -108,6 +113,24 @@ function repositoryLink(
 }
 
 // ---------------------------------------------------------------------------
+
+/** A database in the shape v5 left behind: no charges, body-only counters. */
+function rewindToV5(path: string): { bytes: number; rows: Map<string, number> } {
+  const db = new DatabaseSync(path);
+  const rows = new Map<string, number>();
+  for (const table of [...CANONICAL_TABLES, ...BOOKKEEPING_TABLES, ...DERIVED_TABLES]) {
+    rows.set(table, Number((db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n));
+  }
+  for (const table of CANONICAL_TABLES) db.exec(`ALTER TABLE ${table} DROP COLUMN charged_bytes`);
+  db.exec("ALTER TABLE projects DROP COLUMN record_count");
+  const bodies = db.prepare("SELECT COALESCE(SUM(body_bytes), 0) AS n FROM revisions").get() as { n: number };
+  const payloads = db.prepare("SELECT COALESCE(SUM(bytes), 0) AS n FROM blobs WHERE released IS NULL").get() as { n: number };
+  const bytes = Number(bodies.n) + Number(payloads.n);
+  db.prepare("UPDATE projects SET bytes = ?").run(bytes);
+  db.exec("PRAGMA user_version = 5");
+  db.close();
+  return { bytes, rows };
+}
 
 describe("what a canonical row costs", () => {
   it("charges a comment the exact UTF-8 of what was stored, not its character count", () => {
@@ -759,6 +782,111 @@ describe("admission", () => {
       small.close();
     }
   });
+
+  /** A project with a gate that has already stored its capture, ready to decide. */
+  function preparedDecision(name: string): { path: string; id: string; item: ReturnType<ProjectWorkStore["create"]>; capture: { blobId: string; bytes: number }; globalBytes: number; globalRecords: number } {
+    const path = join(base, `${name}.db`);
+    const first = new ProjectWorkStore({ file: path });
+    const id = first.projectIdFor(join(base, name))!;
+    const item = first.create({ projectId: id, kind: "spec", title: "Brief", body: specBody(), origin: person, idempotencyKey: "a" });
+    first.review({
+      projectId: id,
+      entityId: item.entity.entityId,
+      expectedRevisionId: item.revision.revisionId,
+      action: "request_review",
+      origin: person,
+      idempotencyKey: "r",
+    });
+    // The gate's own earlier transaction. It is durable before the decision is
+    // attempted, whichever budget the decision then runs into.
+    const capture = first.putBlob({
+      projectId: id,
+      entityId: item.entity.entityId,
+      mediaType: "application/json",
+      data: Buffer.from("x".repeat(4 * 1024)),
+    });
+    const usage = first.usage(id);
+    first.close();
+    return { path, id, item, capture, globalBytes: usage.globalBytes, globalRecords: usage.globalRecords };
+  }
+
+  /** Approve the prepared decision, and hand back whatever it refused with. */
+  function approvePrepared(target: ProjectWorkStore, id: string, item: ReturnType<ProjectWorkStore["create"]>): ProjectWorkQuotaError {
+    try {
+      target.approve({
+        projectId: id,
+        entityId: item.entity.entityId,
+        expectedRevisionId: item.revision.revisionId,
+        gate: "brief",
+        decision: "approved",
+        covers: [
+          {
+            entityId: item.entity.entityId,
+            kind: "spec",
+            key: item.entity.key,
+            revisionId: item.revision.revisionId,
+            digest: item.revision.digest,
+          },
+        ],
+        note: "n".repeat(8 * 1024),
+        proof: { gate: "Approving the brief", refs: [] },
+        origin: person,
+        idempotencyKey: "approve",
+      });
+    } catch (error) {
+      return error as ProjectWorkQuotaError;
+    }
+    throw new Error("that approval was expected to be refused");
+  }
+
+  /** The prepared-decision truth, whichever ceiling the refusal reached. */
+  function preparedTruth(refusal: ProjectWorkQuotaError): void {
+    expect(refusal).toBeInstanceOf(ProjectWorkQuotaError);
+    expect(refusal.scope).toBe("global");
+    expect(refusal.recovery).toContain("Approving the brief");
+    expect(refusal.recovery).toContain("is kept and can still be read");
+    expect(refusal.recovery, "a preparation in an earlier transaction was not rolled back").not.toContain("Nothing from this action was saved");
+    expect(refusal.recovery, "and the room to make is in another project, not this one").toContain("from another project");
+    expect(refusal.recovery).toContain("Archiving an item hides it and keeps its history");
+  }
+
+  it("keeps the preparation's truth when it is the whole app's byte budget that is full", () => {
+    const prepared = preparedDecision("global-gate");
+    // Only the global ceiling bites: this project's own byte cap is untouched.
+    const tight = new ProjectWorkStore({ file: prepared.path, quota: { globalBytes: prepared.globalBytes + 1024 } });
+    try {
+      const seq = tight.seq(prepared.id);
+      const refusal = approvePrepared(tight, prepared.id, prepared.item);
+      preparedTruth(refusal);
+      expect(refusal.measure).toBe("bytes");
+      // The decision itself rolled back — receipt, event and sequence with it —
+      // and the evidence the gate prepared is exactly where it was.
+      expect(tight.get({ projectId: prepared.id, entityId: prepared.item.entity.entityId }).approvals).toHaveLength(0);
+      expect(tight.get({ projectId: prepared.id, entityId: prepared.item.entity.entityId }).entity.state).toBe("needs_review");
+      expect(tight.seq(prepared.id)).toBe(seq);
+      expect(tight.readBlob({ projectId: prepared.id, blobId: prepared.capture.blobId, offset: 0, limit: 8 })?.totalBytes).toBe(prepared.capture.bytes);
+      invariant(tight, prepared.id);
+    } finally {
+      tight.close();
+    }
+  });
+
+  it("keeps the preparation's truth when it is the whole app's record count that is full", () => {
+    const prepared = preparedDecision("global-records");
+    const tight = new ProjectWorkStore({ file: prepared.path, quota: { globalRecords: prepared.globalRecords + 1 } });
+    try {
+      const refusal = approvePrepared(tight, prepared.id, prepared.item);
+      preparedTruth(refusal);
+      expect(refusal.measure).toBe("records");
+      expect(refusal.limitCount).toBe(prepared.globalRecords + 1);
+      expect(refusal.usedCount, "a count is never reported as a number of bytes").toBeGreaterThan(prepared.globalRecords);
+      expect(tight.get({ projectId: prepared.id, entityId: prepared.item.entity.entityId }).approvals).toHaveLength(0);
+      expect(tight.readBlob({ projectId: prepared.id, blobId: prepared.capture.blobId, offset: 0, limit: 8 })?.totalBytes).toBe(prepared.capture.bytes);
+      invariant(tight, prepared.id);
+    } finally {
+      tight.close();
+    }
+  });
 });
 
 describe("explicit deletion", () => {
@@ -777,7 +905,7 @@ describe("explicit deletion", () => {
         origin: person,
         idempotencyKey: idem("del"),
       }),
-    ).toThrow(/proved by a capture this one holds/);
+    ).toThrow(/repository record is proved by a capture this item holds/);
     // Nothing was taken away from either item.
     expect(store.get({ projectId, entityId: holder.entity.entityId }).entity.key).toBe(holder.entity.key);
     expect(store.get({ projectId, entityId: other.entity.entityId }).repositoryLinks).toHaveLength(1);
@@ -831,7 +959,7 @@ describe("explicit deletion", () => {
         origin: person,
         idempotencyKey: idem("del"),
       }),
-    ).toThrow(/approval was decided on evidence this one holds/);
+    ).toThrow(/approval was decided on evidence this item holds/);
 
     // The binding is still exactly what it was: nothing was dropped to let
     // the deletion through, and nothing points at missing proof.
@@ -877,7 +1005,7 @@ describe("explicit deletion", () => {
         origin: person,
         idempotencyKey: idem("del"),
       }),
-    ).toThrow(/Another item's evidence points at a record this one holds/);
+    ).toThrow(/evidence points at a repository record this item holds/);
     expect(store.get({ projectId, entityId: other.entity.entityId }).evidence).toHaveLength(1);
     invariant();
   });
@@ -914,25 +1042,268 @@ describe("explicit deletion", () => {
   });
 });
 
-describe("the v5 → v6 upgrade", () => {
-  /** A database in the shape v5 left behind: no charges, body-only counters. */
-  function rewindToV5(path: string): { bytes: number; rows: Map<string, number> } {
-    const db = new DatabaseSync(path);
-    const rows = new Map<string, number>();
-    for (const table of [...CANONICAL_TABLES, ...BOOKKEEPING_TABLES, ...DERIVED_TABLES]) {
-      rows.set(table, Number((db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n));
+describe("proof another item's record rests on", () => {
+  /** The refusal itself, so its whole sentence can be read. */
+  function refusalOf(act: () => unknown): Error {
+    try {
+      act();
+    } catch (error) {
+      return error as Error;
     }
-    for (const table of CANONICAL_TABLES) db.exec(`ALTER TABLE ${table} DROP COLUMN charged_bytes`);
-    db.exec("ALTER TABLE projects DROP COLUMN record_count");
-    const bodies = db.prepare("SELECT COALESCE(SUM(body_bytes), 0) AS n FROM revisions").get() as { n: number };
-    const payloads = db.prepare("SELECT COALESCE(SUM(bytes), 0) AS n FROM blobs WHERE released IS NULL").get() as { n: number };
-    const bytes = Number(bodies.n) + Number(payloads.n);
-    db.prepare("UPDATE projects SET bytes = ?").run(bytes);
-    db.exec("PRAGMA user_version = 5");
-    db.close();
-    return { bytes, rows };
+    throw new Error("that was expected to be refused");
   }
 
+  /** Every refusal offers the two things that really work, and no others. */
+  function honest(message: string, key: string): void {
+    expect(message, "the dependent item is named, because 'another item' is not something a person can act on").toContain(key);
+    expect(message, "an immutable reference does not go away when a decision is superseded").not.toContain("Supersede or remove that decision");
+    expect(message, "nor when the current state is captured again").not.toContain("Capture that item's state again");
+    expect(message).toContain(`permanently delete ${key}`);
+  }
+
+  it("refuses to delete an item whose capture is another item's evidence", () => {
+    const holder = store.create({ projectId, kind: "task", title: "Holds the capture", body: taskBody(), origin: person, idempotencyKey: idem("h") });
+    const other = store.create({ projectId, kind: "task", title: "Kept it as evidence", body: taskBody(), origin: person, idempotencyKey: idem("o") });
+    // Evidence takes a blob id without asking whose entity the blob is on, so
+    // one item's attachment really can be another item's record.
+    const capture = blob("what the run printed, kept as another item's evidence", holder.entity.entityId);
+    store.link({
+      projectId,
+      expectedRevisionId: other.revision.revisionId,
+      link: {
+        type: "evidence",
+        entityId: other.entity.entityId,
+        revisionId: other.revision.revisionId,
+        kind: "command_output",
+        role: "supporting",
+        summary: "The output this was checked against.",
+        outcome: "passed",
+        blobId: capture.blobId,
+      },
+      origin: person,
+      idempotencyKey: idem("ev"),
+    });
+
+    const refusal = refusalOf(() =>
+      store.delete({
+        projectId,
+        entityId: holder.entity.entityId,
+        expectedRevisionId: holder.revision.revisionId,
+        origin: person,
+        idempotencyKey: idem("del"),
+      }),
+    );
+    expect(refusal).toBeInstanceOf(ProjectWorkRefusedError);
+    expect(refusal.message).toContain(`${other.entity.key}'s evidence is kept as a capture this item holds`);
+    honest(refusal.message, other.entity.key);
+    // The refusal is atomic: both items and the proof itself are untouched.
+    expect(store.get({ projectId, entityId: holder.entity.entityId }).entity.key).toBe(holder.entity.key);
+    expect(store.get({ projectId, entityId: other.entity.entityId }).evidence).toHaveLength(1);
+    expect(store.readBlob({ projectId, blobId: capture.blobId, offset: 0, limit: 8 })?.released).toBeUndefined();
+    invariant();
+  });
+
+  it("refuses to delete an item whose capture another link's history still records, after that link moved on", () => {
+    const repositoryId = repository();
+    const holder = store.create({ projectId, kind: "task", title: "Holds the first capture", body: taskBody(), origin: person, idempotencyKey: idem("h") });
+    const other = store.create({ projectId, kind: "task", title: "Corrected its capture", body: taskBody(), origin: person, idempotencyKey: idem("o") });
+    const first = blob("the capture that link was created with", holder.entity.entityId);
+    const linkId = repositoryLink({ entityId: other.entity.entityId, revisionId: other.revision.revisionId }, repositoryId, first.blobId);
+    // The pointer is corrected to a capture the other item owns: only the
+    // append-only history still names this item's capture (D-363).
+    const corrected = blob("the capture that link points at now", other.entity.entityId);
+    expect(store.attachCapture(projectId, linkId, corrected.blobId, first.blobId, { gate: "A later correction" })).toBe(true);
+    const history = store.captureHistoryPage(projectId, { of: "associations", linkId, linkIds: [linkId] }).associations;
+    expect(history.map((association) => association.blobId)).toContain(first.blobId);
+
+    const refusal = refusalOf(() =>
+      store.delete({
+        projectId,
+        entityId: holder.entity.entityId,
+        expectedRevisionId: holder.revision.revisionId,
+        origin: person,
+        idempotencyKey: idem("del"),
+      }),
+    );
+    expect(refusal.message).toContain(`${other.entity.key}'s capture history records a capture this item holds`);
+    honest(refusal.message, other.entity.key);
+    // The older proof is still readable, and the history still says what it said.
+    expect(store.readBlob({ projectId, blobId: first.blobId, offset: 0, limit: 8 })?.totalBytes).toBe(first.bytes);
+    expect(store.captureHistoryPage(projectId, { of: "associations", linkId, linkIds: [linkId] }).associations).toHaveLength(history.length);
+    invariant();
+  });
+
+  it("refuses to delete an item whose capture another item's accepted state was confirmed against", () => {
+    const repositoryId = repository();
+    const holder = store.create({ projectId, kind: "task", title: "Holds the accepted capture", body: taskBody(), origin: person, idempotencyKey: idem("h") });
+    const other = store.create({ projectId, kind: "task", title: "Accepted a state", body: taskBody(), origin: person, idempotencyKey: idem("o") });
+    const accepted = blob("the capture the acceptance was taken against", holder.entity.entityId);
+    const current = blob("the capture the link points at", other.entity.entityId);
+    store.link({
+      projectId,
+      expectedRevisionId: other.revision.revisionId,
+      link: {
+        type: "evidence",
+        entityId: other.entity.entityId,
+        revisionId: other.revision.revisionId,
+        kind: "person_acceptance",
+        role: "acceptance",
+        summary: "Accepted the preview of that state.",
+        outcome: "passed",
+        verifiedAt: { repositoryId, state: { vcs: "git", objectFormat: "sha1", commitObjectId: "b".repeat(40) } },
+      },
+      // The acceptance binds the exact capture it was confirmed against, and
+      // keeps naming it after the link's pointer moves on (D-361, D-363).
+      verified: {
+        captureBlobId: current.blobId,
+        acceptance: {
+          kind: "checkpoint_preview",
+          confirmedAt: "2026-01-01T00:00:00.000Z",
+          checkpointRef: `${CHECKPOINT_REF_NAMESPACE}/one`,
+          commitObjectId: "b".repeat(40),
+          subjectDigest: other.revision.digest,
+          acceptedBy: person.actor,
+          captureBlobId: accepted.blobId,
+        },
+      },
+      origin: person,
+      idempotencyKey: idem("acc"),
+    });
+
+    const refusal = refusalOf(() =>
+      store.delete({
+        projectId,
+        entityId: holder.entity.entityId,
+        expectedRevisionId: holder.revision.revisionId,
+        origin: person,
+        idempotencyKey: idem("del"),
+      }),
+    );
+    expect(refusal.message).toContain(`${other.entity.key}'s accepted state was confirmed against a capture this item holds`);
+    honest(refusal.message, other.entity.key);
+    expect(store.readBlob({ projectId, blobId: accepted.blobId, offset: 0, limit: 8 })?.totalBytes).toBe(accepted.bytes);
+    expect(store.get({ projectId, entityId: other.entity.entityId }).repositoryLinks[0]?.acceptance?.captureBlobId).toBe(accepted.blobId);
+    invariant();
+  });
+
+  it("still deletes an item whose captures nothing else names", () => {
+    const alone = store.create({ projectId, kind: "task", title: "Nobody's proof", body: taskBody(), origin: person, idempotencyKey: idem("a") });
+    blob("only this item's own capture", alone.entity.entityId);
+    const removed = store.delete({
+      projectId,
+      entityId: alone.entity.entityId,
+      expectedRevisionId: alone.revision.revisionId,
+      origin: person,
+      idempotencyKey: idem("del"),
+    });
+    expect(removed.deleted).toBe(true);
+    invariant();
+  });
+});
+
+describe("when the counters and the rows disagree", () => {
+  /** Write a counter nobody's rows support, the way real drift would look. */
+  function forceCounter(path: string, id: string, column: "bytes" | "record_count", value: number): void {
+    const db = new DatabaseSync(path);
+    db.prepare(`UPDATE projects SET ${column} = ? WHERE project_id = ?`).run(value, id);
+    db.close();
+  }
+
+  it("refuses the write instead of clamping a total to zero, and loses nothing doing it", () => {
+    const path = join(base, "drift.db");
+    const first = new ProjectWorkStore({ file: path });
+    const id = first.projectIdFor(join(base, "drift"))!;
+    const item = first.create({ projectId: id, kind: "spec", title: "Real work", body: specBody(), origin: person, idempotencyKey: "a" });
+    first.comment({
+      projectId: id,
+      entityId: item.entity.entityId,
+      expectedRevisionId: item.revision.revisionId,
+      revisionId: item.revision.revisionId,
+      anchor: { kind: "whole" },
+      text: "History that must survive a broken tally.",
+      origin: person,
+      idempotencyKey: "b",
+    });
+    const truth = { bytes: first.usage(id).projectBytes, records: first.usage(id).records, seq: first.seq(id) };
+    first.close();
+
+    // A byte tally far below what is really stored: crediting this deletion
+    // would end below zero.
+    forceCounter(path, id, "bytes", 100);
+    const drifted = new ProjectWorkStore({ file: path });
+    try {
+      let refusal: Error | undefined;
+      try {
+        drifted.delete({
+          projectId: id,
+          entityId: item.entity.entityId,
+          expectedRevisionId: item.revision.revisionId,
+          origin: person,
+          idempotencyKey: "c",
+        });
+      } catch (error) {
+        refusal = error as Error;
+      }
+      expect(refusal).toBeInstanceOf(ProjectWorkRefusedError);
+      expect(refusal?.message).toContain("stored size counted as less than nothing");
+      expect(refusal?.message, "a refused write is not a lost one").toContain("Nothing already saved was changed or removed");
+      // Atomic: the item, its history and the drifted counter are all exactly
+      // where they were, and no event was published.
+      expect(drifted.get({ projectId: id, entityId: item.entity.entityId }).entity.key).toBe(item.entity.key);
+      expect(drifted.usage(id).projectBytes).toBe(100);
+      expect(drifted.usage(id).records).toBe(truth.records);
+      expect(drifted.seq(id)).toBe(truth.seq);
+      expect(drifted.reconcileUsage(id).bytes, "the rows still say what they always said").toBe(truth.bytes);
+      drifted.close();
+
+      // The same for a record tally: a count that cannot be credited is a
+      // fault, not something to round up to zero.
+      forceCounter(path, id, "bytes", truth.bytes);
+      forceCounter(path, id, "record_count", 1);
+      const counted = new ProjectWorkStore({ file: path });
+      try {
+        expect(() =>
+          counted.delete({
+            projectId: id,
+            entityId: item.entity.entityId,
+            expectedRevisionId: item.revision.revisionId,
+            origin: person,
+            idempotencyKey: "d",
+          }),
+        ).toThrow(/number of saved records counted as less than nothing/);
+      } finally {
+        counted.close();
+      }
+
+      // And with counters that match the rows, the very same deletion — an
+      // over-cap store shrinking, receipt and all — goes through.
+      forceCounter(path, id, "record_count", truth.records);
+      const repaired = new ProjectWorkStore({ file: path, quota: { projectBytes: Math.floor(truth.bytes / 2) } });
+      try {
+        expect(repaired.usage(id).projectBytes).toBeGreaterThan(repaired.usage(id).limits.projectBytes);
+        const removed = repaired.delete({
+          projectId: id,
+          entityId: item.entity.entityId,
+          expectedRevisionId: item.revision.revisionId,
+          origin: person,
+          idempotencyKey: "e",
+        });
+        expect(removed.deleted).toBe(true);
+        invariant(repaired, id);
+      } finally {
+        repaired.close();
+      }
+    } finally {
+      try {
+        drifted.close();
+      } catch {
+        /* closed above */
+      }
+    }
+  });
+});
+
+describe("the v5 → v6 upgrade", () => {
   it("counts an existing store's metadata without deleting a row or charging a byte twice", () => {
     const path = join(base, "upgrade.db");
     const old = new ProjectWorkStore({ file: path });
@@ -1016,6 +1387,163 @@ describe("the v5 → v6 upgrade", () => {
       invariant(upgraded, id);
     } finally {
       upgraded.close();
+    }
+  });
+});
+
+describe("counting a project that does not fit in one read", () => {
+  /** Big enough that a payload read at the wrong moment would show up. */
+  const PAYLOAD = Buffer.from("p".repeat(32 * 1024));
+
+  /**
+   * A project with more rows in one table than a single page may read, and
+   * inline blob payloads beside them.
+   *
+   * The bulk rows are written straight into the file: what is under test is a
+   * migration reading somebody's existing store, not the doors that made it,
+   * and a thousand real transactions would prove nothing extra.
+   */
+  function crowded(path: string, comments: number, blobs: number): { id: string; entityId: string; blobIds: string[] } {
+    const seed = new ProjectWorkStore({ file: path });
+    const id = seed.projectIdFor(join(base, "crowded"))!;
+    const item = seed.create({ projectId: id, kind: "spec", title: "Crowded", body: specBody(), origin: person, idempotencyKey: "seed" });
+    seed.close();
+    const db = new DatabaseSync(path);
+    const comment = db.prepare(
+      "INSERT INTO comments (comment_id, project_id, entity_id, revision_id, anchor_json, text, state, blocking, created_at, origin_json, orphaned) " +
+        "VALUES (?,?,?,?,?,?,?,?,?,?,0)",
+    );
+    const blobRow = db.prepare(
+      "INSERT INTO blobs (blob_id, project_id, entity_id, digest, media_type, bytes, chunked, data, created_at) VALUES (?,?,?,?,?,?,0,?,?)",
+    );
+    const blobIds: string[] = [];
+    db.exec("BEGIN");
+    for (let n = 0; n < comments; n += 1) {
+      comment.run(
+        `cmt_fixture_${String(n).padStart(6, "0")}`,
+        id,
+        item.entity.entityId,
+        item.revision.revisionId,
+        JSON.stringify({ kind: "whole" }),
+        `Review note ${String(n)}`,
+        "open",
+        0,
+        "2026-01-01T00:00:00.000Z",
+        JSON.stringify(person),
+      );
+    }
+    for (let n = 0; n < blobs; n += 1) {
+      const blobId = `blb_fixture_${String(n).padStart(6, "0")}`;
+      blobRow.run(blobId, id, item.entity.entityId, `digest-${String(n)}`, "application/json", PAYLOAD.byteLength, PAYLOAD, "2026-01-01T00:00:00.000Z");
+      blobIds.push(blobId);
+    }
+    db.exec("COMMIT");
+    db.close();
+    return { id, entityId: item.entity.entityId, blobIds };
+  }
+
+  it("reads it in bounded pages, and never pulls a stored payload through memory to count it", () => {
+    const path = join(base, "pages.db");
+    const fixture = crowded(path, CHARGE_SCAN_BATCH_ROWS * 2 + 7, 3);
+    const raw = new DatabaseSync(path);
+    type Params = Parameters<ReturnType<DatabaseSync["prepare"]>["all"]>;
+    const reads: Array<{ sql: string; rows: number }> = [];
+    const traced: ProjectWorkDatabase = {
+      exec: (sql: string) => raw.exec(sql),
+      close: () => raw.close(),
+      prepare: (sql: string) => {
+        const statement = raw.prepare(sql);
+        return {
+          run: (...params: unknown[]) => statement.run(...(params as Params)),
+          get: (...params: unknown[]) => statement.get(...(params as Params)),
+          all: (...params: unknown[]) => {
+            const rows = statement.all(...(params as Params));
+            reads.push({ sql, rows: rows.length });
+            return rows;
+          },
+          iterate: (...params: unknown[]) => statement.iterate(...(params as Params)) as IterableIterator<unknown>,
+        };
+      },
+    };
+
+    const totals = rechargeProject(traced, fixture.id);
+
+    const pages = reads.filter((read) => read.sql.includes("FROM comments"));
+    expect(pages.length, "a table past two pages is read a page at a time").toBeGreaterThanOrEqual(3);
+    for (const read of reads) {
+      expect(read.rows, `one read may not materialise more than a page: ${read.sql}`).toBeLessThanOrEqual(CHARGE_SCAN_BATCH_ROWS);
+    }
+    expect(
+      reads.some((read) => read.sql.includes("SELECT *")),
+      "a projection of the columns a charge is read from, never every column",
+    ).toBe(false);
+    for (const read of reads.filter((read) => read.sql.includes("FROM blobs"))) {
+      expect(read.sql, "the payload is charged through `bytes` and is never selected to be counted").not.toMatch(/\bdata\b/);
+    }
+
+    // And the totals those bounded reads wrote are the ones an independent
+    // recount from the raw rows finds.
+    expect(recomputeProjectUsage(traced, fixture.id)).toEqual(totals);
+    const stored = raw.prepare("SELECT bytes, record_count, entity_count FROM projects WHERE project_id = ?").get(fixture.id) as {
+      bytes: number;
+      record_count: number;
+      entity_count: number;
+    };
+    expect(Number(stored.bytes)).toBe(totals.bytes);
+    expect(Number(stored.record_count)).toBe(totals.records);
+    expect(Number(stored.entity_count)).toBe(totals.entities);
+    // Every row was charged: none was skipped by a page boundary.
+    const uncharged = raw.prepare("SELECT COUNT(*) AS n FROM comments WHERE project_id = ? AND charged_bytes = 0").get(fixture.id) as { n: number };
+    expect(Number(uncharged.n)).toBe(0);
+    raw.close();
+
+    const reopened = new ProjectWorkStore({ file: path });
+    try {
+      invariant(reopened, fixture.id);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("upgrades it from v5 without losing a row, a payload or a byte of the total", () => {
+    const path = join(base, "crowded-upgrade.db");
+    const fixture = crowded(path, CHARGE_SCAN_BATCH_ROWS * 2 + 7, 3);
+    const v5 = rewindToV5(path);
+
+    const upgraded = new ProjectWorkStore({ file: path });
+    try {
+      expect(existsSync(`${path}.v5.backup`), "the file is copied before it is changed").toBe(true);
+      const db = new DatabaseSync(path, { readOnly: true });
+      for (const [table, count] of v5.rows) {
+        expect(Number((db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n), `${table} kept its rows`).toBe(count);
+      }
+      // The payloads themselves are byte-for-byte what they were.
+      for (const blobId of fixture.blobIds) {
+        const row = db.prepare("SELECT data FROM blobs WHERE blob_id = ?").get(blobId) as { data: Uint8Array };
+        expect(Buffer.from(row.data).equals(PAYLOAD), `${blobId} kept its payload`).toBe(true);
+      }
+      db.close();
+
+      const usage = upgraded.usage(fixture.id);
+      expect(usage.records, "every page of rows is counted").toBeGreaterThan(CHARGE_SCAN_BATCH_ROWS * 2);
+      invariant(upgraded, fixture.id);
+      upgraded.close();
+
+      // Reopening recomputes rather than accumulates, page boundaries and all.
+      const again = new ProjectWorkStore({ file: path });
+      try {
+        expect(again.usage(fixture.id).projectBytes).toBe(usage.projectBytes);
+        expect(again.usage(fixture.id).records).toBe(usage.records);
+        invariant(again, fixture.id);
+      } finally {
+        again.close();
+      }
+    } finally {
+      try {
+        upgraded.close();
+      } catch {
+        /* already closed above */
+      }
     }
   });
 });

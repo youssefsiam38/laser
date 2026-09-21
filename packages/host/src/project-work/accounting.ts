@@ -103,6 +103,18 @@ export const DERIVED_TABLES = ["events", "search_projection"] as const;
  */
 export const UNPARTITIONED_TABLES = ["blob_chunks"] as const;
 
+/**
+ * How many rows one read of a project's stored work may materialise.
+ *
+ * A recount and a migration are the only full scans in this store, and a
+ * project can hold hundreds of thousands of canonical rows: they walk the
+ * rows in stable key order, a page at a time, so the memory they need is the
+ * size of one page and never the size of the project. The page is read in
+ * full before anything is written back, so nothing ever writes through a live
+ * cursor.
+ */
+export const CHARGE_SCAN_BATCH_ROWS = 500;
+
 /** Rows of this table a project may keep before a write is refused. */
 export const PROJECT_WORK_PROJECT_RECORDS_DEFAULT = 200_000;
 /** Canonical rows across every project together. */
@@ -161,6 +173,66 @@ const PROJECT_COLUMN: Record<CanonicalTable, string> = {
   idempotency: "project_id",
 };
 
+/** How a list of SQL identifiers is joined. */
+const SEPARATOR = ", ";
+
+/**
+ * The columns a charge is read from: everything the row stores, minus what is
+ * charged some other way.
+ *
+ * Asked of the database rather than hard-coded, so a column added by a later
+ * migration is charged without this file being edited, and read once per
+ * table per scan. `blobs.data` is excluded here rather than skipped after the
+ * read: the payload is already charged through `bytes`, and selecting it
+ * would pull every inline capture in the project through memory to reach a
+ * number the row already carries.
+ */
+function chargedColumns(db: ProjectWorkDatabase, table: CanonicalTable): string[] {
+  const skip = NOT_CHARGED[table] ?? [];
+  const columns = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+    .map((column) => String(column.name))
+    .filter((name) => !skip.includes(name));
+  // The keys are what the next page is asked for, so they are never optional.
+  for (const key of ROW_KEYS[table]) if (!columns.includes(key)) columns.push(key);
+  return columns;
+}
+
+/**
+ * Walk one project's rows of one table in bounded pages, oldest key first.
+ *
+ * Keyset pagination on the row's own primary key: each page asks for the rows
+ * after the last key the previous page returned, which is stable under the
+ * only write a recharge makes — `charged_bytes`, which is in no key and in no
+ * index this order uses. `OFFSET` would not be stable, and iterating a live
+ * cursor while writing through it has no defined meaning here at all.
+ *
+ * Each page is fully materialised and handed over as an array, so a caller may
+ * update every row in it before the next page is read.
+ */
+export function scanChargedRows(
+  db: ProjectWorkDatabase,
+  table: CanonicalTable,
+  projectId: string,
+  onPage: (rows: ReadonlyArray<Record<string, unknown>>) => void,
+): void {
+  const keys = ROW_KEYS[table];
+  const columns = chargedColumns(db, table).join(SEPARATOR);
+  const order = keys.join(SEPARATOR);
+  const page = `ORDER BY ${order} LIMIT ${String(CHARGE_SCAN_BATCH_ROWS)}`;
+  const where = `${PROJECT_COLUMN[table]} = ?`;
+  const first = db.prepare(`SELECT ${columns} FROM ${table} WHERE ${where} ${page}`);
+  const next = db.prepare(`SELECT ${columns} FROM ${table} WHERE ${where} AND (${order}) > (${keys.map(() => "?").join(SEPARATOR)}) ${page}`);
+  let after: unknown[] | undefined;
+  for (;;) {
+    const rows = (after ? next.all(projectId, ...after) : first.all(projectId)) as Array<Record<string, unknown>>;
+    if (rows.length === 0) return;
+    onPage(rows);
+    if (rows.length < CHARGE_SCAN_BATCH_ROWS) return;
+    const last = rows[rows.length - 1]!;
+    after = keys.map((key) => last[key]);
+  }
+}
+
 /** What this project's rows really cost, counted again from the rows. */
 export interface RecomputedUsage {
   bytes: number;
@@ -182,12 +254,12 @@ export function recomputeProjectUsage(db: ProjectWorkDatabase, projectId: string
   let bytes = 0;
   let records = 0;
   for (const table of CANONICAL_TABLES) {
-    const where = table === "projects" ? "project_id = ?" : `${PROJECT_COLUMN[table]} = ?`;
-    const rows = db.prepare(`SELECT * FROM ${table} WHERE ${where}`).iterate(projectId) as IterableIterator<Record<string, unknown>>;
-    for (const row of rows) {
-      bytes += rowCharge(table, row);
-      records += 1;
-    }
+    scanChargedRows(db, table, projectId, (rows) => {
+      for (const row of rows) {
+        bytes += rowCharge(table, row);
+        records += 1;
+      }
+    });
   }
   const entities = Number((db.prepare("SELECT COUNT(*) AS n FROM entities WHERE project_id = ?").get(projectId) as { n: number }).n);
   return { bytes, records, entities };
@@ -203,21 +275,29 @@ export function recomputeProjectUsage(db: ProjectWorkDatabase, projectId: string
  * charges nothing twice and a crashed migration that re-runs starts from the
  * rows rather than from a half-finished total. No row is deleted, and no
  * column other than `charged_bytes` is touched.
+ *
+ * Bounded in memory: one page of rows at a time ({@link scanChargedRows}),
+ * without the blob payloads, which are charged through `blobs.bytes` and would
+ * otherwise be carried through memory to learn a number the row already holds.
+ * A migration must never need as much memory as the work it is counting.
  */
 export function rechargeProject(db: ProjectWorkDatabase, projectId: string): RecomputedUsage {
   let bytes = 0;
   let records = 0;
   for (const table of CANONICAL_TABLES) {
-    const where = `${PROJECT_COLUMN[table]} = ?`;
     const keys = ROW_KEYS[table];
-    const rows = db.prepare(`SELECT * FROM ${table} WHERE ${where}`).all(projectId) as Array<Record<string, unknown>>;
     const update = db.prepare(`UPDATE ${table} SET charged_bytes = ? WHERE ${keys.map((key) => `${key} = ?`).join(" AND ")}`);
-    for (const row of rows) {
-      const charge = rowCharge(table, row);
-      update.run(charge, ...keys.map((key) => row[key]));
-      bytes += charge;
-      records += 1;
-    }
+    scanChargedRows(db, table, projectId, (rows) => {
+      // The page is already in hand: updating it writes through nothing that
+      // is still being read, and `charged_bytes` is in no key this scan orders
+      // by, so the next page starts exactly where this one ended.
+      for (const row of rows) {
+        const charge = rowCharge(table, row);
+        update.run(charge, ...keys.map((key) => row[key]));
+        bytes += charge;
+        records += 1;
+      }
+    });
   }
   const entities = Number((db.prepare("SELECT COUNT(*) AS n FROM entities WHERE project_id = ?").get(projectId) as { n: number }).n);
   db.prepare("UPDATE projects SET bytes = ?, record_count = ?, entity_count = ? WHERE project_id = ?").run(bytes, records, entities, projectId);

@@ -474,3 +474,95 @@ the decision itself was not recorded.
 - `pnpm -F @lasercode/protocol exec vitest run test/project-work.test.ts test/project-work-methods.test.ts test/schemas.test.ts` — 95 passing, no type errors.
 - `pnpm identity:check` — clean.
 - Not run here (the parent owns the full gate): `pnpm verify`, the UI and worker suites.
+
+## 14. The parent's four corrections, as implemented
+
+The batch in [`m21-canonical-quota-corrections.md`](m21-canonical-quota-corrections.md)
+landed on the merged `40c89aa1` accounting, in
+`packages/host/src/project-work/{accounting.ts,store.ts}` and
+`packages/host/test/project-work/quota.test.ts`. Nothing else was touched: no
+protocol change was needed, no limit moved, and no UI, worker or planning file
+was written.
+
+### 1. A migration is bounded in memory
+
+`rechargeProject` and `recomputeProjectUsage` both walk a project through
+`scanChargedRows`: keyset pagination on each table's own primary key,
+`CHARGE_SCAN_BATCH_ROWS` (500) rows at a time, ordered by the key and asking
+for the rows *after* the last key the previous page returned. The projection is
+built from `PRAGMA table_info` minus the columns a charge is never read from,
+so `blobs.data` is never selected — the payload is charged through
+`blobs.bytes`, and reading it back would carry every inline capture in the
+project through memory to learn a number the row already holds. Each page is
+fully materialised before its rows are recharged, so nothing writes through a
+live cursor; `charged_bytes` is in no key the order uses, so the page after an
+update starts exactly where the previous one ended.
+
+Proved on an owned fixture of `500 × 2 + 7` comments and inline-payload blobs:
+every read returns at most one page, the crowded table takes at least three
+reads, no statement is a `SELECT *`, no statement that reads `blobs` names
+`data`, every row ends up charged, and the totals written equal both the
+independent raw-row recount and the stored counters. The same fixture rewound
+to v5 upgrades with its `.v5.backup` beside it, keeps every row and every
+payload byte-for-byte, and reopens to identical counters.
+
+### 2. Global refusals keep the preparation's truth
+
+`settle` no longer hard-codes `GLOBAL_FULL_RECOVERY` for the global byte and
+record ceilings. A transaction that is deciding on a gate's preparation records
+the gate in `preparedGate`, and both scopes take their sentence from it:
+`decisionRefusedRecovery(gate, "project" | "global")` says the prepared
+evidence is kept and readable and the decision was not recorded, and only the
+way to make room differs between the two. Tested for both global dimensions:
+the capture stored by the earlier transaction is still readable, the approval,
+its receipt, its events and the project's `seq` all rolled back, the sentence
+never says "Nothing from this action was saved", and a count refusal still
+reports `usedCount`/`limitCount` rather than bytes.
+
+### 3. Drift is rejected, not clamped
+
+The counter UPDATE is `bytes = bytes + ?`, with no `MAX(0, …)`. After it, the
+settled row is read back: a byte, record or entity total below zero means the
+counters and the rows disagree, and the whole transaction is refused inside
+`transaction()`, so the rows it would have written are not saved and not one
+row that was already there is changed or removed. The refusal says so. Tested
+by forcing a counter below what the rows support: the deletion is refused in
+both the byte and the record dimension, the item, its history, the drifted
+counter and the event sequence are exactly as they were — and with the counters
+restored, the *same* deletion, over cap and writing its own receipt, is
+admitted.
+
+### 4. Every cross-owner proof reference is protected
+
+`proofConsumedElsewhere` keeps its decision-binding, evidence-names-link and
+current-capture-pointer probes and adds three more, each a reference a person
+really can create: another item's `evidence.blob_id` (evidence accepts a
+`blobId` without requiring the blob to be on the same item), a retained Native
+acceptance's `captureBlobId` on another item's link, and an **older**
+association in another link's append-only capture history — which is what every
+decision taken before a pointer correction was read against, and which is also
+the proof of a legacy acceptance that names no capture of its own.
+
+Each refusal names the dependent item by key, and the copy no longer offers a
+recovery that does not exist: superseding a decision or capturing a state again
+leaves the reference exactly where it is. The two honest ways forward are
+keeping this item, or deleting the dependent work as explicitly as this
+deletion was asked for. Nothing rewrites or deletes another item's history.
+
+### Evidence
+
+- `pnpm -r build` — clean.
+- `env -i PATH="$PATH" HOME="$HOME" pnpm -F @lasercode/host exec vitest run test/project-work` — 21 files, **344** tests (335 before; 9 new in `quota.test.ts`, 3 assertions updated to the corrected copy).
+- Red first: with only the two source files stashed, 11 of those tests fail (8 new behaviours + the 3 corrected sentences); the crowded-upgrade test is red only because the page constant does not exist there, so its value is as a no-data-loss and idempotency test rather than as a bound proof.
+- `env -i … pnpm -F @lasercode/protocol exec vitest run` — 47 files, 754 tests, including its typecheck.
+- `pnpm -F @lasercode/host exec tsc -p tsconfig.json --noEmit` — clean.
+- `pnpm identity:check` — clean.
+- Not run here (the parent owns the full gate): `pnpm verify`, the UI and worker suites.
+
+### Noted for the independent storage review, not changed here
+
+`remember()` writes its receipt with `INSERT OR REPLACE`, which would reset
+that row's `charged_bytes` to 0 while the old charge is still in the counters.
+It is unreachable today — `once()` replays before `work()` runs, so a key that
+already has a receipt never reaches `remember()` — and it was left exactly as
+`40c89aa1` wrote it rather than refactored outside this batch.
