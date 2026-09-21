@@ -5991,14 +5991,14 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T11 | DesignTree, canvas, primitive kit, prototypes and Sketch | done | claude-2026-09-21-leap | `05e270d7` (merged `66348ae2`); protocol 652 (`design-tree.test.ts` 21), `pnpm -F @lasercode/ui test` 3176 (`test/design/*` 48) | see notes |
 | M21-T12 | Static host grounding and source selection | done | claude-2026-09-21-leap | `92cc43c9` + `f15eb7d1`; protocol 674 (`host-page.test.ts` 10), worker `test/design/*` 128 incl. parse-only for `design/host`; matrix 22 fixtures | see notes |
 | M21-T13 | Design workspace and anchored review | in-progress | claude-2026-09-21-leap | — | see notes |
-| M21-T14 | Greenfield design foundation | todo | — | — | `PLAN.md` M21 |
+| M21-T14 | Greenfield design foundation | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T15 | Plan DAG and Project Task engine | done | claude-2026-09-21-leap | `2d2b5778` (merged `aa33ffbf`); host 1121 passed (`project-work/task-engine.test.ts` 17 over the wire), protocol 631 (`project-work-plan-graph.test.ts` 12) | see notes |
 | M21-T16 | Plans and Tasks workspace | done | claude-2026-09-21-leap | `faf53146` (merged with T7 conflicts resolved by the orchestrator in `store.ts`/`WorkDetail.tsx`/`Inspector.tsx`); `pnpm -F @lasercode/ui test` (`plan-graph`, `plan-detail`, `task-detail`, `board-transitions` 42) | see notes |
 | M21-T17 | Model tools and execution linking | done | claude-2026-09-21-leap | `133d55cd` (six commits, merged); protocol 631, pi-extension 237, worker 1498, host 1140; `pnpm tool-eval` 42/42 (21 fixtures × 2 profiles); `pnpm verify` passed | see notes |
 | M21-T18 | Checkpoints, changes and delivery evidence | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T19 | Verification and convergence | todo | — | — | `PLAN.md` M21 |
 | M21-T20 | Cross-session continuity and recovery | todo | — | — | `PLAN.md` M21 |
-| M21-T21 | Import, export and repository publication | todo | — | — | `PLAN.md` M21 |
+| M21-T21 | Import, export and repository publication | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T22 | Security, privacy, relay and resource hardening | todo | — | — | `PLAN.md` M21 |
 | M21-T23 | Product-language and element reconciliation | todo | — | — | `PLAN.md` M21 |
 | M21-T24 | End-to-end project lifecycle acceptance | todo | — | — | `PLAN.md` M21 |
@@ -6016,6 +6016,12 @@ live work holding its row when a snapshot thins — because both are real hazard
 #### M21-T9 notes
 - 2026-09-21 done (`222d86c0`): the typed ref lives at the foot of the message as a Markdown link-reference definition (`[TASK-44]: laser://work/... "sha256-…"`) parsed by the host at send time (project/entity/revision/digest/read scope; mismatch re-pins; stale sent as named), bounded per-kind projection with `[from project KEY@rev]` provenance delivered as host-supplied `session/prompt.projectWork` (worker-side consumption in the T17 packet is an open item named in the plan); one adapter with `@KEY`/prefix/title queries ranking exact key → current project → labelled others; `MentionChip`/`ArtifactCard`, sidebar TASK chip, global search keys first, search index stores prose once.
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI mention adapter (`@spec:` … `@task:` and `@KEY`), typed pinned refs in the stored message, transcript chip, sidebar TASK chip, global search; host-side send-time validation rides on the spine's `get` fences.
+
+#### M21-T14 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: Foundation mode (worker `design/foundation/**` proposals on `designIndexProfileId`, UI `Foundation*` files in the T13 slot); repository unchanged before Build.
+
+#### M21-T21 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: host import/export adapters (Spec Kit, OpenSpec, Markdown, `PLAN.md`), deterministic Markdown + manifest export, previewed publication with `published_as`.
 
 #### M21-T13 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: client methods for the index/grounding/sketch grounding (host → worker), the Design tab sections, in-context canvas with host outline and strategy chip, node-anchored comments, Re-index Command, both themes/widths; wires T11's honest pending states.
