@@ -95,3 +95,35 @@ active. Any later T19 correction follows this batch, in dependency order.
 The parent verifies the final storage delta and focused tests; there is no
 second independent storage review (the reviewer's request to re-review is not
 adopted). Preserve full source/review ancestry and record evidence precisely.
+
+## The final batch, applied
+
+Applied on a branch based on the **entire** candidate `7115a976` (quota
+`40c89aa1`/`8e69281b` and the Native/runtime/UI checkpoint `00f6b934`, merged
+whole, plus this review and triage). Neither frozen review target was touched.
+
+- **H-1 done.** A typed `PreparedWrite` (kept / not recorded / what to do)
+  replaces the single gate name. Every producer of earlier-transaction bytes
+  was traced — the three `storeCapture` calls in `gate.ts` and `putBlob` in
+  `verification/report.ts` — and five doors now refuse truthfully: approve and
+  task action, accept a delivery, record or accept a verified state, correct a
+  link's capture, and the general case of any record naming a blob already
+  stored (the report path, and a repository link carrying a `captureBlobId`).
+  Proved at all four ceilings per door, with the prepared bytes readable and
+  the refused write completely rolled back; an ordinary refusal with nothing
+  prepared still says nothing was saved.
+- **M-1 done.** `remember()` is a plain `INSERT` with no pre-read; a duplicate
+  is a rolled-back constraint failure rather than a reset charge.
+- **M-2 done.** The charge is computed in SQLite (`chargeExpression`) and a
+  scan returns keys and numbers only — no body, source or payload string in a
+  migration result row — with UTF-8 asserted rather than assumed, SQL/JS
+  parity tested over every value kind and every canonical table, and a
+  structural bound proved on a multi-page fixture holding 4 MB bodies.
+- **M-3 done.** `countRefusal()` replaces the nested conditional spread.
+- **M-4 deferred**, as triaged: the deletion cluster is untouched debt.
+
+Evidence, commands and the red-first result are in §15 of
+[`m21-canonical-quota-plan.md`](m21-canonical-quota-plan.md). Host
+project-work 374 tests, protocol project-work-methods 22, host and protocol
+types, both builds and identity clean. The parent verifies the delta; no
+second independent storage review was started.

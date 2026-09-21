@@ -394,7 +394,7 @@ export class ProjectWorkGate {
     acceptance?: { kind: "checkpoint_preview" } | undefined;
     /** Which attempt this state came out of, as the caller reports it. */
     attempt?: { taskEntityId: string; executionLinkId: string } | undefined;
-  }): Promise<{ captureBlobId: string; acceptance?: RepositoryLinkAcceptance; executionLinkId?: string }> {
+  }): Promise<{ captureBlobId: string; gate: string; acceptance?: RepositoryLinkAcceptance; executionLinkId?: string }> {
     const wantsAcceptance = input.acceptance !== undefined;
     if (wantsAcceptance && this.caller.origin.actor.kind !== "person") {
       throw new ProjectWorkRefusedError(
@@ -466,19 +466,25 @@ export class ProjectWorkGate {
         "That state could not be read out of the repository, so there would be nothing to review later. Record a commit or a checkpoint that is still there.",
       );
     }
+    // The words this preparation is known by, kept with what it stored: the
+    // capture is durable from here on, so if the record that names it is
+    // refused for space, the refusal says which evidence is still readable
+    // rather than that nothing was saved (review H-1).
+    const gate = wantsAcceptance ? "Accepting this preview" : "Recording this state";
     const stored = storeCapture(this.store, {
       projectId: input.projectId,
       entityId: input.entityId,
       capture: built,
-      gate: wantsAcceptance ? "Accepting this preview" : "Recording this state",
+      gate,
     });
     const attemptId = input.attempt?.executionLinkId;
 
     if (!wantsAcceptance) {
-      return { captureBlobId: stored.blobId, ...(attemptId ? { executionLinkId: attemptId } : {}) };
+      return { captureBlobId: stored.blobId, gate, ...(attemptId ? { executionLinkId: attemptId } : {}) };
     }
     return {
       captureBlobId: stored.blobId,
+      gate,
       ...(attemptId ? { executionLinkId: attemptId } : {}),
       acceptance: {
         kind: "checkpoint_preview",

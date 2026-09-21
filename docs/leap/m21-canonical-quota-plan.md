@@ -566,3 +566,109 @@ that row's `charged_bytes` to 0 while the old charge is still in the counters.
 It is unreachable today — `once()` replays before `work()` runs, so a key that
 already has a receipt never reaches `remember()` — and it was left exactly as
 `40c89aa1` wrote it rather than refactored outside this batch.
+
+## 15. The final storage-review corrections, as implemented
+
+The independent review `472b1347` and the parent's triage in
+[`m21-canonical-quota-corrections.md`](m21-canonical-quota-corrections.md) are
+applied here, on the whole candidate `7115a976` (quota `40c89aa1`/`8e69281b`
+**and** the Native/runtime/UI work `00f6b934`, merged, nothing dropped).
+
+### H-1 — every door that consumes bytes stored by an earlier transaction
+
+`preparedGate: string` became `prepared: PreparedWrite` — three phrases (what
+is kept, what was not recorded, what to do once there is room) instead of one
+gate name, so each door refuses in its own words and no door has to borrow the
+copy of a decision it is not. `settle()` builds both the project and the
+global sentence from it, exactly as before for approvals and completions.
+
+Every producer of earlier-transaction bytes was traced, not just the three the
+review named (`storeCapture` at `gate.ts:346`, `:469`, `:679`, and
+`store.putBlob` in `verification/report.ts`), and each door now carries the
+truth:
+
+| Door | How it is known | What the refusal says |
+| --- | --- | --- |
+| approve, task action | `proof.gate` (unchanged) | the evidence is kept; the decision was not recorded; decide again |
+| accept a delivery | `link({ capture })` | the evidence the delivery was checked against is kept; the delivery was not accepted; accept it again |
+| record / accept a verified state | `verified.gate`, added by `prepareVerifiedAt` | the evidence that gate prepared is kept; the record of it was not saved; record it again |
+| correct a link's capture | `attachCapture(context.gate)` | the evidence is kept; the record still points where it did; try again |
+| any record naming a stored blob | the blob is already in `blobs` | what this record points at was already saved; the record naming it was not saved; try again |
+
+The last row is the general case and is a property of the write rather than a
+flag a caller passes: the verification report is stored and then named, and so
+is whatever the next feature stores and then names. It covers
+`evidence.blob_id` with no `verified.captureBlobId` (the report path) and a
+repository link written with a `captureBlobId` that is already stored. A write
+with nothing prepared still says "Nothing from this action was saved".
+
+Proved for **five** doors at **all four** ceilings — this project's bytes and
+records, the whole app's bytes and records — 20 cases plus the
+no-preparation case: the prepared blob is still readable at its full length,
+the refused row, pointer, association, evidence, receipt, event and `seq` are
+all rolled back, the sentence never claims nothing was saved, and the recount
+still agrees with the counters. The report door runs the **real producer**
+(`storeReport`), re-recording one report whose blob deduplicates onto the one
+the first run stored.
+
+### M-1 — the receipt is immutable
+
+`remember()` writes a plain `INSERT` and no longer pre-reads the row it is
+about to replace; the charge is always an insert's charge. A second receipt
+for one key is now a constraint failure that rolls the transaction back,
+instead of a `REPLACE` that resets `charged_bytes` while the old charge is
+still in the counters. It stays unreachable through the store's own door —
+`once()` replays first — so the test pins the invariant at the table: the
+duplicate is refused, the stored result, timestamp and charge are untouched,
+and an ordinary replay still changes nothing.
+
+### M-2 — the scan carries numbers, never bodies
+
+A 500-row page of revisions could have carried 500 bodies. It cannot now: the
+charge is computed **in SQLite** by `chargeExpression()` and a scan selects
+only each row's keys and that number. `octet_length()` measures stored TEXT in
+exact UTF-8 (NUL included — it is a byte count, not a C string) and stored
+BLOB in its own bytes; `typeof()` keeps integers, reals and nulls under the
+64-byte floor; `blobs.data` is never named and the payload is still charged
+once through `bytes`, less a released one. The encoding is asserted rather
+than assumed: a database that is not UTF-8 is refused with a sentence, because
+`octet_length` on a UTF-16 store would silently count the wrong bytes.
+
+`rowCharge()` stays the definition a single write is charged by — the writer
+already holds the row — and the two definitions are held to each other by
+parity tests: every value kind (NUL, emoji, combining marks, raw bytes, big
+integers, reals, nulls, empty strings), the released/inline blob pair, and
+every row of every canonical table of a real seeded project. The recompute is
+still independent of `charged_bytes`; it now derives the charge from the raw
+values through SQL rather than through JavaScript.
+
+The bound is tested structurally, not by timing or RSS: a fixture with two
+pages of comments, a 200 KB document written through the ordinary door and two
+4 MB legacy revision bodies written straight into the file. Across the whole
+migration no read carries more than 256 KB, the entire recharge carries less
+than one stored body, no read returns a value containing the bodies' marker,
+and the revision reads name `octet_length("body")` and never `body` itself —
+while the totals still equal an independent recount and the counters still
+agree with the rows.
+
+### M-3 — the count fields are a named branch
+
+`toProtocolError`'s nested conditional spread is now `countRefusal(error)`: a
+bytes refusal returns nothing, a count refusal returns its measure and its own
+`usedCount`/`limitCount`. The protocol shape is unchanged.
+
+### M-4 — deferred, on purpose
+
+The deletion cluster in `store.ts` is recorded as structural debt and was not
+extracted: refactoring the deletion authority during a bounded correction
+batch would put every cross-owner proof protection at risk for a legibility
+win. `store.ts` is unchanged in that region.
+
+### Evidence
+
+- `env -i PATH="$PATH" HOME="$HOME" pnpm -F @lasercode/host exec vitest run test/project-work` — 22 files, **374** tests (347 on the candidate; 27 new in `quota.test.ts`).
+- Red first, with only the source patch reverted and the new tests in place: 21 of them fail — the 16 door cases that existed then, plus the five M-2 tests (four are new API, and the byte-bound test fails on behaviour: the old scan carried the bodies). The four new doors added afterwards were written against the same red.
+- `env -i … pnpm -F @lasercode/protocol exec vitest run test/project-work-methods.test.ts` — 22 tests, no type errors.
+- `pnpm -F @lasercode/host exec tsc -p tsconfig.json --noEmit`, `pnpm -F @lasercode/protocol exec tsc -p tsconfig.json --noEmit` — clean.
+- `pnpm -F @lasercode/protocol build`, `pnpm -F @lasercode/host build`, `pnpm identity:check` — clean.
+- Not run here (the parent owns the full gate): `pnpm verify`, the rest of the host suite, UI and worker.

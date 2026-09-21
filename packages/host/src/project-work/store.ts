@@ -157,6 +157,96 @@ const ITEM_LIMIT_RECOVERY =
   "Permanently delete some project work before adding more. Archiving an item hides it and keeps its history, so it frees nothing.";
 
 /**
+ * What an earlier transaction already saved, when this one is refused
+ * (M21-T2 corrections, item 2; storage review H-1).
+ *
+ * Several doors of this store write in two steps: a capture, a report or some
+ * other blob is stored by one transaction, and the record that rests on it is
+ * written by the next one. If the second transaction is refused for space,
+ * "nothing from this action was saved" is a lie about bytes the person can
+ * still read — and it stays a lie whichever ceiling refused it, this
+ * project's or the whole app's.
+ *
+ * So a door that consumes earlier-transaction bytes carries this with it:
+ * what is still there, what did not happen, and what to do after making room.
+ * Three phrases rather than a sentence per door, because the difference
+ * between approving, accepting a delivery and saving a record that points at
+ * a report is real and a person can hear it.
+ */
+export interface PreparedWrite {
+  /** What an earlier transaction saved and that is still readable. */
+  kept: string;
+  /** What this refused transaction did not record. */
+  refused: string;
+  /** How the sentence "make room and …" ends. */
+  retry: string;
+}
+
+/** The refusal a {@link PreparedWrite} gets at either ceiling. */
+export function preparedRefusedRecovery(prepared: PreparedWrite, scope: "project" | "global" = "project"): string {
+  const room =
+    scope === "project"
+      ? `Export or permanently delete some of this project's saved work — attachments and sketches first — and ${prepared.retry}. `
+      : `Export or permanently delete project work you no longer need from another project, and ${prepared.retry}. `;
+  return `${prepared.kept}; ${prepared.refused}. ` + room + "Archiving an item hides it and keeps its history, so it frees nothing.";
+}
+
+/** A gate prepared its evidence, and the decision it was for was refused. */
+function preparedDecision(gate: string): PreparedWrite {
+  return {
+    kept: `The evidence ${gate} prepared is kept and can still be read`,
+    refused: "the decision itself was not recorded",
+    retry: "decide again",
+  };
+}
+
+/** The capture of an accepted change outlived the acceptance that was refused. */
+function preparedDelivery(): PreparedWrite {
+  return {
+    kept: "The evidence this delivery was checked against is kept and can still be read",
+    refused: "the delivery itself was not accepted",
+    retry: "accept it again",
+  };
+}
+
+/** A state was captured, and the record naming it was refused. */
+function preparedCapture(gate: string): PreparedWrite {
+  return {
+    kept: `The evidence ${gate} prepared is kept and can still be read`,
+    refused: "the record of it was not saved",
+    retry: "record it again",
+  };
+}
+
+/** A correction to which capture a record points at was refused. */
+function preparedCorrection(gate?: string | undefined): PreparedWrite {
+  return {
+    kept: gate
+      ? `The evidence ${gate} prepared is kept and can still be read`
+      : "The evidence that was captured is kept and can still be read",
+    refused: "this record still points at the evidence it pointed at before",
+    retry: "try again",
+  };
+}
+
+/**
+ * The general case: a record that names something an earlier transaction
+ * already stored.
+ *
+ * A verification report is the one this store writes today — the report blob
+ * is stored, then the evidence row that points at it — but the shape is the
+ * point: any later door that saves bytes first and names them afterwards gets
+ * a truthful refusal without having to remember to ask for one.
+ */
+function preparedStoredData(): PreparedWrite {
+  return {
+    kept: "What this record points at was already saved and can still be read",
+    refused: "the record naming it was not saved",
+    retry: "try again",
+  };
+}
+
+/**
  * What a refusal says when a gate already stored its evidence.
  *
  * The capture was written by an earlier transaction and is still there; only
@@ -167,15 +257,7 @@ const ITEM_LIMIT_RECOVERY =
  * changes (M21-T2 corrections, item 2).
  */
 export function decisionRefusedRecovery(gate: string, scope: "project" | "global" = "project"): string {
-  const room =
-    scope === "project"
-      ? "Export or permanently delete some of this project's saved work — attachments and sketches first — and decide again. "
-      : "Export or permanently delete project work you no longer need from another project, and decide again. ";
-  return (
-    `The evidence ${gate} prepared is kept and can still be read; the decision itself was not recorded. ` +
-    room +
-    "Archiving an item hides it and keeps its history, so it frees nothing."
-  );
+  return preparedRefusedRecovery(preparedDecision(gate), scope);
 }
 
 /**
@@ -431,7 +513,7 @@ export class ProjectWorkStore {
   private write<T>(work: () => T): T {
     this.pending = [];
     this.ledger.clear();
-    this.preparedGate = undefined;
+    this.prepared = undefined;
     let result: T;
     try {
       // Admission is settled inside the transaction, after the work and before
@@ -448,7 +530,7 @@ export class ProjectWorkStore {
       throw error;
     } finally {
       this.ledger.clear();
-      this.preparedGate = undefined;
+      this.prepared = undefined;
     }
     const events = this.pending;
     this.pending = [];
@@ -702,15 +784,16 @@ export class ProjectWorkStore {
    */
   private ledger = new Map<string, { bytes: number; entities: number; records: number }>();
   /**
-   * The gate whose preparation this transaction is deciding on, if any.
+   * What an earlier transaction already saved for the write this transaction
+   * is making, if anything.
    *
-   * A door whose gate already stored evidence in an **earlier** transaction
-   * records it here, and every ceiling this transaction can reach — this
-   * project's bytes or records, or the whole app's — refuses in words that do
-   * not claim that preparation was rolled back. Only this transaction's own
-   * work was.
+   * A door that consumes bytes stored before it — a gate's capture, a state
+   * capture, a verification report — records it here, and every ceiling this
+   * transaction can reach (this project's bytes or records, or the whole
+   * app's) refuses in words that do not claim that preparation was rolled
+   * back. Only this transaction's own work was.
    */
-  private preparedGate: string | undefined;
+  private prepared: PreparedWrite | undefined;
 
   private note(projectId: string, delta: { bytes?: number; entities?: number; records?: number }): void {
     const current = this.ledger.get(projectId) ?? { bytes: 0, entities: 0, records: 0 };
@@ -780,10 +863,10 @@ export class ProjectWorkStore {
       globalBytes += delta.bytes;
       globalRecords += delta.records;
     }
-    // The same truth in both scopes: a capture a gate stored in an earlier
-    // transaction is still there, whichever budget is full.
-    const recovery = this.preparedGate ? decisionRefusedRecovery(this.preparedGate) : PROJECT_FULL_RECOVERY;
-    const globalRecovery = this.preparedGate ? decisionRefusedRecovery(this.preparedGate, "global") : GLOBAL_FULL_RECOVERY;
+    // The same truth in both scopes: bytes an earlier transaction stored are
+    // still there, whichever budget is full.
+    const recovery = this.prepared ? preparedRefusedRecovery(this.prepared) : PROJECT_FULL_RECOVERY;
+    const globalRecovery = this.prepared ? preparedRefusedRecovery(this.prepared, "global") : GLOBAL_FULL_RECOVERY;
     for (const [projectId, delta] of this.ledger) {
       const entry = this.statement("SELECT bytes, entity_count, record_count FROM projects WHERE project_id = ?").get(projectId) as
         | { bytes: number; entity_count: number; record_count: number }
@@ -914,21 +997,25 @@ export class ProjectWorkStore {
   }
 
   private remember(projectId: string, method: string, key: string, result: unknown): void {
-    const existing = this.statement("SELECT 1 AS present FROM idempotency WHERE project_id = ? AND method = ? AND key = ?").get(projectId, method, key);
-    this.statement("INSERT OR REPLACE INTO idempotency (project_id, method, key, result_json, at) VALUES (?,?,?,?,?)").run(
+    // A plain `INSERT`, on purpose (storage review M-1). A receipt answers the
+    // same key with the same result for ever: `once()` replays an existing one
+    // before any work is done, so reaching here twice for one key would be a
+    // fault, and the fault should be a constraint failure that rolls the whole
+    // transaction back rather than a silent re-price that resets the charge
+    // this receipt is already carrying in the counters.
+    this.statement("INSERT INTO idempotency (project_id, method, key, result_json, at) VALUES (?,?,?,?,?)").run(
       projectId,
       method,
       key,
       JSON.stringify(result),
       this.now(),
     );
-    // A receipt answers the same key with the same result for ever, so it is
-    // durable canonical storage and is charged like any other (D-365, A-3). It
-    // is charged after the work succeeded and inside the same transaction: if
-    // there is no room for it the whole mutation refuses and the key is left
-    // free to retry. A receipt is scoped to the project, not to an entity, so
-    // it survives an entity's deletion on purpose.
-    this.chargeRow("idempotency", projectId, "project_id = ? AND method = ? AND key = ?", [projectId, method, key], existing === undefined);
+    // A receipt is durable canonical storage and is charged like any other
+    // (D-365, A-3). It is charged after the work succeeded and inside the same
+    // transaction: if there is no room for it the whole mutation refuses and
+    // the key is left free to retry. A receipt is scoped to the project, not
+    // to an entity, so it survives an entity's deletion on purpose.
+    this.chargeRow("idempotency", projectId, "project_id = ? AND method = ? AND key = ?", [projectId, method, key], true);
   }
 
   /**
@@ -1846,7 +1933,7 @@ export class ProjectWorkStore {
       // The gate stored its capture in an earlier transaction, so a refusal
       // here must not claim that nothing was kept: the evidence is still
       // readable and it is the decision that did not happen.
-      if (input.proof) this.preparedGate = input.proof.gate;
+      if (input.proof) this.prepared = preparedDecision(input.proof.gate);
       const entity = this.entityRow(input.projectId, input.entityId);
       this.requireCurrent(entity, input.expectedRevisionId);
       // Every revision the decision covers must be exactly what the store has:
@@ -2005,6 +2092,11 @@ export class ProjectWorkStore {
             acceptance?: RepositoryLinkAcceptance | undefined;
             /** The attempt the host tied this state to, re-derived by it. */
             executionLinkId?: string | undefined;
+            /**
+             * The gate that took that capture, in its own words, so a refusal
+             * here says which preparation is still readable (review H-1).
+             */
+            gate?: string | undefined;
           }
         | undefined;
     } & ProjectWorkWriteOrigin,
@@ -2017,6 +2109,9 @@ export class ProjectWorkStore {
       const now = this.now();
       const linkId = mintLinkId();
       const payload = input.link;
+      // What was already stored for this link before this transaction opened,
+      // so a refusal for space says what is still readable (review H-1).
+      this.prepared = this.preparedForLink(input, payload);
       if (payload.type === "delivery") return this.acceptDelivery(input, payload, now);
       const anchorEntityId =
         payload.type === "edge" ? payload.subject.entityId : payload.type === "repository" ? payload.subjectEntityId : payload.entityId;
@@ -2233,6 +2328,43 @@ export class ProjectWorkStore {
       });
       return { link: record, seq };
     });
+  }
+
+  /**
+   * What an earlier transaction already stored for the link about to be
+   * written, if anything (review H-1).
+   *
+   * Every way a link can rest on bytes that are already durable: a delivery
+   * whose capture the gate stored, a `verified_at` state whose capture the
+   * host took before validating anything else, and — generally — any record
+   * that names a blob already in this project, whether that is an evidence
+   * row pointing at a verification report or a repository link written with
+   * the capture it was read against. The general case is deliberately a
+   * property of the write rather than a flag a caller passes: a report is
+   * stored and then named, and so is whatever the next feature stores and
+   * then names.
+   */
+  private preparedForLink(
+    input: {
+      projectId: string;
+      capture?: { blobId: string } | undefined;
+      verified?: { captureBlobId?: string | undefined; gate?: string | undefined } | undefined;
+    },
+    payload: ProjectWorkLinkInput,
+  ): PreparedWrite | undefined {
+    if (payload.type === "delivery") return input.capture ? preparedDelivery() : undefined;
+    if (payload.type === "repository") {
+      return payload.captureBlobId !== undefined && this.blobStored(input.projectId, payload.captureBlobId) ? preparedStoredData() : undefined;
+    }
+    if (payload.type !== "evidence") return undefined;
+    if (input.verified?.captureBlobId !== undefined) return preparedCapture(input.verified.gate ?? "Recording this state");
+    if (payload.blobId !== undefined && this.blobStored(input.projectId, payload.blobId)) return preparedStoredData();
+    return undefined;
+  }
+
+  /** Is this blob already in this project's store, before this transaction? */
+  private blobStored(projectId: string, blobId: string): boolean {
+    return this.statement("SELECT 1 AS present FROM blobs WHERE project_id = ? AND blob_id = ?").get(projectId, blobId) !== undefined;
   }
 
   /**
@@ -2710,6 +2842,11 @@ export class ProjectWorkStore {
     context?: { gate?: string | undefined; actor?: ProjectWorkActor | undefined } | undefined,
   ): boolean {
     return this.write(() => {
+      // The capture this correction points at was stored by an earlier
+      // transaction and stays readable whether or not the pointer moves, so a
+      // refusal for space here says the pointer did not move — never that
+      // nothing was saved (review H-1).
+      this.prepared = preparedCorrection(context?.gate);
       const changes = Number(
         replacing !== undefined
           ? this.statement(
@@ -2868,7 +3005,7 @@ export class ProjectWorkStore {
       // As in `approve`: evidence the gate kept in an earlier transaction is
       // still there, so a refusal here says the completion was not recorded,
       // not that nothing was saved.
-      if (input.proof) this.preparedGate = input.proof.gate;
+      if (input.proof) this.prepared = preparedDecision(input.proof.gate);
       const entity = this.entityRow(input.projectId, input.entityId);
       this.requireCurrent(entity, input.expectedRevisionId);
       if (entity.kind !== "task") throw new ProjectWorkRefusedError("Only a task has task actions.");

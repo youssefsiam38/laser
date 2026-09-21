@@ -32,14 +32,20 @@ import {
   DERIVED_TABLES,
   UNPARTITIONED_TABLES,
   ROW_OVERHEAD_BYTES,
+  chargeExpression,
   recomputeProjectUsage,
   rechargeProject,
+  rowCharge,
+  scanChargedRows,
+  type CanonicalTable,
 } from "../../src/project-work/accounting.js";
+import { ProjectWorkUnavailableError } from "../../src/project-work/errors.js";
 import type { ProjectWorkDatabase } from "../../src/project-work/schema.js";
 import { ProjectWorkQuotaError, ProjectWorkRefusedError } from "../../src/project-work/errors.js";
 import { ProjectWorkStore } from "../../src/project-work/store.js";
+import { storeReport } from "../../src/project-work/verification/report.js";
 import { CHECKPOINT_REF_NAMESPACE } from "@lasercode/protocol";
-import { person, specBody, taskBody } from "./fixtures.js";
+import { agent, person, specBody, taskBody } from "./fixtures.js";
 
 let base: string;
 let store: ProjectWorkStore;
@@ -642,6 +648,42 @@ describe("admission", () => {
     invariant();
   });
 
+  it("keeps a receipt immutable: a second one for the same key cannot re-price the first", () => {
+    const item = spec();
+    const before = store.usage(projectId);
+    const db = new DatabaseSync(file);
+    const key = lastKey();
+    const stored = db
+      .prepare("SELECT result_json, at, charged_bytes FROM idempotency WHERE project_id = ? AND method = ? AND key = ?")
+      .get(projectId, "project/work/create", key) as { result_json: string; at: string; charged_bytes: number };
+    expect(Number(stored.charged_bytes), "the receipt of that create is charged").toBeGreaterThan(0);
+    // `once()` replays an existing receipt before any work is done, so the
+    // store cannot reach a second `remember` for one key — this is the
+    // constraint that makes it a rolled-back failure if it ever could, rather
+    // than a `REPLACE` that resets the charge already in the counters.
+    // Written from a second connection because the store's own door is the
+    // one that will not go there (storage review M-1).
+    expect(() =>
+      db
+        .prepare("INSERT INTO idempotency (project_id, method, key, result_json, at) VALUES (?,?,?,?,?)")
+        .run(projectId, "project/work/create", key, "{\"different\":true}", "2026-02-02T00:00:00.000Z"),
+    ).toThrow(/UNIQUE|PRIMARY KEY|constraint/i);
+    const after = db
+      .prepare("SELECT result_json, at, charged_bytes FROM idempotency WHERE project_id = ? AND method = ? AND key = ?")
+      .get(projectId, "project/work/create", key) as { result_json: string; at: string; charged_bytes: number };
+    db.close();
+    expect(after.result_json, "the receipt answers the same key with the same result, for ever").toBe(stored.result_json);
+    expect(after.at).toBe(stored.at);
+    expect(Number(after.charged_bytes), "and its charge was not reset").toBe(Number(stored.charged_bytes));
+    // The ordinary replay is untouched by any of this: no mutation, no charge.
+    const again = store.create({ projectId, kind: "spec", title: "Phone review", body: specBody(), origin: person, idempotencyKey: key });
+    expect(again.replayed).toBe(true);
+    expect(again.entity.entityId).toBe(item.entity.entityId);
+    expect(store.usage(projectId).projectBytes).toBe(before.projectBytes);
+    expect(store.usage(projectId).records).toBe(before.records);
+    invariant();
+  });
+
   it("lets an over-cap store shrink, even though the deletion writes a receipt of its own", () => {
     const roomy = join(base, "over.db");
     const first = new ProjectWorkStore({ file: roomy });
@@ -882,6 +924,365 @@ describe("admission", () => {
       expect(refusal.usedCount, "a count is never reported as a number of bytes").toBeGreaterThan(prepared.globalRecords);
       expect(tight.get({ projectId: prepared.id, entityId: prepared.item.entity.entityId }).approvals).toHaveLength(0);
       expect(tight.readBlob({ projectId: prepared.id, blobId: prepared.capture.blobId, offset: 0, limit: 8 })?.totalBytes).toBe(prepared.capture.bytes);
+      invariant(tight, prepared.id);
+    } finally {
+      tight.close();
+    }
+  });
+});
+
+/**
+ * Every other door that consumes bytes an **earlier** transaction stored
+ * (storage review H-1).
+ *
+ * Approving and completing were covered above; these four are the rest of
+ * them, and each one was refusing with "Nothing from this action was saved"
+ * while the capture or the report it was about sat readable in the store:
+ *
+ * - accepting a delivery, whose capture the gate stores first;
+ * - recording or accepting a verified state, whose capture the host takes
+ *   before it validates anything else;
+ * - correcting which capture a record points at;
+ * - saving any record that names a blob already in the project — a
+ *   verification report is the one this store writes today, and the door is
+ *   tested through the real producer rather than through a lookalike.
+ *
+ * Each is proved at all four ceilings: this project's bytes and records, and
+ * the whole app's.
+ */
+describe("a write whose evidence was stored before it", () => {
+  type Usage = ReturnType<ProjectWorkStore["usage"]>;
+
+  /** The four ceilings such a write can run into, each tightened to the bone. */
+  const CEILINGS = [
+    {
+      at: "this project's bytes",
+      scope: "project" as const,
+      measure: "bytes" as const,
+      room: "some of this project's saved work",
+      quota: (usage: Usage) => ({ projectBytes: usage.projectBytes }),
+    },
+    {
+      at: "this project's record count",
+      scope: "project" as const,
+      measure: "records" as const,
+      room: "some of this project's saved work",
+      quota: (usage: Usage) => ({ projectRecords: usage.records }),
+    },
+    {
+      at: "the whole app's bytes",
+      scope: "global" as const,
+      measure: "bytes" as const,
+      room: "from another project",
+      quota: (usage: Usage) => ({ globalBytes: usage.globalBytes }),
+    },
+    {
+      at: "the whole app's record count",
+      scope: "global" as const,
+      measure: "records" as const,
+      room: "from another project",
+      quota: (usage: Usage) => ({ globalRecords: usage.globalRecords }),
+    },
+  ];
+
+  const STATE = { vcs: "git", objectFormat: "sha1", commitObjectId: "a".repeat(40) } as const;
+  const CHANGE = {
+    base: STATE,
+    head: { vcs: "git", objectFormat: "sha1", commitObjectId: "b".repeat(40) },
+    diffDigest: "c".repeat(64),
+  } as const;
+
+  interface Prepared {
+    path: string;
+    id: string;
+    task: ReturnType<ProjectWorkStore["create"]>;
+    repositoryId: string;
+    /** A repository link with no capture yet, for the correction door. */
+    linkId: string;
+    /** The bytes a gate stored before the write under test. */
+    capture: { blobId: string; bytes: number };
+    /** The report blob the first run stored, which a second run re-uses. */
+    reportBlobId: string;
+    usage: Usage;
+  }
+
+  /** The report a run writes: a blob, and then the record that names it. */
+  function reportInput(target: ProjectWorkStore, prepared: Prepared, idempotencyKey: string): Parameters<typeof storeReport>[0] {
+    const task = {
+      authority: "task" as const,
+      entityId: prepared.task.entity.entityId,
+      kind: "task" as const,
+      key: prepared.task.entity.key,
+      revisionId: prepared.task.revision.revisionId,
+      digest: prepared.task.revision.digest,
+      title: prepared.task.entity.title,
+    };
+    return {
+      store: target,
+      projectId: prepared.id,
+      entityId: prepared.task.entity.entityId,
+      expectedRevisionId: prepared.task.revision.revisionId,
+      plan: { task, authorities: [task], criteria: [], commands: [], blockers: [], truncated: [] },
+      evaluation: { findings: [], blockers: [], personDecisions: [], converged: false, outcome: "failed" },
+      commands: [],
+      deviations: [],
+      runId: "run_fixed_for_dedup",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      endedAt: "2026-01-01T00:00:01.000Z",
+      origin: agent,
+      idempotencyKey,
+    };
+  }
+
+  /** A project seeded to the moment before each door's write. */
+  function prepare(name: string): Prepared {
+    const path = join(base, `${name}.db`);
+    const seed = new ProjectWorkStore({ file: path });
+    const id = seed.projectIdFor(join(base, name))!;
+    const repositoryId = seed.ensureRepository({ projectId: id, name: "app", gitCommonDir: join(base, name, "app", ".git") });
+    const task = seed.create({ projectId: id, kind: "task", title: "Ship the footer", body: taskBody(), origin: person, idempotencyKey: "seed-task" });
+    const written = seed.link({
+      projectId: id,
+      expectedRevisionId: task.revision.revisionId,
+      link: {
+        type: "repository",
+        relation: "based_on",
+        subjectEntityId: task.entity.entityId,
+        subjectRevisionId: task.revision.revisionId,
+        repositoryId,
+        target: { state: STATE },
+      },
+      origin: person,
+      idempotencyKey: "seed-link",
+    });
+    if (written.link.type !== "repository") throw new Error("fixture");
+    // The gate's own earlier transaction: durable before any of these writes
+    // is attempted, and still durable when one of them is refused.
+    const capture = seed.putBlob({
+      projectId: id,
+      entityId: task.entity.entityId,
+      mediaType: "application/json",
+      data: Buffer.from("x".repeat(4 * 1024)),
+    });
+    const prepared: Prepared = {
+      path,
+      id,
+      task,
+      repositoryId,
+      linkId: written.link.repository.linkId,
+      capture,
+      reportBlobId: "",
+      usage: seed.usage(id),
+    };
+    // One run's report, stored and recorded. Its blob is what a second run of
+    // the same report finds already there, the way deduplication intends.
+    prepared.reportBlobId = storeReport(reportInput(seed, prepared, "seed-report")).blobId;
+    prepared.usage = seed.usage(id);
+    seed.close();
+    return prepared;
+  }
+
+  interface Door {
+    name: string;
+    kept: string;
+    refused: string;
+    retry: string;
+    /** Make the write, with everything it needs already stored. */
+    attempt: (target: ProjectWorkStore, prepared: Prepared) => void;
+    /** What must not be there afterwards. */
+    rolledBack: (target: ProjectWorkStore, prepared: Prepared) => void;
+  }
+
+  const DOORS: Door[] = [
+    {
+      name: "accepting a delivery",
+      kept: "The evidence this delivery was checked against is kept and can still be read",
+      refused: "the delivery itself was not accepted",
+      retry: "accept it again",
+      attempt: (target, prepared) => {
+        target.link({
+          projectId: prepared.id,
+          expectedRevisionId: prepared.task.revision.revisionId,
+          link: {
+            type: "delivery",
+            entityId: prepared.task.entity.entityId,
+            revisionId: prepared.task.revision.revisionId,
+            repositoryId: prepared.repositoryId,
+            change: CHANGE,
+            confirm: true,
+          },
+          capture: { blobId: prepared.capture.blobId, bytes: prepared.capture.bytes, files: 1, sources: 1 },
+          origin: person,
+          idempotencyKey: "accept-delivery",
+        });
+      },
+      rolledBack: (target, prepared) => {
+        const links = target.get({ projectId: prepared.id, entityId: prepared.task.entity.entityId }).repositoryLinks;
+        expect(links.filter((link) => link.relation === "implemented_by"), "no delivery was accepted").toHaveLength(0);
+      },
+    },
+    {
+      name: "recording a verified state",
+      kept: "The evidence Accepting this preview prepared is kept and can still be read",
+      refused: "the record of it was not saved",
+      retry: "record it again",
+      attempt: (target, prepared) => {
+        target.link({
+          projectId: prepared.id,
+          expectedRevisionId: prepared.task.revision.revisionId,
+          link: {
+            type: "evidence",
+            entityId: prepared.task.entity.entityId,
+            revisionId: prepared.task.revision.revisionId,
+            kind: "screenshot",
+            role: "supporting",
+            summary: "What the checkpoint looked like",
+            outcome: "passed",
+            verifiedAt: { repositoryId: prepared.repositoryId, state: STATE },
+          },
+          verified: { captureBlobId: prepared.capture.blobId, gate: "Accepting this preview" },
+          origin: person,
+          idempotencyKey: "record-state",
+        });
+      },
+      rolledBack: (target, prepared) => {
+        const detail = target.get({ projectId: prepared.id, entityId: prepared.task.entity.entityId });
+        expect(detail.repositoryLinks.filter((link) => link.relation === "verified_at"), "no state was recorded").toHaveLength(0);
+        expect(detail.evidence.filter((row) => row.kind === "screenshot"), "and no evidence was written for it").toHaveLength(0);
+      },
+    },
+    {
+      name: "correcting which capture a record points at",
+      kept: "The evidence Marking this task done prepared is kept and can still be read",
+      refused: "this record still points at the evidence it pointed at before",
+      retry: "try again",
+      attempt: (target, prepared) => {
+        target.attachCapture(prepared.id, prepared.linkId, prepared.capture.blobId, undefined, {
+          gate: "Marking this task done",
+          actor: person.actor,
+        });
+      },
+      rolledBack: (target, prepared) => {
+        const link = target
+          .get({ projectId: prepared.id, entityId: prepared.task.entity.entityId })
+          .repositoryLinks.find((row) => row.linkId === prepared.linkId);
+        expect(link?.captureBlobId, "the pointer did not move").toBeUndefined();
+        expect(
+          target.captureHistoryPage(prepared.id, { of: "associations", linkId: prepared.linkId, linkIds: [prepared.linkId] }).associations,
+          "and no association was appended",
+        ).toHaveLength(0);
+      },
+    },
+    {
+      name: "writing a record against a capture already stored",
+      kept: "What this record points at was already saved and can still be read",
+      refused: "the record naming it was not saved",
+      retry: "try again",
+      attempt: (target, prepared) => {
+        target.link({
+          projectId: prepared.id,
+          expectedRevisionId: prepared.task.revision.revisionId,
+          link: {
+            type: "repository",
+            relation: "based_on",
+            subjectEntityId: prepared.task.entity.entityId,
+            subjectRevisionId: prepared.task.revision.revisionId,
+            repositoryId: prepared.repositoryId,
+            target: { state: { vcs: "git", objectFormat: "sha1", commitObjectId: "d".repeat(40) } },
+            captureBlobId: prepared.capture.blobId,
+          },
+          origin: person,
+          idempotencyKey: "second-based-on",
+        });
+      },
+      rolledBack: (target, prepared) => {
+        const links = target.get({ projectId: prepared.id, entityId: prepared.task.entity.entityId }).repositoryLinks;
+        expect(links, "only the link the fixture seeded is there").toHaveLength(1);
+        expect(links[0]?.captureBlobId, "and it still has no capture of its own").toBeUndefined();
+      },
+    },
+    {
+      name: "saving a record that names a report already stored",
+      kept: "What this record points at was already saved and can still be read",
+      refused: "the record naming it was not saved",
+      retry: "try again",
+      attempt: (target, prepared) => {
+        // The real producer, run again for the same report: the blob is
+        // already stored and costs nothing, and the record naming it is what
+        // there is no room for.
+        storeReport(reportInput(target, prepared, "second-report"));
+      },
+      rolledBack: (target, prepared) => {
+        const evidence = target.get({ projectId: prepared.id, entityId: prepared.task.entity.entityId }).evidence;
+        expect(evidence.filter((row) => row.kind === "verification"), "the first run's record is there, and only it").toHaveLength(1);
+      },
+    },
+  ];
+
+  for (const door of DOORS) {
+    for (const ceiling of CEILINGS) {
+      it(`${door.name}: says what is still readable when ${ceiling.at} is full`, () => {
+        const prepared = prepare(`${door.name.replace(/[^a-z]+/gi, "-")}-${ceiling.measure}-${ceiling.scope}`);
+        const tight = new ProjectWorkStore({ file: prepared.path, quota: ceiling.quota(prepared.usage) });
+        try {
+          const seq = tight.seq(prepared.id);
+          let refusal: ProjectWorkQuotaError | undefined;
+          try {
+            door.attempt(tight, prepared);
+          } catch (error) {
+            refusal = error as ProjectWorkQuotaError;
+          }
+          expect(refusal, "this write was expected to be refused for space").toBeInstanceOf(ProjectWorkQuotaError);
+          expect(refusal?.scope).toBe(ceiling.scope);
+          expect(refusal?.measure ?? "bytes").toBe(ceiling.measure);
+          expect(refusal?.recovery).toContain(door.kept);
+          expect(refusal?.recovery).toContain(door.refused);
+          expect(refusal?.recovery, "and it says what to do once there is room").toContain(door.retry);
+          expect(refusal?.recovery, "the room to make is where the budget ran out").toContain(ceiling.room);
+          expect(refusal?.recovery, "a preparation in an earlier transaction was not rolled back").not.toContain(
+            "Nothing from this action was saved",
+          );
+          expect(refusal?.recovery).toContain("Archiving an item hides it and keeps its history");
+
+          // What was prepared really is still there, byte for byte.
+          const kept = tight.readBlob({ projectId: prepared.id, blobId: prepared.capture.blobId, offset: 0, limit: 16 });
+          expect(kept?.totalBytes).toBe(prepared.capture.bytes);
+          expect(kept?.released).toBeUndefined();
+          expect(tight.readBlob({ projectId: prepared.id, blobId: prepared.reportBlobId, offset: 0, limit: 16 })?.released).toBeUndefined();
+          // And the refused write left nothing at all behind.
+          door.rolledBack(tight, prepared);
+          expect(tight.seq(prepared.id), "no event, and no sequence bump").toBe(seq);
+          invariant(tight, prepared.id);
+        } finally {
+          tight.close();
+        }
+      });
+    }
+  }
+
+  it("still says nothing was saved when nothing was prepared", () => {
+    const prepared = prepare("no-preparation");
+    const tight = new ProjectWorkStore({ file: prepared.path, quota: { projectBytes: prepared.usage.projectBytes } });
+    try {
+      let refusal: ProjectWorkQuotaError | undefined;
+      try {
+        tight.comment({
+          projectId: prepared.id,
+          entityId: prepared.task.entity.entityId,
+          expectedRevisionId: prepared.task.revision.revisionId,
+          revisionId: prepared.task.revision.revisionId,
+          anchor: { kind: "whole" },
+          text: "An ordinary write, with nothing stored ahead of it.",
+          blocking: false,
+          origin: person,
+          idempotencyKey: "ordinary",
+        });
+      } catch (error) {
+        refusal = error as ProjectWorkQuotaError;
+      }
+      expect(refusal).toBeInstanceOf(ProjectWorkQuotaError);
+      expect(refusal?.recovery, "an ordinary refusal is still the plain truth").toContain("Nothing from this action was saved");
+      expect(refusal?.recovery).not.toContain("can still be read");
       invariant(tight, prepared.id);
     } finally {
       tight.close();
@@ -1394,6 +1795,25 @@ describe("the v5 → v6 upgrade", () => {
 describe("counting a project that does not fit in one read", () => {
   /** Big enough that a payload read at the wrong moment would show up. */
   const PAYLOAD = Buffer.from("p".repeat(32 * 1024));
+  /** A revision body of the size the store's own transport cap allows. */
+  const BIG_BODY_BYTES = 4 * 1024 * 1024;
+  /** The largest document a body may carry through the ordinary door. */
+  const DOCUMENT_BYTES = 200_000;
+  /** A string that exists nowhere but in those bodies. */
+  const BODY_MARKER = "only-in-a-stored-body";
+
+  /** What one read really carried into this process. */
+  function bytesOf(rows: readonly unknown[]): number {
+    let total = 0;
+    for (const row of rows) {
+      for (const value of Object.values(row as Record<string, unknown>)) {
+        if (typeof value === "string") total += Buffer.byteLength(value, "utf8");
+        else if (value instanceof Uint8Array) total += value.byteLength;
+        else total += 8;
+      }
+    }
+    return total;
+  }
 
   /**
    * A project with more rows in one table than a single page may read, and
@@ -1403,10 +1823,23 @@ describe("counting a project that does not fit in one read", () => {
    * migration reading somebody's existing store, not the doors that made it,
    * and a thousand real transactions would prove nothing extra.
    */
-  function crowded(path: string, comments: number, blobs: number): { id: string; entityId: string; blobIds: string[] } {
+  function crowded(path: string, comments: number, blobs: number, bodies = 0): { id: string; entityId: string; blobIds: string[] } {
     const seed = new ProjectWorkStore({ file: path });
     const id = seed.projectIdFor(join(base, "crowded"))!;
     const item = seed.create({ projectId: id, kind: "spec", title: "Crowded", body: specBody(), origin: person, idempotencyKey: "seed" });
+    // The largest body the ordinary door accepts, written through it.
+    if (bodies > 0) {
+      const document = specBody(`${BODY_MARKER} written through the door`);
+      if (document.kind === "spec") document.spec.document = `${BODY_MARKER} ${"d".repeat(DOCUMENT_BYTES - BODY_MARKER.length - 1)}`;
+      seed.revise({
+        projectId: id,
+        entityId: item.entity.entityId,
+        expectedRevisionId: item.revision.revisionId,
+        body: document,
+        origin: person,
+        idempotencyKey: "seed-document",
+      });
+    }
     seed.close();
     const db = new DatabaseSync(path);
     const comment = db.prepare(
@@ -1436,6 +1869,33 @@ describe("counting a project that does not fit in one read", () => {
       const blobId = `blb_fixture_${String(n).padStart(6, "0")}`;
       blobRow.run(blobId, id, item.entity.entityId, `digest-${String(n)}`, "application/json", PAYLOAD.byteLength, PAYLOAD, "2026-01-01T00:00:00.000Z");
       blobIds.push(blobId);
+    }
+    // And the bodies a store written by an older release can be holding: the
+    // transport cap is four megabytes a body, and a migration reads what is
+    // there rather than what today's door would have allowed.
+    if (bodies > 0) {
+      const revision = db.prepare(
+        "INSERT INTO revisions (revision_id, project_id, entity_id, kind, idx, parent_revision_id, title, digest, body_bytes, body, created_at, origin_json, state) " +
+          "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      );
+      for (let n = 0; n < bodies; n += 1) {
+        const body = `{"kind":"spec","note":"${BODY_MARKER}","filler":"${"z".repeat(BIG_BODY_BYTES)}"}`;
+        revision.run(
+          `rev_fixture_${String(n).padStart(6, "0")}`,
+          id,
+          item.entity.entityId,
+          "spec",
+          100 + n,
+          null,
+          "A legacy body",
+          `digest-body-${String(n)}`,
+          Buffer.byteLength(body, "utf8"),
+          body,
+          "2026-01-01T00:00:00.000Z",
+          JSON.stringify(person),
+          "draft",
+        );
+      }
     }
     db.exec("COMMIT");
     db.close();
@@ -1505,6 +1965,71 @@ describe("counting a project that does not fit in one read", () => {
     }
   });
 
+  it("asks the database for the size of a stored body and never for the body", () => {
+    const path = join(base, "bounded-bytes.db");
+    const fixture = crowded(path, CHARGE_SCAN_BATCH_ROWS * 2 + 7, 3, 2);
+    const raw = new DatabaseSync(path);
+    type Params = Parameters<ReturnType<DatabaseSync["prepare"]>["all"]>;
+    const reads: Array<{ sql: string; rows: number; bytes: number; marker: boolean }> = [];
+    const traced: ProjectWorkDatabase = {
+      exec: (sql: string) => raw.exec(sql),
+      close: () => raw.close(),
+      prepare: (sql: string) => {
+        const statement = raw.prepare(sql);
+        return {
+          run: (...params: unknown[]) => statement.run(...(params as Params)),
+          get: (...params: unknown[]) => statement.get(...(params as Params)),
+          all: (...params: unknown[]) => {
+            const rows = statement.all(...(params as Params));
+            reads.push({
+              sql,
+              rows: rows.length,
+              bytes: bytesOf(rows),
+              marker: rows.some((row) => Object.values(row as Record<string, unknown>).some((value) => typeof value === "string" && value.includes(BODY_MARKER))),
+            });
+            return rows;
+          },
+          iterate: (...params: unknown[]) => statement.iterate(...(params as Params)) as IterableIterator<unknown>,
+        };
+      },
+    };
+
+    const totals = rechargeProject(traced, fixture.id);
+
+    // The project really does hold what a naive scan would have carried.
+    const storedBodies = Number(
+      (raw.prepare("SELECT COALESCE(SUM(body_bytes), 0) AS n FROM revisions WHERE project_id = ?").get(fixture.id) as { n: number }).n,
+    );
+    expect(storedBodies, "the fixture holds several megabytes of real bodies").toBeGreaterThan(2 * BIG_BODY_BYTES);
+    // And not one of them crossed into this process.
+    const worst = reads.reduce((most, read) => Math.max(most, read.bytes), 0);
+    expect(worst, `one read carried ${String(worst)} bytes; a page is keys and numbers`).toBeLessThan(256 * 1024);
+    const carried = reads.reduce((sum, read) => sum + read.bytes, 0);
+    expect(carried, "the whole migration carries less than one stored body").toBeLessThan(BIG_BODY_BYTES);
+    expect(
+      reads.filter((read) => read.marker),
+      "no read returned the text of a stored body",
+    ).toHaveLength(0);
+    for (const read of reads.filter((read) => read.sql.includes("FROM revisions"))) {
+      expect(read.sql, "the body is measured where it is stored, by name, and never selected").toMatch(/octet_length\("body"\)/);
+      expect(read.sql.replace(/octet_length\("[a-z_]+"\)|typeof\("[a-z_]+"\)/g, ""), "and no column of it is returned but its key").not.toMatch(
+        /\bbody\b/,
+      );
+    }
+
+    // The bounded reads still produce the same totals as an independent
+    // recount, and the counters they wrote agree with the rows.
+    expect(recomputeProjectUsage(traced, fixture.id)).toEqual(totals);
+    expect(totals.bytes, "and the bodies are counted, not skipped").toBeGreaterThan(storedBodies);
+    raw.close();
+    const reopened = new ProjectWorkStore({ file: path });
+    try {
+      invariant(reopened, fixture.id);
+    } finally {
+      reopened.close();
+    }
+  });
+
   it("upgrades it from v5 without losing a row, a payload or a byte of the total", () => {
     const path = join(base, "crowded-upgrade.db");
     const fixture = crowded(path, CHARGE_SCAN_BATCH_ROWS * 2 + 7, 3);
@@ -1545,6 +2070,132 @@ describe("counting a project that does not fit in one read", () => {
         /* already closed above */
       }
     }
+  });
+});
+
+/**
+ * The charge is defined twice — once in JavaScript for a single write, once in
+ * SQL so a scan never carries what it is counting — so the two are held to the
+ * same answer (storage review M-2).
+ */
+describe("the charge in SQL and the charge in JavaScript", () => {
+  /** A scratch database shaped like a canonical table, for value kinds. */
+  function scratch(sql: string): ProjectWorkDatabase {
+    const db = new DatabaseSync(":memory:");
+    db.exec(sql);
+    return db as unknown as ProjectWorkDatabase;
+  }
+
+  it("agree on every kind of stored value, including NUL, emoji and raw bytes", () => {
+    const db = scratch(
+      "CREATE TABLE comments (comment_id TEXT PRIMARY KEY, project_id TEXT, text TEXT, note TEXT, payload BLOB, n INTEGER, r REAL, charged_bytes INTEGER NOT NULL DEFAULT 0)",
+    );
+    const insert = db.prepare("INSERT INTO comments (comment_id, project_id, text, note, payload, n, r) VALUES (?,?,?,?,?,?,?)");
+    const rows: Array<[string, string, string | null, Uint8Array | null, number | null, number | null]> = [
+      ["plain", "Review note", "short", null, 1, null],
+      ["nul", "before\u0000after", null, null, null, null],
+      ["unicode", "🙂 λόγος — e\u0301", "héllo", null, null, null],
+      ["empty", "", "", null, 0, 0],
+      ["bytes", "with a payload", null, new Uint8Array([0, 1, 2, 250, 255]), null, null],
+      ["numbers", "counted under the floor", null, null, 9_007_199_254_740_991, -1.5],
+    ];
+    for (const [id, text, note, payload, n, r] of rows) insert.run(id, "prj_1", text, note, payload, n, r);
+
+    const expression = chargeExpression(db, "comments");
+    const sql = db.prepare(`SELECT comment_id, (${expression}) AS charge FROM comments`).all() as Array<{ comment_id: string; charge: number }>;
+    const stored = db.prepare("SELECT * FROM comments").all() as Array<Record<string, unknown>>;
+    expect(sql).toHaveLength(rows.length);
+    for (const row of stored) {
+      const inSql = sql.find((one) => one.comment_id === row["comment_id"]);
+      expect(Number(inSql?.charge), `${String(row["comment_id"])} costs the same in both definitions`).toBe(rowCharge("comments", row));
+    }
+    // And the exactness the definition claims: UTF-8 bytes, not characters,
+    // with the NUL counted rather than treated as the end of the string.
+    const nul = sql.find((one) => one.comment_id === "nul");
+    expect(Number(nul?.charge)).toBe(
+      ROW_OVERHEAD_BYTES + "nul".length + Buffer.byteLength("prj_1", "utf8") + Buffer.byteLength("before\u0000after", "utf8"),
+    );
+    db.close();
+  });
+
+  it("agree that a released payload is given back and an inline one is charged once", () => {
+    const db = scratch(
+      "CREATE TABLE blobs (blob_id TEXT PRIMARY KEY, project_id TEXT, digest TEXT, media_type TEXT, bytes INTEGER, data BLOB, released TEXT, charged_bytes INTEGER NOT NULL DEFAULT 0)",
+    );
+    const payload = new Uint8Array(4096).fill(7);
+    const insert = db.prepare("INSERT INTO blobs (blob_id, project_id, digest, media_type, bytes, data, released) VALUES (?,?,?,?,?,?,?)");
+    // The two rows differ only in whether the payload was released, so the
+    // difference between their charges is exactly what a release gives back.
+    insert.run("kept", "prj_1", "d1", "application/json", payload.byteLength, payload, null);
+    insert.run("gone", "prj_1", "d2", "application/json", payload.byteLength, null, "quota");
+
+    const expression = chargeExpression(db, "blobs");
+    expect(expression, "the payload is charged through `bytes`, never read to be counted").not.toMatch(/"data"/);
+    const sql = db.prepare(`SELECT blob_id, (${expression}) AS charge FROM blobs`).all() as Array<{ blob_id: string; charge: number }>;
+    const stored = db.prepare("SELECT * FROM blobs").all() as Array<Record<string, unknown>>;
+    for (const row of stored) {
+      const inSql = sql.find((one) => one.blob_id === row["blob_id"]);
+      expect(Number(inSql?.charge), `${String(row["blob_id"])} costs the same in both definitions`).toBe(rowCharge("blobs", row));
+    }
+    const kept = Number(sql.find((one) => one.blob_id === "kept")?.charge);
+    const gone = Number(sql.find((one) => one.blob_id === "gone")?.charge);
+    expect(kept - gone, "a released payload gives back exactly its bytes, and keeps its metadata charge").toBe(payload.byteLength - "quota".length);
+    db.close();
+  });
+
+  it("agree on every row of a real project, table by table", () => {
+    // A project with something in every kind of row the doors write.
+    const repositoryId = repository();
+    const item = spec("Review 🙂 from a phone");
+    const task = store.create({ projectId, kind: "task", title: "Build it", body: taskBody(), origin: person, idempotencyKey: idem("task") });
+    store.comment({
+      projectId,
+      entityId: item.entity.entityId,
+      expectedRevisionId: item.revision.revisionId,
+      revisionId: item.revision.revisionId,
+      anchor: { kind: "whole" },
+      text: "A note with a NUL\u0000, an emoji 🙂 and a combining mark e\u0301.",
+      origin: person,
+      idempotencyKey: idem("comment"),
+    });
+    const capture = blob("a capture 🙂 with non-ASCII in it", item.entity.entityId);
+    repositoryLink({ entityId: task.entity.entityId, revisionId: task.revision.revisionId }, repositoryId, capture.blobId);
+    const released = blob("a derived blob that will be let go", item.entity.entityId);
+    store.releaseDerived({ projectId, blobId: released.blobId, reason: "quota", detail: "made room" });
+
+    const raw = new DatabaseSync(file, { readOnly: true }) as unknown as ProjectWorkDatabase;
+    let rowsSeen = 0;
+    for (const table of CANONICAL_TABLES) {
+      let inSql = 0;
+      scanChargedRows(raw, table as CanonicalTable, projectId, (page) => {
+        for (const row of page) inSql += row.charge;
+        rowsSeen += page.length;
+      });
+      const stored = (raw.prepare(`SELECT * FROM ${table} WHERE project_id = ?`).all(projectId) as Array<Record<string, unknown>>).reduce(
+        (total, row) => total + rowCharge(table as CanonicalTable, row),
+        0,
+      );
+      expect(inSql, `${table} costs the same counted in SQL as counted from its rows`).toBe(stored);
+    }
+    raw.close();
+    expect(rowsSeen, "and the project really had rows in it").toBeGreaterThan(10);
+  });
+
+  it("refuses to count a database that does not store its text as UTF-8", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA encoding = 'UTF-16'");
+    db.exec("CREATE TABLE comments (comment_id TEXT PRIMARY KEY, project_id TEXT, text TEXT, charged_bytes INTEGER NOT NULL DEFAULT 0)");
+    db.prepare("INSERT INTO comments (comment_id, project_id, text) VALUES (?,?,?)").run("a", "prj_1", "héllo");
+    // What the guard is for: counted here, that text would cost its UTF-16
+    // bytes and every charge in the store would be wrong by a different
+    // amount per row.
+    expect(Number((db.prepare("SELECT octet_length(text) AS n FROM comments").get() as { n: number }).n)).toBeGreaterThan(
+      Buffer.byteLength("héllo", "utf8"),
+    );
+    const wrapped = db as unknown as ProjectWorkDatabase;
+    expect(() => chargeExpression(wrapped, "comments")).toThrow(ProjectWorkUnavailableError);
+    expect(() => scanChargedRows(wrapped, "comments", "prj_1", () => {})).toThrow(/UTF-8/);
+    db.close();
   });
 });
 

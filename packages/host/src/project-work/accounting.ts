@@ -32,6 +32,7 @@
  *   summing `charged_bytes` — which is what makes a forgotten recharge after
  *   an UPDATE a test failure rather than silent drift.
  */
+import { ProjectWorkUnavailableError } from "./errors.js";
 import type { ProjectWorkDatabase } from "./schema.js";
 
 /**
@@ -108,10 +109,16 @@ export const UNPARTITIONED_TABLES = ["blob_chunks"] as const;
  *
  * A recount and a migration are the only full scans in this store, and a
  * project can hold hundreds of thousands of canonical rows: they walk the
- * rows in stable key order, a page at a time, so the memory they need is the
- * size of one page and never the size of the project. The page is read in
- * full before anything is written back, so nothing ever writes through a live
- * cursor.
+ * rows in stable key order, a page at a time. The page is read in full before
+ * anything is written back, so nothing ever writes through a live cursor.
+ *
+ * This is a bound on **rows**, and a row bound alone would say nothing about
+ * memory: five hundred revisions of four megabytes each is half a gigabyte of
+ * bodies. What makes a page small is {@link chargeExpression} — a scan asks
+ * the database for each row's key and its charge as a **number**, and never
+ * for the body, the source text or the payload behind that number. One page
+ * is therefore a few hundred keys and a few hundred integers, whatever the
+ * project holds.
  */
 export const CHARGE_SCAN_BATCH_ROWS = 500;
 
@@ -133,6 +140,12 @@ const NOT_CHARGED: Partial<Record<CanonicalTable, readonly string[]>> = {
  * `row` is the row exactly as SQLite returns it. TEXT is charged as its UTF-8
  * length, BLOB as its byte length, and INTEGER, REAL and NULL are covered by
  * the floor — a column that holds a number cannot be a place to hide bytes.
+ *
+ * This is what a **single write** is charged by: the writer has the row it
+ * just wrote in hand, so measuring it costs nothing extra. A scan of a whole
+ * project uses {@link chargeExpression}, which is the same definition in SQL
+ * so that a page never carries the bytes it is counting; a parity test holds
+ * the two to the same answer on every stored row.
  */
 export function rowCharge(table: CanonicalTable, row: Record<string, unknown>): number {
   const skip = NOT_CHARGED[table];
@@ -177,24 +190,76 @@ const PROJECT_COLUMN: Record<CanonicalTable, string> = {
 const SEPARATOR = ", ";
 
 /**
- * The columns a charge is read from: everything the row stores, minus what is
- * charged some other way.
+ * The columns a charge is counted over: everything the row stores, minus what
+ * is charged some other way and minus the charge itself.
  *
  * Asked of the database rather than hard-coded, so a column added by a later
  * migration is charged without this file being edited, and read once per
  * table per scan. `blobs.data` is excluded here rather than skipped after the
- * read: the payload is already charged through `bytes`, and selecting it
- * would pull every inline capture in the project through memory to reach a
- * number the row already carries.
+ * read: the payload is already charged through `bytes`, and counting it again
+ * would charge one payload twice.
  */
 function chargedColumns(db: ProjectWorkDatabase, table: CanonicalTable): string[] {
   const skip = NOT_CHARGED[table] ?? [];
-  const columns = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
     .map((column) => String(column.name))
-    .filter((name) => !skip.includes(name));
-  // The keys are what the next page is asked for, so they are never optional.
-  for (const key of ROW_KEYS[table]) if (!columns.includes(key)) columns.push(key);
-  return columns;
+    .filter((name) => name !== "charged_bytes" && !skip.includes(name));
+}
+
+/**
+ * The text encoding this database stores its TEXT values in.
+ *
+ * It matters here and nowhere else: `octet_length` counts the bytes of the
+ * value **as the database holds it**, so on a UTF-16 database it would answer
+ * with UTF-16 bytes while {@link rowCharge} and every stored charge speak
+ * exact UTF-8. Rather than let the two quietly disagree, a database in any
+ * other encoding is refused — this store creates its files in SQLite's UTF-8
+ * default and has never written another, so this is an assertion about a
+ * thing that cannot happen, said out loud instead of assumed.
+ */
+function requireUtf8(db: ProjectWorkDatabase): void {
+  const row = db.prepare("PRAGMA encoding").get() as Record<string, unknown> | undefined;
+  const encoding = row ? String(Object.values(row)[0] ?? "") : "";
+  if (encoding.toUpperCase() !== "UTF-8") {
+    throw new ProjectWorkUnavailableError(
+      `This project work database stores its text as ${encoding || "an unknown encoding"} rather than UTF-8, ` +
+        "so what it holds cannot be measured against the budget without counting the wrong bytes. " +
+        "Nothing has been changed. Open the copy this app made beside it, or start again from an export.",
+    );
+  }
+}
+
+/**
+ * What one stored row costs, as an SQL expression over that row.
+ *
+ * The same three rules as {@link rowCharge}, evaluated by the database so a
+ * scan can learn what a row costs **without carrying the row's bytes into
+ * this process**: `octet_length` measures the stored TEXT in exact UTF-8
+ * (NULs and all — it is a byte count, not a C string) and the stored BLOB in
+ * its own bytes, `typeof` keeps integers, reals and nulls under the floor the
+ * way the JavaScript definition does, and `blobs.bytes` is added exactly when
+ * the payload has not been released. The two definitions are held to each
+ * other by a parity test over every stored row, and the JavaScript one
+ * remains the definition a single write is charged by.
+ */
+export function chargeExpression(db: ProjectWorkDatabase, table: CanonicalTable): string {
+  requireUtf8(db);
+  const parts = [String(ROW_OVERHEAD_BYTES)];
+  for (const column of chargedColumns(db, table)) {
+    parts.push(`CASE typeof("${column}") WHEN 'text' THEN octet_length("${column}") WHEN 'blob' THEN octet_length("${column}") ELSE 0 END`);
+  }
+  // A released derived blob keeps its row, its size and its reason, and has
+  // given its payload back: the metadata is still charged, the bytes are not.
+  if (table === "blobs") parts.push('CASE WHEN "released" IS NULL THEN COALESCE("bytes", 0) ELSE 0 END');
+  return parts.join(" + ");
+}
+
+/** One row of a scan: how to address it, and what it costs. */
+export interface ChargedRow {
+  /** This row's key values, in {@link ROW_KEYS} order. */
+  key: unknown[];
+  /** What the database says this row's stored values cost. */
+  charge: number;
 }
 
 /**
@@ -206,30 +271,33 @@ function chargedColumns(db: ProjectWorkDatabase, table: CanonicalTable): string[
  * index this order uses. `OFFSET` would not be stable, and iterating a live
  * cursor while writing through it has no defined meaning here at all.
  *
- * Each page is fully materialised and handed over as an array, so a caller may
- * update every row in it before the next page is read.
+ * What a page carries is keys and numbers: the charge is computed inside the
+ * database ({@link chargeExpression}), so a project of four-megabyte design
+ * bodies costs a scan exactly as much memory as a project of one-line
+ * comments. Each page is fully materialised before it is handed over, so a
+ * caller may update every row in it before the next page is read.
  */
 export function scanChargedRows(
   db: ProjectWorkDatabase,
   table: CanonicalTable,
   projectId: string,
-  onPage: (rows: ReadonlyArray<Record<string, unknown>>) => void,
+  onPage: (rows: ReadonlyArray<ChargedRow>) => void,
 ): void {
   const keys = ROW_KEYS[table];
-  const columns = chargedColumns(db, table).join(SEPARATOR);
-  const order = keys.join(SEPARATOR);
+  const columns = [...keys.map((key) => `"${key}"`), `(${chargeExpression(db, table)}) AS charge`].join(SEPARATOR);
+  const order = keys.map((key) => `"${key}"`).join(SEPARATOR);
   const page = `ORDER BY ${order} LIMIT ${String(CHARGE_SCAN_BATCH_ROWS)}`;
   const where = `${PROJECT_COLUMN[table]} = ?`;
   const first = db.prepare(`SELECT ${columns} FROM ${table} WHERE ${where} ${page}`);
   const next = db.prepare(`SELECT ${columns} FROM ${table} WHERE ${where} AND (${order}) > (${keys.map(() => "?").join(SEPARATOR)}) ${page}`);
   let after: unknown[] | undefined;
   for (;;) {
-    const rows = (after ? next.all(projectId, ...after) : first.all(projectId)) as Array<Record<string, unknown>>;
-    if (rows.length === 0) return;
+    const raw = (after ? next.all(projectId, ...after) : first.all(projectId)) as Array<Record<string, unknown>>;
+    if (raw.length === 0) return;
+    const rows = raw.map((row) => ({ key: keys.map((key) => row[key]), charge: Number(row["charge"] ?? 0) }));
     onPage(rows);
     if (rows.length < CHARGE_SCAN_BATCH_ROWS) return;
-    const last = rows[rows.length - 1]!;
-    after = keys.map((key) => last[key]);
+    after = rows[rows.length - 1]!.key;
   }
 }
 
@@ -246,9 +314,11 @@ export interface RecomputedUsage {
  * The independent check: it never reads `charged_bytes`, so a writer that
  * inserted a row without charging it, or updated one without recharging it,
  * shows up as a difference from the counters rather than as an agreement
- * between two copies of the same mistake. It is a full scan of the project's
- * rows and is therefore only ever a migration, an integrity surface or a test
- * — never part of a write.
+ * between two copies of the same mistake. The charge is derived from the raw
+ * stored values every time — by the database, from the values themselves,
+ * never from the number a writer wrote down. It is a full scan of the
+ * project's rows and is therefore only ever a migration, an integrity surface
+ * or a test — never part of a write.
  */
 export function recomputeProjectUsage(db: ProjectWorkDatabase, projectId: string): RecomputedUsage {
   let bytes = 0;
@@ -256,7 +326,7 @@ export function recomputeProjectUsage(db: ProjectWorkDatabase, projectId: string
   for (const table of CANONICAL_TABLES) {
     scanChargedRows(db, table, projectId, (rows) => {
       for (const row of rows) {
-        bytes += rowCharge(table, row);
+        bytes += row.charge;
         records += 1;
       }
     });
@@ -276,25 +346,25 @@ export function recomputeProjectUsage(db: ProjectWorkDatabase, projectId: string
  * rows rather than from a half-finished total. No row is deleted, and no
  * column other than `charged_bytes` is touched.
  *
- * Bounded in memory: one page of rows at a time ({@link scanChargedRows}),
- * without the blob payloads, which are charged through `blobs.bytes` and would
- * otherwise be carried through memory to learn a number the row already holds.
- * A migration must never need as much memory as the work it is counting.
+ * Bounded in memory: one page at a time ({@link scanChargedRows}), and a page
+ * is keys and charges rather than rows — a design body, a research source and
+ * a capture payload are measured where they are stored and only their size
+ * crosses into this process. A migration must never need as much memory as
+ * the work it is counting.
  */
 export function rechargeProject(db: ProjectWorkDatabase, projectId: string): RecomputedUsage {
   let bytes = 0;
   let records = 0;
   for (const table of CANONICAL_TABLES) {
     const keys = ROW_KEYS[table];
-    const update = db.prepare(`UPDATE ${table} SET charged_bytes = ? WHERE ${keys.map((key) => `${key} = ?`).join(" AND ")}`);
+    const update = db.prepare(`UPDATE ${table} SET charged_bytes = ? WHERE ${keys.map((key) => `"${key}" = ?`).join(" AND ")}`);
     scanChargedRows(db, table, projectId, (rows) => {
       // The page is already in hand: updating it writes through nothing that
       // is still being read, and `charged_bytes` is in no key this scan orders
       // by, so the next page starts exactly where this one ended.
       for (const row of rows) {
-        const charge = rowCharge(table, row);
-        update.run(charge, ...keys.map((key) => row[key]));
-        bytes += charge;
+        update.run(row.charge, ...row.key);
+        bytes += row.charge;
         records += 1;
       }
     });

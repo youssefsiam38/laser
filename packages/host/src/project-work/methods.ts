@@ -1231,6 +1231,24 @@ export class ProjectWorkMethods {
 }
 
 /**
+ * The part of a quota refusal that is about a **count** rather than bytes
+ * (storage review M-3).
+ *
+ * A refusal over bytes carries `usedBytes`/`limitBytes` and nothing else: the
+ * measure is the default and there is no count to report. A refusal over
+ * records or items carries its own pair instead, because a number of rows
+ * reported in a field named after bytes is how a client ends up telling a
+ * person their project is 200,000 bytes full (D-365).
+ */
+function countRefusal(error: ProjectWorkQuotaError): Partial<ProjectWorkQuotaRefusal> {
+  if (error.measure === "bytes") return {};
+  const counts: Partial<ProjectWorkQuotaRefusal> = { measure: error.measure };
+  if (error.usedCount !== undefined) counts.usedCount = error.usedCount;
+  if (error.limitCount !== undefined) counts.limitCount = error.limitCount;
+  return counts;
+}
+
+/**
  * The store's refusals, as the JSON-RPC errors the leap's callers expect.
  *
  * A conflict carries what is current *now* plus what the caller believed, so a
@@ -1253,9 +1271,7 @@ export function toProtocolError(error: unknown): unknown {
       recovery: error.recovery,
       usedBytes: error.usedBytes,
       limitBytes: error.limitBytes,
-      ...(error.measure === "bytes"
-        ? {}
-        : { measure: error.measure, ...(error.usedCount !== undefined ? { usedCount: error.usedCount } : {}), ...(error.limitCount !== undefined ? { limitCount: error.limitCount } : {}) }),
+      ...countRefusal(error),
     } satisfies ProjectWorkQuotaRefusal);
   }
   if (error instanceof ProjectWorkRefusedError) {
