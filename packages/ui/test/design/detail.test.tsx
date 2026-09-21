@@ -15,7 +15,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, type DesignBody } from "@lasercode/protocol";
 
-import { DesignDetail, IMPLEMENT_SENTENCE } from "../../src/components/project-work/bodies/DesignDetail.js";
+import { DesignDetail, IMPLEMENT_SENTENCE, foundationRequestFor } from "../../src/components/project-work/bodies/DesignDetail.js";
+import type { DesignIndexAccess } from "../../src/components/design/DesignIndexPanel.js";
+import { onWorkQuote, type WorkQuoteDetail } from "../../src/components/project-work/quote.js";
 import type { WorkBodyContext } from "../../src/components/project-work/bodies/context.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { SKETCH_GATE_REFUSAL } from "../../src/design/sketch.js";
@@ -104,6 +106,94 @@ const settle = async (): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 };
+
+/**
+ * Case A's entry (M21-T14 follow-up): a design with nothing on it, in a
+ * project that may or may not have an index. What is asserted is that the
+ * offer is honest about this project's own state and that taking it writes
+ * nothing — the steps are the model's to propose.
+ */
+describe("starting a foundation", () => {
+  const emptyDesign = (): DesignBody => ({
+    brief: "A greenfield foundation for a reading app.",
+    screens: [],
+    flows: [],
+    sketches: [],
+    fidelity: "proposed",
+    fixtures: [],
+  });
+
+  const accessWith = (state: DesignIndexAccess["state"]): DesignIndexAccess => ({ state });
+
+  async function renderEmpty(state: DesignIndexAccess["state"], over: Partial<WorkBodyContext> = {}): Promise<void> {
+    const body = emptyDesign();
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <DesignDetail body={body} context={contextFor(body, over)} indexAccess={accessWith(state)} />
+        </TooltipProvider>,
+      ),
+    );
+    await settle();
+  }
+
+  it("offers it, and says this project has no index, once the index has answered", async () => {
+    await renderEmpty({ kind: "absent", detail: "This project has not been indexed yet." });
+    const offer = container.querySelector('[data-slot="foundation-start"]');
+    expect(offer).not.toBeNull();
+    expect(offer!.textContent).toContain("no design index yet");
+    expect(button("Start a foundation")).toBeDefined();
+  });
+
+  it("claims nothing about the project while the index is still being read", async () => {
+    await renderEmpty({ kind: "loading" });
+    const offer = container.querySelector('[data-slot="foundation-start"]')!;
+    expect(offer.textContent).toContain("Reading this project's design system");
+    expect(offer.textContent).not.toContain("no design index");
+    // The action is still there: a person may start one without waiting.
+    expect(button("Start a foundation")).toBeDefined();
+  });
+
+  it("says what went wrong rather than reading a failure as an empty project", async () => {
+    await renderEmpty({ kind: "error", message: "The project folder is not trusted." });
+    const offer = container.querySelector('[data-slot="foundation-start"]')!;
+    expect(offer.textContent).toContain("The project folder is not trusted.");
+    expect(offer.textContent).not.toContain("no design index");
+  });
+
+  it("keeps the override in a project that already has an index", async () => {
+    await renderEmpty({ kind: "ready", index: indexFixture() });
+    const offer = container.querySelector('[data-slot="foundation-start"]')!;
+    expect(offer.textContent).toContain("already has a design index");
+    expect(button("Start a foundation")).toBeDefined();
+  });
+
+  it("puts the request in the composer, naming this design, and writes nothing", async () => {
+    const quotes: WorkQuoteDetail[] = [];
+    const stop = onWorkQuote((detail) => quotes.push(detail));
+    try {
+      await renderEmpty({ kind: "absent", detail: "" });
+      await click(button("Start a foundation"));
+      expect(quotes).toHaveLength(1);
+      expect(quotes[0]?.workKey).toBe("DES-3");
+      expect(quotes[0]?.text).toBe(foundationRequestFor("DES-3"));
+      expect(quotes[0]?.text).toContain("@DES-3");
+      expect(quotes[0]?.text).toContain("propose_foundation");
+      // Nothing was sent and nothing was written: no revision, no empty
+      // foundation invented to make a wizard appear.
+      expect(calls).toEqual([]);
+      expect(toast).toHaveBeenCalledWith("info", expect.stringContaining("in the composer"));
+    } finally {
+      stop();
+    }
+  });
+
+  it("does not offer it on a revision this window may not edit", async () => {
+    await renderEmpty({ kind: "absent", detail: "" }, { editable: false, readOnlyReason: "This revision is read-only." });
+    expect(container.querySelector('[data-slot="foundation-start"]')).not.toBeNull();
+    expect(button("Start a foundation")).toBeUndefined();
+  });
+});
 
 describe("DesignDetail", () => {
   it("plays the prototype: a click inside the shadow root navigates, an overlay opens, Back closes it, and it is all said aloud", async () => {

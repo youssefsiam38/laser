@@ -271,6 +271,56 @@ describe("the wizard", () => {
   });
 });
 
+/**
+ * M21-T14 follow-up: the wizard is a *section*, not a takeover. T13's five
+ * sections have to stay reachable on a design that has a foundation — that is
+ * what "Index, Foundation, Screens, Flows, Review" means.
+ */
+describe("the Foundation section beside the others", () => {
+  const section = (label: string): HTMLButtonElement | undefined =>
+    [...container.querySelectorAll<HTMLButtonElement>('nav[aria-label="Design sections"] button')].find((node) => node.textContent?.startsWith(label));
+
+  it("opens on Foundation for a greenfield design and keeps the other four", async () => {
+    const body = bodyFixture(foundationFixture());
+    await render(body, contextFor(body));
+    expect([...container.querySelectorAll('nav[aria-label="Design sections"] button')].map((node) => node.textContent?.replace(/ ·.*$/, ""))).toEqual([
+      "Index",
+      "Foundation",
+      "Screens",
+      "Flows",
+      "Review",
+    ]);
+    expect(section("Foundation")?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector('[data-slot="foundation-wizard"]')).not.toBeNull();
+
+    await click(section("Index"));
+    expect(container.querySelector('[data-slot="design-index-panel"]')).not.toBeNull();
+    expect(container.querySelector('[data-slot="foundation-wizard"]')).toBeNull();
+
+    await click(section("Screens"));
+    // Nothing is drawn yet, and it says so rather than showing an empty canvas
+    // or claiming a fidelity over zero screens.
+    expect(container.querySelector('[data-slot="design-nothing-drawn"]')?.textContent).toContain("foundation is in its own section");
+    expect(container.querySelector('[data-slot="design-canvas"]')).toBeNull();
+
+    await click(section("Review"));
+    expect(container.querySelector('[data-slot="design-review"]')).not.toBeNull();
+
+    await click(section("Foundation"));
+    expect(container.querySelector('[data-slot="foundation-wizard"]')).not.toBeNull();
+  });
+
+  it("saves an edit made in the section through the detail's own Save", async () => {
+    const body = bodyFixture(foundationFixture());
+    await render(body, contextFor(body));
+    await click(container.querySelector('[data-step="principles"]'));
+    await type(container.querySelector('input[aria-label="Principle 1"]'), "Quiet by default.");
+    await click(button("Save revision"));
+    const revise = calls.find((call) => call.method === "project/work/revise");
+    expect((revise?.params["body"] as { design: DesignBody }).design.foundation?.principles[0]).toBe("Quiet by default.");
+  });
+});
+
 describe("approval", () => {
   it("refuses while the draft is unsaved, and never approves on Enter", async () => {
     const body = bodyFixture(foundationFixture());

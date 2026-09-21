@@ -52,6 +52,7 @@ import {
   type FoundationModelAccess,
 } from "../../src/design/foundation/index.js";
 import { ScriptedProjectWorkWorld } from "../../src/tool-eval/project-work-world.js";
+import { ProjectWorkSession } from "../../src/project-work/session.js";
 
 const EMPTY: DesignFoundation = { principles: [], status: "proposed", steps: [] };
 
@@ -337,6 +338,73 @@ describe("storage", () => {
     expect(after.body.brief).toBe("kept");
     expect(after.body.fixtures).toHaveLength(1);
     expect(after.body.foundation?.notes).toBe("edited");
+  });
+});
+
+describe("the session's binding", () => {
+  /** The design surface a session with an index has; nothing here builds one. */
+  const designSurface = {
+    index: async () => undefined,
+    commands: () => [],
+    command: () => undefined,
+    startBuild: async () => ({ commandId: "c", title: "t", appRoot: "." }),
+    wait: async () => {},
+    stop: () => false,
+    review: async () => {
+      throw new Error("not used");
+    },
+  } as unknown as ConstructorParameters<typeof ProjectWorkSession>[0]["design"];
+
+  it("reads the models on every call, so a profile assigned now counts", async () => {
+    const world = new ScriptedProjectWorkWorld({});
+    let access: FoundationModelAccess | undefined;
+    let reads = 0;
+    const session = new ProjectWorkSession({
+      bridge: world,
+      design: designSurface,
+      foundationModels: () => {
+        reads += 1;
+        return access;
+      },
+    });
+    const binding = session.designTools().find((tool) => tool.spec.name === "propose_foundation");
+    expect(binding, "a session with a design surface and a project offers it").toBeDefined();
+    // Registration must not be the moment the profile is read: a session open
+    // for hours would then keep proposing on a profile that has moved.
+    expect(reads).toBe(0);
+
+    const neutral = (await binding!.run({ idempotency_key: "k1" })) as Record<string, unknown>;
+    expect(reads).toBe(1);
+    expect(neutral["fallback"]).toBe(true);
+
+    access = scriptedAccess(() => JSON.stringify({ principles: ["One colour carries meaning.", "Nothing below 12px.", "Quiet by default."] }));
+    const proposed = (await binding!.run({
+      idempotency_key: "k2",
+      entity_id: String(neutral["entity_id"]),
+      step: "principles",
+    })) as Record<string, unknown>;
+    expect(reads).toBe(2);
+    expect(proposed["fallback"]).toBeUndefined();
+    const stored = await load(world, String(proposed["entity_id"]));
+    expect(stored.body.foundation?.principles[0]).toBe("One colour carries meaning.");
+  });
+
+  it("says why a step is neutral when the profile chosen for design work has nothing in it", async () => {
+    const world = new ScriptedProjectWorkWorld({});
+    const session = new ProjectWorkSession({
+      bridge: world,
+      design: designSurface,
+      foundationModels: () => ({
+        models: async () => ({ getModel: () => undefined, completeSimple: async () => ({ content: [] }) }) as never,
+        profile: { id: "p", name: "Bare", models: [], origin: "person", updatedAt: "" } as unknown as ModelProfile,
+        unavailable: "“Bare”, the profile assigned to design work, has no model in it.",
+      }),
+    });
+    const binding = session.designTools().find((tool) => tool.spec.name === "propose_foundation")!;
+    const answer = (await binding.run({ idempotency_key: "k1" })) as Record<string, unknown>;
+    expect(answer["fallback"]).toBe(true);
+    expect(String(answer["note"])).toContain("the profile assigned to design work, has no model in it");
+    expect(String(answer["note"])).toContain("neutral starting point");
   });
 });
 

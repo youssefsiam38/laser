@@ -19,8 +19,13 @@ export interface ProjectDesignIndexOptions {
   stateDir: string;
   /** Stable key for this project inside the state directory. */
   projectKey: string;
-  /** Synthesis, when the machine has a Design-index profile. */
-  synthesis?: DesignBuildOptions["synthesis"];
+  /**
+   * Synthesis, read once per build rather than once per worker: the profile
+   * design work runs on is a setting, and a person who assigns one while this
+   * project is open must not have to restart anything for the next build to
+   * use it.
+   */
+  synthesis?: () => DesignBuildOptions["synthesis"] | undefined;
   /** Told about every build, so the fleet can show it. */
   onCommand?: (command: DesignBuildCommand) => void;
   onProgress?: (commandId: string, progress: DesignBuildProgress) => void;
@@ -58,12 +63,15 @@ export class ProjectDesignIndex implements DesignIndexBridge {
     // closure over a `const` declared after this call would be in its temporal
     // dead zone exactly once — on the report that says the build started.
     const started: { id?: string } = {};
+    // Resolved here, at the boundary, so one build runs on one profile from
+    // its first completion to its last.
+    const synthesis = this.options.synthesis?.();
     const command = startDesignIndexBuild({
       projectCwd: this.options.projectCwd,
       appRoot,
       cache,
       ...(input.maxFiles !== undefined ? { budget: { maxFiles: input.maxFiles } } : {}),
-      ...(this.options.synthesis !== undefined ? { synthesis: this.options.synthesis } : {}),
+      ...(synthesis !== undefined ? { synthesis } : {}),
       ...(this.options.now !== undefined ? { now: this.options.now } : {}),
       onProgress: (progress) => {
         if (started.id !== undefined) this.options.onProgress?.(started.id, progress);

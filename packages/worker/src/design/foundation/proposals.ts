@@ -45,8 +45,8 @@ import {
 import type { CompletionContext, CompletionRuntime } from "../../agents/session-naming.js";
 import { checkSource } from "./licence.js";
 import {
-  FOUNDATION_FALLBACK_NOTE,
   FOUNDATION_MODEL_FALLBACK_NOTE,
+  foundationFallbackNote,
   mergeTokens,
   neutralFoundation,
 } from "./neutral.js";
@@ -83,6 +83,12 @@ export interface FoundationModelAccess {
   models: () => Promise<CompletionRuntime>;
   /** The Design-index profile. `null` means design work has no profile here. */
   profile: ModelProfile | null;
+  /**
+   * Why there is nothing to ask, when there is nothing to ask: no profile at
+   * all, or the profile chosen for design work holding no model. It is said
+   * on the step, because "neutral" without a reason is a shrug.
+   */
+  unavailable?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
 }
@@ -626,7 +632,7 @@ export async function proposeFoundationStep(
     state: "proposed",
     summary: handler.summary(applied.foundation),
     source: "fallback",
-    note: connected ? FOUNDATION_MODEL_FALLBACK_NOTE : FOUNDATION_FALLBACK_NOTE,
+    note: connected ? FOUNDATION_MODEL_FALLBACK_NOTE : foundationFallbackNote(options.access?.unavailable),
     at,
   };
   return { foundation: withStep(applied.foundation, record), record, fallback: true, issues };

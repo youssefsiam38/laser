@@ -83,6 +83,7 @@ import { ModelsAdapter, PackagesAdapter } from "./packages.js";
 import { SettingsAdapter, readEffectiveProductSettings, readProfileSettings, researchSourcesFrom, resolveProfile } from "./settings.js";
 import { ProjectHostGrounding } from "./design/host/ground.js";
 import { ProjectDesignIndex } from "./design/index/bridge.js";
+import { designModelAccess, type DesignModelAccess } from "./design/profile.js";
 import { DesignWorkspace, isDesignCommandTaskId } from "./design/workspace.js";
 import { ProjectResearch } from "./research/bridge.js";
 import { enabledResearchAdapters, type ResearchAdapterId } from "@lasercode/protocol";
@@ -158,6 +159,8 @@ export interface WorkerServerOptions {
   npmCommand?: string[];
   /** Test seam: the model runtime a naming request completes through. Defaults to the engine's. */
   namingModels?: () => Promise<CompletionRuntime>;
+  /** Test seam: the model runtime design work completes through. Defaults to the engine's. */
+  designModels?: () => Promise<CompletionRuntime>;
   /** Test seam for git actions (L6). */
   gitActions?: {
     run?: ProcessRunner;
@@ -2164,6 +2167,10 @@ export class WorkerServer {
       cwd: openOptions.cwd,
       design: this.designIndex(),
       hostGrounding: this.hostGrounding(),
+      // Foundation mode proposes on the Design profile (`docs/design-phase.md`,
+      // "Model profiles"), read per call so a profile assigned while this
+      // session is open counts.
+      foundationModels: () => this.designModels(),
       ...(this.researchRun(bridge, openOptions.cwd) ? { research: this.researchRun(bridge, openOptions.cwd) } : {}),
       projectInstructions: () => projectInstructions(this.options.cwd),
       reviewActor: { kind: "agent", label },
@@ -2277,6 +2284,22 @@ export class WorkerServer {
     }
   }
 
+  /**
+   * The models and the profile design work runs on right now
+   * (`designIndexProfileId`, `docs/model-profiles.md`).
+   *
+   * Read per use, exactly like the naming profile, and never substituted: an
+   * explicitly assigned profile with nothing in it leaves design work on the
+   * parse and the neutral foundation with the reason, rather than quietly
+   * spending a profile the person did not choose for this.
+   */
+  private designModels(): DesignModelAccess {
+    return designModelAccess({
+      agentDir: this.settings().agentDir,
+      models: this.options.designModels ?? (() => this.modelCatalog().modelRuntime()),
+    });
+  }
+
   /** This project's design index, built once per worker and read on demand. */
   private designIndex(): ProjectDesignIndex {
     this.projectDesignIndex ??= new ProjectDesignIndex({
@@ -2286,6 +2309,16 @@ export class WorkerServer {
       // A build is a Command a person can watch and stop (M21-T13): the
       // workspace turns these two reports into the fleet row. A build a model
       // started through `build_design_index` takes the same road.
+      // L1 synthesis runs on the Design profile, read when a build starts.
+      synthesis: () => {
+        const access = this.designModels();
+        return {
+          models: access.models,
+          profile: access.profile,
+          ...(access.unavailable !== undefined ? { unavailable: access.unavailable } : {}),
+          ...(access.profile ? { profileId: access.profile.id } : {}),
+        };
+      },
       onCommand: (command) => this.designWorkspace().observeCommand(command),
       onProgress: (commandId, progress) => this.designWorkspace().observeProgress(commandId, progress),
     });
