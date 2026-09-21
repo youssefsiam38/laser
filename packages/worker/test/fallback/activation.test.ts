@@ -40,6 +40,13 @@ const OTHER: ModelProfile = {
 };
 
 /** Only the reads an activation makes; everything a move needs would be a different test. */
+/** Only A is unusable here, so a start-time walk has exactly one skip to record. */
+const catalogue = new Map([
+  ["stub/a", { ref: A, signedIn: false, offered: true }],
+  ["stub/b", { ref: B, signedIn: true, offered: true }],
+  ["stub/c", { ref: C, signedIn: true, offered: true }],
+]);
+
 function harness(selected: ModelIdentity | null, profile: ModelProfile | null = BALANCED) {
   let model = selected;
   let current = profile;
@@ -49,7 +56,7 @@ function harness(selected: ModelIdentity | null, profile: ModelProfile | null = 
   const engine: FallbackEngine = {
     profile: () => current,
     selectedModel: () => model,
-    catalogue: () => Promise.resolve(new Map()),
+    catalogue: () => Promise.resolve(catalogue),
     names: () => new Map(),
     contextTokens: () => null,
     lastFailure: () => undefined,
@@ -173,4 +180,39 @@ it("never re-activates a traversal written before profiles existed", () => {
   } as unknown as Partial<SessionFallbackEntry>)]);
   expect(controller.summary()).toBeUndefined();
   expect(controller.activeProfileId()).toBeNull();
+});
+
+it("starts on the first model it can use, records every skip, and says so once", async () => {
+  // The profile prefers A, but this machine has no credential for it. The
+  // session starts on B, the skip is in the session's own file, and one
+  // update tells the person why they are not on the model they chose.
+  const { controller, entries, updates } = harness(A);
+  controller.activateIfUnset();
+  const moved = await controller.startWalk();
+  expect(moved).toEqual(B);
+  expect(controller.summary()).toMatchObject({ profileId: BALANCED.id, position: 1 });
+  expect(entries.map((entry) => entry.event)).toEqual(["activated"]);
+  expect(entries[0]!.failover?.attempts).toEqual([
+    { model: "stub/a", at: expect.any(String), outcome: "skipped", reason: "not signed in" },
+  ]);
+  const notice = updates.find((update) => update.kind === "model_fallback");
+  expect(notice).toMatchObject({ phase: "switched", position: 1, profileId: BALANCED.id });
+  expect((notice as { detail?: string }).detail).toContain("not signed in");
+  expect(JSON.stringify(updates)).not.toContain("chain");
+});
+
+it("does not disturb a running conversation when the profile is edited", async () => {
+  // The snapshot is taken at activation and never re-read: a saved edit
+  // applies at the next activation (docs/model-profiles.md, "Runtime").
+  const { controller, setProfile } = harness(A);
+  controller.activateIfUnset();
+  expect(controller.summary()).toMatchObject({ models: [A, B] });
+
+  setProfile({ ...BALANCED, models: [C], updatedAt: "2026-02-02T00:00:00.000Z" });
+  expect(controller.summary()).toMatchObject({ models: [A, B] });
+  expect(controller.activeProfileId()).toBe(BALANCED.id);
+
+  // The next activation is where the edit lands.
+  const activation = controller.onProfileChosen({ ...BALANCED, models: [C] });
+  expect(activation).toMatchObject({ models: [C] });
 });

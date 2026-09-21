@@ -137,3 +137,25 @@ Two more decisions the contract was silent on:
 
 Green: `pnpm -F @lasercode/worker test` (1208 passed, 4 skipped),
 `pnpm -F @lasercode/protocol test`, `pnpm identity:check`.
+
+### M22-T3 checkpoint — done
+
+The runtime moved with T2 (the package would not compile otherwise); this
+commit carries the parts that are T3's own and the tests that prove them:
+
+- `SessionDriver.setProfile` is on the seam, and the Chord stub fails closed on
+  both model paths (`test/seam.test.ts`).
+- The start-time walk records every model it passed over, moves the position,
+  writes one `activated` record and emits one update whose copy never says
+  "chain" (`test/fallback/activation.test.ts`).
+- Editing a profile does not disturb a running conversation: the activation
+  snapshot is never re-read, and the edit lands at the next activation.
+- A pin clears the activation and writes `cleared`; a profile choice writes
+  `activated`; a pre-M22 `chainKey` activation reads back as history and never
+  re-activates.
+
+Re-run of the M15-T3/T8 verification list (`STATUS_DETAILED.md` M15-T3 notes,
+"Verification"): `test/fallback/{policy,activation,compact,engine}.test.ts`
+130 passed together with the seam, thinking-level and first-turn suites;
+whole worker suite 1211 passed / 4 skipped. Live browser verification belongs
+to the person (AGENTS.md) and is not claimed here.
