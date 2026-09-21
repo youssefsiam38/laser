@@ -1,0 +1,34 @@
+{
+  "tool": "inspect_design_index",
+  "task": "What button component does this project already have, and what variants does it support?",
+  "expectedTool": "inspect_design_index",
+  "allowedTools": ["inspect_design_index", "build_design_index"],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 3,
+    "inputTokens": 40000,
+    "outputTokens": 300
+  },
+  "measures": ["truncation"],
+  "truncationBytes": 20000,
+  "world": {
+    "role": "root",
+    "designIndex": { "project": "react-tailwind", "built": true }
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "inspect_design_index",
+        "args": {
+          "query": "button",
+          "kind": "component",
+          "limit": 5,
+          "activity_label": "Reading the design index"
+        }
+      }
+    },
+    {
+      "text": "This project has Button (primary, secondary, ghost; sizes sm, md, lg) and a deprecated LegacyButton. Compose with Button."
+    }
+  ]
+}

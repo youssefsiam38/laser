@@ -1,0 +1,8 @@
+{
+  "size": {
+    "font": {
+      "body": { "value": "16px", "type": "dimension", "comment": "Body copy." },
+      "heading": { "value": "24px", "type": "dimension" }
+    }
+  }
+}

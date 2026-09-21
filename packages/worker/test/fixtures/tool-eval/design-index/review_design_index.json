@@ -1,0 +1,77 @@
+{
+  "tool": "review_design_index",
+  "task": "The Card component in the index is really a Panel. Rename it and accept the Button while you are there.",
+  "expectedTool": "review_design_index",
+  "allowedTools": ["inspect_design_index", "review_design_index"],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 5,
+    "inputTokens": 40000,
+    "outputTokens": 400
+  },
+  "measures": ["retry"],
+  "world": {
+    "role": "root",
+    "designIndex": { "project": "react-tailwind", "built": true }
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "inspect_design_index",
+        "args": {
+          "kind": "component",
+          "limit": 10,
+          "activity_label": "Reading the components"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "review_design_index",
+        "args": {
+          "entry_id": "{{entry:component:Card:id}}",
+          "action": "rename",
+          "name": "Panel",
+          "facts_digest": "{{stale}}",
+          "activity_label": "Renaming an entry"
+        }
+      },
+      "fails": true
+    },
+    {
+      "toolCall": {
+        "name": "inspect_design_index",
+        "args": {
+          "entry_id": "{{entry:component:Card:id}}",
+          "activity_label": "Re-reading the entry"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "review_design_index",
+        "args": {
+          "entry_id": "{{entry:component:Card:id}}",
+          "action": "rename",
+          "name": "Panel",
+          "facts_digest": "{{entry:component:Card:digest}}",
+          "activity_label": "Renaming an entry"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "review_design_index",
+        "args": {
+          "entry_id": "{{entry:component:Button:id}}",
+          "action": "accept",
+          "facts_digest": "{{entry:component:Button:digest}}",
+          "activity_label": "Accepting an entry"
+        }
+      }
+    },
+    {
+      "text": "Card is now recorded as Panel and Button is accepted. Both decisions are attributed to me, not to you."
+    }
+  ]
+}

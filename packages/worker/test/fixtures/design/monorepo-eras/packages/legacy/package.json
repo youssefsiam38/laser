@@ -1,0 +1,8 @@
+{
+  "name": "@northwind/legacy",
+  "private": true,
+  "dependencies": {
+    "jquery": "3.7.1",
+    "bootstrap": "3.4.1"
+  }
+}

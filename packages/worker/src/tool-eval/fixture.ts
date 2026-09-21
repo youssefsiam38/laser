@@ -65,6 +65,20 @@ export interface ToolEvalWorldAgent {
   question?: { text: string };
 }
 
+/**
+ * The project a Design Index fixture is evaluated against (M21-T10).
+ *
+ * Unlike the fleet, this world is not scripted: it is a copy of one of the
+ * design fixtures under `test/fixtures/design/`, indexed by the real builder.
+ * A parse-only tool can be evaluated against the real thing.
+ */
+export interface ToolEvalDesignWorld {
+  /** The directory name under `test/fixtures/design/`. */
+  project: string;
+  /** Whether the index has already been built when the run starts. */
+  built?: boolean;
+}
+
 /** The state the scripted harness bridge answers from. No real agent is started. */
 export interface ToolEvalWorld {
   /** root: the parent tools are registered. child: only `complete_agent_run` is. */
@@ -79,6 +93,8 @@ export interface ToolEvalWorld {
    * (the default) does not offer the tool at all.
    */
   search?: "unconnected" | "off";
+  /** Present for the Design Index tools; absent for every other fixture. */
+  designIndex?: ToolEvalDesignWorld;
 }
 
 export interface ToolEvalFixture {

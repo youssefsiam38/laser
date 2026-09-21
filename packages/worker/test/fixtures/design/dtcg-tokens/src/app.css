@@ -1,0 +1,10 @@
+:root {
+  --color-brand-500: #7c3aed;
+}
+
+.button {
+  background: #7c3aed;
+  padding: 16px;
+  border-radius: 8px;
+  font-size: 16px;
+}
