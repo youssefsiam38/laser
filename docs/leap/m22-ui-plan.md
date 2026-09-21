@@ -168,9 +168,12 @@ current profile beside an older capture — which would be a claim the record
 does not support — the inspector is left naming provider, model and API only.
 Add `profileId` to the capture context and the inspector gains a row.
 
-Validation: `npx vitest run` in packages/ui — 320 of 323 files green; the three
-red ones (`test/agents/page/{screen,phone}`, `test/beam/model-dialog`) are
-M22-T9's.
+Validation: `npx vitest run` in packages/ui — 320 of 323 files green at the time
+of the commit; the three red ones (`test/agents/page/{screen,phone}`,
+`test/beam/model-dialog`) were M22-T9's and are green now.
+
+The composer trigger draws its two lines inside one flex item so the selector's
+own chevron stays beside them; the phone uses the same control.
 
 ## M22-T9 · Agents page and CLI
 
@@ -208,3 +211,7 @@ Tests: `test/beam/profile-dialog.test.tsx` replaces `model-dialog.test.tsx`;
 `test/agents/page/{model,screen,phone,instruction-template-editor}` updated
 (the built-in model test became "lets every built-in run on a profile");
 CLI `test/runs.test.ts` gains the profile/substitution case.
+
+Validation after merging the backend branch: `pnpm verify` passed in 121s
+(direction, `pnpm -r build`, release tests, browser-check tests,
+`pnpm -r typecheck`, `pnpm -r test`), plus `pnpm identity:check`.

@@ -1288,11 +1288,13 @@ export function SessionModelSelector({ className }: { className?: string | undef
         title={sessionPath ? undefined : "Choose what new conversations in this project start on"}
         data-slot="session-model-trigger"
         data-pinned={pinned ? "true" : undefined}
-        className={cn("h-auto min-w-0 max-w-56 shrink flex-col items-start gap-0 py-1 text-ink-2", className)}
+        className={cn("h-auto min-w-0 max-w-56 shrink py-1 text-ink-2", className)}
       >
         {model || intent ? (
-          <>
-            <span className="flex min-w-0 items-center gap-1.5">
+          // Two lines in one flex item so the trigger's own chevron stays
+          // beside them rather than under them.
+          <span className="flex min-w-0 flex-col items-start gap-0">
+            <span className="flex min-w-0 max-w-full items-center gap-1.5">
               {model && <ProviderLogo provider={model.provider} className="size-3.5 shrink-0 text-ink-3" />}
               <span className="truncate font-medium text-ink" title={pinned ? modelName : intent?.name}>
                 {pinned ? (modelName ?? "Pinned") : (intent?.name ?? modelName)}
@@ -1314,10 +1316,10 @@ export function SessionModelSelector({ className }: { className?: string | undef
                 </span>
               )}
             </span>
-            <span data-slot="session-model-secondary" className="w-full truncate text-start text-xs leading-4 text-ink-3">
+            <span data-slot="session-model-secondary" className="max-w-full truncate text-start text-xs leading-4 text-ink-3">
               {pinned ? "Pinned · no fallback" : (modelName ?? "no model yet")}
             </span>
-          </>
+          </span>
         ) : (
           <span className="flex items-center gap-1.5 text-ink-3">
             <Cpu aria-hidden="true" className="size-3.5" />
