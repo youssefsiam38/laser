@@ -30,7 +30,7 @@ const execFileSync = vi.fn((file: string, args: readonly string[]) => {
 
 vi.mock("node:child_process", () => ({ execFileSync }));
 
-const { blobObjectId, checkpointCommit } = await import("../../src/project-work/publish/git.js");
+const { blobObjectId, checkpointCommit, listCheckpoints } = await import("../../src/project-work/publish/git.js");
 const { CHECKPOINT_REF_NAMESPACE, checkpointRef } = await import("@lasercode/protocol");
 
 const CWD = "/repo";
@@ -113,6 +113,62 @@ describe("checkpointCommit", () => {
     listing(REF, ref(REF, COMMIT));
     failures.add(`rev-parse --verify --quiet ${COMMIT}^{commit}`);
     expect(checkpointCommit(CWD, REF)).toBeUndefined();
+  });
+});
+
+describe("listCheckpoints", () => {
+  const other = checkpointRef(SESSION, 2);
+  const SECOND = "1122334455667788990011223344556677889900";
+
+  function namespaceListing(text: string, max = 20): void {
+    answers.set(`for-each-ref --count=${String(max)} --sort=-creatordate --format=%(refname)%00%(objectname) ${CHECKPOINT_REF_NAMESPACE}`, text);
+  }
+
+  it("offers the checkpoints of this repository, newest first, bounded and read-only", () => {
+    namespaceListing(`${ref(REF, COMMIT)}${ref(other, SECOND)}`);
+    commitExists(COMMIT);
+    commitExists(SECOND);
+    expect(listCheckpoints(CWD, 20)).toEqual([
+      { ref: REF, commitObjectId: COMMIT, turn: 4 },
+      { ref: other, commitObjectId: SECOND, turn: 2 },
+    ]);
+    // The count git was asked for is the bound, and every call is a read.
+    expect(calls[0]).toEqual([
+      "for-each-ref",
+      "--count=20",
+      "--sort=-creatordate",
+      "--format=%(refname)%00%(objectname)",
+      CHECKPOINT_REF_NAMESPACE,
+    ]);
+    for (const call of calls.slice(1)) expect(call[0]).toBe("rev-parse");
+  });
+
+  it("drops a row that is not a checkpoint ref, not an object id, or not a commit", () => {
+    namespaceListing(
+      [
+        ref(`${CHECKPOINT_REF_NAMESPACE}/${SESSION}`, COMMIT),
+        ref("refs/heads/main", COMMIT),
+        ref(REF, "not-an-object-id"),
+        ref(other, SECOND),
+        ref(checkpointRef(SESSION, 7), COMMIT),
+      ].join(""),
+    );
+    commitExists(SECOND);
+    failures.add(`rev-parse --verify --quiet ${COMMIT}^{commit}`);
+    expect(listCheckpoints(CWD, 20)).toEqual([{ ref: other, commitObjectId: SECOND, turn: 2 }]);
+  });
+
+  it("answers nothing when the namespace is empty or git cannot answer", () => {
+    namespaceListing("");
+    expect(listCheckpoints(CWD, 20)).toEqual([]);
+    answers.clear();
+    expect(listCheckpoints(CWD, 20)).toEqual([]);
+  });
+
+  it("never asks for an unbounded listing", () => {
+    namespaceListing("", 1);
+    expect(listCheckpoints(CWD, 0)).toEqual([]);
+    expect(calls[0]).toContain("--count=1");
   });
 });
 

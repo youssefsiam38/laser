@@ -14,7 +14,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { parseCheckpointRef } from "@lasercode/protocol";
+import { CHECKPOINT_REF_NAMESPACE, parseCheckpointRef } from "@lasercode/protocol";
 
 const GIT_TIMEOUT_MS = 15_000;
 const GIT_MAX_BUFFER = 8 * 1024 * 1024;
@@ -105,6 +105,50 @@ export function checkpointCommit(cwd: string, checkpointId: string): { ref: stri
   if (!/^[0-9a-f]{7,64}$/.test(objectId)) return undefined;
   const commitObjectId = resolveCommit(cwd, objectId);
   return commitObjectId ? { ref: checkpointId, commitObjectId } : undefined;
+}
+
+/** One checkpoint this repository still has, resolved. */
+export interface CheckpointRow {
+  ref: string;
+  commitObjectId: string;
+  /** The turn it was taken at, from the ref itself. Display only. */
+  turn: number;
+}
+
+/**
+ * The checkpoints this repository still has, newest first, bounded.
+ *
+ * Discovery for a publication's source list, and nothing more: one read-only
+ * `for-each-ref` over the worker's own namespace, capped at `max` rows, every
+ * row parsed with the shared `parseCheckpointRef` and proved to point at a
+ * commit object. A ref outside the namespace, a malformed id or an object that
+ * is not a commit is dropped rather than offered.
+ *
+ * No worker is started and nothing is written; a checkpoint a caller actually
+ * names is still proved by {@link checkpointCommit}, which this never replaces.
+ */
+export function listCheckpoints(cwd: string, max: number): CheckpointRow[] {
+  const listed = gitRead(cwd, [
+    "for-each-ref",
+    `--count=${String(Math.max(1, Math.trunc(max)))}`,
+    "--sort=-creatordate",
+    "--format=%(refname)%00%(objectname)",
+    CHECKPOINT_REF_NAMESPACE,
+  ]);
+  const rows: CheckpointRow[] = [];
+  for (const line of (listed ?? "").split(/\r?\n/)) {
+    if (line.trim() === "") continue;
+    const [refname, objectname] = line.split("\0");
+    if (refname === undefined) continue;
+    const parsed = parseCheckpointRef(refname);
+    if (!parsed) continue;
+    const objectId = (objectname ?? "").trim();
+    if (!/^[0-9a-f]{7,64}$/.test(objectId)) continue;
+    const commitObjectId = resolveCommit(cwd, objectId);
+    if (!commitObjectId) continue;
+    rows.push({ ref: refname, commitObjectId, turn: parsed.turn });
+  }
+  return rows;
 }
 
 /**

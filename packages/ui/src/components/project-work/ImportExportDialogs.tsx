@@ -39,6 +39,27 @@ import { WorkRefusal } from "./states.js";
 type ImportPreview = ClientRequests["project/work/import/preview"]["result"];
 type ExportPreview = ClientRequests["project/work/export/preview"]["result"];
 type PublishPreview = ClientRequests["project/work/publish/preview"]["result"];
+type PublishSource = NonNullable<PublishPreview["selected"]>;
+
+/**
+ * A state the host offered, asked for again by its own identity.
+ *
+ * The dialog never types a state: it hands back the checkpoint's exact ref or
+ * the commit object the host resolved, so the preview and the confirmation are
+ * about the same bytes.
+ */
+function selectionOf(source: PublishSource): { kind: "checkpoint"; checkpointId: string } | { kind: "commit"; commit: string } {
+  return source.checkpointId !== undefined
+    ? { kind: "checkpoint", checkpointId: source.checkpointId }
+    : { kind: "commit", commit: source.commitObjectId };
+}
+
+/** Is this the state the preview on screen measured against? */
+function isSelected(source: PublishSource, selected: PublishSource | undefined): boolean {
+  return (
+    selected !== undefined && selected.commitObjectId === source.commitObjectId && (selected.checkpointId ?? "") === (source.checkpointId ?? "")
+  );
+}
 
 /** Where an export goes when the person names nothing, as the host defaults it. */
 const DEFAULT_EXPORT_ROOT = `${PROJECT_DIR_NAME}/${WORK_EXPORT_DIR}`;
@@ -83,6 +104,7 @@ const MODE_LABEL: Readonly<Record<WorkExportMode, string>> = {
 const PRESERVE_REASON: Readonly<Record<WorkExportPreserveReason, string>> = {
   changed: "changed here",
   not_this_export: "not written by this export",
+  unproven: "written before this app could prove it wrote it",
 };
 
 /** A row of a preview list: one line, never smaller type, always truncating. */
@@ -512,20 +534,35 @@ export function PublishDialog({ store, open, onOpenChange }: WorkDialogProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  /**
+   * Which check the answers on screen belong to.
+   *
+   * Choosing a second state while the first check is still in flight is
+   * ordinary; the late answer landing on top of it is not. Every check takes a
+   * number, and an answer for anything but the newest is dropped — so the
+   * preview shown, the state it measured and the button that confirms it are
+   * always the same request.
+   */
+  const asked = useRef(0);
 
-  const look = useCallback(async () => {
-    if (!store) return;
-    setBusy(true);
-    setError(undefined);
-    const outcome = await store.publishPreview({});
-    setBusy(false);
-    if (!outcome.ok) {
-      setPreview(undefined);
-      setError(outcome.failure.message);
-      return;
-    }
-    setPreview(outcome.value);
-  }, [store]);
+  const look = useCallback(
+    async (source?: PublishSource) => {
+      if (!store) return;
+      const mine = (asked.current += 1);
+      setBusy(true);
+      setError(undefined);
+      const outcome = await store.publishPreview(source ? { source: selectionOf(source) } : {});
+      if (mine !== asked.current) return;
+      setBusy(false);
+      if (!outcome.ok) {
+        setPreview(undefined);
+        setError(outcome.failure.message);
+        return;
+      }
+      setPreview(outcome.value);
+    },
+    [store],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -534,9 +571,17 @@ export function PublishDialog({ store, open, onOpenChange }: WorkDialogProps) {
   }, [look, open]);
 
   const run = async (): Promise<void> => {
-    if (!store || !preview?.ready) return;
+    // The state confirmed is the one this preview resolved and showed, sent back
+    // by its own identity: never a label, never the tip of a branch that may
+    // have moved since.
+    const selected = preview?.selected;
+    if (!store || !preview?.ready || !selected) return;
     setBusy(true);
-    const outcome = await store.publishApply({ previewDigest: preview.previewDigest, commit: "HEAD" });
+    const outcome = await store.publishApply({
+      previewDigest: preview.previewDigest,
+      commit: selected.commitObjectId,
+      ...(selected.checkpointId ? { checkpointId: selected.checkpointId } : {}),
+    });
     setBusy(false);
     if (!outcome.ok) {
       setError(outcome.failure.message);
@@ -591,10 +636,43 @@ export function PublishDialog({ store, open, onOpenChange }: WorkDialogProps) {
                 </Row>
               ))}
             </PreviewList>
+            {preview.sources && preview.sources.length > 1 ? (
+              <fieldset className="flex flex-col gap-1.5">
+                <legend className="eyebrow">The state to record</legend>
+                <div className="flex flex-wrap gap-1.5">
+                  {preview.sources.map((source) => (
+                    <button
+                      key={`${source.kind}:${source.checkpointId ?? source.commitObjectId}`}
+                      type="button"
+                      aria-pressed={isSelected(source, preview.selected)}
+                      // Choosing again while a check is still in flight is
+                      // allowed: the newest check is the one that answers, and
+                      // a late one is dropped rather than shown.
+                      disabled={!store}
+                      onClick={() => void look(source)}
+                      className={cn(
+                        "flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-sm leading-5 outline-none",
+                        "transition-colors duration-(--motion-instant) motion-reduce:transition-none",
+                        "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live pointer-coarse:min-h-11",
+                        isSelected(source, preview.selected) ? "border-transparent bg-surface-2 text-ink" : "border-line text-ink-2 hover:bg-surface-2",
+                      )}
+                    >
+                      {source.label}
+                      {source.carriesExport ? (
+                        <Check aria-hidden="true" className="size-4 text-ok" />
+                      ) : (
+                        <span className="text-xs leading-xs text-ink-3">does not have this export</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+            ) : null}
             {preview.ready ? (
               <p className="flex items-center gap-1.5 text-sm leading-5 text-ink-2">
                 <Check aria-hidden="true" className="size-4 text-ok" />
-                Every exported file is in {preview.repository?.head?.slice(0, 7) ?? "the current commit"}.
+                Every exported file is in {preview.selected?.label.toLowerCase() ?? "the current commit"}
+                <span className="typed text-ink-3">{preview.selected?.commitObjectId.slice(0, 7)}</span>.
               </p>
             ) : (
               <div className="flex flex-col gap-1.5 rounded-lg border border-line bg-surface p-2.5">
@@ -605,6 +683,9 @@ export function PublishDialog({ store, open, onOpenChange }: WorkDialogProps) {
                 <p className="text-xs leading-xs text-ink-2">
                   Commit <span className="typed">{preview.commit?.paths[0] ?? preview.root}</span> in Source control — you will see that change
                   before it is made — then check again here.
+                  {(preview.sources ?? []).some((source) => source.carriesExport)
+                    ? " Or record it at a state above that already has these files."
+                    : null}
                 </p>
               </div>
             )}
@@ -617,11 +698,13 @@ export function PublishDialog({ store, open, onOpenChange }: WorkDialogProps) {
           <Button ref={cancelRef} variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button variant="outline" disabled={busy || !store} onClick={() => void look()}>
+          {/* Checking again keeps the state the person chose, rather than
+              quietly dropping back to the current commit. */}
+          <Button variant="outline" disabled={busy || !store} onClick={() => void look(preview?.selected)}>
             <FileText />
             Check again
           </Button>
-          <Button disabled={busy || !store || preview?.ready !== true} onClick={() => void run()}>
+          <Button disabled={busy || !store || preview?.ready !== true || preview.selected === undefined} onClick={() => void run()}>
             <Upload />
             Record it
           </Button>

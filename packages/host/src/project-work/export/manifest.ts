@@ -42,6 +42,14 @@ export interface ManifestEntityInput {
   edges: ProjectWorkEdge[];
   repositoryLinks: RepositoryLink[];
   document: string;
+  /**
+   * sha256 of the document's rendered bytes, filled in once it is rendered.
+   *
+   * The manifest has always fenced the body; this fences the document beside
+   * it, which is what lets a re-export tell its own leftover from a file a
+   * person edited in that folder and keep the second.
+   */
+  documentDigest?: string;
   bodyPath: string;
 }
 
@@ -136,6 +144,7 @@ export function buildManifest(input: {
     digest: item.revision.digest,
     bodyBytes: item.revision.bodyBytes,
     document: item.document,
+    ...(item.documentDigest !== undefined ? { documentDigest: item.documentDigest } : {}),
     body: item.bodyPath,
   }));
 

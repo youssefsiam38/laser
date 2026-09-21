@@ -87,6 +87,15 @@ interface StaleFiles {
 
 const NO_STALE_FILES: StaleFiles = { removes: [], preserved: [] };
 
+/**
+ * One entity row of a manifest already on disk, as the schema validated it.
+ *
+ * Same members as {@link WorkManifestEntity}; the optional document digest is
+ * spelled `| undefined` because a validated older manifest carries the property
+ * absent, and this module reads rather than writes these rows.
+ */
+type PreviousEntity = Omit<WorkManifestEntity, "documentDigest"> & { documentDigest?: string | undefined };
+
 export class ProjectWorkExport {
   constructor(private readonly store: ProjectWorkStore) {}
 
@@ -218,6 +227,16 @@ export class ProjectWorkExport {
       }
     }
 
+    // The documents are rendered before the manifest is built, because the
+    // manifest records each one's digest: an export that can prove which bytes
+    // it wrote is an export that never deletes a person's own edit later.
+    const rendered = new Map<string, { document: string; body: string }>();
+    for (const item of entities) {
+      const document = renderDocument({ ...item, keyOf: (entityId) => keyOf.get(entityId) });
+      rendered.set(item.entity.key, { document, body: `${JSON.stringify(JSON.parse(canonicalJson(item.body)), null, 2)}\n` });
+      item.documentDigest = sha256(document);
+    }
+
     const manifest = buildManifest({ projectId, entities, attachments });
     const contents = new Map<string, string>();
     const files: WorkExportFile[] = [];
@@ -228,8 +247,9 @@ export class ProjectWorkExport {
 
     add(README_FILE, "readme", readme());
     for (const item of entities) {
-      add(item.document, "document", renderDocument({ ...item, keyOf: (entityId) => keyOf.get(entityId) }), item.entity.key);
-      add(item.bodyPath, "body", `${JSON.stringify(JSON.parse(canonicalJson(item.body)), null, 2)}\n`, item.entity.key);
+      const texts = rendered.get(item.entity.key)!;
+      add(item.document, "document", texts.document, item.entity.key);
+      add(item.bodyPath, "body", texts.body, item.entity.key);
     }
     const manifestText = manifestBytes(manifest);
     add(MANIFEST_FILE, "manifest", manifestText);
@@ -311,10 +331,13 @@ export class ProjectWorkExport {
    *    for that identity — `<KEY>.md` and `bodies/<KEY>.json` for the key the
    *    manifest row itself carries. A manifest may not name some other file and
    *    have it deleted, whatever the path resolves to;
-   * 3. the bytes on disk are still the bytes that export wrote, proved against
-   *    the **digest the manifest declared** for that revision's body. A body
-   *    that was edited, replaced or is missing is a conflict: it and its
-   *    document are kept, and the preview names them.
+   * 3. **both halves** of the item are still the bytes that export wrote: the
+   *    body against the `digest` and `bodyBytes` the manifest declared, and the
+   *    document against the `documentDigest` beside them. Either one edited,
+   *    replaced or missing is a conflict — both files are kept and the preview
+   *    names them — and a manifest that records no `documentDigest` at all (an
+   *    export written before this product recorded one) proves nothing, so that
+   *    item is kept too rather than assumed owned.
    *
    * So a `replace` deletes only files it can prove a previous export of this
    * project wrote and nobody has touched since. Everything it cannot prove is
@@ -351,9 +374,10 @@ export class ProjectWorkExport {
         keep(entity.body, "not_this_export");
         continue;
       }
-      if (!this.bodyStillIs(projectRoot, absolute, body, entity)) {
-        keep(document, "changed");
-        keep(body, "changed");
+      const proof = this.stillAsWritten(projectRoot, absolute, { document, body }, entity);
+      if (proof !== "proved") {
+        keep(document, proof);
+        keep(body, proof);
         continue;
       }
       for (const path of [document, body]) {
@@ -382,7 +406,7 @@ export class ProjectWorkExport {
    * Fails closed in both directions: an unreadable or invalid manifest gives no
    * deletion list at all, and the person is told plainly that their files stay.
    */
-  private previousManifest(projectRoot: string, absolute: string): { entities?: WorkManifestEntity[]; refusal?: string } {
+  private previousManifest(projectRoot: string, absolute: string): { entities?: PreviousEntity[]; refusal?: string } {
     const manifestText = readTextFile(insideProjectAt(projectRoot, absolute, MANIFEST_FILE), PREVIOUS_FILE_MAX_BYTES);
     if (manifestText === undefined) {
       return {
@@ -410,29 +434,44 @@ export class ProjectWorkExport {
   }
 
   /**
-   * Is this body file still the exact revision the previous manifest declared?
+   * Are **both** of this item's files still exactly what that export wrote?
    *
-   * The manifest carries that revision's canonical digest and byte count, so
-   * the file's own bytes prove it: canonicalise what is there and compare. A
-   * file that is missing, unparseable, over the read ceiling or different in
-   * any byte answers `false`, and nothing about that item is deleted.
+   * The body is proved through its canonical digest and byte count, which is
+   * what the manifest has always recorded; the document is proved through the
+   * `documentDigest` beside it. An item whose manifest row carries no document
+   * digest cannot be proved at all and answers `unproven` — never "probably
+   * ours". Anything read that differs, is missing, is unparseable or is over the
+   * read ceiling answers `changed`.
    */
-  private bodyStillIs(projectRoot: string, absolute: string, body: string, entity: WorkManifestEntity): boolean {
-    let text: string | undefined;
-    try {
-      text = readTextFile(insideProjectAt(projectRoot, absolute, body), PREVIOUS_FILE_MAX_BYTES);
-    } catch {
-      return false;
-    }
-    if (text === undefined) return false;
+  private stillAsWritten(
+    projectRoot: string,
+    absolute: string,
+    paths: { document: string; body: string },
+    entity: PreviousEntity,
+  ): "proved" | WorkExportPreserveReason {
+    if (entity.documentDigest === undefined) return "unproven";
+    const bodyText = this.readPrevious(projectRoot, absolute, paths.body);
+    if (bodyText === undefined) return "changed";
     let json: unknown;
     try {
-      json = JSON.parse(text);
+      json = JSON.parse(bodyText);
     } catch {
-      return false;
+      return "changed";
     }
     const { digest, bytes } = bodyDigest(json);
-    return digest === entity.digest && bytes === entity.bodyBytes;
+    if (digest !== entity.digest || bytes !== entity.bodyBytes) return "changed";
+    const documentText = this.readPrevious(projectRoot, absolute, paths.document);
+    if (documentText === undefined || sha256(documentText) !== entity.documentDigest) return "changed";
+    return "proved";
+  }
+
+  /** One file of the export already on disk, or nothing when it may not be read. */
+  private readPrevious(projectRoot: string, absolute: string, path: string): string | undefined {
+    try {
+      return readTextFile(insideProjectAt(projectRoot, absolute, path), PREVIOUS_FILE_MAX_BYTES);
+    } catch {
+      return undefined;
+    }
   }
 
   /** `…/work` → `…/work-2`, the first free one. A new revision never overwrites. */

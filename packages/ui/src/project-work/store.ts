@@ -617,9 +617,15 @@ export class ProjectWorkStore {
 
   /** What publishing the export into its repository would record. */
   async publishPreview(
-    options: { path?: string | undefined } = {},
+    options: { path?: string | undefined; source?: ClientRequests["project/work/publish/preview"]["params"]["source"] } = {},
   ): Promise<ProjectWorkOutcome<ClientRequests["project/work/publish/preview"]["result"]>> {
-    return this.#read1("project/work/publish/preview", (projectId) => ({ projectId, ...(options.path ? { path: options.path } : {}) }));
+    return this.#read1("project/work/publish/preview", (projectId) => ({
+      projectId,
+      ...(options.path ? { path: options.path } : {}),
+      // The state to measure against: omitted is the repository's current
+      // commit, which is what publication has always used.
+      ...(options.source ? { source: options.source } : {}),
+    }));
   }
 
   /**

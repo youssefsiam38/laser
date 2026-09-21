@@ -258,14 +258,26 @@ Now, in `export/index.ts`:
    kept instead is one line naming the first file, its reason, and an honest
    "and N more".
 
-**Known limit, stated rather than implied:** a document (`<KEY>.md`) has no
-digest of its own in the manifest — the manifest fences the *body*. So a
-leftover document whose body still proves the pair is removed even if someone
-edited that document by hand. It is named in the preview before anything
-happens, and the export's own README says editing an export changes nothing;
-recording document digests in the manifest would be a format change, which this
-batch does not make. A body that is only **reformatted** (same JSON, different
-whitespace) still proves the pair, by design: it is the same content.
+**Both halves are proved, including the document.** The first pass of this batch
+fenced only the body, which left a hand-edited `<KEY>.md` deletable — the
+original data-loss finding, not a limitation to accept. The manifest now carries
+a `documentDigest` per entity (one **additive optional** field; no version bump,
+no migration machinery), written by the exporter from the document's own rendered
+bytes, and a deletion requires **both** halves to match their declared proof:
+
+- body: canonical digest + `bodyBytes`, as before;
+- document: sha256 of its bytes against `documentDigest`;
+- a manifest row with no `documentDigest` — an export written before this field
+  existed — proves nothing, so that item is **kept** with the explicit reason
+  `unproven`. It is never assumed owned.
+
+Because the proof is part of the preview digest, editing either half between the
+preview and the press moves the pair from `removes` to `preserved` and the apply
+refuses. A body or document that is only **reformatted** (same canonical JSON,
+or byte-identical document) still proves the pair, which is correct: it is the
+same content. The documents are rendered before the manifest is built so their
+digests can go into it; the export stays deterministic and the round trip stays
+byte-identical (pinned by the existing round-trip test).
 
 ### F2 · the import fence binds the revision it would land on
 
@@ -333,7 +345,63 @@ New tests, all fixture- or mock-based, with no traversal and no external target:
   sentence, names what is kept and why, and says plainly when nothing in the
   folder can be removed.
 
-## F3 · the plan for a checkpoint publication surface (awaiting approval)
+## F3 · the checkpoint publication surface, as built
+
+Approved from the plan below and implemented in this batch, with the three
+additions the owner asked for (conflicting identities refused, confirmation bound
+to the preview's own resolved source, latest-request fencing in the dialog).
+
+**protocol** · `WORK_PUBLISH_SOURCE_KINDS`, `WORK_PUBLISH_SOURCES_MAX = 20`,
+`WorkPublishSource` (kind, resolved `commitObjectId`, `checkpointId?`, `label`,
+`carriesExport`, bounded `missing[]`) and `WorkPublishSourceSelection`. The
+preview params gain an optional `source` (omitted = the current commit, exactly
+what publication always did); the result gains `selected` and `sources`. Apply
+params are unchanged.
+
+**host** · `publish/git.ts#listCheckpoints(cwd, max)`: one read-only
+`for-each-ref --count=<max> --sort=-creatordate --format=%(refname)%00%(objectname)`
+over the worker's own namespace, every row parsed with the shared
+`parseCheckpointRef` and proved to point at a commit. No worker, no new method,
+no change to the T18/T19 source-control code; a checkpoint a caller *names* is
+still proved by `checkpointCommit`, untouched. `publish/index.ts`:
+
+- `resolveSource` resolves the selection — current commit, a named commit, or a
+  checkpoint ref — and refuses anything that does not resolve, with a sentence.
+- `plan()` measures the export against **that** state's tree (the same
+  `treeAt` + `blobObjectId` proof), keeps the tree, and the apply proves every
+  blob against it.
+- `publishDigest` binds the resolved source (kind, commit object id, checkpoint
+  ref), so a confirmation of the commit preview cannot be spent on the
+  checkpoint one, or the other way round.
+- the preview offers `sources`: the current commit and up to 20 checkpoints,
+  each **measured** (`carriesExport`, `missing`) rather than merely listed.
+- `apply` refuses **conflicting identities**: `checkpointId` with `commit:
+  "HEAD"` is refused ("a checkpoint is published at its own commit"), and a
+  `commit` that resolves to anything but that checkpoint's commit is refused
+  ("two different states"). The host never prefers one of two identities.
+
+**UI** · `PublishDialog` shows a chooser of the host's states (labels the host
+resolved, a tick when that state carries the export, "does not have this export"
+otherwise) and **no free-text field**. Choosing one re-previews with that
+selection; `Check again` keeps the chosen state. The confirmation sends the
+preview's own `selected.commitObjectId` (+ `checkpointId`), never `"HEAD"`, and
+is disabled until that preview is ready. Every check takes a number
+(`asked.current`) and an answer for anything but the newest is dropped, so a late
+answer can neither overwrite the preview on screen nor enable a confirmation for
+a state nobody chose — pinned by a deferred-response race test.
+
+New tests for F3: host · the offered states include the checkpoint that carries
+the export while the current commit does not; selecting it makes the preview
+ready and its digest differs; the ambiguous and conflicting applies are refused
+and record nothing; a stale preview digest is refused; a checkpoint that does not
+carry the export previews as `carriesExport: false` with the missing file named;
+an unresolvable checkpoint refuses in the preview too. `interop-git.test.ts` ·
+`listCheckpoints` bounded (`--count`), namespace-only, non-commit and malformed
+rows dropped, git mocked throughout. UI · the chooser lists the states, sends the
+selected identity, has no text input, records the checkpoint's own commit and
+ref, and drops the late answer.
+
+## F3 · the plan as approved
 
 What exists: the host and the protocol fully support publishing against an M20
 checkpoint, proved against that checkpoint's commit; `PublishDialog` always
