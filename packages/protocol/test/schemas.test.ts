@@ -303,7 +303,10 @@ const samples: Record<ClientMethod, unknown> = {
     },
   },
   "models/profiles/delete": { id: "mp_01jbalanced0000000000000", replacementId: "mp_01jfast00000000000000000" },
-  "models/profiles/migrate": { cwd: "/p" },
+  "models/profiles/migrate": {
+    cwd: "/p",
+    legacyChoices: [{ key: "beam", label: "Beam", model: { provider: "anthropic", id: "claude-sonnet-4-5" } }],
+  },
   "session/profile/set": { path: "/s.jsonl", profileId: "mp_01jfast00000000000000000" },
   "session/model/pin": { path: "/s.jsonl", model: { provider: "stub", id: "stub-1" } },
   "agents/builtin/set-instructions": { name: "chat", instructions: "Answer like an exacting editor." },

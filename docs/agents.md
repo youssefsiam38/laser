@@ -55,10 +55,12 @@ and every currently trusted project's files. A registered project with no
 trust-gated content remains a valid destination; its first definition written
 through Laser records trust before the file is created. An untrusted project is
 neither read nor written. An invalid hand edit produces a `file` warning and
-leaves the last valid definition running until it is fixed. Nobody's file is
-rewritten for them: a definition written before M22 that still carries `model:`
-is told to remove an unknown field, which is how a person learns the format
-changed ([`model-profiles.md`](model-profiles.md)).
+leaves the last valid definition running until it is fixed. A definition
+written before M22 that still carries `model:` is not broken by the format
+change: it loads, and the one-way migration rewrites that field once to the
+`profile:` naming the profile that model became, recording the file it changed.
+Until that rewrite happens the agent runs on `defaultProfileId` with a warning
+on its `profile` field ([`model-profiles.md`](model-profiles.md)).
 
 The Agents page uses Settings' single explicit target. **Global** shows global
 custom definitions plus built-ins and owns the default and harness policy;

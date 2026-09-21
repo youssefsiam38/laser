@@ -201,6 +201,25 @@ export class FallbackController {
   }
 
   /**
+   * A first-turn runtime replacement put this session on another profile.
+   *
+   * Preparing the accepted agent rebuilds the runtime, and the agent may name
+   * a profile the session did not open on. A walk recorded against the profile
+   * `open()` resolved says nothing about the one that is about to answer, so
+   * the activation is re-anchored — and only then, before anything is asked of
+   * a provider, is the start-time walk worth running again.
+   *
+   * The same profile is left exactly as it stands: `open()` already resolved
+   * it, including any walk it did.
+   */
+  activateForPreparedSelection(): void {
+    const profile = this.engine.profile();
+    if (!profile || this.state.activation?.profileId === profile.id) return;
+    const { failover: _discarded, ...rest } = this.state;
+    this.state = { ...rest, activation: this.activationForSelectedModel() };
+  }
+
+  /**
    * A person pinned this session to one model.
    *
    * A pin is the deliberate escape hatch: the session leaves its profile and

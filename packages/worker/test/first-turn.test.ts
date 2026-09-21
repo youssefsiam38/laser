@@ -63,6 +63,27 @@ const activatedSetup = (over: Partial<SessionFallbackEntry> = {}): unknown => fa
   models: {},
   ...over,
 });
+/**
+ * What the start-time walk leaves behind: the session stands on the first
+ * model of its profile it can reach, having asked nothing of anyone
+ * (`docs/model-profiles.md`, "Runtime"). Setup, not history.
+ */
+const startWalkSetup = (over: Partial<SessionFallbackEntry> = {}): unknown => fallbackEntry({
+  version: 1,
+  event: "activated",
+  at: AT,
+  to: B,
+  activation: { ...activation, position: 1 },
+  failover: {
+    id: "walk",
+    startedAt: AT,
+    endedAt: AT,
+    ended: "switched",
+    attempts: [{ model: modelKey(A), at: AT, outcome: "skipped", reason: "not signed in" }],
+  },
+  models: {},
+  ...over,
+});
 const clearedSetup = (over: Partial<SessionFallbackEntry> = {}): unknown => fallbackEntry({
   version: 1,
   event: "cleared",
@@ -87,6 +108,13 @@ describe("first-turn admission", () => {
     ] }))).not.toThrow();
   });
 
+  it("lets a conversation that only walked its profile at start still choose its agent", () => {
+    // The walk exists for a machine that has no credential for the model a
+    // profile prefers. Counting it as history would refuse the first-turn
+    // agent choice on exactly those machines (D-m).
+    expect(() => assertFirstTurnAdmission(admission({ entries: [startWalkSetup()] }))).not.toThrow();
+  });
+
   it.each([
     ["attempt failure", activatedSetup({ event: "attempt_failed", from: A, failure: { class: "provider_down", at: AT } })],
     ["switch", activatedSetup({ event: "switched", from: A, to: B, failure: { class: "provider_down", at: AT } })],
@@ -106,6 +134,21 @@ describe("first-turn admission", () => {
     ["activation on clear", clearedSetup({ activation })],
     ["model memory on clear", clearedSetup({ models: { [modelKey(A)]: { cooldownUntil: AT } } })],
     ["failure on clear", clearedSetup({ failure: { class: "provider_down", at: AT } })],
+    ["a walk that tried a model", startWalkSetup({
+      failover: {
+        id: "walk",
+        startedAt: AT,
+        endedAt: AT,
+        ended: "switched",
+        attempts: [{ model: modelKey(A), at: AT, outcome: "failed", class: "provider_down" }],
+      },
+    })],
+    ["a walk that skipped fewer models than it passed", startWalkSetup({
+      failover: { id: "walk", startedAt: AT, endedAt: AT, ended: "switched", attempts: [] },
+    })],
+    ["a walk that is still open", startWalkSetup({
+      failover: { id: "walk", startedAt: AT, attempts: [{ model: modelKey(A), at: AT, outcome: "skipped", reason: "not signed in" }] },
+    })],
     ["malformed fallback", { type: "custom", customType: SESSION_FALLBACK_ENTRY_TYPE, data: { event: "activated" } }],
   ])("rejects fallback history shaped as %s", (_label, entry) => {
     expect(() => assertFirstTurnAdmission(admission({ entries: [entry] }))).toThrow("already started");

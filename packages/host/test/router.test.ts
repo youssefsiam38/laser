@@ -95,7 +95,7 @@ const WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-worksp
 const WORKSPACES = { beam: join(WORKSPACE_ROOT, "beam"), chat: join(WORKSPACE_ROOT, "chat") };
 
 /** A Router with fakes for everything but the piece under test. */
-function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; reserved?: string[]; agents?: boolean; features?: boolean; workspaces?: { beam: string; chat: string }; exclude?: string[]; now?: () => number; workerRequest?: (method: string, params: unknown) => Promise<unknown>; liveCwd?: string; admission?: PressureAdmission; activation?: RuntimeActivationGate } = {}) {
+function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; reserved?: string[]; agents?: boolean; agentStore?: AgentStore; features?: boolean; workspaces?: { beam: string; chat: string }; exclude?: string[]; now?: () => number; workerRequest?: (method: string, params: unknown) => Promise<unknown>; liveCwd?: string; admission?: PressureAdmission; activation?: RuntimeActivationGate } = {}) {
   const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-`));
   const catalogRows = options.catalogRows ?? [];
   const open = options.open ?? { [CWD_A]: [PATH_A] };
@@ -153,7 +153,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
   const attention = new AttentionTracker({});
   const workspaces = options.workspaces ?? WORKSPACES;
   const projects = new ProjectRegistry({ catalog, agentDir: dir, exclude: [...(options.exclude ?? []), workspaces.beam, workspaces.chat] });
-  const agents = options.agents ? new AgentStore({ agentDir: join(dir, "agent"), workspaces: options.workspaces ?? WORKSPACES }) : undefined;
+  const agents = options.agentStore ?? (options.agents ? new AgentStore({ agentDir: join(dir, "agent"), workspaces: options.workspaces ?? WORKSPACES }) : undefined);
   // Fixtures date from June; a fixed clock keeps retention from pruning them.
   const runs = options.agents ? new AgentRunRegistry({ now: () => new Date("2026-06-02T00:00:00.000Z") }) : undefined;
   const views = new ViewCache(2);
@@ -855,6 +855,96 @@ describe("Router · agents (docs/agents-leap)", () => {
       expect(h.agents!.snapshot().builtinProfiles.namer).toBe(BALANCED);
     } finally {
       h.cleanup();
+    }
+  });
+
+  it("refuses to delete a profile when a definition could not be moved to the replacement", async () => {
+    // The rewrite is refused *before* the profile is deleted: a definition
+    // pointing at a profile that is gone is the one outcome this path must
+    // never produce (M22 review S2).
+    const state = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-profiles-`));
+    mkdirSync(join(state, "agents"), { recursive: true });
+    const FAST = "mp_testfast00000000000000";
+    const BALANCED = "mp_testbalanced000000000";
+    // A hand-edited file: it loads, but it names a child agent that is not
+    // there, so saving it again is refused.
+    writeFileSync(join(state, "agents", "reviewer.md"), [
+      "---",
+      "description: reviews changes",
+      `profile: ${FAST}`,
+      "supportsSubagents: true",
+      "allowedAgents:",
+      "  - ghost",
+      "---",
+      "Act as reviewer.",
+      "",
+    ].join("\n"));
+    const store = new AgentStore({ storePath: join(state, "agents.json"), stateDir: state, agentDir: join(state, "engine"), workspaces: WORKSPACES });
+    const h = harness({ agentStore: store });
+    try {
+      expect(store.get("reviewer")?.profileId).toBe(FAST);
+      const refused = await rpc(h.router, "models/profiles/delete", { cwd: CWD_A, id: FAST, replacementId: BALANCED });
+      expect(refused).toMatchObject({ error: { message: expect.stringContaining("“reviewer” cannot be moved to that profile") } });
+      expect(refused).toMatchObject({ error: { message: expect.stringContaining("ghost") } });
+      // Nothing was asked of the worker, so the profile is still there.
+      expect(h.workerRequests.some((r) => r.method === "models/profiles/delete")).toBe(false);
+      expect(store.get("reviewer")?.profileId).toBe(FAST);
+    } finally {
+      store.close();
+      h.cleanup();
+      rmSync(state, { recursive: true, force: true });
+    }
+  });
+
+  it("says so on the definition when a rewrite fails after the profile is gone", async () => {
+    // The settings write and the definition rewrite are not one transaction.
+    // When the second half fails the person is told at once, on the field they
+    // can act on, instead of waiting for the periodic check (S2).
+    const state = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-profiles-`));
+    mkdirSync(join(state, "agents"), { recursive: true });
+    const FAST = "mp_testfast00000000000000";
+    const BALANCED = "mp_testbalanced000000000";
+    writeFileSync(join(state, "agents", "reviewer.md"), [
+      "---",
+      "description: reviews changes",
+      `profile: ${FAST}`,
+      "---",
+      "Act as reviewer.",
+      "",
+    ].join("\n"));
+    let failWrites = false;
+    const logs: string[] = [];
+    const store = new AgentStore({
+      storePath: join(state, "agents.json"),
+      stateDir: state,
+      agentDir: join(state, "engine"),
+      workspaces: WORKSPACES,
+      log: (line) => logs.push(line),
+      writeFile: (path, text) => {
+        if (failWrites) throw new Error("disk is full");
+        writeFileSync(path, text);
+      },
+    });
+    const h = harness({ agentStore: store });
+    try {
+      failWrites = true;
+      const deleted = await rpc(h.router, "models/profiles/delete", { cwd: CWD_A, id: FAST, replacementId: BALANCED });
+      expect(deleted).toMatchObject({ result: { ok: true } });
+      expect(h.workerRequests.some((r) => r.method === "models/profiles/delete")).toBe(true);
+      // The definition kept its own id, and it says why.
+      expect(store.get("reviewer")?.profileId).toBe(FAST);
+      expect(store.warnings()).toEqual([
+        expect.objectContaining({
+          agentName: "reviewer",
+          field: "profile",
+          message: expect.stringContaining("could not be moved to the replacement"),
+        }),
+      ]);
+      expect(logs.join(" ")).toContain("disk is full");
+    } finally {
+      store.close();
+      h.cleanup();
+      rmSync(state, { recursive: true, force: true });
     }
   });
 

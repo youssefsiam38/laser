@@ -195,7 +195,7 @@ itself, which is not code. The mark in the first cell says how:
 | Area | Change |
 | --- | --- |
 | ✓ `src/agents/builtins.ts` | `beamModel`/`chatModel`/`namerModel` → profile ids; seeded defaults |
-| ≠ `src/agents/{store,validate,agent-file,agent-files-watch}.ts` | `model:` frontmatter → `profile:`; validation warning field `profile`. **Differently:** there is no one-time rewrite of a person's files. `model:` is simply no longer a frontmatter field, so a hand-written file that still carries it says “Remove the unknown frontmatter field ‘model’” — which is how a person learns the format changed — and the migration record lists each definition's resulting profile instead of a per-file before/after |
+| ✓ `src/agents/{store,validate,agent-file,agent-files-watch}.ts` | `model:` frontmatter → `profile:`; validation warning field `profile`. The parser reads `model:` as migratable input rather than an unknown field, the one-way migration rewrites each file that carries one exactly once, and the preview record lists only the files it actually changed, with the model each one named |
 | ≠ `src/router.ts`, `src/server.ts` | new methods, removed methods, migration at start, the seeded-profile review. **Differently:** `worker-client.ts` needed no change (the migration is an ordinary request), and the review is the `models/profiles/seeded` notification: offered once per host run, applied never — a built-in with no choice of its own takes the matching assignment at the same moment |
 | ≠ `src/catalog.ts`, `src/session-projection.ts` | session rows expose profile intent and effective model. **Differently:** only `catalog.ts` changed — it reads `SessionSummary.profileId` from the session's durable activation entry. `session-projection.ts` carries no model attribution at all, so it had nothing to add |
 
@@ -228,7 +228,7 @@ itself, which is not code. The mark in the first cell says how:
 | --- | --- |
 | ✓ Global settings file | `modelProfiles`, `defaultProfileId`, `namingProfileId`, `oracleProfileId` and `designIndexProfileId` written; old keys kept one release and read by the migration alone |
 | ≠ Host state (built-in choices, onboarding state) | built-in model choices → profile ids (`builtinProfiles` in `agents.json`). **Differently:** “first provider connected, Beam has no model” did not become “no profile” — there is no pending state at all. The host offers the seeded profiles for review once and gives a built-in with no choice the matching assignment |
-| ≠ Agent files (global and `.laser/agents`) | `profile:` is the field; a person's files are **not** rewritten. `model:` is an unknown field now and says so on the definition, so nobody's authored file is edited underneath them |
+| ✓ Agent files (global and `.laser/agents`) | `profile:` is the field. A file that still says `model:` loads, runs on `defaultProfileId` with a warning on its `profile` field, and is rewritten once by the migration to name the profile that model became — a new single-model profile named after the agent when nothing starts with it |
 | ≠ Session JSONL | untouched for existing sessions; the durable `lasercode/fallback` entry carries `profileId`. **Differently:** no field was added to the session header — the catalog reads a conversation's profile from that activation entry, so there is one writer and one truth |
 | ✓ Migration preview record | written under the state directory; idempotent |
 

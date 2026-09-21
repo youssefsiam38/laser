@@ -85,17 +85,19 @@ function writeStubs(
   models: Array<{ provider: string; id: string }> = [MODEL.a, MODEL.b, MODEL.c],
   extraProfiles: Array<{ models: Array<{ provider: string; id: string }> }> = [],
   defaultModel: { provider: string; id: string } = MODEL.a,
-  options: { windows?: Partial<Record<Which, number>>; compaction?: Record<string, unknown> } = {},
+  options: { windows?: Partial<Record<Which, number>>; compaction?: Record<string, unknown>; unauthenticated?: readonly Which[] } = {},
 ): void {
   mkdirSync(agentDir, { recursive: true });
   const windowOf = (which: Which, fallback: number) => options.windows?.[which] ?? fallback;
+  /** A provider the person never signed in to: in the catalogue, unusable. */
+  const keyOf = (which: Which) => (options.unauthenticated?.includes(which) ? {} : { apiKey: "k" });
   writeFileSync(
     join(agentDir, "models.json"),
     JSON.stringify({
       providers: {
-        stub: { baseUrl: stubs.a.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-1", name: "Stub A", contextWindow: windowOf("a", 8000), maxTokens: 1000 }] },
-        "stub-b": { baseUrl: stubs.b.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-b-1", name: "Stub B", contextWindow: windowOf("b", 8000), maxTokens: 1000 }] },
-        "stub-c": { baseUrl: stubs.c.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-c-1", name: "Stub C", contextWindow: windowOf("c", 8000), maxTokens: 1000 }] },
+        stub: { baseUrl: stubs.a.url, api: "openai-completions", ...keyOf("a"), models: [{ id: "stub-1", name: "Stub A", contextWindow: windowOf("a", 8000), maxTokens: 1000 }] },
+        "stub-b": { baseUrl: stubs.b.url, api: "openai-completions", ...keyOf("b"), models: [{ id: "stub-b-1", name: "Stub B", contextWindow: windowOf("b", 8000), maxTokens: 1000 }] },
+        "stub-c": { baseUrl: stubs.c.url, api: "openai-completions", ...keyOf("c"), models: [{ id: "stub-c-1", name: "Stub C", contextWindow: windowOf("c", 8000), maxTokens: 1000 }] },
       },
     }),
   );
@@ -509,6 +511,62 @@ it("activates the agent's own profile when its first turn is accepted", async ()
   expect(idOf(driver)).toBe("stub-b-1");
   expect(driver.state().fallback).toMatchObject({ position: 1 });
   expect(fallbacks(updates).at(-1)).toMatchObject({ phase: "switched", to: { id: "stub-b-1" } });
+});
+
+it("starts a conversation on the first model of its profile it can reach", async () => {
+  // The profile prefers A, and this machine has no credential for it. The
+  // session must open on B — the person's first prompt is not the place to
+  // discover that (`docs/model-profiles.md`, "Runtime").
+  writeStubs([MODEL.a, MODEL.b, MODEL.c], [], MODEL.a, { unauthenticated: ["a"] });
+  script.b = () => ok("from b");
+  const { driver, updates } = await open();
+
+  expect(idOf(driver)).toBe("stub-b-1");
+  expect(driver.state().fallback).toMatchObject({ profileId: profileId(0), position: 1 });
+  expect(requests("a")).toBe(0);
+  const started = fallbacks(updates).at(-1);
+  expect(started).toMatchObject({ phase: "switched", to: { id: "stub-b-1" } });
+  expect(started?.detail).toContain("not signed in");
+
+  // And the first prompt is answered by the model it started on, first time.
+  await driver.prompt([{ type: "text", text: "hello" }]);
+  expect(requests("a")).toBe(0);
+  expect(requests("b")).toBe(1);
+  expect(idOf(driver)).toBe("stub-b-1");
+});
+
+it("walks the profile the accepted first turn brings, before that turn is asked of anyone", async () => {
+  // The session opens on the default profile, which is reachable; the agent
+  // chosen for the first turn names a profile whose preferred model is not.
+  writeStubs([MODEL.a, MODEL.b], [], MODEL.c, { unauthenticated: ["a"] });
+  script.b = () => ok("from b");
+  const original = { ...fallbackDefaultAgent(), profileId: null };
+  const { driver, updates } = await open(undefined, {
+    definition: original,
+    role: rootRole(original.name),
+    record: rootRecord(original.name),
+    policy: fallbackPolicy(),
+  });
+  expect(idOf(driver)).toBe("stub-c-1");
+
+  const definition = { ...fallbackDefaultAgent(), name: "reviewer", profileId: profileId(0) };
+  await driver.prepareFirstTurn({
+    agent: {
+      definition,
+      role: rootRole(definition.name),
+      record: rootRecord(definition.name),
+      policy: fallbackPolicy(),
+    },
+  });
+
+  // Prepared, and already on a model this machine can use: the host's own
+  // availability check runs here, before the prompt is offered at all.
+  expect(idOf(driver)).toBe("stub-b-1");
+  expect(driver.state().fallback).toMatchObject({ profileId: profileId(0), position: 1 });
+  await driver.prompt([{ type: "text", text: "review this" }]);
+  expect(requests("a")).toBe(0);
+  expect(requests("b")).toBe(1);
+  expect(fallbacks(updates).at(-1)?.detail).toContain("not signed in");
 });
 
 it("does the same for a child agent's session, which is a session like any other", async () => {

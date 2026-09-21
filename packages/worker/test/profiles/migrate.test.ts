@@ -187,7 +187,7 @@ describe("migrating a settings file with nothing in it", () => {
 });
 
 describe("migrating a file a half-finished migration left behind", () => {
-  it("keeps the profiles it finds and only fills the assignments that are missing", async () => {
+  it("keeps the profiles it finds and gives the old default model a profile of its own", async () => {
     const existing = {
       id: "mp_testhalfdone0000000000",
       name: "Mine",
@@ -207,16 +207,28 @@ describe("migrating a file a half-finished migration left behind", () => {
     expect(report.ran).toBe(true);
 
     // The person's own profile is untouched — no second pass over the old
-    // lists, and no re-ordering of what they already have.
+    // lists, and no re-ordering of what they already have. The model new
+    // conversations started on is not dropped either: nothing here begins with
+    // it, so it becomes one profile of one model (contract "Migration", D-h).
     const profiles = readModelProfiles(agentDir);
-    expect(profiles).toEqual([existing]);
+    expect(profiles[0]).toEqual(existing);
+    expect(profiles).toHaveLength(2);
+    expect(profiles[1]!.name).toBe("Default");
+    expect(profiles[1]!.models).toEqual([{ provider: "anthropic", id: "claude-sonnet-4-5", thinking: "medium" }]);
     const assignments = readProfileAssignments(agentDir);
     expect(assignments.namingProfileId).toBe(existing.id);
-    expect(assignments.defaultProfileId).toBe(existing.id);
+    expect(assignments.defaultProfileId).toBe(profiles[1]!.id);
     // The dangling id is replaced rather than carried: nothing points at a
     // profile that is not there.
-    expect(assignments.oracleProfileId).toBe(existing.id);
-    expect(assignments.designIndexProfileId).toBe(existing.id);
+    expect(assignments.oracleProfileId).toBe(profiles[1]!.id);
+    expect(assignments.designIndexProfileId).toBe(profiles[1]!.id);
+
+    // And it converges: the assignment it just wrote is the answer, so the old
+    // key is never read again and no second “Default” appears.
+    const before = readFileSync(join(agentDir, "settings.json"), "utf8");
+    const again = await migrateModelProfiles(adapter(), { at: AT, models: CATALOGUE, configuredProviders: CONNECTED, newId: nextId });
+    expect(again.ran).toBe(false);
+    expect(readFileSync(join(agentDir, "settings.json"), "utf8")).toBe(before);
   });
 
   it("is a plan before it is a write, and the plan is empty when there is nothing to do", () => {
@@ -236,6 +248,91 @@ describe("migrating a file a half-finished migration left behind", () => {
     const plan = planModelProfileMigration({ doc: done, at: AT, newId: nextId });
     expect(plan.changes).toEqual([]);
     expect(plan.ran).toBe(false);
+  });
+});
+
+describe("the model choices the host holds", () => {
+  // The built-ins' models and the agent files' `model:` live in the host's
+  // state, and only this writer may create a profile — so they travel with the
+  // migration request and come back resolved (contract "Migration", D-i).
+  const beam = { key: "builtin:beam", label: "Beam", model: { provider: "anthropic", id: "claude-sonnet-4-5" } };
+  const namer = { key: "builtin:namer", label: "Namer", model: { provider: "openai", id: "gpt-5-nano" } };
+  const reviewer = { key: "/agents/reviewer.md", label: "reviewer", model: { provider: "anthropic", id: "claude-opus-4" } };
+
+  it("maps each choice to the profile that already prefers that model", async () => {
+    writeGlobal(ZERO_ELEVEN);
+    const report = await migrateModelProfiles(adapter(), {
+      at: AT,
+      models: CATALOGUE,
+      configuredProviders: CONNECTED,
+      newId: nextId,
+      modelName: (model) => model.id,
+      legacyChoices: [beam, namer],
+    });
+
+    const profiles = readModelProfiles(agentDir);
+    // Both saved lists begin with the model a built-in was on, so nothing new
+    // is created for either of them.
+    expect(profiles.map((profile) => profile.name)).toEqual(["claude-sonnet-4-5 profile", "gpt-5-nano profile"]);
+    expect(report.resolved).toEqual({ "builtin:beam": profiles[0]!.id, "builtin:namer": profiles[1]!.id });
+  });
+
+  it("creates one single-model profile named after whatever made the choice", async () => {
+    writeGlobal(ZERO_ELEVEN);
+    const report = await migrateModelProfiles(adapter(), {
+      at: AT,
+      models: CATALOGUE,
+      configuredProviders: CONNECTED,
+      newId: nextId,
+      modelName: (model) => model.id,
+      legacyChoices: [reviewer],
+    });
+
+    const profiles = readModelProfiles(agentDir);
+    const created = profiles.find((profile) => profile.name === "reviewer");
+    expect(created?.models).toEqual([{ provider: "anthropic", id: "claude-opus-4", thinking: "medium" }]);
+    expect(report.resolved).toEqual({ [reviewer.key]: created!.id });
+    expect(report.notes.join(" ")).toContain("“reviewer” kept the model it was on");
+  });
+
+  it("answers the same keys with the same profiles on the next start, and writes nothing", async () => {
+    writeGlobal(ZERO_ELEVEN);
+    const first = await migrateModelProfiles(adapter(), {
+      at: AT,
+      models: CATALOGUE,
+      configuredProviders: CONNECTED,
+      newId: nextId,
+      modelName: (model) => model.id,
+      legacyChoices: [beam, reviewer],
+    });
+    const before = readFileSync(join(agentDir, "settings.json"), "utf8");
+
+    const again = await migrateModelProfiles(adapter(), {
+      at: "2026-10-01T00:00:00.000Z",
+      models: CATALOGUE,
+      configuredProviders: CONNECTED,
+      newId: nextId,
+      modelName: (model) => model.id,
+      legacyChoices: [beam, reviewer],
+    });
+
+    expect(again.ran).toBe(false);
+    expect(again.resolved).toEqual(first.resolved);
+    expect(readFileSync(join(agentDir, "settings.json"), "utf8")).toBe(before);
+  });
+
+  it("gives two agents on the same model the same profile", async () => {
+    writeGlobal({});
+    const other = { key: "/agents/writer.md", label: "writer", model: reviewer.model };
+    const report = await migrateModelProfiles(adapter(), {
+      at: AT,
+      models: [],
+      newId: nextId,
+      legacyChoices: [reviewer, other],
+    });
+    const profiles = readModelProfiles(agentDir);
+    expect(profiles.map((profile) => profile.name)).toEqual(["reviewer"]);
+    expect(report.resolved).toEqual({ [reviewer.key]: profiles[0]!.id, [other.key]: profiles[0]!.id });
   });
 });
 

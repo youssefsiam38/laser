@@ -27,6 +27,7 @@ import {
   profileById,
   profileByName,
   profileStartingWith,
+  type LegacyModelChoice,
   type ModelCatalogEntry,
   type ModelIdentity,
   type ModelProfile,
@@ -54,6 +55,11 @@ export interface MigrationInput {
   newId?: () => string;
   /** A model's catalogue name, for the profiles the old lists become. */
   modelName?: (model: ModelIdentity) => string | undefined;
+  /**
+   * The model choices the host holds — each built-in's model, each agent
+   * file's `model:` — which only this writer can turn into profiles.
+   */
+  legacyChoices?: readonly LegacyModelChoice[];
 }
 
 export interface MigrationPlan extends ModelProfileMigrationReport {
@@ -108,10 +114,11 @@ export function planModelProfileMigration(input: MigrationInput): MigrationPlan 
 
   // 2. The default provider and model. A profile that already prefers that
   //    model *is* the default; otherwise one profile of one model is created.
-  // Only when this run created the profiles. A person who already has
-  // profiles has answered this question; re-reading the old default model
-  // would add a profile they never asked for on every half-finished file.
-  const startingModel = createdProfiles ? legacyDefaultModel(doc) : undefined;
+  // The question is asked only while `defaultProfileId` is unset (D-h): once
+  // this migration has written an assignment, or a person has chosen one, the
+  // old key is history and is never read again — which is what makes a
+  // half-migrated file converge instead of growing a profile per run.
+  const startingModel = legacyDefaultModel(doc);
   let defaultProfile = profileById(profiles, readId(doc, DEFAULT_PROFILE_SETTING));
   if (!defaultProfile && startingModel) {
     defaultProfile = profileStartingWith(profiles, startingModel);
@@ -147,9 +154,32 @@ export function planModelProfileMigration(input: MigrationInput): MigrationPlan 
     }
   }
 
+  // 4. The model choices the host holds: a built-in's, an agent file's. Each
+  //    becomes the profile that already prefers that model, or a new
+  //    single-model profile named after whatever made the choice.
+  const resolved: Record<string, string> = {};
+  for (const choice of input.legacyChoices ?? []) {
+    if (!choice.model.provider || !choice.model.id || resolved[choice.key]) continue;
+    const match = profileStartingWith(profiles, choice.model);
+    if (match) {
+      resolved[choice.key] = match.id;
+      continue;
+    }
+    const created: ModelProfile = {
+      id: newId(),
+      name: uniqueName(profiles, choice.label),
+      models: [withThinking(choice.model)],
+      origin: "person",
+      updatedAt: at,
+    };
+    profiles.push(created);
+    resolved[choice.key] = created.id;
+    notes.push(`“${choice.label}” kept the model it was on, as the profile “${created.name}”.`);
+  }
+
   const assignments = resolveAssignments(doc, profiles, defaultProfile);
 
-  // 4. The changes themselves. A file that already says all of this gets none.
+  // 5. The changes themselves. A file that already says all of this gets none.
   const changes: SettingChange[] = [];
   const profilesChanged = JSON.stringify(stripped(existing)) !== JSON.stringify(stripped(profiles));
   if (profiles.length > 0 && profilesChanged) {
@@ -169,7 +199,14 @@ export function planModelProfileMigration(input: MigrationInput): MigrationPlan 
   }
   if (seeded) notes.push("Review the profiles and edit them however you like; nothing is fixed.");
 
-  return { ran: changes.length > 0, profiles, assignments, notes, changes };
+  return {
+    ran: changes.length > 0,
+    profiles,
+    assignments,
+    notes,
+    ...(Object.keys(resolved).length > 0 ? { resolved } : {}),
+    changes,
+  };
 }
 
 /**
@@ -182,11 +219,15 @@ export async function migrateModelProfiles(
 ): Promise<ModelProfileMigrationReport> {
   await settings.refresh();
   const plan = planModelProfileMigration({ ...options, doc: settings.snapshot().global.values });
+  // A resolution is an answer, not a change: the second run maps the same keys
+  // to the same profiles and writes nothing, which is what makes the host's
+  // half of the migration idempotent too.
+  const resolved = plan.resolved ? { resolved: plan.resolved } : {};
   if (plan.changes.length === 0) {
-    return { ran: false, profiles: plan.profiles, assignments: plan.assignments, notes: [] };
+    return { ran: false, profiles: plan.profiles, assignments: plan.assignments, notes: [], ...resolved };
   }
   await settings.apply("global", plan.changes);
-  return { ran: true, profiles: plan.profiles, assignments: plan.assignments, notes: plan.notes };
+  return { ran: true, profiles: plan.profiles, assignments: plan.assignments, notes: plan.notes, ...resolved };
 }
 
 // ---------------------------------------------------------------- internals

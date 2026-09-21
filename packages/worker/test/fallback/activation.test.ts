@@ -201,6 +201,32 @@ it("starts on the first model it can use, records every skip, and says so once",
   expect(JSON.stringify(updates)).not.toContain("chain");
 });
 
+it("re-anchors to the profile a first-turn preparation brought, and walks that one", async () => {
+  // `open()` resolved one profile and walked it; the accepted agent names
+  // another. A walk recorded against the profile that is no longer in force
+  // would be a lie about which models were passed over.
+  const { controller, entries, setProfile } = harness(A);
+  controller.activateIfUnset();
+  expect(await controller.startWalk()).toEqual(B);
+  expect(controller.summary()).toMatchObject({ profileId: BALANCED.id, position: 1 });
+
+  setProfile(OTHER);
+  controller.activateForPreparedSelection();
+  expect(controller.summary()).toMatchObject({ profileId: OTHER.id, position: 0, models: [C] });
+  // C can be used, so this profile starts where it prefers and says nothing.
+  expect(await controller.startWalk()).toBeNull();
+  expect(entries.map((entry) => entry.event)).toEqual(["activated"]);
+});
+
+it("leaves a prepared first turn on the profile it already walked", () => {
+  // The same profile: `open()` already answered this question, walk included.
+  const { controller } = harness(A);
+  controller.activateIfUnset();
+  const before = controller.summary();
+  controller.activateForPreparedSelection();
+  expect(controller.summary()).toEqual(before);
+});
+
 it("does not disturb a running conversation when the profile is edited", async () => {
   // The snapshot is taken at activation and never re-read: a saved edit
   // applies at the next activation (docs/model-profiles.md, "Runtime").

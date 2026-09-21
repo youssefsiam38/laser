@@ -23,6 +23,7 @@ import {
   FOREGROUND_COMMAND_SECONDS_MIN,
 } from "./agents.js";
 import {
+  MAX_LEGACY_MODEL_CHOICES,
   MAX_MODEL_PROFILES,
   MAX_PROFILE_MODELS,
   MODEL_PROFILE_ID_PATTERN,
@@ -216,6 +217,19 @@ export const modelProfileSchema = z
 
 /** A save carries the whole profile; the writer stamps `updatedAt`. */
 export const modelProfileInputSchema = modelProfileSchema.extend({ updatedAt: z.string().min(1).max(64).optional() }).strict();
+
+/**
+ * One pre-M22 model choice the host hands the migration: a built-in's model or
+ * an agent file's `model:`, keyed by whatever the caller resolves its answer
+ * by (`docs/model-profiles.md`, "Migration").
+ */
+export const legacyModelChoiceSchema = z
+  .object({
+    key: z.string().min(1).max(1024),
+    label: z.string().min(1).max(PROFILE_NAME_MAX),
+    model: z.object({ provider: z.string().min(1).max(100), id: z.string().min(1).max(200) }).strict(),
+  })
+  .strict();
 
 export const modelProfilesSchema = z.array(modelProfileSchema).max(MAX_MODEL_PROFILES);
 
@@ -1243,7 +1257,9 @@ export const clientParamsSchemas = {
   "models/profiles/delete": z
     .object({ cwd: cwd.optional(), id: modelProfileIdSchema, replacementId: modelProfileIdSchema.optional() })
     .strict(),
-  "models/profiles/migrate": z.object({ cwd }).strict(),
+  "models/profiles/migrate": z
+    .object({ cwd, legacyChoices: z.array(legacyModelChoiceSchema).max(MAX_LEGACY_MODEL_CHOICES).optional() })
+    .strict(),
   "session/profile/set": z.object({ path: sessionPath, profileId: modelProfileIdSchema }).strict(),
   // The pin path, under its own name. `pi/model/set` means the same thing.
   "session/model/pin": z.object({ path: sessionPath, model: modelRefSchema }).strict(),
