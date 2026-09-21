@@ -51,6 +51,9 @@ export const DEFAULT_BUILD_MS = 5 * 60_000;
 /** Files parsed between two turns of the event loop. */
 export const YIELD_EVERY_FILES = 8;
 
+/** Builds started by this process, so no two commands share an id. */
+let started = 0;
+
 export interface DesignBuildOptions {
   projectCwd: string;
   /** The app root inside the project, for a monorepo. Defaults to the project. */
@@ -237,7 +240,11 @@ export function startDesignIndexBuild(options: DesignBuildOptions): DesignBuildC
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   let latest: DesignBuildProgress = { phase: "scanning", filesParsed: 0, filesFound: 0, filesFromCache: 0, elapsedMs: 0 };
-  const id = stableId("cmd", options.projectCwd, options.appRoot ?? ".", String(Date.now()));
+  // The counter, not only the clock: this id is a Command's identity — the
+  // fleet row it publishes under and the Stop that finds it — and two builds
+  // started in the same millisecond would otherwise be the same command.
+  started += 1;
+  const id = stableId("cmd", options.projectCwd, options.appRoot ?? ".", String(Date.now()), String(started));
   const done = buildDesignIndex({
     ...options,
     signal,

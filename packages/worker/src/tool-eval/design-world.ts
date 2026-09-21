@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DesignIndex, DesignIndexEntry } from "@lasercode/protocol";
 import { ProjectDesignIndex } from "../design/index/bridge.js";
-import type { DesignIndexBridge } from "../design/index/tools.js";
+import type { DesignBuildOwner, DesignIndexBridge } from "../design/index/tools.js";
 import type { DesignReviewAction, ReviewActor } from "../design/index/review.js";
 
 export interface ScriptedDesignWorldOptions {
@@ -40,15 +40,27 @@ export class ScriptedDesignWorld implements DesignIndexBridge {
     this.projectCwd = join(base, "project");
     this.stateDir = join(base, "state");
     cpSync(options.projectSource, this.projectCwd, { recursive: true });
+    this.owner = { sessionPath: join(base, "session.jsonl") };
     this.project = new ProjectDesignIndex({ projectCwd: this.projectCwd, stateDir: this.stateDir, projectKey: "tool-eval" });
   }
+
+  /**
+   * The conversation a scripted build belongs to.
+   *
+   * A recorded evaluation has no worker and therefore no open session, but a
+   * build without an owner is refused everywhere else in the product — so the
+   * world supplies one rather than the engine making an exception. It is a
+   * path in this world's own temporary directory: it names the fixture, and it
+   * could never collide with a real session file.
+   */
+  readonly owner: DesignBuildOwner;
 
   /** Build the starting index, when the fixture says the project has one. */
   async prepare(): Promise<void> {
     if (this.prepared) return;
     this.prepared = true;
     if (!this.options.built) return;
-    const started = await this.project.startBuild({ rebuild: false });
+    const started = await this.project.startBuild({ rebuild: false, owner: this.owner });
     await this.project.wait(started.commandId);
   }
 
@@ -57,7 +69,7 @@ export class ScriptedDesignWorld implements DesignIndexBridge {
   }
 
   async startBuild(input: { rebuild: boolean; appRoot?: string; maxFiles?: number }): Promise<{ commandId: string; title: string; appRoot: string }> {
-    const started = await this.project.startBuild(input);
+    const started = await this.project.startBuild({ ...input, owner: this.owner });
     // A model must not have to wait for the command; the evaluation does, so
     // the next recorded call reads an index that exists.
     await this.project.wait(started.commandId);

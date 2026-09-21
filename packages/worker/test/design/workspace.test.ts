@@ -6,20 +6,25 @@
  * *files* and stop, a page grounded with both strategies, and a sketch reborn
  * as a validated tree with the list of what did not map.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { designWorkspaceResultSchemas, type BackgroundTask } from "@lasercode/protocol";
-import { reviewPath } from "../../src/design/index/storage.js";
+import { indexPath, reviewPath } from "../../src/design/index/storage.js";
 import { DesignWorkspace, designCommandTaskId } from "../../src/design/workspace.js";
 import { progressLine, type DesignBuildCommand, type DesignBuildProgress } from "../../src/design/index/command.js";
-import { ProjectDesignIndex } from "../../src/design/index/bridge.js";
+import { FINISHED_COMMANDS_KEPT, ProjectDesignIndex } from "../../src/design/index/bridge.js";
 import { ProjectHostGrounding } from "../../src/design/host/ground.js";
 import { cleanupFixtures, copyFixture } from "./helpers.js";
 
 afterAll(cleanupFixtures);
 
-function workspaceFor(projectCwd: string, published: Array<{ path: string; task: BackgroundTask }> = []) {
+/** The conversations this worker "holds" in these tests. */
+const SESSION = "/s.jsonl";
+/** A child agent's session: a worktree of the same project, its own cwd. */
+const CHILD_SESSION = "/p/.worktrees/agent-1/c.jsonl";
+
+function workspaceFor(projectCwd: string, published: Array<{ path: string; task: BackgroundTask }> = [], held: readonly string[] = [SESSION, CHILD_SESSION]) {
   // Wired exactly as the worker wires it: the index reports to the workspace,
   // the workspace publishes the row.
   let workspace!: DesignWorkspace;
@@ -27,7 +32,7 @@ function workspaceFor(projectCwd: string, published: Array<{ path: string; task:
     projectCwd,
     stateDir: join(projectCwd, ".state"),
     projectKey: "fixture",
-    onCommand: (command) => workspace.observeCommand(command),
+    onCommand: (command, owner) => workspace.observeCommand(command, owner),
     onProgress: (commandId, progress) => workspace.observeProgress(commandId, progress),
   });
   const grounding = new ProjectHostGrounding({ projectCwd, index: async () => (await index.index()) ?? undefined });
@@ -36,11 +41,17 @@ function workspaceFor(projectCwd: string, published: Array<{ path: string; task:
     index: () => index,
     grounding: () => grounding,
     publishTask: (path, task) => published.push({ path, task }),
+    holdsSession: (path) => held.includes(path),
   });
   return { workspace, index, published };
 }
 
 const PROJECT_ID = "pw_9f2c1a0400000000000000000000";
+
+/** A build owned by the ordinary session, for a test about something else. */
+function buildParams(over: Partial<{ appRoot: string; maxFiles: number; rebuild: boolean; sessionPath: string }> = {}) {
+  return { projectId: PROJECT_ID, sessionPath: SESSION, ...over };
+}
 
 describe("design/index/get", () => {
   it("says a project has never been indexed rather than answering an empty index", async () => {
@@ -56,7 +67,7 @@ describe("design/index/get", () => {
   it("answers the reviewed index and its review progress once one is built", async () => {
     const projectCwd = copyFixture("react-tailwind");
     const { workspace } = workspaceFor(projectCwd);
-    const { command } = await workspace.build({ projectId: PROJECT_ID });
+    const { command } = await workspace.build(buildParams());
     await waitForCommand(workspace, command.commandId);
     const answer = await workspace.get({ projectId: PROJECT_ID });
     expect(answer.state).toBe("ready");
@@ -71,7 +82,7 @@ describe("design/index/build", () => {
   it("reports progress by files and never a percentage", async () => {
     const projectCwd = copyFixture("react-tailwind");
     const { workspace } = workspaceFor(projectCwd);
-    const { command } = await workspace.build({ projectId: PROJECT_ID, sessionPath: "/s.jsonl" });
+    const { command } = await workspace.build(buildParams());
     expect(Object.keys(command)).not.toContain("percent");
     await waitForCommand(workspace, command.commandId);
     const after = (await workspace.get({ projectId: PROJECT_ID })).commands[0];
@@ -84,10 +95,10 @@ describe("design/index/build", () => {
     const projectCwd = copyFixture("react-tailwind");
     const published: Array<{ path: string; task: BackgroundTask }> = [];
     const { workspace } = workspaceFor(projectCwd, published);
-    const { command } = await workspace.build({ projectId: PROJECT_ID, sessionPath: "/s.jsonl" });
+    const { command } = await workspace.build(buildParams());
     await waitForCommand(workspace, command.commandId);
     expect(published.length).toBeGreaterThan(0);
-    expect(published.every((entry) => entry.path === "/s.jsonl")).toBe(true);
+    expect(published.every((entry) => entry.path === SESSION)).toBe(true);
     expect(published.every((entry) => entry.task.id === designCommandTaskId(command.commandId))).toBe(true);
     expect(published[0]?.task.status).toBe("running");
     const last = published[published.length - 1]?.task;
@@ -98,24 +109,68 @@ describe("design/index/build", () => {
     expect(last?.activity).not.toMatch(/%/);
   });
 
-  it("publishes no row at all when no session started it", async () => {
+  it("refuses a build that no conversation would own, before it reads anything", async () => {
+    const projectCwd = copyFixture("react-tailwind");
+    const published: Array<{ path: string; task: BackgroundTask }> = [];
+    const { workspace, index } = workspaceFor(projectCwd, published);
+    await expect(workspace.build({ projectId: PROJECT_ID, sessionPath: "" })).rejects.toThrow(/watched and stopped|Next:/);
+    // Nothing started, nothing published, nothing written: a refusal is not a
+    // build with a missing row.
+    expect(published).toEqual([]);
+    expect(index.commands()).toEqual([]);
+    expect(existsSync(indexPath(projectCwd))).toBe(false);
+  });
+
+  it("refuses a conversation this worker does not hold, whatever project it belongs to", async () => {
+    const projectCwd = copyFixture("react-tailwind");
+    const published: Array<{ path: string; task: BackgroundTask }> = [];
+    const { workspace, index } = workspaceFor(projectCwd, published);
+    await expect(workspace.build({ projectId: PROJECT_ID, sessionPath: "/other-project/s.jsonl" })).rejects.toThrow(/not open in this project/);
+    expect(published).toEqual([]);
+    expect(index.commands()).toEqual([]);
+    expect(existsSync(indexPath(projectCwd))).toBe(false);
+  });
+
+  it("lets a child agent's worktree session own a build, and hangs the row under it", async () => {
     const projectCwd = copyFixture("react-tailwind");
     const published: Array<{ path: string; task: BackgroundTask }> = [];
     const { workspace } = workspaceFor(projectCwd, published);
-    const { command } = await workspace.build({ projectId: PROJECT_ID });
+    const { command } = await workspace.build(buildParams({ sessionPath: CHILD_SESSION }));
+    expect(command.sessionPath).toBe(CHILD_SESSION);
     await waitForCommand(workspace, command.commandId);
-    expect(published).toEqual([]);
+    expect(published.length).toBeGreaterThan(0);
+    expect(published.every((entry) => entry.path === CHILD_SESSION)).toBe(true);
+  });
+
+  it("keeps each session's own build when two start at once", async () => {
+    const projectCwd = copyFixture("react-tailwind");
+    const published: Array<{ path: string; task: BackgroundTask }> = [];
+    const { workspace } = workspaceFor(projectCwd, published);
+    const [first, second] = await Promise.all([
+      workspace.build(buildParams({ sessionPath: SESSION })),
+      workspace.build(buildParams({ sessionPath: CHILD_SESSION })),
+    ]);
+    expect(first.command.sessionPath).toBe(SESSION);
+    expect(second.command.sessionPath).toBe(CHILD_SESSION);
+    await waitForCommand(workspace, first.command.commandId);
+    await waitForCommand(workspace, second.command.commandId);
+    // Neither build's rows ever moved to the other's conversation.
+    const rowsOf = (id: string) => published.filter((entry) => entry.task.id === designCommandTaskId(id));
+    expect(new Set(rowsOf(first.command.commandId).map((entry) => entry.path))).toEqual(new Set([SESSION]));
+    expect(new Set(rowsOf(second.command.commandId).map((entry) => entry.path))).toEqual(new Set([CHILD_SESSION]));
+    const listed = (await workspace.get({ projectId: PROJECT_ID })).commands;
+    expect(listed.map((command) => command.sessionPath).sort()).toEqual([CHILD_SESSION, SESSION].sort());
   });
 
   it("stops on request, from the panel and from the fleet row alike", async () => {
     const projectCwd = copyFixture("react-tailwind");
     const { workspace } = workspaceFor(projectCwd);
-    const first = await workspace.build({ projectId: PROJECT_ID });
+    const first = await workspace.build(buildParams());
     const stopped = workspace.stop({ projectId: PROJECT_ID, commandId: first.command.commandId });
     expect(stopped.stopped).toBe(true);
     await waitForCommand(workspace, first.command.commandId);
 
-    const second = await workspace.build({ projectId: PROJECT_ID });
+    const second = await workspace.build(buildParams());
     expect(workspace.stopByTaskId(designCommandTaskId(second.command.commandId))).toBe(true);
     expect(workspace.stopByTaskId("t-42")).toBe(false);
     await waitForCommand(workspace, second.command.commandId);
@@ -125,6 +180,29 @@ describe("design/index/build", () => {
     const projectCwd = copyFixture("react-tailwind");
     const { workspace } = workspaceFor(projectCwd);
     expect(workspace.stop({ projectId: PROJECT_ID, commandId: "nope" })).toEqual({ stopped: false });
+  });
+
+  /**
+   * The index keeps its own bound, not one a caller maintains for it: the
+   * tools, the workspace and a scripted world all start builds through it, and
+   * a closure over a whole build is not something to hold for the life of a
+   * worker.
+   */
+  it("bounds the commands the index itself remembers", async () => {
+    const projectCwd = copyFixture("react-tailwind");
+    const { workspace, index } = workspaceFor(projectCwd);
+    const run = async (): Promise<void> => {
+      const { command } = await workspace.build(buildParams({ maxFiles: 1 }));
+      await waitForCommand(workspace, command.commandId);
+    };
+    for (let attempt = 0; attempt < 11; attempt += 1) await run();
+    // The sweep runs when the next build starts, so what is held is the bound
+    // plus the one that has just finished and has not been swept past yet.
+    const after11 = index.commands().length;
+    expect(after11).toBeLessThanOrEqual(FINISHED_COMMANDS_KEPT + 1);
+    for (let attempt = 0; attempt < 9; attempt += 1) await run();
+    // And it stays there: the map does not grow with the number of builds.
+    expect(index.commands().length).toBe(after11);
   });
 });
 
@@ -143,7 +221,7 @@ describe("finished builds are kept, bounded", () => {
     let workspace!: DesignWorkspace;
     let next = 0;
     const engine = {
-      startBuild: async () => {
+      startBuild: async (input: { owner: { sessionPath: string } }) => {
         next += 1;
         const id = `cmd-${String(next)}`;
         let done!: () => void;
@@ -168,7 +246,7 @@ describe("finished builds are kept, bounded", () => {
           stops: 0,
         };
         commands.set(id, held);
-        workspace.observeCommand(held.command);
+        workspace.observeCommand(held.command, input.owner);
         return { commandId: id, title: held.command.title, appRoot: "." };
       },
       command: (id: string) => commands.get(id)?.command,
@@ -185,9 +263,10 @@ describe("finished builds are kept, bounded", () => {
       index: () => engine as never,
       grounding: () => ({}) as never,
       publishTask: (_path, task) => published.push(task),
+      holdsSession: () => true,
     });
     const run = async (settle = true): Promise<string> => {
-      const { command } = await workspace.build({ projectId: PROJECT_ID, sessionPath: "/s.jsonl" });
+      const { command } = await workspace.build({ projectId: PROJECT_ID, sessionPath: SESSION });
       if (settle) {
         commands.get(command.commandId)!.settle();
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -253,7 +332,7 @@ describe("design/index/review", () => {
   it("persists a decision into review.json and answers the whole reviewed index", async () => {
     const projectCwd = copyFixture("react-tailwind");
     const { workspace } = workspaceFor(projectCwd);
-    const { command } = await workspace.build({ projectId: PROJECT_ID });
+    const { command } = await workspace.build(buildParams());
     await waitForCommand(workspace, command.commandId);
     const before = await workspace.get({ projectId: PROJECT_ID });
     const entry = before.index?.entries.find((candidate) => candidate.kind === "component");
@@ -277,7 +356,7 @@ describe("design/index/review", () => {
   it("renames an entry and keeps the name the parse found", async () => {
     const projectCwd = copyFixture("react-tailwind");
     const { workspace } = workspaceFor(projectCwd);
-    const { command } = await workspace.build({ projectId: PROJECT_ID });
+    const { command } = await workspace.build(buildParams());
     await waitForCommand(workspace, command.commandId);
     const entry = (await workspace.get({ projectId: PROJECT_ID })).index?.entries.find((candidate) => candidate.kind === "component");
     const answer = await workspace.review(
@@ -292,7 +371,7 @@ describe("design/index/review", () => {
   it("refuses an entry that is not in the index, with what to do next", async () => {
     const projectCwd = copyFixture("react-tailwind");
     const { workspace } = workspaceFor(projectCwd);
-    const { command } = await workspace.build({ projectId: PROJECT_ID });
+    const { command } = await workspace.build(buildParams());
     await waitForCommand(workspace, command.commandId);
     await expect(workspace.review({ projectId: PROJECT_ID, entryId: "nope", action: "accept" }, { kind: "person", label: "You" })).rejects.toThrow(
       /no entry|Next:/i,
@@ -312,7 +391,7 @@ describe("design/host/ground", () => {
   it("grounds a route into a frozen outline with both strategies", async () => {
     const projectCwd = copyFixture("react-tailwind");
     const { workspace } = workspaceFor(projectCwd);
-    const { command } = await workspace.build({ projectId: PROJECT_ID });
+    const { command } = await workspace.build(buildParams());
     await waitForCommand(workspace, command.commandId);
     const answer = await workspace.ground({ projectId: PROJECT_ID, routeOrPath: "/settings", featureSize: "large" });
     expect(answer.hostPage?.fidelity).toBe("mapped");
@@ -337,7 +416,7 @@ describe("design/sketch/ground", () => {
   it("rebuilds a sketch as a validated tree and lists what did not map", async () => {
     const projectCwd = copyFixture("react-tailwind");
     const { workspace } = workspaceFor(projectCwd);
-    const { command } = await workspace.build({ projectId: PROJECT_ID });
+    const { command } = await workspace.build(buildParams());
     await waitForCommand(workspace, command.commandId);
     const answer = await workspace.groundSketchDocument({
       projectId: PROJECT_ID,
