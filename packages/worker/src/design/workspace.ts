@@ -7,10 +7,16 @@
  * This module is the seam between a protocol shape and those engines, and it
  * holds three things neither of them should:
  *
- * 1. **The Command a person can see.** An index build is published as a
- *    background Command row — title, progress *by files*, stop — under the
- *    session the person started it from (D-328: one command, one session).
- *    The engine stays a library; the fleet row is a message this module emits.
+ * 1. **The Command a person can see, and the one admission that mints it.**
+ *    An index build is published as a background Command row — title, progress
+ *    *by files*, stop — under the session that owns it (D-328: one command,
+ *    one session). Every build in this worker is admitted here, the person's
+ *    through `design/index/build` and the model's through the session-bound
+ *    bridge behind `build_design_index`, so there is one place that decides
+ *    whether a build may start and exactly one that names its owner. A build
+ *    with no owning session, or one naming a session this worker does not
+ *    hold, is refused before a file is opened: invisible work is not a build
+ *    with a missing row, it is a build that must not start.
  * 2. **The bounded reference image.** A repository screenshot is carried to
  *    the window once, with its bytes, so a region can be drawn on it. It is
  *    never read for text, and a person-supplied image never travels this way.
@@ -33,6 +39,7 @@ import {
 } from "@lasercode/protocol";
 import type { ProjectDesignIndex } from "./index/bridge.js";
 import { progressLine, type DesignBuildCommand, type DesignBuildProgress } from "./index/command.js";
+import type { DesignBuildOwner } from "./index/tools.js";
 import { reviewProgress, ReviewRefused } from "./index/review.js";
 import type { ProjectHostGrounding } from "./host/ground.js";
 import type { StrategyProposal } from "./host/strategy.js";
@@ -56,10 +63,37 @@ export function designCommandIdOf(taskId: string): string {
   return taskId.slice("design-index-".length);
 }
 
+/**
+ * A build refused before anything ran.
+ *
+ * Thrown by the admission and rendered by both its faces: as a
+ * `ProtocolError` for the window, and — because it carries `code` and `next` —
+ * as an ordinary tool refusal for the model, through the design tools' own
+ * `asToolFailure`. Nothing has been written, no cache cleared and no file
+ * opened when it is thrown.
+ */
+export class DesignBuildRefused extends Error {
+  readonly code: string;
+  readonly next: string;
+  constructor(code: string, message: string, next: string) {
+    super(message);
+    this.name = "DesignBuildRefused";
+    this.code = code;
+    this.next = next;
+  }
+}
+
+export const DESIGN_BUILD_NO_SESSION_SENTENCE =
+  "An index build runs as a Command in a conversation, so it can be watched and stopped there. This one was asked for without one, so nothing was started.";
+
+export const DESIGN_BUILD_UNKNOWN_SESSION_SENTENCE =
+  "That conversation is not open in this project, so a build started for it would run where nobody could see or stop it. Nothing was started.";
+
 interface Tracked {
   command: DesignBuildCommand;
   progress: DesignBuildProgress;
-  sessionPath?: string;
+  /** The session that owns it. Fixed at admission; never re-read or replaced. */
+  sessionPath: string;
   startedAt: string;
   running: boolean;
   failure?: string;
@@ -89,13 +123,21 @@ export interface DesignWorkspaceOptions {
   grounding: () => ProjectHostGrounding;
   /** Publish one fleet row. Absent in narrow tests. */
   publishTask?: (sessionPath: string, task: BackgroundTask) => void;
+  /**
+   * Whether this worker holds that conversation open right now.
+   *
+   * The worker only ever opens sessions of its own project — `session/new`
+   * and `session/load` refuse any other directory, and a child session is
+   * opened by the harness in a worktree of this project — so "this worker
+   * holds it" *is* "it belongs to this project". Absent in narrow tests, where
+   * the fixture is the authority on who exists.
+   */
+  holdsSession?: (sessionPath: string) => boolean;
   now?: () => number;
 }
 
 export class DesignWorkspace {
   private readonly tracked = new Map<string, Tracked>();
-  /** The session the build being started belongs to, until its command exists. */
-  private startingFor: string | undefined;
 
   constructor(private readonly options: DesignWorkspaceOptions) {}
 
@@ -104,12 +146,16 @@ export class DesignWorkspace {
    * exists — which is while the build is still at its first await, so the
    * first row a person sees is a running one, not a summary of something that
    * already happened.
+   *
+   * The owner arrives with the command rather than being read from a field the
+   * caller set a moment ago: concurrent admissions cannot interleave into each
+   * other's row.
    */
-  observeCommand(command: DesignBuildCommand): void {
+  observeCommand(command: DesignBuildCommand, owner: DesignBuildOwner): void {
     const held: Tracked = {
       command,
       progress: command.progress(),
-      ...(this.startingFor !== undefined ? { sessionPath: this.startingFor } : {}),
+      sessionPath: owner.sessionPath,
       startedAt: new Date(this.options.now?.() ?? Date.now()).toISOString(),
       running: true,
       publishedAtMs: 0,
@@ -135,23 +181,51 @@ export class DesignWorkspace {
     return { state: "ready", index, progress, commands };
   }
 
+  /**
+   * `design/index/build`: the person's face of the one admission.
+   *
+   * A refusal is a sentence with what to do next, because the window shows it
+   * where the button was.
+   */
   async build(params: Params<"design/index/build">): Promise<Answer<"design/index/build">> {
-    this.startingFor = params.sessionPath;
-    let started: { commandId: string };
     try {
-      started = await this.options.index().startBuild({
+      const started = await this.startBuild({
+        sessionPath: params.sessionPath,
         rebuild: params.rebuild === true,
         ...(params.appRoot !== undefined ? { appRoot: params.appRoot } : {}),
         ...(params.maxFiles !== undefined ? { maxFiles: params.maxFiles } : {}),
       });
-    } finally {
-      this.startingFor = undefined;
+      return { command: started.command };
+    } catch (error) {
+      if (error instanceof DesignBuildRefused) {
+        throw new ProtocolError(ErrorCodes.InvalidParams, `${error.message} Next: ${error.next}.`, { code: error.code, next: error.next });
+      }
+      throw error;
     }
+  }
+
+  /**
+   * The one admission every index build in this worker goes through.
+   *
+   * The owner is decided *here*, before the engine is asked for anything: a
+   * build that cannot be owned is never started, so there is no such thing as
+   * a build running without a row. Everything after this point — the engine,
+   * the row, the retention, Stop — reads the owner this returned.
+   */
+  async startBuild(input: { sessionPath: string; rebuild?: boolean; appRoot?: string; maxFiles?: number }): Promise<{ command: DesignIndexCommand; appRoot: string }> {
+    const owner = this.ownerOf(input.sessionPath);
+    const started = await this.options.index().startBuild({
+      owner,
+      rebuild: input.rebuild === true,
+      ...(input.appRoot !== undefined ? { appRoot: input.appRoot } : {}),
+      ...(input.maxFiles !== undefined ? { maxFiles: input.maxFiles } : {}),
+    });
     const command = this.options.index().command(started.commandId);
     const held = this.tracked.get(started.commandId);
     if (!command || !held) {
       throw new ProtocolError(ErrorCodes.Internal, "The index build could not be started. Try again; nothing was written.");
     }
+    const commandId = started.commandId;
     void command.done
       .then((result) => {
         held.progress = result.progress;
@@ -165,10 +239,37 @@ export class DesignWorkspace {
       .finally(() => {
         // The final row first, then the bookkeeping: a person watching the
         // fleet sees this build end before anything older is forgotten.
-        this.publish(started.commandId, true);
+        this.publish(commandId, true);
         this.prune();
       });
-    return { command: this.commandOf(held) };
+    return { command: this.commandOf(held), appRoot: started.appRoot };
+  }
+
+  /**
+   * Who owns this build, or why nobody may.
+   *
+   * Two refusals, both before any work: no session at all, and a session this
+   * worker does not hold — which covers a conversation that has been closed, a
+   * path that never existed and a session of another project alike, because a
+   * worker holds only its own project's sessions.
+   */
+  private ownerOf(sessionPath: string | undefined): DesignBuildOwner {
+    const path = sessionPath?.trim();
+    if (path === undefined || path === "") {
+      throw new DesignBuildRefused(
+        "no_owning_session",
+        DESIGN_BUILD_NO_SESSION_SENTENCE,
+        "start the build from a conversation in this project, so its Command has somewhere to show",
+      );
+    }
+    if (this.options.holdsSession && !this.options.holdsSession(path)) {
+      throw new DesignBuildRefused(
+        "unknown_session",
+        DESIGN_BUILD_UNKNOWN_SESSION_SENTENCE,
+        "open a conversation in this project and start the build from there",
+      );
+    }
+    return { sessionPath: path };
   }
 
   stop(params: Params<"design/index/stop">): Answer<"design/index/stop"> {
@@ -295,14 +396,14 @@ export class DesignWorkspace {
       elapsedMs: Math.max(0, Math.round(progress.elapsedMs)),
       running: this.isRunning(held),
       ...(held.failure !== undefined ? { failure: held.failure } : {}),
-      ...(held.sessionPath !== undefined ? { sessionPath: held.sessionPath } : {}),
+      sessionPath: held.sessionPath,
     };
   }
 
   /** The fleet row for one build, in the vocabulary a Command row already has. */
   private publish(commandId: string, force = false): void {
     const held = this.tracked.get(commandId);
-    if (!held || held.sessionPath === undefined || !this.options.publishTask) return;
+    if (!held || !this.options.publishTask) return;
     const at = this.options.now?.() ?? Date.now();
     if (!force && at - held.publishedAtMs < ROW_INTERVAL_MS) return;
     held.publishedAtMs = at;

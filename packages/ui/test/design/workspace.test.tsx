@@ -18,6 +18,9 @@ import type { ClientRequests, DesignBody, ProjectWorkComment } from "@lasercode/
 
 import { DesignDetail } from "../../src/components/project-work/bodies/DesignDetail.js";
 import type { WorkBodyContext } from "../../src/components/project-work/bodies/context.js";
+import { bindProjectWork, resetProjectWork } from "../../src/project-work/registry.js";
+import { createStateStore, LaserStoreProvider, type StateStore } from "../../src/runtime/LaserProvider.js";
+import { initialState } from "../../src/store.js";
 import { WORK_QUOTE_EVENT, type WorkQuoteDetail } from "../../src/components/project-work/quote.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { ProjectWorkStore, type ProjectWorkMethod } from "../../src/project-work/store.js";
@@ -75,6 +78,37 @@ const STRATEGY: NonNullable<ClientRequests["design/host/ground"]["result"]["stra
 
 let root: Root;
 let container: HTMLDivElement;
+let store: StateStore;
+
+/** The conversation this window is on, and the project it belongs to. */
+const SESSION = "/p/one.jsonl";
+const SESSION_CWD = "/p";
+
+/**
+ * The window's state: one conversation in this project, selected.
+ *
+ * An index build is a Command, and a Command belongs to a session — so the
+ * Design tab can only start one when this window is on a conversation of the
+ * project being indexed. That is what this seeds.
+ */
+function storeWith(over: Partial<{ current: string | undefined; cwd: string }> = {}): StateStore {
+  const current = "current" in over ? over.current : SESSION;
+  const cwd = over.cwd ?? SESSION_CWD;
+  return createStateStore({
+    ...initialState,
+    ...(current !== undefined ? { current } : {}),
+    sessions: [
+      {
+        path: current ?? SESSION,
+        id: "s1",
+        cwd,
+        createdAt: "2026-02-03T10:00:00.000Z",
+        modifiedAt: "2026-02-03T10:00:00.000Z",
+        messageCount: 2,
+      },
+    ],
+  });
+}
 const workCalls: Array<{ method: ProjectWorkMethod; params: Record<string, unknown> }> = [];
 let historyBody: DesignBody | undefined;
 
@@ -119,6 +153,18 @@ beforeEach(() => {
   historyBody = undefined;
   toast.mockReset();
   answers = { "design/index/get": () => ({ state: "ready", index: indexFixture(), progress: { total: 3, reviewed: 2, changed: 0 }, commands: [] }) };
+  store = storeWith();
+  // The registry is how a directory becomes a project id: the conversation's
+  // folder resolves to "p1", which is what makes it eligible to own a build.
+  resetProjectWork();
+  bindProjectWork((async (method: string, params: Record<string, unknown>) => {
+    if (method !== "project/work/list") throw new Error(`the fixture does not answer ${method}`);
+    // A directory resolves to a project once; every read after that names the
+    // id, exactly as the registry does it.
+    const cwd = params["cwd"] as string | undefined;
+    const projectId = (params["projectId"] as string | undefined) ?? (cwd === SESSION_CWD ? "p1" : "p2");
+    return { projectId, items: [], seq: 1, counts: {}, attention: {} };
+  }) as never);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -127,6 +173,8 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  resetProjectWork();
+  bindProjectWork(undefined);
 });
 
 async function settle(): Promise<void> {
@@ -154,11 +202,16 @@ function button(text: string): HTMLButtonElement | undefined {
 async function render(body: DesignBody, over: Partial<WorkBodyContext> = {}, comments?: ProjectWorkComment[]): Promise<void> {
   await act(async () =>
     root.render(
-      <TooltipProvider>
-        <DesignDetail body={body} context={contextFor(body, over, comments)} />
-      </TooltipProvider>,
+      <LaserStoreProvider store={store}>
+        <TooltipProvider>
+          <DesignDetail body={body} context={contextFor(body, over, comments)} />
+        </TooltipProvider>
+      </LaserStoreProvider>,
     ),
   );
+  await settle();
+  // The owner is resolved through one bounded `project/work/list`; the effect
+  // that reads it lands a tick after the first paint.
   await settle();
 }
 
@@ -211,15 +264,18 @@ describe("Re-index, as a Command", () => {
     answers["design/index/build"] = (params) => {
       started = true;
       expect(params["projectId"]).toBe("p1");
-      return { command: { commandId: "dib_1", title: "Indexing the design system", phase: "parsing", filesParsed: 12, filesFound: 240, filesFromCache: 0, elapsedMs: 900, running: true } };
+      // The Command is owned by the conversation this window is on: that is
+      // where its row, its progress and its Stop live.
+      expect(params["sessionPath"]).toBe(SESSION);
+      return { command: { commandId: "dib_1", title: "Indexing the design system", phase: "parsing", filesParsed: 12, filesFound: 240, filesFromCache: 0, elapsedMs: 900, running: true, sessionPath: SESSION } };
     };
     answers["design/index/get"] = () => ({
       state: "ready",
       index: indexFixture(),
       commands: started && !stopped
-        ? [{ commandId: "dib_1", title: "Indexing the design system", phase: "parsing", filesParsed: 12, filesFound: 240, filesFromCache: 0, elapsedMs: 900, running: true }]
+        ? [{ commandId: "dib_1", title: "Indexing the design system", phase: "parsing", filesParsed: 12, filesFound: 240, filesFromCache: 0, elapsedMs: 900, running: true, sessionPath: SESSION }]
         : started
-          ? [{ commandId: "dib_1", title: "Indexing the design system", phase: "stopped", filesParsed: 12, filesFound: 240, filesFromCache: 0, elapsedMs: 900, running: false }]
+          ? [{ commandId: "dib_1", title: "Indexing the design system", phase: "stopped", filesParsed: 12, filesFound: 240, filesFromCache: 0, elapsedMs: 900, running: false, sessionPath: SESSION }]
           : [],
     });
     answers["design/index/stop"] = () => {
@@ -248,6 +304,29 @@ describe("Re-index, as a Command", () => {
     await render(designFixture());
     await click(button("Re-index"));
     expect(container.textContent).toContain("That project is not one this app knows.");
+  });
+
+  /**
+   * A Command lives in a conversation. With none of this project's open, the
+   * tab says so where the button was and offers the way back — it never starts
+   * a build nobody could watch or stop, and never hides the control silently.
+   */
+  it("asks for a conversation instead of starting an invisible build", async () => {
+    store = storeWith({ current: undefined });
+    await render(designFixture());
+    expect(button("Re-index")).toBeUndefined();
+    const refusal = container.querySelector('[data-slot="design-index-build-refusal"]');
+    expect(refusal?.textContent).toContain("runs as a Command in a conversation");
+    expect(button("Back to the conversation")).toBeDefined();
+    expect(requests.some((request) => request.method === "design/index/build")).toBe(false);
+  });
+
+  it("refuses to hand this project's build to a conversation of another project", async () => {
+    store = storeWith({ cwd: "/elsewhere" });
+    await render(designFixture());
+    expect(button("Re-index")).toBeUndefined();
+    expect(container.querySelector('[data-slot="design-index-build-refusal"]')).not.toBeNull();
+    expect(requests.some((request) => request.method === "design/index/build")).toBe(false);
   });
 });
 
@@ -384,9 +463,11 @@ describe("anchored review", () => {
     } as typeof detail;
     await act(async () =>
       root.render(
-        <TooltipProvider>
-          <DesignDetail body={designFixture()} context={{ store: makeStore(), detail: withHistory, editable: true, onChanged: vi.fn(), items: [], compact: false }} />
-        </TooltipProvider>,
+        <LaserStoreProvider store={store}>
+          <TooltipProvider>
+            <DesignDetail body={designFixture()} context={{ store: makeStore(), detail: withHistory, editable: true, onChanged: vi.fn(), items: [], compact: false }} />
+          </TooltipProvider>
+        </LaserStoreProvider>,
       ),
     );
     await settle();

@@ -9,9 +9,10 @@
  */
 import type { DesignIndex, DesignIndexEntry } from "@lasercode/protocol";
 import { startDesignIndexBuild, type DesignBuildCommand, type DesignBuildOptions, type DesignBuildProgress } from "./command.js";
+import type { DesignBuildOwner } from "./tools.js";
 import { applyReview, applyReviewAction, reviewProgress, ReviewRefused, type ReviewActor, type DesignReviewAction } from "./review.js";
 import { clearParseCache, fileParseCache, readIndex, readReview, writeIndex, writeReview, type ParseCache } from "./storage.js";
-import type { DesignIndexBridge } from "./tools.js";
+
 
 export interface ProjectDesignIndexOptions {
   projectCwd: string;
@@ -26,15 +27,45 @@ export interface ProjectDesignIndexOptions {
    * use it.
    */
   synthesis?: () => DesignBuildOptions["synthesis"] | undefined;
-  /** Told about every build, so the fleet can show it. */
-  onCommand?: (command: DesignBuildCommand) => void;
+  /**
+   * Told about every build and the session that owns it, so the fleet can show
+   * it. The owner is an argument, never a field read afterwards: two sessions
+   * starting builds at once must not be able to take each other's.
+   */
+  onCommand?: (command: DesignBuildCommand, owner: DesignBuildOwner) => void;
   onProgress?: (commandId: string, progress: DesignBuildProgress) => void;
   now?: () => number;
 }
 
-/** One project's index, review and builds. */
-export class ProjectDesignIndex implements DesignIndexBridge {
-  private readonly builds = new Map<string, DesignBuildCommand>();
+/**
+ * How many *finished* builds this project keeps a command object for.
+ *
+ * The same number the workspace keeps rows for, and for the same reason: a
+ * project re-indexed all day would otherwise hold one command — and the
+ * closure over its whole build — for the life of the worker. A build that is
+ * still running is never counted and never released, and nothing is released
+ * while it could still be asked about: the sweep runs when the *next* build
+ * starts, long after the last row of the one being released was published.
+ */
+export const FINISHED_COMMANDS_KEPT = 8;
+
+/** One build this project started, and whether it has ended. */
+interface HeldBuild {
+  command: DesignBuildCommand;
+  owner: DesignBuildOwner;
+  finished: boolean;
+}
+
+/**
+ * One project's index, review and builds.
+ *
+ * Deliberately **not** a `DesignIndexBridge`: a build needs an owning session
+ * and this class cannot know one, so the bridge a session's tools hold is the
+ * session-bound wrapper the worker makes over this (`server.ts`), and every
+ * build reaches here with its owner already decided.
+ */
+export class ProjectDesignIndex {
+  private readonly builds = new Map<string, HeldBuild>();
 
   constructor(private readonly options: ProjectDesignIndexOptions) {}
 
@@ -47,15 +78,24 @@ export class ProjectDesignIndex implements DesignIndexBridge {
 
   /** The commands this project has started, newest last. */
   commands(): DesignBuildCommand[] {
-    return [...this.builds.values()];
+    return [...this.builds.values()].map((held) => held.command);
   }
 
   command(commandId: string): DesignBuildCommand | undefined {
-    return this.builds.get(commandId);
+    return this.builds.get(commandId)?.command;
   }
 
-  async startBuild(input: { rebuild: boolean; appRoot?: string; maxFiles?: number }): Promise<{ commandId: string; title: string; appRoot: string }> {
+  /** The session one build belongs to. Read-only: it is fixed at admission. */
+  owner(commandId: string): DesignBuildOwner | undefined {
+    return this.builds.get(commandId)?.owner;
+  }
+
+  async startBuild(input: { rebuild: boolean; appRoot?: string; maxFiles?: number; owner: DesignBuildOwner }): Promise<{ commandId: string; title: string; appRoot: string }> {
     const appRoot = input.appRoot ?? ".";
+    // Before this build joins them, not after it ends: a command released here
+    // has long since published its last row, and one still running is never a
+    // candidate however many have ended since.
+    this.release();
     if (input.rebuild) clearParseCache(this.options.stateDir, this.options.projectKey);
     const cache: ParseCache = fileParseCache(this.options.stateDir, this.options.projectKey);
     // The id is read from a holder rather than captured: the build reports its
@@ -79,24 +119,47 @@ export class ProjectDesignIndex implements DesignIndexBridge {
     });
     const commandId = command.id;
     started.id = commandId;
-    this.builds.set(commandId, command);
-    this.options.onCommand?.(command);
+    const held: HeldBuild = { command, owner: input.owner, finished: false };
+    this.builds.set(commandId, held);
+    this.options.onCommand?.(command, input.owner);
     // A failed build must not become an unhandled rejection: the command's
     // own `done` still carries the failure for whoever awaits it.
-    command.done.catch(() => {});
+    command.done.then(
+      () => {
+        held.finished = true;
+      },
+      () => {
+        held.finished = true;
+      },
+    );
     return { commandId, title: command.title, appRoot };
   }
 
   /** Wait for one build. Used by the tools' tests and by a person's "stop". */
   async wait(commandId: string): Promise<void> {
-    await this.builds.get(commandId)?.done.catch(() => {});
+    await this.builds.get(commandId)?.command.done.catch(() => {});
   }
 
   stop(commandId: string): boolean {
-    const command = this.builds.get(commandId);
-    if (!command) return false;
-    command.stop();
+    const held = this.builds.get(commandId);
+    if (!held) return false;
+    held.command.stop();
     return true;
+  }
+
+  /**
+   * Forget the oldest ended builds past the bound.
+   *
+   * Insertion order is start order, so the oldest ended build goes first. This
+   * is the index's own bound rather than a caller's callback: the tools, the
+   * workspace and a scripted world all start builds through here, and a bound
+   * only one of them maintained would not be a bound at all.
+   */
+  private release(): void {
+    const ended = [...this.builds.entries()].filter(([, held]) => held.finished);
+    for (let index = 0; index < ended.length - FINISHED_COMMANDS_KEPT; index += 1) {
+      this.builds.delete(ended[index]![0]);
+    }
   }
 
   async review(input: {
