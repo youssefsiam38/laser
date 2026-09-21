@@ -183,3 +183,97 @@ Deferred on purpose, and recorded here rather than implied:
   the Design body reads its real fields today and names the sketches it has
   without ever rendering their bytes.
 - **Model tools and execution linking.** M21-T17.
+
+---
+
+## M21-T7 · Specs and Research
+
+The two slots the T6 table left open, filled exactly: `SpecBodyView` gains
+editing, the brief → full revision flow and its conflict banner;
+`ResearchBodyView` is replaced in the detail by the tree ↔ findings pair.
+"Link something…", deferred by T6 to whichever surface had something to link,
+lands here as the inspector's own act.
+
+### What landed
+
+| File | What it owns |
+| --- | --- |
+| `packages/ui/src/project-work/spec.ts` | the Spec draft: brief ↔ full, what a *full* spec is missing, and one body rendered as stable text for the difference |
+| `packages/ui/src/project-work/research.ts` | the question tree in reading order, a question's findings, the cited span, where a source opens, `[from …]`, the quote's Markdown, and the three writes a person may make |
+| `packages/ui/src/project-work/search.ts` | `project/work/search` merged into the backlog's filter, exact key first |
+| `packages/ui/src/project-work/store.ts` | `revise`, `link` and `unlink` beside the reads (the fence and the idempotency key stay minted in one place) |
+| `packages/ui/src/components/project-work/bodies/SpecDocument.tsx` | the Spec: reading form, editor, revision, conflict banner, difference dialog |
+| `packages/ui/src/components/project-work/bodies/ResearchDetail.tsx` | the compact bar, the tree, the findings panel, the option matrix, the unresolved list, the person-side resolutions |
+| `packages/ui/src/components/project-work/bodies/editor-fields.tsx` | the writing half of a body's fields, including Markdown source/preview |
+| `packages/ui/src/components/project-work/bodies/context.ts` | what a body needs to write: the store, the exact revision, whether it may be edited and why not |
+| `packages/ui/src/components/project-work/LinkDialog.tsx` | "Link something…": relation, target by key, one edge between two exact revisions |
+| `packages/ui/src/components/project-work/quote.ts` | Quote as an event the composer listens for, so the workspace never reaches into the conversation's runtime |
+| `packages/ui/src/components/assistant-ui/elements/research-report.tsx` | the adopted catalog element, retoned, as the selectable question outline |
+| `packages/ui/test/project-work/{spec-research-model,spec-editor,research-detail,links}.test.*` | the rules, the revise round trip and its conflict, the tree/findings/source panel, link and unlink |
+
+Edited: `bodies/index.tsx` (routes Spec and Research through the two new
+components when a context exists, keeps the reading forms), `WorkDetail.tsx`
+(builds that context; `editable` is decided once, from the revision, the
+archive state and `project/work/revise`), `Inspector.tsx` (Link something… and
+unlink), `WorkBacklog.tsx` (the filter also searches bodies),
+`thread/Composer.tsx` (takes a quote into the draft it already holds),
+`components/project-work/index.ts` (the quote seam).
+
+### Decisions
+
+1. **A save is a child revision, never a replacement.** `project/work/revise`
+   is fenced by the revision the person was *reading*. A refused write keeps
+   every word on screen, shows the difference between the two real revisions
+   (the adopted `code-diff` over `specBodyText`) and offers "keep mine as a
+   new revision", which writes fenced by what the host says is current. There
+   is no path in the file that overwrites bytes nobody saw.
+2. **Brief and full are two documents, not one with gaps.** A brief asks for
+   its brief and nothing else; the full form names what a full spec records
+   (problem, outcomes, requirements, acceptance) as a description beside the
+   fields, and still saves without them.
+3. **Findings are read-only here, and it is said out loud.** They are written
+   by the research loop's tools (`record_finding`, M21-T17/T26) and a
+   correction is a new finding that contradicts the old one. The empty state
+   is "No findings yet — the research loop records them", not a disabled
+   "Add finding" button. Confidence is by rule and carries its rule in a
+   tooltip; a person may resolve, hand over, reopen or add a question, and
+   those go through `project/work/revise` with the whole body.
+4. **A highlight is a claim about the source's own words**, so the cited span
+   is matched literally — a quoted phrase from the claim, or the longest run
+   the two share, pulled back to whole words — and nothing is marked on a
+   resemblance.
+5. **Only identities the adapter contract fixes become a URL**: an absolute
+   URL, a known forge at an exact commit, a registry this app ships an adapter
+   for, a DOI through its published resolver. A local path opens through the
+   existing file opener, a `SPEC-4`-shaped project source opens that artifact,
+   and anything else says there is nothing to open rather than guessing a host.
+6. **Quote is an event, not a reach into another surface's runtime.** The
+   composer is mounted the whole time the workspace is open (D-355), so the
+   Markdown — key, claim, verbatim excerpt, `[from …]` — is appended to the
+   draft the person already has rather than replacing it.
+7. **The backlog's one filter does both halves of search.** Rows are filtered
+   locally by key and title; the same text asks the host to search the bodies
+   it projects, and a row that only matched inside a document joins the list
+   with "matched inside the document" on it. An exact key outranks everything.
+   A search never steps around the other filters and never removes a row the
+   person can already see.
+8. **Derived status is derived.** A Research revision's `status` is computed
+   from its question states before every write; a question handed to a person
+   is *not* counted as settled.
+
+### Deferred, with the reason
+
+- **The Jira chip on the Spec header** (named in the T6 slot table). No wire
+  shape for an external work link exists yet — nothing in
+  `packages/protocol/src/project-work*.ts` carries a tracker key — and drawing
+  a chip over data the protocol does not have would be inventing state.
+  `docs/external-work-links.md` owns that contract.
+- **The global "Search all sessions" dialog**, which the T6 plan assigns to
+  M21-T9 with the rest of cross-project search and mentions. `project/work/search`
+  now has a real client (`project-work/search.ts`) for T9 to mount there.
+- **Approve, Request changes and comments** on the Spec's gate card: M21-T8.
+- **The retrieval budget of a *running* research run** in the compact bar. The
+  body carries no budget field; the bar shows what the revision can prove —
+  sources read, findings kept, questions settled — and says so. The run's own
+  `maxSearches`/`maxReads`/`maxBytes` arrive with the loop (M21-T26) and the
+  fleet row.

@@ -8,6 +8,12 @@
  * are M21-T7 (Spec, Research), M21-T13 (Design canvas and index) and M21-T16
  * (Plan document/graph, Task attempts and evidence) — each replaces or wraps
  * the component for its kind, and keeps this one as the reading form.
+ *
+ * M21-T7 has landed for two of them: a Spec is wrapped by `SpecDocument`,
+ * which keeps `SpecBodyView` as its reading half and adds editing, the
+ * revision flow and its conflict banner; a Research is replaced by
+ * `ResearchDetail`, the tree ↔ findings pair. A body rendered without a
+ * context (a preview, a test) still gets the reading form.
  */
 import type {
   DesignBody,
@@ -27,14 +33,25 @@ import { selectWork } from "@/project-work";
 import { KIND_TEXT, stateLabel, taskMark } from "@/project-work/vocabulary";
 
 import { KeyTag } from "../KindBadge.js";
+import type { WorkBodyContext } from "./context.js";
 import { Document, EmptyBody, Labelled, ListSection, Prose, Section, Tags } from "./fields.js";
+import { ResearchDetail } from "./ResearchDetail.js";
+import { SpecDocument } from "./SpecDocument.js";
 
-export function WorkBody({ body, items = [] }: { body: ProjectWorkBody; items?: readonly ProjectWorkListItem[] }) {
+export function WorkBody({
+  body,
+  items = [],
+  context,
+}: {
+  body: ProjectWorkBody;
+  items?: readonly ProjectWorkListItem[];
+  context?: WorkBodyContext | undefined;
+}) {
   switch (body.kind) {
     case "spec":
-      return <SpecBodyView body={body.spec} />;
+      return context ? <SpecDocument body={body.spec} context={context} /> : <SpecBodyView body={body.spec} />;
     case "research":
-      return <ResearchBodyView body={body.research} />;
+      return context ? <ResearchDetail body={body.research} context={context} /> : <ResearchBodyView body={body.research} />;
     case "design":
       return <DesignBodyView body={body.design} />;
     case "plan":

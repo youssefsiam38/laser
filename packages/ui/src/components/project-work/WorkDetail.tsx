@@ -67,6 +67,7 @@ export function WorkDetail({
   const { actions } = useLaserStable();
   const { copy } = useCopy();
   const canWrite = useCapability("project/work/archive", { presentation: "explained" });
+  const canRevise = useCapability("project/work/revise", { presentation: "explained" });
 
   const entityId = selection?.entityId;
   const revisionId = selection?.revisionId;
@@ -228,8 +229,8 @@ export function WorkDetail({
 
         {historical ? (
           <p role="status" className="rounded-md bg-[color-mix(in_oklab,var(--attention)_10%,transparent)] px-2 py-1.5 text-xs leading-xs text-ink-2">
-            This is revision {revision.index}, not the current one.{" "}
-            {selection.fromLink ? "The link you followed named it exactly, so it stays where it was." : "Editing is disabled on an older revision."}{" "}
+            This is revision {revision.index}, not the current one. Editing is disabled on an older revision.{" "}
+            {selection.fromLink ? "The link you followed named it exactly, so it stays where it was." : ""}{" "}
             <button
               type="button"
               className="text-live underline-offset-4 outline-none hover:underline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live"
@@ -249,7 +250,28 @@ export function WorkDetail({
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {detail.body?.body ? (
-          <WorkBody body={detail.body.body} items={work.items} />
+          <WorkBody
+            body={detail.body.body}
+            items={work.items}
+            context={{
+              store,
+              detail,
+              // An older revision is read as it was written, and a window
+              // without the capability says so rather than offering a control
+              // that would fail (M21-T7).
+              editable: !historical && canRevise.state === "available" && !entity.archivedAt,
+              readOnlyReason: historical
+                ? "Editing is disabled on an older revision."
+                : entity.archivedAt
+                  ? "This is archived. Restore it to make changes."
+                  : canRevise.state === "available"
+                    ? undefined
+                    : "This connection cannot write to this project's work.",
+              onChanged: () => void read(),
+              items: work.items,
+              compact,
+            }}
+          />
         ) : detail.body?.released ? (
           <WorkRefusal
             message="This revision's content is no longer stored on this machine."

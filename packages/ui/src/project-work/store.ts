@@ -305,6 +305,56 @@ export class ProjectWorkStore {
     });
   }
 
+  /**
+   * Write the next revision of an entity (M21-T7).
+   *
+   * `expectedRevisionId` is the revision the person was *reading* when they
+   * started editing: the host refuses the write when anything landed in
+   * between, and the surface offers the difference and "keep mine as a new
+   * revision" rather than overwriting what it never saw.
+   */
+  async revise(
+    entity: { entityId: string; expectedRevisionId: string },
+    body: ClientRequests["project/work/revise"]["params"]["body"],
+    options: { title?: string | undefined; note?: string | undefined; sessionId?: string | undefined; actorLabel?: string | undefined } = {},
+  ): Promise<ProjectWorkOutcome<ClientRequests["project/work/revise"]["result"]>> {
+    const projectId = this.#snapshot.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
+    return this.#write("project/work/revise", {
+      projectId,
+      entityId: entity.entityId,
+      expectedRevisionId: entity.expectedRevisionId,
+      body,
+      ...(options.title ? { title: options.title } : {}),
+      ...(options.note ? { note: options.note } : {}),
+      idempotencyKey: this.#newKey(),
+      ...origin(options),
+    });
+  }
+
+  /** Add one link. Optional in every direction, and never implied (D-352). */
+  async link(
+    link: ClientRequests["project/work/link"]["params"]["link"],
+    expectedRevisionId: string,
+  ): Promise<ProjectWorkOutcome<ClientRequests["project/work/link"]["result"]>> {
+    const projectId = this.#snapshot.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
+    return this.#write("project/work/link", { projectId, expectedRevisionId, link, idempotencyKey: this.#newKey() });
+  }
+
+  /** Remove one link by its id. The two artifacts are untouched. */
+  async unlink(entity: { entityId: string; expectedRevisionId: string }, linkId: string): Promise<ProjectWorkOutcome<ClientRequests["project/work/unlink"]["result"]>> {
+    const projectId = this.#snapshot.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
+    return this.#write("project/work/unlink", {
+      projectId,
+      entityId: entity.entityId,
+      expectedRevisionId: entity.expectedRevisionId,
+      linkId,
+      idempotencyKey: this.#newKey(),
+    });
+  }
+
   async archive(entity: { entityId: string; expectedRevisionId: string }, archived: boolean): Promise<ProjectWorkOutcome<ClientRequests["project/work/archive"]["result"]>> {
     const projectId = this.#snapshot.projectId;
     if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
@@ -604,7 +654,7 @@ export function firstBody(kind: ProjectWorkKind, text: string): ClientRequests["
  * call and never from here, so the label is a display name and nothing more —
  * and it is only sent when there is something to say.
  */
-const origin = (input: CreateWorkInput): { origin?: ProjectWorkOrigin } => {
+const origin = (input: { sessionId?: string | undefined; actorLabel?: string | undefined }): { origin?: ProjectWorkOrigin } => {
   if (!input.sessionId && !input.actorLabel) return {};
   return {
     origin: {
