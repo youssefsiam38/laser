@@ -6310,7 +6310,7 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | M26-T0 | Binding contract | done | codex-2026-09-21-model-profiles | `docs/agent-tool-contract.md`; `PLAN.md` M26; D-350 | see notes |
 | M26-T1 | Protocol lint and shapes | done | claude-2026-09-21-leap | `a6ed4028`; `pnpm -F @lasercode/protocol test` (515 passed; `test/tool-contract.test.ts` 49) · `pnpm -F @lasercode/pi-extension test` (`register-tool.test.ts`) | see notes |
 | M26-T2 | Retrofit harness and background tools | done | claude-2026-09-21-leap | `b54e2f06`; `pnpm verify` passed in the worker's tree; merged `a94271f2` | see notes |
-| M26-T3 | Evaluation harness | in-progress | claude-2026-09-21-leap | — | see notes |
+| M26-T3 | Evaluation harness | done | claude-2026-09-21-leap | `5efd53e1` (merged `49439557`); `pnpm -F @lasercode/worker test` (1274 passed; `test/tool-eval/*` 46); `pnpm tool-eval` → 20/20 runs (10 tools × 2 profiles) | see notes |
 | M26-T4 | UI error and preview rendering | done | claude-2026-09-21-leap | `bb8180ca`; `pnpm -F @lasercode/ui test` (3005 passed; `test/thread/tool-contract-rows.test.tsx` 16) | see notes |
 
 #### M26-T1–T2 notes
@@ -6321,6 +6321,7 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 #### M26-T3–T4 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: T3 evaluation harness (worker) and T4 UI error/preview rendering (ui) to two workers in parallel from `a94271f2`; contracts for both in `docs/leap/m26-plan.md` "What the M26-T3 and M26-T4 owners must know".
 
+- 2026-09-21 T3 done (`5efd53e1`): `packages/worker/src/tool-eval/` recorded-response runner over the real driver/engine/registrations with a replay provider that answers as each profile's model; six §4 measures defined exactly in `docs/agent-tool-contract.md`; ten fixtures + a two-profile settings fixture; `pnpm tool-eval` (table/JSON) and `--live --profile` for the person; not wired into `pnpm verify` because the vitest suite already runs the whole matrix (D-350.h in the plan). M21/M24/M25 add fixtures per the plan's recipe.
 - 2026-09-21 T4 done (`bb8180ca`): `elements/tool-error.tsx` `ToolErrorReport` (message headline, committed line in attention/danger-quiet tone, `Next` step, code as a chip), wired through `ToolRow` bodies/peeks and the fallback row; `source-control/change-preview.tsx` extracted from the git dialog and reused by `ToolPreviewRow` (digest, no confirm button); the detected preview shape (`preview: true` + `digest` + `summary` …) published in `docs/leap/m26-plan.md` for M21-T17/M25-T4 producers. Browser acceptance of both themes/widths is the person's (D-342).
 
 #### M26-T0 notes

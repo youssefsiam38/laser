@@ -32,7 +32,7 @@
 | M23 Plain Chat | done |
 | M24 Ask Oracle | in-progress |
 | M25 External work links | in-progress |
-| M26 Tool contract conformance | in-progress |
+| M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
 **Blockers:** M19-T7 source work waits for M19-T6 to release shared `LaserPaths` and migration-storage ownership. M21 remains dependency-gated on the person's M20 sandbox acceptance; the leap goal (`docs/goal-project-lifecycle-leap.md`) proceeds M22 → M23 → M26 → M21 → M24 → M25.
