@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T19:00:31+03:00 · leap integration · HEAD: 02c1bc3c
-**Current focus:** M21 integration and acceptance gaps. T13/T14/T21 checkpoints merged, not yet accepted; T19 checkpoint returned for required corrections. M26 v0.14.0 tagged after exact-source CI; publication retrying the diagnosed upstream failure.
+**Last updated:** 2026-09-21T19:06:46+03:00 · leap integration · HEAD: 64c701cc
+**Current focus:** M21 integration and acceptance gaps. T13/T14/T21 checkpoints merged, not yet accepted; T19 checkpoint returned for required corrections. M26 v0.14.0 is published and verified; M21 remains the next release gate.
 
 | Milestone | State |
 | --- | --- |
@@ -32,12 +32,12 @@
 | M23 Plain Chat | done |
 | M24 Ask Oracle | in-progress (contract only) |
 | M25 External work links | in-progress (contract only) |
-| M26 Tool contract conformance | in-progress (publication pending) |
+| M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
-**Active owners:** T13/T14 approval-projection/gate proof (`f4286351` batch passed focused gates); T18/T19 durable capture implementation (Command/convergence checkpoint `48ca7d60`, owner merge `f86b2d07`); T9/T17 explicit ephemeral SDK identity seam approved (D-362), patch and consumer implementation. T21 single review-fix batch (`run_587c6d87`). M26 diagnosed same-tag retry `t-ca1150ab` is active; no provenance bypass. Exact paths/sessions in `STATUS_DETAILED.md`.
+**Active owners:** T13/T14 approval-projection/gate proof (`f4286351` batch passed focused gates); T18/T19 durable capture implementation (Command/convergence checkpoint `48ca7d60`, owner merge `f86b2d07`); T9/T17 explicit ephemeral SDK identity seam approved (D-362), patch and consumer implementation. T21 single review-fix batch (`run_587c6d87`). M26 publication completed; all four active owners are on M21. Exact paths/sessions in `STATUS_DETAILED.md`.
 **Gate:** merged build/typecheck, host lifecycle 179/179 and UI design 97/97 pass. Full verify failed CLI timeout (focused 2/2 pass); M26 release preparation initially failed MCP status test (focused 11/11 pass); full staged gate passed on resume without bypass. Browser acceptance remains the person's (D-342).
-**Published:** last confirmed Latest v0.13.0 (M23), with v0.12.0 (M22). M26 candidate `ac098597` passed exact-source CI `35616431166`; release `35616858358` failed three x64 attempts on download HTTP504 (ARM64 passed); exact upstream fetch diagnosed; assets subsequently reachable, same-tag retry active. Public assets/Latest are not yet verified. Final main-branch gates remain required.
-**Next dependency-ready work:** finish active corrections/review, publish reviewed M26 checkpoint, close T9/T17 worker mention-context delivery gap (tasks reopened), then T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
+**Published:** v0.14.0 Latest (M26), v0.13.0 (M23), v0.12.0 (M22). Candidate `ac098597`; exact-source CI `35616431166` and release `35616858358` attempt4 pass. Twelve assets, manifest digests and source-bound provenance verified by release controller; evidence `docs/leap/m26-release-evidence.json`. Parent merged release metadata (`64c701cc`), identity check passes. Final integrated main-branch gates remain required.
+**Next dependency-ready work:** finish active corrections/review, close T9/T17 worker mention-context delivery gap (tasks reopened), then T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
 **Recent implementation checkpoints:** T18 `85ee5ea4` (reopened: durable verification capture missing); T9 `222d86c0`; T17 `133d55cd`; T12 `92cc43c9` + `f15eb7d1`; T8 `98a01428`.
 **Other retained blocker:** M19-T7 waits for M19-T6 shared storage ownership. Person-owned M20/visual acceptance must not be inferred from unit tests.

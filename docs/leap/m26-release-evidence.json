@@ -1,0 +1,113 @@
+{
+  "source": "08ebe228b6d3e396b56494f17cf9d78a4ee8b9b5",
+  "candidate": "ac0985979337b5494484c0bc9c91e2d9e8663305",
+  "tag": "v0.14.0",
+  "checkpointStage": "verified",
+  "completedAt": "2026-09-21T16:03:51.851Z",
+  "sourceCi": {
+    "id": 35616431166,
+    "url": "https://github.com/youssefsiam38/laser/actions/runs/35616431166"
+  },
+  "releaseWorkflow": {
+    "id": 35616858358,
+    "attempt": 4,
+    "conclusion": "success",
+    "headSha": "ac0985979337b5494484c0bc9c91e2d9e8663305",
+    "url": "https://github.com/youssefsiam38/laser/actions/runs/35616858358"
+  },
+  "publication": {
+    "id": 393097148,
+    "url": "https://github.com/youssefsiam38/laser/releases/tag/v0.14.0",
+    "draft": false,
+    "prerelease": false,
+    "latest": true,
+    "assets": [
+      {
+        "name": "install.sh",
+        "size": 50857,
+        "digest": "sha256:b41c0e4ab98dc5660627b2968e264debe533f320a6c42a8d3ffa54f35cd3f5cb",
+        "state": "uploaded"
+      },
+      {
+        "name": "laser-0.14.0-aarch64.tar.gz",
+        "size": 207628718,
+        "digest": "sha256:faf000a413fb9bb77acaaf4d2877548a21641f5d75f07cea8b8f5b935a2da13a",
+        "state": "uploaded"
+      },
+      {
+        "name": "Laser-0.14.0-arm64.AppImage",
+        "size": 197670503,
+        "digest": "sha256:955bacb8e630d1911f49525f66a6034967c3079dbcc264eca1aecad80fd023b8",
+        "state": "uploaded"
+      },
+      {
+        "name": "Laser-0.14.0-x86_64.AppImage",
+        "size": 206548330,
+        "digest": "sha256:7f74e1e9685995a84c2952313b22cfe7d7b6cffe64d789a086f712f9ab8ffa54",
+        "state": "uploaded"
+      },
+      {
+        "name": "laser-0.14.0-x86_64.tar.gz",
+        "size": 215941838,
+        "digest": "sha256:93f6d45b5c39bd1850f89642b8c7c73a845192ae1125505870eb2311060faabb",
+        "state": "uploaded"
+      },
+      {
+        "name": "laser-0.14.0.aarch64.rpm",
+        "size": 138334329,
+        "digest": "sha256:041e1adcdb606bfc8a992484f5ded100c3866cf8c67ed96cfe9176743dde2cc3",
+        "state": "uploaded"
+      },
+      {
+        "name": "laser-0.14.0.x86_64.rpm",
+        "size": 151126741,
+        "digest": "sha256:847973afc7c044b5a1c08c5efd7f0956bf34b04c367e73d9a7d020d6f39a98d2",
+        "state": "uploaded"
+      },
+      {
+        "name": "laser_0.14.0_amd64.deb",
+        "size": 169158552,
+        "digest": "sha256:6ac8dfcb10f8d0ab11ef34a93cffbc5827dd6ed2446e72305b27e63c7d48f73c",
+        "state": "uploaded"
+      },
+      {
+        "name": "laser_0.14.0_arm64.deb",
+        "size": 155508368,
+        "digest": "sha256:e7c97206464dc44c74f6008871b4dcb76e4392c40c1fe97396d83caed7708d44",
+        "state": "uploaded"
+      },
+      {
+        "name": "provenance.jsonl",
+        "size": 12569,
+        "digest": "sha256:47799311c5704fa744efb8dd0231419eb2c2f991ff5bf426d726262dc1bf5c2a",
+        "state": "uploaded"
+      },
+      {
+        "name": "SHA256SUMS",
+        "size": 812,
+        "digest": "sha256:a6caea8a092a7c08088dc544c6fec425de5cb67703bca35f7684b11e0de64721",
+        "state": "uploaded"
+      },
+      {
+        "name": "SHA256SUMS.sig",
+        "size": 64,
+        "digest": "sha256:8098e09a06292731df36fedeb21d5b4980909205c1c9fc746a7029bbc343c61a",
+        "state": "uploaded"
+      }
+    ]
+  },
+  "verification": {
+    "controllerExitCode": 0,
+    "inventory": true,
+    "digestsComparedWithPublishedManifest": true,
+    "provenanceVerifiedAgainstCandidateAndTag": true,
+    "notesMatchTagAndRelease": true,
+    "installersDownloaded": false,
+    "smallVerificationFiles": [
+      "SHA256SUMS",
+      "provenance.jsonl"
+    ],
+    "log": "/tmp/laser-m26-release-diagnosed-retry.log",
+    "implementation": "scripts/release/release.mjs verifyPublicRelease/verifyPublishedDigests/verifyPublishedProvenance at reviewed source"
+  }
+}
