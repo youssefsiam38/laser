@@ -14,10 +14,11 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClientRequests, DesignBody, ProjectWorkComment } from "@lasercode/protocol";
+import type { ClientRequests, DesignBody, ProjectWorkComment, SessionSummary } from "@lasercode/protocol";
 
 import { DesignDetail } from "../../src/components/project-work/bodies/DesignDetail.js";
 import type { WorkBodyContext } from "../../src/components/project-work/bodies/context.js";
+import { emptyCodeDestination } from "../../src/runtime/main-destination.js";
 import { bindProjectWork, resetProjectWork } from "../../src/project-work/registry.js";
 import { createStateStore, LaserStoreProvider, type StateStore } from "../../src/runtime/LaserProvider.js";
 import { initialState } from "../../src/store.js";
@@ -91,23 +92,60 @@ const SESSION_CWD = "/p";
  * Design tab can only start one when this window is on a conversation of the
  * project being indexed. That is what this seeds.
  */
+function sessionRow(path: string, cwd: string): SessionSummary {
+  return { path, id: `s${path}`, cwd, createdAt: "2026-02-03T10:00:00.000Z", modifiedAt: "2026-02-03T10:00:00.000Z", messageCount: 2 };
+}
+
 function storeWith(over: Partial<{ current: string | undefined; cwd: string }> = {}): StateStore {
   const current = "current" in over ? over.current : SESSION;
   const cwd = over.cwd ?? SESSION_CWD;
   return createStateStore({
     ...initialState,
     ...(current !== undefined ? { current } : {}),
-    sessions: [
-      {
-        path: current ?? SESSION,
-        id: "s1",
-        cwd,
-        createdAt: "2026-02-03T10:00:00.000Z",
-        modifiedAt: "2026-02-03T10:00:00.000Z",
-        messageCount: 2,
-      },
-    ],
+    sessions: [sessionRow(current ?? SESSION, cwd)],
   });
+}
+
+/**
+ * Move this window to another conversation, the way the app does: the row
+ * exists in the catalog, and the destination selects it.
+ */
+async function moveTo(path: string, cwd: string): Promise<void> {
+  await act(async () => {
+    store.dispatch({ type: "sessions", sessions: [sessionRow(SESSION, SESSION_CWD), sessionRow(path, cwd)] });
+    store.dispatch({
+      type: "destination",
+      destination: { phase: "ready-chat", intent: 1, chat: { kind: "session", path }, rememberedCode: emptyCodeDestination },
+    });
+  });
+  await settle();
+  await settle();
+}
+
+/**
+ * Directories whose resolution this test holds open.
+ *
+ * Resolving a directory to a project is one bounded read over the wire, so
+ * there is always a moment when the window is on a conversation it knows
+ * nothing about yet. That moment is what these tests are about, and this is
+ * how it is held still.
+ */
+const pendingAnswers = new Map<string, Promise<string>>();
+
+/** Hold `cwd` unresolved; the returned function resolves it to one project. */
+function deferResolution(cwd: string): (projectId: string) => Promise<void> {
+  let settleWith!: (projectId: string) => void;
+  pendingAnswers.set(
+    cwd,
+    new Promise<string>((resolve) => {
+      settleWith = resolve;
+    }),
+  );
+  return async (projectId: string) => {
+    settleWith(projectId);
+    await settle();
+    await settle();
+  };
 }
 const workCalls: Array<{ method: ProjectWorkMethod; params: Record<string, unknown> }> = [];
 let historyBody: DesignBody | undefined;
@@ -154,6 +192,7 @@ beforeEach(() => {
   toast.mockReset();
   answers = { "design/index/get": () => ({ state: "ready", index: indexFixture(), progress: { total: 3, reviewed: 2, changed: 0 }, commands: [] }) };
   store = storeWith();
+  pendingAnswers.clear();
   // The registry is how a directory becomes a project id: the conversation's
   // folder resolves to "p1", which is what makes it eligible to own a build.
   resetProjectWork();
@@ -162,7 +201,8 @@ beforeEach(() => {
     // A directory resolves to a project once; every read after that names the
     // id, exactly as the registry does it.
     const cwd = params["cwd"] as string | undefined;
-    const projectId = (params["projectId"] as string | undefined) ?? (cwd === SESSION_CWD ? "p1" : "p2");
+    const held = cwd !== undefined ? pendingAnswers.get(cwd) : undefined;
+    const projectId = (params["projectId"] as string | undefined) ?? (held ? await held : cwd === SESSION_CWD ? "p1" : "p2");
     return { projectId, items: [], seq: 1, counts: {}, attention: {} };
   }) as never);
   container = document.createElement("div");
@@ -327,6 +367,68 @@ describe("Re-index, as a Command", () => {
     expect(button("Re-index")).toBeUndefined();
     expect(container.querySelector('[data-slot="design-index-build-refusal"]')).not.toBeNull();
     expect(requests.some((request) => request.method === "design/index/build")).toBe(false);
+  });
+
+  /**
+   * Moving to a conversation this device has never resolved.
+   *
+   * Whether a conversation may own this project's build is a fact about *its*
+   * directory, and that fact takes a bounded read to learn. Until it has been
+   * learned there is no owner: the tab asks for a conversation rather than
+   * lending the last one's eligibility to this one, which would offer a build
+   * of this project to a conversation that turns out to belong to another.
+   */
+  it("offers no build while the conversation it moved to is still unresolved, and none when it resolves elsewhere", async () => {
+    const FOREIGN = "/elsewhere/two.jsonl";
+    const resolveForeign = deferResolution("/elsewhere");
+    await render(designFixture());
+    expect(button("Re-index"), "the conversation this window started on owns builds").toBeDefined();
+
+    await moveTo(FOREIGN, "/elsewhere");
+    expect(button("Re-index"), "an unresolved conversation owns nothing").toBeUndefined();
+    expect(container.querySelector('[data-slot="design-index-build-refusal"]')?.textContent).toContain("runs as a Command in a conversation");
+    expect(requests.some((request) => request.method === "design/index/build")).toBe(false);
+
+    // It resolves to a different project: still nothing, now for the reason
+    // the worker would have given anyway.
+    await resolveForeign("p2");
+    expect(button("Re-index")).toBeUndefined();
+    expect(container.querySelector('[data-slot="design-index-build-refusal"]')).not.toBeNull();
+    expect(requests.some((request) => request.method === "design/index/build")).toBe(false);
+  });
+
+  it("offers the build to a worktree conversation once it resolves to this project", async () => {
+    const WORKTREE = "/p/.worktrees/agent-1/three.jsonl";
+    const resolveWorktree = deferResolution("/p/.worktrees/agent-1");
+    let owner: string | undefined;
+    answers["design/index/build"] = (params) => {
+      owner = params["sessionPath"] as string;
+      return {
+        command: {
+          commandId: "dib_2",
+          title: "Indexing the design system",
+          phase: "parsing",
+          filesParsed: 1,
+          filesFound: 9,
+          filesFromCache: 0,
+          elapsedMs: 10,
+          running: true,
+          sessionPath: WORKTREE,
+        },
+      };
+    };
+
+    await render(designFixture());
+    await moveTo(WORKTREE, "/p/.worktrees/agent-1");
+    expect(button("Re-index"), "not until the worktree's own directory has resolved").toBeUndefined();
+
+    // A worktree resolves to the project it belongs to, so it owns a build of
+    // it exactly as the project's own conversation does.
+    await resolveWorktree("p1");
+    const reindex = button("Re-index");
+    expect(reindex).toBeDefined();
+    await click(reindex);
+    expect(owner, "the build belongs to the conversation the window is on").toBe(WORKTREE);
   });
 });
 

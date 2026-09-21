@@ -35,6 +35,24 @@ export function designBuildOwnerHasSession(owner: DesignBuildOwner): owner is { 
 const REFUSED: DesignBuildOwner = { refusal: DESIGN_BUILD_NEEDS_SESSION_SENTENCE };
 
 /**
+ * One answer, and what it is an answer *about*.
+ *
+ * A resolution belongs to the directory it was made for and to the project it
+ * was compared against — never to "the last thing this hook looked at". The
+ * moment the window moves to another conversation, the old answer stops
+ * applying, so it can never be read as this one's: an unresolved directory is
+ * refused until it has resolved, not treated as whatever resolved before it.
+ */
+interface Resolution {
+  /** The conversation's directory this was resolved for. */
+  cwd: string;
+  /** The project the panel was asking about when it was resolved. */
+  forProjectId: string;
+  /** What the directory resolved to, or undefined when it could not be. */
+  projectId: string | undefined;
+}
+
+/**
  * The conversation that would own a build of this project, or why none would.
  *
  * `projectId` empty means the caller is not reading a project over the wire at
@@ -51,22 +69,22 @@ export function useDesignBuildOwner(projectId: string): DesignBuildOwner {
     if (!path) return undefined;
     return state.open[path]?.state.cwd ?? state.sessions.find((row) => row.path === path)?.cwd;
   });
-  const [resolved, setResolved] = useState<string | undefined>(undefined);
+  const [resolution, setResolution] = useState<Resolution | undefined>(undefined);
 
   useEffect(() => {
     if (projectId === "" || cwd === undefined) {
-      setResolved(undefined);
+      setResolution(undefined);
       return;
     }
     // Already resolved on this device: no probe, no render after the fact.
     const known = knownProjectWork(cwd);
     if (known) {
-      setResolved(known.getSnapshot().projectId);
+      setResolution({ cwd, forProjectId: projectId, projectId: known.getSnapshot().projectId });
       return;
     }
     let cancelled = false;
     void resolveProjectWork(cwd).then((store) => {
-      if (!cancelled) setResolved(store?.getSnapshot().projectId);
+      if (!cancelled) setResolution({ cwd, forProjectId: projectId, projectId: store?.getSnapshot().projectId });
     });
     return () => {
       cancelled = true;
@@ -74,11 +92,16 @@ export function useDesignBuildOwner(projectId: string): DesignBuildOwner {
   }, [cwd, projectId]);
 
   if (projectId === "" || !current || cwd === undefined) return REFUSED;
+  // Only an answer about *this* conversation's directory counts. While a
+  // directory has not resolved yet there is no owner: a build is not offered
+  // on the strength of the conversation the window was on a moment ago.
+  const resolved = resolution?.cwd === cwd && resolution.forProjectId === projectId ? resolution.projectId : undefined;
   const known = knownProjectWork(cwd)?.getSnapshot().projectId ?? resolved;
   // A conversation in another project may read this design and comment on it,
   // but it cannot own this project's work (the leap, "Cross-session mentions
   // and context"); the worker refuses it too, and this is why it is never
-  // offered.
+  // offered. An unresolved directory is `undefined` here, and `undefined` is
+  // not this project either — so the refusal covers both.
   if (known !== projectId) return REFUSED;
   return { sessionPath: current };
 }
