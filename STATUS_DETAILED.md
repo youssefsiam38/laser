@@ -5987,7 +5987,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T7 | Specs and Research experience | todo | — | — | `PLAN.md` M21 |
 | M21-T8 | Comments, reviews and approval gates | todo | — | — | `PLAN.md` M21 |
 | M21-T9 | Cross-session and cross-project mentions | todo | — | — | `PLAN.md` M21 |
-| M21-T10 | Design Index: static facts, synthesis, review, storage | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T10 | Design Index: static facts, synthesis, review, storage | done | claude-2026-09-21-leap | `9306d0fa`; `pnpm -F @lasercode/worker test` (1344 passed; `test/design/*` 70 incl. the parse-only module-graph and side-effect-marker proofs) | see notes |
 | M21-T11 | Framework-neutral DesignTree and React composition engine | todo | — | — | `PLAN.md` M21 |
 | M21-T12 | Native validation runner and source selection | todo | — | — | `PLAN.md` M21 |
 | M21-T13 | Design workspace and anchored review | todo | — | — | `PLAN.md` M21 |
@@ -6009,6 +6009,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap: one UI worker (client store → workspace shell) from the merged spine; plan in `docs/leap/m21-workspace-plan.md`.
 
 #### M21-T10 notes
+- 2026-09-21 done (`9306d0fa`): `packages/worker/src/design/index/` L0 parsers (stack, styles incl. Tailwind config as text, DTCG tokens, components with typed props, templates/routes, assets/i18n), digest-keyed cache, eras with `useForNewWork`, L1 one-shot synthesis on `designIndexProfileId` with citation checks, review actions preserved by stable ids with "changed since review", `<project>/.laser/design/{index,review}.json` writer refusing machine paths, bounded stoppable Command with progress by files; three tools linted and fixture-replayed (engine registration is M21-T17's — deviation 1), no host change (index authority is M21-T13's — deviation 2); no new dependencies. Merge fix by the orchestrator: the strict fixture parser from the M26 batch dropped `world.designIndex`.
 - 2026-09-21 claimed by claude-2026-09-21-leap (row title aligned with `PLAN.md` as amended by D-353): worker-side Design Index (L0 parsers, L1 synthesis on `designIndexProfileId`, storage, review, digest cache, bounded Command) in parallel with the UI; plan in `docs/leap/m21-design-index-plan.md`.
 
 #### M21-T1–T4 notes
