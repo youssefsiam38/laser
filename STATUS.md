@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T10:09:00+03:00 · claude-2026-09-21-leap · HEAD: 660e5b54
-**Current focus:** M23 Plain Chat is implemented, reviewed and fixed (`pnpm verify` green); M23-T6 is releasing 0.13.0. M26-T1/T2 tool-contract lint runs in parallel; M21 follows.
+**Last updated:** 2026-09-21T14:58:10+03:00 · claude-2026-09-21-leap · HEAD: 819d4a5e
+**Current focus:** M21 The project lifecycle leap: spine (T1–T4), task engine (T15), Design Index (T10), Research (T26), workspace (T5–T7, T16) merged; T8, T11, T17 in flight. M22, M23, M26 done and released (0.12.0, 0.13.0).
 
 | Milestone | State |
 | --- | --- |
@@ -36,7 +36,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** M19-T7 source work waits for M19-T6 to release shared `LaserPaths` and migration-storage ownership. M21 remains dependency-gated on the person's M20 sandbox acceptance; the leap goal (`docs/goal-project-lifecycle-leap.md`) proceeds M22 → M23 → M26 → M21 → M24 → M25.
-**In flight:** M23-T6 release of 0.13.0; M26-T1/T2 (worker). Browser acceptance of the Chat entry points, the Agents empty state and the profile surfaces is the person's (D-342).
+**In flight:** M21-T8 comments/gates, M21-T11 design canvas/sketch, M21-T17 tools/bridge/execution linking (three workers). Browser acceptance of the workspace, Specs/Research, Plans/Tasks and the board is the person's (D-342).
 **Published:** v0.13.0 is Latest (`842bd911` candidate; 12 verified assets).
-**Next up:** M26-T3 evaluation harness and M26-T4 UI error/preview rendering; M21-T1 protocol domain for the lifecycle; M24-T1 after M26-T1.
-**Recently done:** M23-T1–T5 Plain Chat: protocol (`5aebaee4`), worker chat prompt + one-shot naming (`0051d591`), host without built-ins (`79404b7c`), UI without Beam (`72f0a3a1`), docs/guard (`c91eec1b`, `70d8f4ad`), review fixes (`3a27fe38`), naming kept on the person's choice (`40eabcee`); M22 released as v0.12.0 (`19cdd565`).
+**Next up:** M21-T9 mentions, T12 static host grounding, T13 design workspace, T14 greenfield foundation, T18 checkpoints/evidence, T19 verification, then T20–T25; M24 Ask Oracle; M25 External work links.
+**Recently done:** M21-T16 Plans/Tasks workspace (`faf53146`), T7 Specs/Research (`ae5eac62`), T26 Research adapters/tools (`331962d4`), T15 task engine (`2d2b5778`), T5/T6 workspace (`edac5b5c`, `83f454d3`), T10 Design Index (`9306d0fa`), T3/T4 host authority (`34f011f4`, `ed23525f`), T1/T2 (`fca60c23`, `b8fb9454`); M26 T1–T4 + review fixes (`13b310f7`); v0.13.0 published.
