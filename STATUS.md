@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T18:02:00+03:00 · leap integration · HEAD: bc3e16df
+**Last updated:** 2026-09-21T18:26:16+03:00 · leap integration · HEAD: 446c7c99
 **Current focus:** M21 integration and acceptance gaps. T13/T14/T21 checkpoints merged, not yet accepted; T19 checkpoint returned for required corrections. M26 v0.14.0 tagged after exact-source CI; publication building.
 
 | Milestone | State |
@@ -35,9 +35,9 @@
 | M26 Tool contract conformance | in-progress (publication pending) |
 | MX Cross-cutting | in-progress |
 
-**Active owners:** T14 foundation wiring/shared editor; T21 filesystem/publication corrections; T19 verification; independent T18 delivery review. Orchestrator: M26-T5 release transaction from reviewed tool-only source `08ebe228` (resume task `t-22636077`), not yet published. Exact paths/sessions in `STATUS_DETAILED.md`.
+**Active owners:** T13/T14 design integration review (`bfd81088`); T21 full independent review (`1a157c44`); T19 Command/convergence corrections with durable Native-acceptance contract pending; independent T18 delivery review. Orchestrator: M26-T5 release transaction from reviewed tool-only source `08ebe228` (diagnostic retry task `t-d4f27f7c`), not yet published. T9/T17 mention-context owner is drafting the admission/cleanup plan. Exact paths/sessions in `STATUS_DETAILED.md`.
 **Gate:** merged build/typecheck, host lifecycle 179/179 and UI design 97/97 pass. Full verify failed CLI timeout (focused 2/2 pass); M26 release preparation initially failed MCP status test (focused 11/11 pass); full staged gate passed on resume without bypass. Browser acceptance remains the person's (D-342).
-**Published:** last confirmed Latest v0.13.0 (M23), with v0.12.0 (M22). M26 candidate `ac098597` passed exact-source CI `35616431166`; release `35616858358` is building v0.14.0. Public assets/Latest are not yet verified. Final main-branch gates remain required.
+**Published:** last confirmed Latest v0.13.0 (M23), with v0.12.0 (M22). M26 candidate `ac098597` passed exact-source CI `35616431166`; release `35616858358` retries x64 with debug logging after two external download HTTP 504s (ARM64 passed). Public assets/Latest are not yet verified. Final main-branch gates remain required.
 **Next dependency-ready work:** finish active corrections/review, publish reviewed M26 checkpoint, close T9/T17 worker mention-context delivery gap (tasks reopened), then T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
 **Recent implementation checkpoints:** T18 `85ee5ea4` (review pending); T9 `222d86c0`; T17 `133d55cd`; T12 `92cc43c9` + `f15eb7d1`; T8 `98a01428`.
 **Other retained blocker:** M19-T7 waits for M19-T6 shared storage ownership. Person-owned M20/visual acceptance must not be inferred from unit tests.
