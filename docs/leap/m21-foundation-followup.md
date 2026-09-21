@@ -195,6 +195,122 @@ need a protocol or host change, that stops and is reported rather than taken.
 - Worker wiring + tests, UI shared row + adapters, Foundation section and the
   greenfield entry, full validation above. Done.
 
+## Independent-review correction batch (F1–F4)
+
+Owner: worker "Finish design review corrections", branch
+`agents/finish-design-review-corrections-10539c04`, base `48479e57` with
+`agents/complete-foundation-integration-775d8b76` merged into it (merge commit
+first on the branch; `b2f2d4e9` and `bfd81088` preserved verbatim — nothing
+from the earlier owner was rewritten or reverted).
+
+The findings are `docs/leap/m21-design-integration-review.md`, triaged by the
+parent into one batch. Nothing here re-opens the repairs that review verified;
+every change is additive to them.
+
+### F1 · `DesignDetail.tsx` decomposed along the seams it already had
+
+1 117 → **686 lines**, pure orchestration: the draft and its save, the
+selection, the wire, the render contexts, which section is open. What moved,
+unchanged in behaviour and with the same injectable props the existing tests
+use:
+
+| Moved out | To |
+| --- | --- |
+| `ReviewSection` (pins, grounding report, before/after) | `components/design/ReviewPanel.tsx` (`ReviewPanel`) |
+| `FlowsSection` + `flowActionLabel` | `components/design/FlowsPanel.tsx` (`FlowsPanel`) |
+| `FoundationSection`, `FoundationStart` and their copy | `components/design/FoundationSection.tsx` |
+| `ImplementControl` + `IMPLEMENT_SENTENCE` | `components/design/ImplementControl.tsx` |
+| `readBlob`/`decodeBase64` + the `BlobRequest` shape | `src/design/blob-read.ts` (bounded page budget named there) |
+
+State ownership is exactly as it was: `ReviewPanel` keeps its own
+compare-revision reading, everything else stays a pure function of props.
+`DesignDetail` re-exports `IMPLEMENT_SENTENCE`, `foundationRequestFor`,
+`FOUNDATION_PENDING_SENTENCE`, `FOUNDATION_START_SENTENCE` and
+`FoundationStart`, so its public surface — and the existing tests' imports —
+did not move. No generic framework, no LOC target: the seams are the five
+sections the contract already names.
+
+### F2 · An accepted step is the person's to reopen
+
+`proposeFoundationStep` no longer passes `{ replace: true }`
+(`packages/worker/src/design/foundation/proposals.ts`), so the protocol's
+`already_accepted` refusal is reachable on the model path — before any model
+is asked, so a refused call spends nothing. The refusal's `next` is the act
+that expresses the person's intent: *reopen this step in Foundation before
+proposing it again* (`FOUNDATION_REOPEN_NEXT`). No `reconsider` boolean was
+added: a flag the model sets is the model asserting the person's consent, not
+carrying it. The wizard's existing **Reopen** button plus Save is the real
+consent path, and it works unchanged — the reopened step is stored as
+`proposed` on a new revision, and the tool may then propose it.
+
+Tests (`packages/worker/test/design/foundation.test.ts`): the default refusal
+with its code, its sentence and zero completions spent; the whole persisted
+path — propose → person accepts and saves → tool refused → person reopens and
+saves → tool proposes — asserting four distinct revisions, four distinct
+digests, `revisionCount` 4, the earlier revisions still there, and that a
+write fenced by the superseded revision is still refused.
+
+### F3 · One ordered step-record replacement, shared
+
+`withFoundationStep(foundation, record)` in
+`packages/protocol/src/design-foundation.ts` is now the only place a step row
+is written. The worker's `withStep` is that function; the window's `withStep`
+writes its patch through it. The two *patch semantics* stay distinct on
+purpose — the worker replaces with a record it just composed, the window
+patches the record it is showing and does nothing for a step nobody proposed —
+which is why this is a replacement helper and not a reducer. An id outside the
+fixed order sorts last rather than being dropped.
+
+### F4 · The small honesty and bound gaps
+
+| Gap | Fix |
+| --- | --- |
+| `complete()` swallowed every failure | It now answers `{ ok: false, reason }` and the loop pushes one `issues` line per model: not connected on this machine, no answer within *n* seconds, stopped, could not be reached, answered with nothing. The provider's own error text is **never** quoted — it can carry the endpoint, a header or a key — so the class of failure is what is said. The tool bounds the answer to its own schema (8 issues, 500 chars each). |
+| The window's save gate ignored index entries | `DesignDetail` builds one vocabulary (`primitives` + `entryIds` when a live index is readable) and validates both the save and the inline problem list with it, so a node pointing at an entry a review merged away is refused. With no index read, the kit names are all it checks — it invents no refusal it cannot justify. |
+| `DesignWorkspace.tracked` never pruned | Finished builds are bounded to the last 8 (`FINISHED_BUILDS_KEPT`). A running build is never counted and never evicted; the terminal row is published **before** the prune, so the fleet never loses a build's final state; Stop stays idempotent and still answers for a build that has been forgotten. |
+
+Tests: `packages/worker/test/design/foundation.test.ts` (transport/timeout/
+cancel/missing-model issues, no secret in the issue or the record, bounded
+answer), `packages/worker/test/design/workspace.test.ts` (eviction order,
+terminal row before cleanup, running never evicted, Stop twice and after
+eviction), `packages/ui/test/design/detail.test.tsx` (the index-aware save
+gate, both ways), `packages/protocol/test/design-foundation.test.ts`
+(`withFoundationStep`).
+
+### Validation (this batch, run in this worktree)
+
+| Command | Result |
+| --- | --- |
+| `pnpm -F @lasercode/protocol exec vitest run test/design-foundation.test.ts test/design-workspace.test.ts` | 26 passed (25 + 1 new) |
+| `pnpm -F @lasercode/worker exec vitest run test/design` | 214 passed, 15 files (204 + 10 new) |
+| `pnpm -F @lasercode/ui exec vitest run test/design test/settings/token-editor.test.tsx` | 115 passed (113 + 2 new) |
+| `pnpm -F @lasercode/host exec vitest run test/router.design.test.ts` | 6 passed |
+| `pnpm -r build` | Done, every package |
+| `pnpm -r typecheck` | Done, every package |
+| `pnpm identity:check` | "every generated file agrees, no stray literals" |
+
+No browser run of any kind (D-342). No new dependency. No edit to the server
+prompt/admission/driver/companion turn context, the verification and Fleet
+handlers (T19), the host canonical store or interop.
+
+### Limits of this batch, named
+
+1. **Gate staleness after a reopen is not proved here.** The test harness
+   (`ScriptedProjectWorkWorld`) keeps revisions and the stale fence but models
+   no gates, and gate recomputation is the host's. What is proved is that a
+   reopen is an ordinary fenced revision: history kept, digests distinct, a
+   write against the superseded revision refused. The design gate going stale
+   when a covered revision moves is the host's existing behaviour, unchanged
+   by this batch and not re-proved in it.
+2. **Visual acceptance stays the person's**: the five sections after the
+   extraction (nothing about what is drawn changed, but the files did), the
+   Foundation section and the greenfield offer in both themes and widths.
+   `pnpm -r build && pnpm sandbox`, Design tab on a fixture project.
+3. The refusal sentence a model sees combines the protocol's message ("…is
+   already accepted. Propose it again only when the person asks…") with the
+   worker's `next`. The protocol string itself was left alone deliberately —
+   this batch is additive in `packages/protocol`.
+
 ## Review fix (parent diff inspection)
 
 `FoundationStart`'s `absent` copy said "there is no interface code to compose

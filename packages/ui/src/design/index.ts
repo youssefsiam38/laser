@@ -5,6 +5,7 @@
  * machine, the kit's contract and skin, the token helpers and the tree edits.
  * The components under `components/design/` render it.
  */
+export * from "./blob-read.js";
 export * from "./canvas.js";
 export * from "./fixtures.js";
 export * from "./host-context.js";

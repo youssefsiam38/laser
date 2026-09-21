@@ -33,6 +33,7 @@ import {
   foundationProgress,
   foundationStepState,
   nextFoundationStep,
+  withFoundationStep,
   type DesignBody,
   type DesignFoundation,
   type DesignIndex,
@@ -382,15 +383,21 @@ function editedStep(foundation: DesignFoundation, id: FoundationStepId): DesignF
   return withStep(foundation, id, (record) => ({ ...record, edited: true, source: "person" }));
 }
 
+/**
+ * Patch the record this wizard is showing, through the protocol's own ordered
+ * replacement. The window's semantics stay the window's — it changes the
+ * record it already has and never invents one for a step nobody proposed —
+ * and where the row lands is the contract's, the same function the worker
+ * writes its proposals through.
+ */
 function withStep(
   foundation: DesignFoundation,
   id: FoundationStepId,
   change: (record: NonNullable<DesignFoundation["steps"]>[number]) => NonNullable<DesignFoundation["steps"]>[number],
 ): DesignFoundation {
-  const steps = foundation.steps ?? [];
-  const existing = steps.find((step) => step.id === id);
+  const existing = foundationStepState(foundation, id);
   if (!existing) return foundation;
-  return { ...foundation, steps: steps.map((step) => (step.id === id ? change(step) : step)) };
+  return withFoundationStep(foundation, change(existing));
 }
 
 // ---------------------------------------------------------------------------

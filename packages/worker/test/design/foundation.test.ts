@@ -29,8 +29,10 @@ import {
   foundationPlanWithKeys,
   foundationTokenDiff,
   foundationTokenNames,
+  foundationStepState,
   nextFoundationStep,
   toolContract,
+  withFoundationStep,
   type DesignFoundation,
   type FoundationStepId,
   type ModelProfile,
@@ -204,6 +206,199 @@ describe("the proposal steps", () => {
     expect(step?.state).toBe("accepted");
     expect(step?.edited).toBe(true);
     expect(step?.source).toBe("person");
+  });
+});
+
+/**
+ * An accepted step is a decision the person took, and only the person undoes
+ * it (M21-T13/T14 review, F2).
+ *
+ * The tool carries no input that could mean "they asked for this again" — a
+ * boolean the model sets would be the model asserting consent it does not
+ * have — so the refusal stands until the step is `proposed` again in the
+ * Foundation section, saved as a revision, and read back from storage.
+ */
+describe("an accepted step is the person's to reopen", () => {
+  it("refuses a re-proposal of an accepted step, and names the act that would allow it", async () => {
+    const proposed = await proposeFoundationStep(EMPTY, "principles", {});
+    const accepted = acceptFoundationStep(proposed.foundation, "principles");
+    // A model answering is beside the point: the refusal happens before any
+    // model is asked, so nothing is spent on a call that cannot land.
+    let asked = 0;
+    const access = scriptedAccess(() => {
+      asked += 1;
+      return JSON.stringify({ principles: ["Rewritten behind their back."] });
+    });
+    await expect(proposeFoundationStep(accepted, "principles", { access })).rejects.toThrow(/already accepted/i);
+    expect(asked).toBe(0);
+    try {
+      await proposeFoundationStep(accepted, "principles", { access });
+      expect.unreachable("an accepted step must be refused");
+    } catch (error) {
+      expect((error as { code: string }).code).toBe("already_accepted");
+      expect((error as { next: string }).next).toContain("reopen this step in Foundation");
+    }
+    // The record is untouched: still accepted, still what the person accepted.
+    expect(foundationStepState(accepted, "principles")?.state).toBe("accepted");
+  });
+
+  it("proposes it again once the person's reopen is stored, keeping the revisions before it", async () => {
+    const world = new ScriptedProjectWorkWorld({});
+    const first = await proposeFoundationTool({ work: world }, { idempotency_key: "k1", product: "a reading app" });
+    const entityId = String(first["entity_id"]);
+
+    // The person accepts the step in the wizard and saves the revision.
+    const proposedDesign = await load(world, entityId);
+    const accepted = acceptFoundationStep(proposedDesign.body.foundation!, "principles");
+    const acceptedStored = await storeFoundation(world, { design: proposedDesign, foundation: accepted, note: "Principles accepted", idempotencyKey: "accept-principles" });
+
+    // The model now asks for that step again, and is refused.
+    await expect(
+      proposeFoundationTool({ work: world }, { idempotency_key: "k2", entity_id: entityId, step: "principles" }),
+    ).rejects.toThrow(/already accepted/i);
+    const afterRefusal = await load(world, entityId);
+    expect(afterRefusal.revisionId).toBe(acceptedStored.revisionId);
+    expect(foundationStepState(afterRefusal.body.foundation, "principles")?.state).toBe("accepted");
+
+    // The person reopens it in Foundation — the wizard's own edit — and saves.
+    const record = foundationStepState(afterRefusal.body.foundation, "principles")!;
+    const reopened = withFoundationStep(afterRefusal.body.foundation!, { ...record, state: "proposed" });
+    const reopenStored = await storeFoundation(world, { design: afterRefusal, foundation: reopened, note: "Principles reopened", idempotencyKey: "reopen-principles" });
+
+    // A write fenced by the revision the reopen replaced is still refused:
+    // reopening does not loosen the stale check on anything else.
+    await expect(
+      storeFoundation(world, { design: afterRefusal, foundation: reopened, note: "late", idempotencyKey: "stale-write" }),
+    ).rejects.toThrow();
+
+    // And now the tool may propose it.
+    const again = await proposeFoundationTool({ work: world }, { idempotency_key: "k3", entity_id: entityId, step: "principles" });
+    expect(again["step"]).toBe("principles");
+    expect(again["state"]).toBe("proposed");
+
+    // Every write is its own revision with its own digest, and the earlier
+    // ones are still there: reconsidering rewrites nothing that happened.
+    const finalDesign = await load(world, entityId);
+    const revisionIds = [String(first["revision_id"]), acceptedStored.revisionId, reopenStored.revisionId, String(again["revision_id"])];
+    expect(new Set(revisionIds).size).toBe(4);
+    expect(finalDesign.revisionId).toBe(String(again["revision_id"]));
+    expect(String(again["digest"])).not.toBe(acceptedStored.digest);
+    const stored = world.entity(String(first["key"]));
+    expect(stored?.entity.revisionCount).toBe(4);
+    expect(foundationStepState(finalDesign.body.foundation, "principles")?.state).toBe("proposed");
+  });
+});
+
+/**
+ * A model that could not be asked is said, not swallowed (review F4).
+ *
+ * What is never said is the provider's own error text: it can carry the
+ * endpoint, a header or a key. The class of failure is what a person and a
+ * model can both act on.
+ */
+describe("a model that does not answer", () => {
+  const failingAccess = (fail: () => never): FoundationModelAccess => ({
+    profile: { id: "prof_design", name: "Design", models: [{ provider: "test", id: "test-model" }] } as unknown as ModelProfile,
+    models: async () =>
+      ({
+        getModel: () => ({ id: "test-model", provider: "test" }),
+        completeSimple: async () => fail(),
+      }) as never,
+  });
+
+  it("records a transport failure as an issue, with no provider text in it", async () => {
+    const secret = "POST https://api.example.test/v1/chat failed: authorization Bearer sk-live-4711";
+    const proposal = await proposeFoundationStep(EMPTY, "principles", {
+      access: failingAccess(() => {
+        throw new Error(secret);
+      }),
+    });
+    expect(proposal.fallback).toBe(true);
+    expect(proposal.issues).toHaveLength(1);
+    expect(proposal.issues[0]).toContain("test-model");
+    expect(proposal.issues[0]).toContain("could not be reached");
+    for (const leak of ["sk-live-4711", "api.example.test", "Bearer", "authorization"]) {
+      expect(proposal.issues.join(" "), `the issue must not quote the provider's own error (${leak})`).not.toContain(leak);
+    }
+    expect(JSON.stringify(proposal.record)).not.toContain("sk-live-4711");
+  });
+
+  it("records a timeout as a timeout, naming the bound it passed", async () => {
+    const proposal = await proposeFoundationStep(EMPTY, "principles", {
+      access: {
+        ...failingAccess(() => {
+          const error = new Error("The operation was aborted due to timeout");
+          error.name = "TimeoutError";
+          throw error;
+        }),
+        timeoutMs: 45_000,
+      },
+    });
+    expect(proposal.issues[0]).toContain("did not answer within 45 seconds");
+    expect(proposal.fallback).toBe(true);
+  });
+
+  it("says when the step was stopped, rather than blaming the model", async () => {
+    const controller = new AbortController();
+    const proposal = await proposeFoundationStep(EMPTY, "principles", {
+      access: {
+        ...failingAccess(() => {
+          controller.abort();
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          throw error;
+        }),
+        signal: controller.signal,
+      },
+    });
+    expect(proposal.issues[0]).toContain("still answering when this was stopped");
+  });
+
+  it("says a model in the profile that this machine does not have, and asks the next one", async () => {
+    const profile = {
+      id: "prof_design",
+      name: "Design",
+      models: [
+        { provider: "test", id: "gone-model" },
+        { provider: "test", id: "test-model" },
+      ],
+    } as unknown as ModelProfile;
+    const proposal = await proposeFoundationStep(EMPTY, "principles", {
+      access: {
+        profile,
+        models: async () =>
+          ({
+            getModel: (_provider: string, id: string) => (id === "gone-model" ? undefined : { id, provider: "test" }),
+            completeSimple: async () => ({ content: [{ type: "text", text: JSON.stringify({ principles: ["One colour carries meaning.", "Nothing below 12px.", "Quiet by default."] }) }] }),
+          }) as never,
+      },
+    });
+    expect(proposal.issues[0]).toContain("not connected on this machine");
+    expect(proposal.fallback).toBe(false);
+    expect(proposal.record.model).toBe("test-model");
+  });
+
+  it("bounds what one call can report back, however many models were tried", async () => {
+    const models = Array.from({ length: 12 }, (_value, index) => ({ provider: "test", id: `model-${String(index)}` }));
+    const world = new ScriptedProjectWorkWorld({});
+    const answer = await proposeFoundationTool(
+      {
+        work: world,
+        access: {
+          profile: { id: "prof_design", name: "Design", models } as unknown as ModelProfile,
+          models: async () =>
+            ({
+              getModel: () => undefined,
+              completeSimple: async () => ({ content: [] }),
+            }) as never,
+        },
+      },
+      { idempotency_key: "k1" },
+    );
+    const issues = answer["issues"] as string[];
+    expect(issues.length).toBe(8);
+    for (const issue of issues) expect(issue.length).toBeLessThanOrEqual(500);
+    expect(answer["fallback"]).toBe(true);
   });
 });
 

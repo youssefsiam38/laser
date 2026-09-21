@@ -150,6 +150,10 @@ export interface ProposeFoundationInput {
   idempotency_key: string;
 }
 
+/** The answer's own bounds, as the output schema declares them. */
+const MAX_ISSUES = 8;
+const MAX_ISSUE_CHARS = 500;
+
 function refuse(code: string, message: string, next: string): never {
   throw new ProjectWorkToolFailure(toolError({ code, message, committed: false, next } satisfies Parameters<typeof toolError>[0]) as ToolError);
 }
@@ -247,7 +251,9 @@ export async function proposeFoundationTool(bridge: FoundationBridge, input: Pro
     total_steps: progress.total,
     ...(next !== undefined ? { next_step: next } : {}),
     ...(blocked.length > 0 ? { blocked_sources: blocked.map((source) => `${source.name}: ${source.reason}`) } : {}),
-    ...(proposal.issues.length > 0 ? { issues: proposal.issues } : {}),
+    // Bounded to the shape's own limits: a profile with many models must not
+    // turn one refused step into an unbounded answer.
+    ...(proposal.issues.length > 0 ? { issues: proposal.issues.slice(0, MAX_ISSUES).map((issue) => issue.slice(0, MAX_ISSUE_CHARS)) } : {}),
   };
 }
 

@@ -12,7 +12,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { designWorkspaceResultSchemas, type BackgroundTask } from "@lasercode/protocol";
 import { reviewPath } from "../../src/design/index/storage.js";
 import { DesignWorkspace, designCommandTaskId } from "../../src/design/workspace.js";
-import { progressLine } from "../../src/design/index/command.js";
+import { progressLine, type DesignBuildCommand, type DesignBuildProgress } from "../../src/design/index/command.js";
 import { ProjectDesignIndex } from "../../src/design/index/bridge.js";
 import { ProjectHostGrounding } from "../../src/design/host/ground.js";
 import { cleanupFixtures, copyFixture } from "./helpers.js";
@@ -125,6 +125,127 @@ describe("design/index/build", () => {
     const projectCwd = copyFixture("react-tailwind");
     const { workspace } = workspaceFor(projectCwd);
     expect(workspace.stop({ projectId: PROJECT_ID, commandId: "nope" })).toEqual({ stopped: false });
+  });
+});
+
+/**
+ * What a worker keeps about builds that have ended (review F4).
+ *
+ * A project that re-indexes all day must not grow one row per build for the
+ * life of the worker, and nothing a person is still watching may be dropped
+ * to make room. The engine is stubbed here so the phases are the test's, not
+ * a real parse's.
+ */
+describe("finished builds are kept, bounded", () => {
+  function stubbedWorkspace() {
+    const published: BackgroundTask[] = [];
+    const commands = new Map<string, { command: DesignBuildCommand; settle: () => void; stops: number }>();
+    let workspace!: DesignWorkspace;
+    let next = 0;
+    const engine = {
+      startBuild: async () => {
+        next += 1;
+        const id = `cmd-${String(next)}`;
+        let done!: () => void;
+        const finished = new Promise<void>((resolve) => (done = resolve));
+        let phase: "scanning" | "done" | "stopped" = "scanning";
+        const progress = (): DesignBuildProgress => ({ phase, filesParsed: 1, filesFound: 1, filesFromCache: 0, elapsedMs: 1 });
+        const held = {
+          command: {
+            id,
+            title: `Build ${id}`,
+            progress,
+            stop: () => {
+              held.stops += 1;
+              phase = "stopped";
+            },
+            done: finished.then(() => ({ progress: progress() })),
+          } as unknown as DesignBuildCommand,
+          settle: () => {
+            if (phase === "scanning") phase = "done";
+            done();
+          },
+          stops: 0,
+        };
+        commands.set(id, held);
+        workspace.observeCommand(held.command);
+        return { commandId: id, title: held.command.title, appRoot: "." };
+      },
+      command: (id: string) => commands.get(id)?.command,
+      index: async () => undefined,
+      stop: (id: string) => {
+        const held = commands.get(id);
+        if (!held) return false;
+        held.settle();
+        return true;
+      },
+    };
+    workspace = new DesignWorkspace({
+      projectCwd: "/project",
+      index: () => engine as never,
+      grounding: () => ({}) as never,
+      publishTask: (_path, task) => published.push(task),
+    });
+    const run = async (settle = true): Promise<string> => {
+      const { command } = await workspace.build({ projectId: PROJECT_ID, sessionPath: "/s.jsonl" });
+      if (settle) {
+        commands.get(command.commandId)!.settle();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      return command.commandId;
+    };
+    return { workspace, published, commands, run };
+  }
+
+  it("forgets the oldest finished builds, after their last row has been published", async () => {
+    const { workspace, published, run } = stubbedWorkspace();
+    const ids: string[] = [];
+    for (let index = 0; index < 12; index += 1) ids.push(await run());
+
+    const kept = (await workspace.get({ projectId: PROJECT_ID })).commands.map((command) => command.commandId);
+    expect(kept.length).toBe(8);
+    // The newest are the ones kept, in start order.
+    expect(kept).toEqual(ids.slice(-8));
+
+    // Nothing was forgotten before the fleet was told how it ended: every
+    // build, including the evicted ones, published a terminal row.
+    for (const id of ids) {
+      const rows = published.filter((task) => task.id === designCommandTaskId(id));
+      expect(rows.length, id).toBeGreaterThan(0);
+      expect(rows[rows.length - 1]?.status, id).toBe("completed");
+      expect(rows[rows.length - 1]?.endedAt, id).toBeDefined();
+    }
+  });
+
+  it("never evicts a build that is still running, however many have ended since", async () => {
+    const { workspace, commands, run } = stubbedWorkspace();
+    const running = await run(false);
+    for (let index = 0; index < 12; index += 1) await run();
+
+    const listed = (await workspace.get({ projectId: PROJECT_ID })).commands;
+    expect(listed.find((command) => command.commandId === running)?.running).toBe(true);
+    expect(listed.length).toBe(9);
+
+    // And once it ends it is bounded like any other.
+    commands.get(running)!.settle();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await run();
+    expect((await workspace.get({ projectId: PROJECT_ID })).commands.length).toBe(8);
+  });
+
+  it("answers Stop the same way however often it is asked, and after the build is forgotten", async () => {
+    const { workspace, commands, run } = stubbedWorkspace();
+    const id = await run(false);
+    expect(workspace.stop({ projectId: PROJECT_ID, commandId: id }).stopped).toBe(true);
+    expect(workspace.stop({ projectId: PROJECT_ID, commandId: id }).stopped).toBe(true);
+    expect(commands.get(id)!.stops).toBe(2);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    for (let index = 0; index < 9; index += 1) await run();
+    expect((await workspace.get({ projectId: PROJECT_ID })).commands.some((command) => command.commandId === id)).toBe(false);
+    // Forgotten is not an error: Stop still answers, and says it had nothing.
+    expect(workspace.stop({ projectId: PROJECT_ID, commandId: id })).toEqual({ stopped: true });
+    expect(workspace.stopByTaskId(designCommandTaskId(id))).toBe(false);
   });
 });
 

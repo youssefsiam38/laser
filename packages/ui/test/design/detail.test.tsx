@@ -336,6 +336,52 @@ describe("DesignDetail", () => {
     expect(onChanged).toHaveBeenCalled();
   });
 
+  /**
+   * The save gate checks what this window can actually check (review F4).
+   *
+   * With the project's index read, a node pointing at an entry that is not in
+   * it — a review merged it away, a re-index dropped it — is a problem the
+   * save must see, the same vocabulary the worker validates a grounded tree
+   * with. Without an index read, the kit names are all there is to check
+   * against, and the window does not invent a refusal it cannot justify.
+   */
+  it("refuses to save a node whose index entry the index no longer has", async () => {
+    const body = designFixture();
+    const index = indexFixture();
+    // The entry `n_help` points at was merged away by a review.
+    const merged = { ...index, entries: index.entries.filter((entry) => entry.id !== "e_help") };
+    const context = contextFor(body);
+    await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={context} index={merged} /></TooltipProvider>));
+    await settle();
+
+    const alert = [...container.querySelectorAll('[role="alert"]')].find((node) => node.textContent?.includes("cannot be saved"));
+    expect(alert?.textContent).toContain("One node has a problem");
+
+    // Make the draft dirty, then take the save: it is refused, in a sentence,
+    // and nothing is written.
+    await click(shadowOf("scr_list").querySelector('[data-node-id="n_pay"]'));
+    await act(async () =>
+      container.querySelector<HTMLElement>('[data-slot="design-detail"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, bubbles: true })),
+    );
+    await click(button("Save revision"));
+    expect(calls.find((call) => call.method === "project/work/revise")).toBeUndefined();
+    expect(toast).toHaveBeenCalledWith("error", expect.stringContaining("index entry the index no longer has"));
+  });
+
+  it("checks the same design against the index that still has the entry, and saves it", async () => {
+    const body = designFixture();
+    const context = contextFor(body);
+    await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={context} index={indexFixture()} /></TooltipProvider>));
+    await settle();
+    expect([...container.querySelectorAll('[role="alert"]')].some((node) => node.textContent?.includes("cannot be saved"))).toBe(false);
+    await click(shadowOf("scr_list").querySelector('[data-node-id="n_pay"]'));
+    await act(async () =>
+      container.querySelector<HTMLElement>('[data-slot="design-detail"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, bubbles: true })),
+    );
+    await click(button("Save revision"));
+    expect(calls.find((call) => call.method === "project/work/revise")).toBeDefined();
+  });
+
   it("is read-only on the phone with tap-to-inspect, and plays the prototype full screen", async () => {
     const body = designFixture();
     await act(async () => root.render(<TooltipProvider><DesignDetail body={body} context={contextFor(body, { compact: true })} index={indexFixture()} /></TooltipProvider>));

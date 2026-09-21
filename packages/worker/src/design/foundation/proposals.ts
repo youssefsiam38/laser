@@ -32,6 +32,7 @@ import {
   checkFoundationStepOrder,
   designFoundationSchema,
   foundationStep,
+  withFoundationStep,
   type DesignFoundation,
   type DesignTokenGroup,
   type FoundationComponentContract,
@@ -575,21 +576,22 @@ export function applyFoundationPatch(
  * one completion is attempted per model in the profile, in order; then the
  * neutral fallback, which always succeeds. The returned record is always
  * `proposed`: accepting it is the person's, through the wizard.
+ *
+ * A step the person has **accepted** is refused here like any other caller's:
+ * the tool has no input that carries "the person asked for this again", and a
+ * boolean the model sets would be the model asserting the person's consent,
+ * not carrying it. Reopening the step in the Foundation section is the act
+ * that expresses it — the person reopens it, saves the revision, and the step
+ * is `proposed` again, which this path then allows.
  */
 export async function proposeFoundationStep(
   foundation: DesignFoundation,
   stepId: FoundationStepId,
   options: ProposeStepOptions = {},
 ): Promise<FoundationStepProposal> {
-  const refusal = checkFoundationStepOrder(foundation, stepId, { replace: true });
+  const refusal = checkFoundationStepOrder(foundation, stepId);
   if (refusal) {
-    throw new FoundationStepRefused(
-      refusal.code,
-      refusal.message,
-      refusal.next === undefined
-        ? "read the foundation back; every step is settled"
-        : `propose ${refusal.blockedBy ?? refusal.next} first`,
-    );
+    throw new FoundationStepRefused(refusal.code, refusal.message, refusalNext(refusal));
   }
   const inputs = options.inputs ?? {};
   const handler = HANDLERS[stepId];
@@ -598,9 +600,16 @@ export async function proposeFoundationStep(
 
   for (const model of options.access?.profile?.models ?? []) {
     if (options.access?.signal?.aborted === true) break;
-    const raw = await complete(options.access!, model, foundationPrompt(stepId, foundationBrief(stepId, foundation, inputs)));
-    if (raw === null) continue;
-    const answer = parseFoundationJson(raw);
+    const attempt = await complete(options.access!, model, foundationPrompt(stepId, foundationBrief(stepId, foundation, inputs)));
+    if (!attempt.ok) {
+      // A model that could not be asked, timed out or died is said, not
+      // swallowed: `issues` is what the tool's own schema promises. What is
+      // never said is the provider's own error text, which can carry a URL,
+      // a header or a key — the class of failure is what a person can act on.
+      issues.push(`${model.id} ${attempt.reason}`);
+      continue;
+    }
+    const answer = parseFoundationJson(attempt.text);
     if (!answer) {
       issues.push(`${model.id} did not answer with JSON.`);
       continue;
@@ -638,13 +647,14 @@ export async function proposeFoundationStep(
   return { foundation: withStep(applied.foundation, record), record, fallback: true, issues };
 }
 
-/** Replace this step's record, keeping the steps in the contract's order. */
-export function withStep(foundation: DesignFoundation, record: FoundationStepRecord): DesignFoundation {
-  const steps = (foundation.steps ?? []).filter((step) => step.id !== record.id);
-  steps.push(record);
-  steps.sort((left, right) => FOUNDATION_STEPS.findIndex((step) => step.id === left.id) - FOUNDATION_STEPS.findIndex((step) => step.id === right.id));
-  return { ...foundation, steps };
-}
+/**
+ * Replace this step's record, keeping the steps in the contract's order.
+ *
+ * The ordering is the protocol's ({@link withFoundationStep}), which the
+ * window writes its own step edits through too; what stays this side's is
+ * *what* goes in the record — here, a freshly composed one.
+ */
+export const withStep = withFoundationStep;
 
 /** Accept one proposed step, as the person. Nothing else on the body moves. */
 export function acceptFoundationStep(foundation: DesignFoundation, stepId: FoundationStepId, options: { edited?: boolean; now?: () => number } = {}): DesignFoundation {
@@ -662,15 +672,34 @@ export function acceptFoundationStep(foundation: DesignFoundation, stepId: Found
   return withStep(foundation, record);
 }
 
+/** What the order rule's refusal tells the caller to do about it. */
+function refusalNext(refusal: NonNullable<ReturnType<typeof checkFoundationStepOrder>>): string {
+  if (refusal.code === "already_accepted") return FOUNDATION_REOPEN_NEXT;
+  if (refusal.next === undefined) return "read the foundation back; every step is settled";
+  return `propose ${refusal.blockedBy ?? refusal.next} first`;
+}
+
+/**
+ * What to do about an accepted step, in the words the person's own surface
+ * uses: Reopen is a button in the Foundation section, and taking it is how a
+ * person says they want the decision reconsidered.
+ */
+export const FOUNDATION_REOPEN_NEXT =
+  "ask the person to reopen this step in Foundation before proposing it again — reopening it and saving the revision puts the step back to proposed, and then this call is allowed";
+
+/** One completion attempt: the text, or why there is none, in a safe sentence. */
+type CompletionAttempt = { ok: true; text: string } | { ok: false; reason: string };
+
 async function complete(
   access: FoundationModelAccess,
   choice: { provider: string; id: string },
   context: CompletionContext,
-): Promise<string | null> {
+): Promise<CompletionAttempt> {
+  const seconds = Math.round((access.timeoutMs ?? FOUNDATION_TIMEOUT_MS) / 1000);
   try {
     const runtime = await access.models();
     const model = runtime.getModel(choice.provider, choice.id);
-    if (!model) return null;
+    if (!model) return { ok: false, reason: "is in the design profile but is not connected on this machine, so it was not asked." };
     const timeout = AbortSignal.timeout(access.timeoutMs ?? FOUNDATION_TIMEOUT_MS);
     const merged = access.signal ? AbortSignal.any([timeout, access.signal]) : timeout;
     const completion = await runtime.completeSimple(model, context, { maxTokens: MAX_OUTPUT_TOKENS, signal: merged });
@@ -679,8 +708,17 @@ async function complete(
       .map((part) => part.text as string)
       .join("\n")
       .trim();
-    return answer === "" ? null : answer;
-  } catch {
-    return null;
+    return answer === "" ? { ok: false, reason: "answered with nothing at all." } : { ok: true, text: answer };
+  } catch (error) {
+    // Classified, never quoted: a provider's own message can carry the
+    // endpoint it called, a header or a key, and none of that belongs in a
+    // step note a person reads or a tool answer a model sees.
+    if (access.signal?.aborted === true) return { ok: false, reason: "was still answering when this was stopped." };
+    if (isTimeout(error)) return { ok: false, reason: `did not answer within ${String(seconds)} seconds.` };
+    return { ok: false, reason: "could not be reached, so nothing came back from it." };
   }
+}
+
+function isTimeout(error: unknown): boolean {
+  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }

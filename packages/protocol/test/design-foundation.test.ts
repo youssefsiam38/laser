@@ -26,6 +26,7 @@ import {
   foundationTokenDiff,
   foundationTokenNames,
   nextFoundationStep,
+  withFoundationStep,
   type DesignBody,
   type DesignFoundation,
   type FoundationStepRecord,
@@ -81,6 +82,32 @@ describe("the ordered steps", () => {
     expect(checkFoundationStepOrder(accepted(), "colours")?.code).toBe("unknown_step");
     expect(checkFoundationStepOrder(accepted("principles"), "principles")?.code).toBe("already_accepted");
     expect(checkFoundationStepOrder(accepted("principles"), "principles", { replace: true })).toBeUndefined();
+  });
+
+  /**
+   * Both sides write a step record through this, so neither can drift on
+   * where the row lands. What goes *in* the record stays each side's own: the
+   * worker composes a fresh one for a proposal, the window patches the one it
+   * is showing.
+   */
+  it("replace one step's record in place, in the contract's order", () => {
+    const foundation = accepted("primitive_tokens", "principles");
+    const replaced = withFoundationStep(foundation, { id: "principles", state: "proposed", source: "person", edited: true });
+    expect(replaced.steps?.map((step) => step.id)).toEqual(["principles", "primitive_tokens"]);
+    expect(replaced.steps?.[0]).toEqual({ id: "principles", state: "proposed", source: "person", edited: true });
+    // One row per step, and the foundation itself is not mutated.
+    expect(replaced.steps?.filter((step) => step.id === "principles")).toHaveLength(1);
+    expect(foundation.steps?.[0]?.state).toBe("accepted");
+    expect(foundation.steps).toHaveLength(2);
+
+    // A step nobody recorded yet is added, in its place in the order.
+    const added = withFoundationStep(accepted("principles"), { id: "motion", state: "proposed", source: "model" });
+    expect(added.steps?.map((step) => step.id)).toEqual(["principles", "motion"]);
+
+    // A record the order does not know is carried, not dropped: losing a
+    // stored decision silently is worse than sorting it last.
+    const unknown = withFoundationStep(accepted("principles"), { id: "colours", state: "proposed", source: "model" } as FoundationStepRecord);
+    expect(unknown.steps?.map((step) => step.id)).toEqual(["principles", "colours"]);
   });
 
   it("report the next step, the progress and the order however the steps were stored", () => {
