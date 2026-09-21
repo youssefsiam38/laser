@@ -190,3 +190,99 @@ the evaluation harness.
   `docs/agents.md` §2 and §6 gained annotation columns. New tests: harness
   contract + error shape (subagents), task tools + error shape
   (background-work), `web_search` spec + error shape (web-access).
+
+## M26-T4 — the transcript's error and preview rows
+
+Owner: worker "Tool error and preview rows", branch
+`agents/tool-error-and-preview-rows-90d4811e`, base `3e48f73c`. Write set:
+`packages/ui` only, plus this section and the `docs/ux-elements.md` rows for
+what it draws.
+
+### A failed Laser tool row
+
+A Laser tool fails by throwing its rendered `ToolError` (D-359.a). The UI
+never matches prose: it calls `parseToolError(text)` and, when that answers,
+draws the fields.
+
+| Path | What |
+| --- | --- |
+| `packages/ui/src/components/assistant-ui/elements/tool-error.tsx` | `ToolErrorReport` — the parsed failure; falls through to the existing `ToolError` when the text is not one |
+| `packages/ui/src/components/assistant-ui/elements/tool-fallback.aui.tsx` | an unknown/Laser tool's row draws the report in its `error` section instead of the raw result |
+| `packages/ui/src/components/thread/ToolRow.tsx` | every known tool's body and every collapsed row's peek go through the report too |
+
+Three things, in the order a person reads them:
+
+1. **the message** as the headline, in primary ink next to the danger mark —
+   the row already carries the danger rail and the alert icon, and a sentence
+   written for a person reads better in ink than in red;
+2. **what was saved**, in its own tone: `text-attention` for "Some of this was
+   already saved." — the line that may need you — and `text-danger-quiet` for
+   "Nothing was changed.", which is a statement, not a task. The report also
+   carries `data-committed="true" | "false"`;
+3. **the next step**, quieter, under a `Next` eyebrow with its own mark, so it
+   reads as the suggestion it is.
+
+The `code` is never the headline. It draws as a small typed chip
+(`data-slot="tool-error-code"`) for correlation and for the evaluation
+harness. A collapsed row's peek shows the headline and the saved line only.
+
+An error that does not parse — an engine tool, an MCP tool, a crash, a capture
+from before the contract, or an excerpt of a folded body — renders exactly as
+it did before, through `ToolError`.
+
+### Preview rows, and the result shape they detect
+
+A preview draws through **the same component the person's git actions use**:
+the card the commit / push / branch / pull-request dialogs show between Review
+and Confirm was extracted to
+`packages/ui/src/source-control/change-preview.tsx` (`ChangePreview`;
+`GitChangePreview` maps a `GitActionConfirmation` onto it), and
+`packages/ui/src/components/thread/ToolPreviewRow.tsx` mounts it in the
+transcript. `git-dialog.tsx` now renders the same card, so the two cannot
+drift.
+
+**The shape the transcript detects** (`packages/ui/src/components/thread/tool-preview.ts`).
+M21-T17 and M25-T4 producers: match this and your `preview: true` answer draws
+itself.
+
+```jsonc
+{
+  "preview": true,                        // the literal boolean — required
+  "digest": "b8f0c1a4e93d5f17",           // required; the confirming call repeats it
+  "summary": "Export SPEC-12 revision 4 to the tracker as a new issue.",
+  "target": "acme/laser",                 // optional: where it would land
+  "branch": "main",                       // optional
+  "remote": "origin",                     // optional
+  "items": ["SPEC-12", "TASK-44"],        // optional: what it would write
+  "confirmWith": "export_project_work"    // optional: the tool that takes the digest back
+}
+```
+
+| Rule | Value |
+| --- | --- |
+| Where it is read from | the result's `details` (a Laser tool's declared output), then the result object itself, then JSON in the result text — a stored transcript keeps whichever the session had |
+| Required | `preview === true`, a `digest` matching `^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$`, a non-empty `summary`. Any one missing and it is an ordinary result, drawn the ordinary way |
+| Bounds | `summary` ≤ 400 chars, `target`/`branch`/`remote`/`confirmWith` ≤ 200, `items` ≤ 200 entries of ≤ 400 chars (the card paints the first 50 and says how many more), a body over 64 KB is not searched for one |
+| Untrusted | every field is text a model or a service wrote: clamped, escaped by React, wrong types dropped rather than rendered |
+
+The row sits **outside the fold**, beside an approval, because a write that
+has not happened yet is not a detail, and it has **no confirm button**: the
+contract's handshake is a second tool call carrying `confirmed: true` and this
+digest, so the row says that in words ("It goes ahead only when the agent asks
+again with this exact preview through `<tool>`") and shows the digest. A
+control that pretended to confirm would either do nothing or claim an
+authority the transcript does not have.
+
+### Validation
+
+`packages/ui/test/thread/tool-contract-rows.test.tsx` (16 tests): both
+`committed` values with their tones, the code never as the headline and the
+rendered three lines never as one block, the alert role, the collapsed peek, a
+non-conforming error unchanged (asserted as "the pre-existing `tool-error`
+element with the text intact and no report" — a named proxy for "unchanged",
+not a pixel comparison), the preview card with its digest and zero buttons,
+its group role and name, the same card under `GitChangePreview` and
+`ToolPreviewRow`, and the detection rules and bounds above.
+
+Not run by an agent: the browser. `pnpm -r build && pnpm sandbox` and the two
+themes/widths are the person's (D-342).

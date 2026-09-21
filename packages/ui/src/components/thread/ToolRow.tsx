@@ -8,7 +8,7 @@ import { useSessionMcpServers } from "@/agents/hooks";
 import { CodeDiff, DiffStat, diffStatDescription } from "@/components/assistant-ui/elements/code-diff";
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block";
 import { ToolCall } from "@/components/assistant-ui/elements/tool-call";
-import { ToolError } from "@/components/assistant-ui/elements/tool-error";
+import { ToolErrorReport } from "@/components/assistant-ui/elements/tool-error";
 import {
   ToolFallback,
   ToolFallbackApproval,
@@ -37,6 +37,8 @@ import { classifyMcpTool } from "./mcp-tools.js";
 import { McpToolRow } from "./McpToolRow.js";
 import { diffStats, diffViewForTool } from "./diff.js";
 import { useElapsed } from "./timing.js";
+import { ToolPreviewRow } from "./ToolPreviewRow.js";
+import { toolPreview } from "./tool-preview.js";
 import { isNonZeroExit, parseBashOutput, pretty, resultDetails, resultText, summarizeTool, toolBody } from "./tool-summary.js";
 
 /** Shape of `interrupt.payload` the projection builds for select/input/editor dialogs. */
@@ -160,8 +162,12 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       {argsOverflow ? <BodyOverflow body={bodies?.args} path={path ?? undefined} label="request" ground="surface" fade={false} finishes={finishes} tool={{ toolName, state }} className="ms-4" /> : null}
     </>
   );
+  // A write the tool has not made yet (`tool-preview.ts`): the same card the
+  // person's git actions show, outside the fold, with no control of its own.
+  const previewed = state === "done" ? toolPreview(result) : undefined;
   const footer = (
     <>
+      {previewed ? <ToolPreviewRow preview={previewed} toolName={toolName} /> : null}
       {approval ? <RowApproval {...props} /> : null}
       {interrupt && isInterruptPayload(interrupt.payload) ? (
         <InterruptFooter payload={interrupt.payload} resume={props.resume} />
@@ -238,7 +244,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
         onOpenChange={rememberOpen}
         toolName={toolName}
         bodySearchText={bodySearchText}
-        peek={failed && text ? <ToolError message={text} compact /> : undefined}
+        peek={failed && text ? <ToolErrorReport text={text} compact /> : undefined}
         footer={footer}
       >
         <TextBody args={visibleArgs} argsText={visibleArgsText} text={text} failed={failed} overflow={fold("surface-2", text.length > 0)} argsOverflow={argsFold} />
@@ -265,7 +271,7 @@ function ToolRowImpl(props: ToolCallMessagePartProps) {
       bodySearchText={bodySearchText}
       trailing={appliedDiffStats ? <DiffStat added={appliedDiffStats.added} removed={appliedDiffStats.removed} /> : undefined}
       accessibleDescription={diffDescription}
-      peek={failed && text ? <ToolError message={text} compact /> : undefined}
+      peek={failed && text ? <ToolErrorReport text={text} compact /> : undefined}
       footer={footer}
     >
       {(kind === "write" || kind === "edit") && state === "done" && status?.type === "complete" && diffView?.path ? (
@@ -298,7 +304,7 @@ function ReadBody({ args, argsText, text, failed, overflow, argsOverflow }: { ar
       {overflow && !failed ? <ToolFallbackResult result={text} overflow={overflow} /> : text ? (
         failed ? (
           <ToolFallbackSection label="error">
-            <ToolError message={text} />
+            <ToolErrorReport text={text} />
           </ToolFallbackSection>
         ) : (
           <ToolFallbackSection label="result">
@@ -426,7 +432,7 @@ function StartAgentRow({
       open={open}
       onOpenChange={onOpenChange}
       toolName={START_AGENT_TOOL}
-      peek={failed && text ? <ToolError message={text} compact /> : undefined}
+      peek={failed && text ? <ToolErrorReport text={text} compact /> : undefined}
       footer={
         <>
           {info.cwd ? (
@@ -485,7 +491,7 @@ function DiffBody({
       {view ? <CodeDiff view={view} /> : <ToolFallbackArgs argsText={argsText ?? pretty(visibleArgs)} />}
       {failed && text ? (
         <ToolFallbackSection label="error">
-          <ToolError message={text} />
+          <ToolErrorReport text={text} />
         </ToolFallbackSection>
       ) : null}
     </>
@@ -499,7 +505,7 @@ function TextBody({ args, argsText, text, failed, overflow, argsOverflow }: { ar
       <ToolFallbackArgs argsText={argsText ?? pretty(visibleArgs)} overflow={argsOverflow} />
       {failed && text ? (
         <ToolFallbackSection label="error">
-          <ToolError message={text} />
+          <ToolErrorReport text={text} />
         </ToolFallbackSection>
       ) : null}
       {failed ? overflow ?? null : text || overflow ? <ToolFallbackResult result={text} overflow={overflow} /> : null}
