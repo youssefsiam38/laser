@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T01:52:16+03:00 · codex-2026-09-21-model-profiles · HEAD: 56f04f8b
-**Current focus:** 0.11.1 is published and Latest, with the person's own verification behind it. M19-T6 T6B is the next build work.
+**Last updated:** 2026-09-21T07:24:17+03:00 · claude-2026-09-21-leap · HEAD: c6fa9277
+**Current focus:** M22 Model profiles is implemented, reviewed and fixed (`f14a152f`, `pnpm verify` green); M22-T11 is releasing 0.12.0. Next in the leap order: M23 Plain Chat.
 
 | Milestone | State |
 | --- | --- |
@@ -35,8 +35,8 @@
 | M26 Tool contract conformance | in-progress |
 | MX Cross-cutting | in-progress |
 
-**Blockers:** M19-T7 source work waits for M19-T6 to release shared `LaserPaths` and migration-storage ownership. M21 remains dependency-gated on the person's M20 sandbox acceptance.
-**In flight:** nothing building. M16-T97 and M16-T99 are merged and waiting on the person's browser acceptance (D-342: agents run no browser checks; the person tests the sandbox).
-**Published:** v0.10.1 is Latest (`09d68d51` candidate; 12 verified assets).
-**Next up:** M22-T1 protocol for Model Profiles when the person opens M22 implementation; M19-T6 T6B launcher/daemon/desktop binding; the UI half of M16-T98 once the window's contract is final; M19-T7 staging once the launch spine is released (D-339).
-**Recently done:** D-355 binds the workspace UX structure (keys, type badges, Work/Board/Needs you/Recent); D-354 binds the Sketch → Tree → Native ladder, canvas/prototype display and `/design` hand-off; `docs/design-phase.md` binds a parse-only Design phase with a reviewed Design Index (D-353); `docs/research-phase.md` binds the Research phase and adds M21-T26 (D-351); M23–M26 T0 contracts written and indexed in the leap document (`docs/plain-chat.md`, `docs/ask-oracle.md`, `docs/external-work-links.md`, `docs/agent-tool-contract.md`; D-347–D-350); M22-T0 binds Model Profiles as the one model-routing concept, with the breaking-change inventory (`docs/model-profiles.md`, `PLAN.md` M22, D-346); M21-T0 now binds exact artifact-revision ↔ repository provenance (`docs/project-lifecycle-leap.md`, D-345); 0.11.1 removed the whole-conversation read and three transcript defects (`3eba514b`, `259f390f`); M16-T97 transcript paging and M16-T99 local landing (`d92c5f6b`); Changes overlay scrolling (`a264e1ba`); M19-T6 T6A retained runtime store (`40177a72`).
+**Blockers:** M19-T7 source work waits for M19-T6 to release shared `LaserPaths` and migration-storage ownership. M21 remains dependency-gated on the person's M20 sandbox acceptance; the leap goal (`docs/goal-project-lifecycle-leap.md`) proceeds M22 → M23 → M26 → M21 → M24 → M25.
+**In flight:** M22-T11 release of 0.12.0 (migration notes in `RELEASE_NOTES.md`). Browser acceptance of the profiles tab, onboarding profile step and the two-line composer control is the person's (D-342).
+**Published:** v0.11.1 is Latest (`e5a69d80` candidate; 12 verified assets).
+**Next up:** M23-T1 protocol removal and `sessionKind` (after 0.12.0 is Latest); M26-T1 `toolContract()` lint; M19-T6 T6B launcher/daemon/desktop binding.
+**Recently done:** M22-T1–T10 Model profiles: protocol (`e692e4b9`), worker settings/migration/seeds (`717c7c33`), runtime on profiles (`ad23a25e`), agents and naming (`c4d4ec48`), host authority (`e9ba67c9`), settings tab (`14318ffa`), onboarding (`69f7bf9c`), composer/fleet/logs (`60671df9`), agents page + CLI (`1e2c031c`), docs/guard/reconciliation (`1a1efdcd`, `05fbb7aa`), review fixes (`8095f43f`); migration preview on the person's settings (`docs/leap/m22-real-migration-preview.json`, D-356).
