@@ -1,5 +1,10 @@
 # M21-T19 · the verification run's Command lifetime — investigation and plan
 
+Parent inspection of runtime33d3163e found five remaining correctness gaps;
+[`m21-verification-runtime-corrections.md`](m21-verification-runtime-corrections.md)
+is the required correction batch before the first full T19 review. In
+particular, timer-based stdio grace is not accepted as actual drain.
+
 **Read-only investigation. No code, no tests and no other file changed by this
 owner.** This is the original M21-T19 Command contract — a verification run is
 a bounded, visible, stoppable Command — finished rather than extended. Nothing
