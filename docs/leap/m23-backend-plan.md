@@ -113,6 +113,55 @@ Downstream packages are red until T2/T3, as expected between commits.
 7. Byte-for-byte prompt test; naming tests; seam test.
 8. Evidence: `pnpm -F @lasercode/worker test`.
 
+### M23-T2 checkpoint — done
+
+Changed: `worker/src/agents/{definitions,session-config,instruction-templates,template-provenance,harness,index}.ts`,
+`worker/src/agents/session-naming.ts` (new, replaces `namer.ts`),
+`worker/src/{server,driver,first-turn,index,main,packages,worker-lifetime}.ts`,
+`worker/src/drivers/stable-sdk.ts`, `worker/src/git-actions/prose.ts`,
+`pi-extension/src/agents-bridge.ts`, `pi-extension/src/modules/subagents.ts`,
+and the tests listed in the evidence below.
+
+- **A Chat session runs no definition at all.** `DriverAgentOptions.definition`
+  and `HarnessSessionRole.agentName` are optional; `session/new
+  { sessionKind: "chat" }` prepares `chatRole()` / `chatRecord()` and the
+  driver renders `CHAT_INSTRUCTION_TEMPLATE` —
+  `{{availableTools}}\n\n{{toolGuidelines}}\n\n{{availableSkills}}` — through
+  the same field values an agent gets. No core-instructions block (there is no
+  definition to prepend it to), no engine default prompt, no project
+  instructions, and no D-140 role block: `roleBlock` now returns nothing for a
+  chat, and the delegation half was already gated on `canDelegate()`, which a
+  session with no definition never has.
+- **The proof is byte-for-byte.** `test/agents/chat-prompt.test.ts` runs a real
+  engine turn against the stub provider and reads the instruction provenance
+  recorded beside the request: the three field regions are `availableTools`,
+  `toolGuidelines`, `availableSkills` in that order, the first starts at byte
+  0, the last ends at the last byte, the bytes between them are exactly
+  `\n\n`, and no span is attributed to a definition, a core block or an
+  unrecorded writer. A second case is the control: an ordinary project session
+  in the same harness still carries the core block and its `AGENTS.md`.
+- **Naming is a function.** `agents/session-naming.ts` exports
+  `nameSession(text, { models, profile, timeoutMs })`: one bounded completion
+  per model of the naming profile, in order, 8 s ceiling, the existing tolerant
+  normalisation and length rules, silent on failure. `NamerService`,
+  `NamerState`, the Namer instruction template and the editable-prompt hook
+  are gone, and the request carries no identity at all (asserted).
+- **The parked-prompt queue went with it (D-s).** `unnamed`, `UNNAMED_MAX`,
+  `waitToName`, `nameWaitingSessions` and the `definitions.onChange` naming
+  hook are removed: with nothing assigned to naming the request does not run,
+  and the `naming` safety pin now means exactly "a completion is in flight".
+  The M18-T17 behaviour it corrected cannot recur, because the state it
+  corrected no longer exists.
+- `packages.ts`, `main.ts`, `worker-lifetime.ts` and `first-turn.ts` lost
+  their last Beam/Namer vocabulary; the only surviving mention of `beam` in
+  the worker is the legacy record kind `session-config.ts` reads and maps.
+
+Green: `pnpm -F @lasercode/worker build`, `pnpm -F @lasercode/worker test`
+1223 passed / 4 skipped (includes `test/seam.test.ts` 4 passed),
+`pnpm -F @lasercode/pi-extension test` 204 passed,
+`pnpm -F @lasercode/protocol test` 466 passed, `pnpm identity:check`.
+The host is red until T3, as expected between commits.
+
 ## M23-T3 · Host: no built-ins, Beam re-home
 
 1. `agents/builtins.ts` deleted; `seedDefaultAgent` moves to `agents/seed.ts`.

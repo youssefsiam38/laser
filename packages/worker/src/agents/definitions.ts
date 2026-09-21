@@ -4,22 +4,19 @@
  * The host is the source of truth (`<stateDir>/agents/*.md` plus definition
  * metadata in `<stateDir>/agents.json`) and pushes `agents/sync { snapshot }`
  * right after `pi/worker/status: ready` and on every change. Until the first
- * sync arrives this cache answers with built-in
- * fallbacks for `default`, `beam`, `chat` and `namer`, shaped exactly like the
- * host's seeds, so a session opened in the first milliseconds still runs as an
- * agent rather than as nothing.
+ * sync arrives this cache answers with a fallback for `default`, shaped
+ * exactly like the host's seed, so a session opened in the first milliseconds
+ * still runs as an agent rather than as nothing.
  */
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   AGENT_MAX_DEPTH_DEFAULT,
-  BUILTIN_AGENT_NAMES,
   DEFAULT_AGENT_NAME,
   FOREGROUND_COMMAND_SECONDS_DEFAULT,
   PRODUCT_DISPLAY_NAME,
   effectiveAgents,
-  instructionTemplateToken,
-  isBuiltinAgentName,
+  isRetiredAgentName,
   type AgentDefinition,
   type AgentPolicy,
   type AgentsSnapshot,
@@ -38,13 +35,10 @@ function canonicalProjectCwd(projectCwd: string): string {
   }
 }
 
-export const FALLBACK_NAMER_INSTRUCTIONS =
-  "You name sessions from what the person wants done. Keep every title concrete, brief and easy to scan.";
-
-function base(name: string, kind: AgentDefinition["kind"], partial: Partial<AgentDefinition>): AgentDefinition {
+function base(name: string, partial: Partial<AgentDefinition>): AgentDefinition {
   return {
     name,
-    kind,
+    kind: "custom",
     scope: "global",
     description: "",
     instructions: "",
@@ -65,53 +59,11 @@ function base(name: string, kind: AgentDefinition["kind"], partial: Partial<Agen
 /** The shipped `default` agent: Laser's instructions, every default tool, may start itself. */
 export function fallbackDefaultAgent(): AgentDefinition {
   const app = PRODUCT_DISPLAY_NAME;
-  return base(DEFAULT_AGENT_NAME, "custom", {
+  return base(DEFAULT_AGENT_NAME, {
     description: `${app}'s standard coding agent with its default instructions.`,
     engineInstructions: true,
     supportsSubagents: true,
     allowedAgents: [DEFAULT_AGENT_NAME],
-  });
-}
-
-export function fallbackBeamAgent(options: { profileId: string | null }): AgentDefinition {
-  const app = PRODUCT_DISPLAY_NAME;
-  return base("beam", "builtin", {
-    description: `${app}'s assistant for the app itself.`,
-    instructions: [
-      `You are Beam, the person's assistant for ${app}.`,
-      `You answer questions about their sessions, logs, agents and settings by inspecting the ${app} data available in your workspace. Read before you answer.`,
-      "You explain how to navigate the app, propose concrete next actions in the app's own words, and ask before changing any file or setting.",
-      "Be brief and specific. Quote the paths you read so the person can check.",
-      instructionTemplateToken("availableTools"),
-      instructionTemplateToken("toolGuidelines"),
-      instructionTemplateToken("availableSkills"),
-    ].join("\n"),
-    profileId: options.profileId,
-    scopedSkills: false,
-    skills: [],
-  });
-}
-
-export function fallbackChatAgent(profileId: string | null = null): AgentDefinition {
-  return base("chat", "builtin", {
-    description: "A general assistant for conversations not tied to a project.",
-    instructions: [
-      "You are a general assistant. This conversation is not tied to any project or code base.",
-      "Answer directly and concisely. You work in a scratch folder of your own, not in the person's project: if they want work done in one, tell them to open a session there.",
-      instructionTemplateToken("availableTools"),
-      instructionTemplateToken("toolGuidelines"),
-      instructionTemplateToken("availableSkills"),
-    ].join("\n"),
-    profileId,
-  });
-}
-
-/** Namer is a service, never a session: never startable. */
-export function fallbackNamerAgent(profileId: string | null): AgentDefinition {
-  return base("namer", "builtin", {
-    description: "Names sessions on the profile chosen for session names. Not a session agent.",
-    instructions: FALLBACK_NAMER_INSTRUCTIONS,
-    profileId,
   });
 }
 
@@ -122,25 +74,22 @@ export function fallbackPolicy(): AgentPolicy {
 export function fallbackSnapshot(): AgentsSnapshot {
   return {
     revision: 0,
-    agents: [
-      fallbackDefaultAgent(),
-      fallbackBeamAgent({ profileId: null }),
-      fallbackChatAgent(),
-      fallbackNamerAgent(null),
-    ],
+    agents: [fallbackDefaultAgent()],
     defaultAgent: DEFAULT_AGENT_NAME,
     warnings: [],
     policy: fallbackPolicy(),
-    builtinProfiles: { beam: null, chat: null, namer: null },
-    builtinInstructions: { beam: null, chat: null, namer: null },
     renamedAgents: {},
-    workspaces: { beam: "", chat: "" },
+    workspaces: { chat: "" },
   };
 }
 
-/** True for a definition a parent may start as a child. Built-ins never are. */
+/**
+ * True for a definition a parent may start as a child. Every definition is a
+ * person's own now; the three names that used to be built-in agents are still
+ * refused here, so a stale reference cannot start something unexpected.
+ */
 export function isStartable(definition: AgentDefinition): boolean {
-  return definition.kind === "custom" && !isBuiltinAgentName(definition.name);
+  return !isRetiredAgentName(definition.name);
 }
 
 export class DefinitionsCache {
@@ -173,16 +122,6 @@ export class DefinitionsCache {
       return projectCwd === agent.projectCwd ? agent : { ...agent, projectCwd };
     });
     const agents = effectiveAgents(normalized, this.projectCwd);
-
-    // A host that has not seeded a built-in yet still gets the fallback for
-    // it, so Beam and Chat never go missing between two host versions.
-    const names = new Set(agents.map((agent) => agent.name));
-    for (const name of BUILTIN_AGENT_NAMES) {
-      if (names.has(name)) continue;
-      if (name === "beam") agents.push(fallbackBeamAgent({ profileId: snapshot.builtinProfiles?.beam ?? null }));
-      else if (name === "chat") agents.push(fallbackChatAgent(snapshot.builtinProfiles?.chat ?? null));
-      else agents.push(fallbackNamerAgent(snapshot.builtinProfiles?.namer ?? null));
-    }
     this.current = { ...snapshot, agents };
     this.synced = true;
     for (const listener of [...this.listeners]) {
@@ -216,29 +155,6 @@ export class DefinitionsCache {
 
   policy(): AgentPolicy {
     return this.current.policy;
-  }
-
-  /**
-   * The profile session naming runs on; null follows the profile assigned to
-   * naming in Settings (`docs/model-profiles.md`, "Assignments").
-   */
-  namerProfileId(): string | null {
-    return this.current.builtinProfiles?.namer ?? null;
-  }
-
-  /** Namer is a service rather than a session, so it reads its prompt here. */
-  namerInstructions(): string {
-    const instructions = this.definition("namer")?.instructions.trim();
-    return instructions || FALLBACK_NAMER_INSTRUCTIONS;
-  }
-
-  beamProfileId(): string | null {
-    return this.current.builtinProfiles?.beam ?? null;
-  }
-
-  /** Chat's profile; null means Chat follows the profile assigned to new sessions. */
-  chatProfileId(): string | null {
-    return this.current.builtinProfiles?.chat ?? null;
   }
 
   onChange(listener: (snapshot: AgentsSnapshot) => void): () => void {

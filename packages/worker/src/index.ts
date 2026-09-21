@@ -65,5 +65,5 @@ export {
 } from "./transcribe.js";
 export * from "./resolve-pi.js";
 
-// M13 · the agent harness: definitions, runs, worktrees, Beam and Namer.
+// M13 · the agent harness: definitions, runs, worktrees and session naming.
 export * from "./agents/index.js";

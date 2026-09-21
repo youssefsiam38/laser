@@ -1,21 +1,22 @@
 /** Diagnostic rendering alongside the real template. Sent text is never changed. */
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
-import { INSTRUCTION_TEMPLATE_FIELDS, renderInstructionTemplate, type InstructionSource, type InstructionSourceSpan, type InstructionTemplateTarget } from "@lasercode/protocol";
+import { INSTRUCTION_TEMPLATE_FIELDS, renderInstructionTemplate, type InstructionSource, type InstructionSourceSpan } from "@lasercode/protocol";
 import { formatSkillsForPrompt, type BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
 
+/** `name` is absent for a plain Chat, which runs no definition. */
 export function templateProvenance(
   template: string,
-  target: InstructionTemplateTarget,
   values: Record<string, string>,
   text: string,
-  name: string,
+  name: string | undefined,
   options: BuildSystemPromptOptions,
   coreLength?: number,
   definitionPath?: string,
 ): InstructionSourceSpan[] {
   const role: InstructionSource = {
-    kind: "agent", origin: "agent", label: `Agent · ${name}`, agentName: name,
+    kind: "agent", origin: "agent", label: name ? `Agent · ${name}` : "Chat",
+    ...(name ? { agentName: name } : {}),
     ...(definitionPath ? { path: definitionPath } : { inline: true as const }),
   };
   const core: InstructionSource = { kind: "agent", origin: "agent", label: "Core instructions", inline: true };
@@ -27,7 +28,7 @@ export function templateProvenance(
   const diagnosticTemplate = coreLength === undefined
     ? template
     : `${template.slice(0, coreLength)}${boundary}${template.slice(coreLength)}`;
-  const rendered = renderInstructionTemplate(diagnosticTemplate, target, tagged);
+  const rendered = renderInstructionTemplate(diagnosticTemplate, tagged);
   const pattern = new RegExp(`${marker}(\\d+):(start|end)\\u0000|${boundary}`, "g");
   let inCore = coreLength !== undefined;
   let current: InstructionSource = inCore ? core : role;
@@ -40,7 +41,7 @@ export function templateProvenance(
     const field = INSTRUCTION_TEMPLATE_FIELDS.find(field => field.key === key);
     const label = field?.label ?? "Instruction field";
     return { kind: "variable", origin: "variable", inline: true, label: `Variable · ${label}`,
-      fieldKey: key, agentName: name };
+      fieldKey: key, ...(name ? { agentName: name } : {}) };
   };
   for (const match of rendered.matchAll(pattern)) {
     const value = rendered.slice(cursor, match.index);

@@ -36,21 +36,37 @@ export function filterSkills<T extends SkillLike>(
   return scoped ? skills.filter((skill) => scoped.has(skill.name)) : skills;
 }
 
-/** The role a top-level session gets from its agent name. */
+/** The role a top-level project session gets from its agent name. */
 export function rootRole(agentName: string): HarnessSessionRole {
-  const kind: SessionAgentKind = agentName === "beam" ? "beam" : agentName === "chat" ? "chat" : "root";
-  return { agentName, kind, depth: 0 };
+  return { agentName, kind: "root", depth: 0 };
 }
 
-/** The record a top-level session carries. */
+/** The record a top-level project session carries. */
 export function rootRecord(agentName: string): SessionAgentRecord {
-  return { agentName, kind: rootRole(agentName).kind };
+  return { agentName, kind: "root" };
+}
+
+/**
+ * The role and the record of a plain Chat conversation (`docs/plain-chat.md`):
+ * no definition, no project, and so no name to put on either.
+ */
+export function chatRole(): HarnessSessionRole {
+  return { kind: "chat", depth: 0 };
+}
+
+export function chatRecord(): SessionAgentRecord {
+  return { kind: "chat" };
 }
 
 /** How much of a session file is read to find its pre-message agent record. */
 export const RECORD_SCAN_BYTES = 64 * 1024;
 
-const KINDS: readonly SessionAgentKind[] = ["root", "child", "beam", "chat"];
+/**
+ * Kinds a stored record may say. `beam` is not one any agent writes now; it is
+ * read, mapped to `chat` and never written back, so a conversation started
+ * before M23 opens as the plain chat it always was (`docs/plain-chat.md`).
+ */
+const KINDS: readonly string[] = ["root", "child", "beam", "chat"];
 
 function str(value: unknown): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
@@ -72,10 +88,15 @@ function parseIsolation(value: unknown): AgentIsolation | undefined {
 export function parseSessionAgentRecord(data: unknown): SessionAgentRecord | undefined {
   if (!data || typeof data !== "object") return undefined;
   const raw = data as Record<string, unknown>;
-  const agentName = str(raw["agentName"]);
-  const kind = raw["kind"];
-  if (!agentName || typeof kind !== "string" || !KINDS.includes(kind as SessionAgentKind)) return undefined;
-  const record: SessionAgentRecord = { agentName, kind: kind as SessionAgentKind };
+  const stored = raw["kind"];
+  if (typeof stored !== "string" || !KINDS.includes(stored)) return undefined;
+  const kind: SessionAgentKind = stored === "beam" ? "chat" : (stored as SessionAgentKind);
+  // An older Chat or Beam record names the built-in it ran as. That name is
+  // not an agent any more, so it is dropped here rather than carried into a
+  // lookup that would find nothing; the file itself is never rewritten.
+  const agentName = kind === "chat" ? undefined : str(raw["agentName"]);
+  if (kind !== "chat" && !agentName) return undefined;
+  const record: SessionAgentRecord = { kind, ...(agentName ? { agentName } : {}) };
   const subagentName = str(raw["subagentName"]);
   const parentPath = str(raw["parentPath"]);
   const parentSessionId = str(raw["parentSessionId"]);
@@ -173,16 +194,15 @@ export async function readSessionHeaderCwd(path: string): Promise<string | undef
 }
 
 /**
- * A Beam or Chat session's working directory is the app's own workspace, so
- * a missing one is recreated rather than refused: the engine will not open a
- * session whose stored directory is gone, and a person who moved their state
- * directory or ran an older layout would otherwise lose every Beam chat.
+ * A Chat session's working directory is the app's own workspace, so a missing
+ * one is recreated rather than refused: the engine will not open a session
+ * whose stored directory is gone, and a person who moved their state directory
+ * or ran an older layout would otherwise lose every chat they have had.
  * Never applied to a project session — a project that vanished is the
  * person's to restore.
  */
 export async function ensureWorkspaceSessionCwd(kind: SessionAgentKind, cwd: string, sessionPath?: string): Promise<void> {
-  if (kind !== "beam" && kind !== "chat") return;
-  const label = kind === "beam" ? "Beam" : "Chat";
+  if (kind !== "chat") return;
   const wanted = new Set([cwd]);
   // A stored session may name an older workspace directory; the engine checks
   // that one, so both are ensured.
@@ -197,7 +217,7 @@ export async function ensureWorkspaceSessionCwd(kind: SessionAgentKind, cwd: str
     } catch (error) {
       const code = (error as { code?: string }).code;
       const why = code === "EACCES" || code === "EPERM" ? "permission denied" : code === "ENOTDIR" ? "a parent of that path is a file" : code === "EROFS" ? "the file system is read-only" : error instanceof Error ? error.message : String(error);
-      throw new Error(`${label}'s workspace folder ${dir} is missing and could not be recreated (${why}). Start a new ${label} chat; this one cannot be opened.`);
+      throw new Error(`This chat's folder ${dir} is missing and could not be recreated (${why}). Start a new chat; this one cannot be opened.`);
     }
   }
 }

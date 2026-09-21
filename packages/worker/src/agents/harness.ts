@@ -39,6 +39,7 @@ import {
   AGENT_TASK_MAX,
   SESSION_RUN_ENTRY_TYPE,
   SESSION_AGENT_ENTRY_TYPE,
+  sessionKindOf,
   type WorktreeSetup,
   AGENT_ISOLATION_DEFAULT,
   resolveIsolation,
@@ -186,7 +187,8 @@ export interface AgentHarnessOptions {
 export interface SessionHandle {
   readonly bridge: AgentHarnessBridge;
   readonly role: HarnessSessionRole;
-  readonly definition: AgentDefinition;
+  /** Absent for a plain Chat conversation, which runs no definition. */
+  readonly definition: AgentDefinition | undefined;
   readonly record: SessionAgentRecord;
   /** Called by whoever opened the session, the moment its path and id are known. */
   attach(sessionPath: string, sessionId: string): void;
@@ -203,7 +205,8 @@ export interface SessionHandle {
 
 export interface PrepareSessionInput {
   role: HarnessSessionRole;
-  definition: AgentDefinition;
+  /** Absent for a plain Chat conversation, which runs no definition. */
+  definition?: AgentDefinition;
   record: SessionAgentRecord;
   /** The project this session belongs to: the git toplevel is resolved from it for worktrees. */
   projectCwd: string;
@@ -213,7 +216,7 @@ interface Entry {
   path: string | undefined;
   sessionId: string | undefined;
   role: HarnessSessionRole;
-  definition: AgentDefinition;
+  definition: AgentDefinition | undefined;
   record: SessionAgentRecord;
   projectCwd: string;
   isolation?: AgentIsolation;
@@ -338,7 +341,7 @@ function excerpt(text: string, max: number): string {
 }
 
 function labelOf(role: Pick<HarnessSessionRole, "agentName" | "subagentName">): string {
-  return role.subagentName ?? role.agentName;
+  return role.subagentName ?? role.agentName ?? "this conversation";
 }
 
 function isTransientModelError(message: string): boolean {
@@ -394,7 +397,7 @@ export class AgentHarness {
     // change, so `start_agent` catalogs are re-read.
     this.definitions.onChange(() => {
       for (const entry of this.byPath.values()) {
-        const fresh = this.definitions.definition(entry.definition.name);
+        const fresh = entry.definition ? this.definitions.definition(entry.definition.name) : undefined;
         if (fresh) entry.definition = fresh;
         this.announceRole(entry);
       }
@@ -513,8 +516,9 @@ export class AgentHarness {
     const owner = entry.lifecycle.owner();
     const latest = (owner ? this.runStates.get(owner) : undefined) ?? this.latestRun(sessionPath);
     return {
-      agentName: entry.role.agentName,
+      ...(entry.role.agentName !== undefined ? { agentName: entry.role.agentName } : {}),
       kind: entry.role.kind,
+      sessionKind: sessionKindOf(entry.role.kind),
       ...(entry.role.subagentName !== undefined ? { subagentName: entry.role.subagentName } : {}),
       ...(entry.record.parentPath !== undefined ? { parentPath: entry.record.parentPath } : {}),
       ...(entry.record.rootPath !== undefined ? { rootPath: entry.record.rootPath } : {}),
@@ -1160,7 +1164,7 @@ export class AgentHarness {
   }
 
   private catalogFor(entry: Entry): AgentCatalogEntry[] {
-    if (!entry.definition.supportsSubagents) return [];
+    if (!entry.definition?.supportsSubagents) return [];
     const rows: AgentCatalogEntry[] = [];
     for (const name of entry.definition.allowedAgents) {
       const definition = this.definitions.definition(name);
@@ -1171,7 +1175,7 @@ export class AgentHarness {
   }
 
   private canDelegate(entry: Entry): boolean {
-    return entry.definition.supportsSubagents && this.catalogFor(entry).length > 0 && entry.role.depth < this.definitions.policy().maxDepth;
+    return (entry.definition?.supportsSubagents ?? false) && this.catalogFor(entry).length > 0 && entry.role.depth < this.definitions.policy().maxDepth;
   }
 
   private async startAgent(parent: Entry, input: StartAgentInput, signal?: AbortSignal): Promise<StartAgentResult> {
@@ -1198,6 +1202,9 @@ export class AgentHarness {
     const definition = this.definitions.definition(agentName);
     if (!definition || !isStartable(definition)) {
       throw new HarnessError(`No agent is called "${agentName}". ${availableSentence(catalog)}`);
+    }
+    if (!parent.definition) {
+      throw new HarnessError(`A chat cannot start agents. Open a session in a project and start "${agentName}" from there.`);
     }
     if (!parent.definition.supportsSubagents || !catalog.some((row) => row.agentName === agentName)) {
       throw new HarnessError(`${parent.definition.name} may not start "${agentName}". ${availableSentence(catalog)}`);
@@ -1252,7 +1259,7 @@ export class AgentHarness {
       parent: {
         sessionPath: parent.path,
         sessionId: parent.sessionId,
-        agentName: parent.role.agentName,
+        agentName: parent.role.agentName ?? parent.definition?.name ?? "",
         ...(parent.role.subagentName !== undefined ? { subagentName: parent.role.subagentName } : {}),
       },
       runId,
@@ -1592,7 +1599,7 @@ export class AgentHarness {
       return {
         task: own,
         owner: {
-          agentName: self?.agentName ?? entry?.definition.name ?? "this session",
+          agentName: self?.agentName ?? entry?.definition?.name ?? "this session",
           subagentName: self?.subagentName ?? "this session",
           sessionId: self?.sessionId ?? entry?.sessionId ?? "",
         },
@@ -1962,8 +1969,8 @@ export class AgentHarness {
     const parentPath = entry.record.parentPath;
     const runCwd = driver?.state().cwd ?? entry.record.worktree?.path;
     const run: AgentRun = {
-      agentName: entry.role.agentName,
-      subagentName: entry.role.subagentName ?? entry.role.agentName,
+      agentName: entry.role.agentName ?? "",
+      subagentName: entry.role.subagentName ?? entry.role.agentName ?? "",
       sessionId,
       runId,
       sessionPath: path,

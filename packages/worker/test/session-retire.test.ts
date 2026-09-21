@@ -18,17 +18,20 @@ import { ErrorCodes, LIFETIME_RETRY, PRODUCT_NAME } from "@lasercode/protocol";
 import type { AgentsSnapshot, ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, UiDialogRequest } from "@lasercode/protocol";
 import type { DriverEvent, DriverListener, DriverReleaseReadiness, SessionDriver } from "../src/driver.js";
 import { fallbackSnapshot } from "../src/agents/definitions.js";
-import type { NamerCompletion, NamerContext, NamerModelRuntime } from "../src/agents/namer.js";
+import type { CompletionContext, CompletionResult, CompletionRuntime } from "../src/agents/session-naming.js";
 import { WorkerServer } from "../src/server.js";
 
-/** The agents snapshot the host sends once a model Namer may use exists. */
+/** The profile session naming is assigned to in this file's settings. */
 const NAMING_PROFILE_ID = "mp_testretirenaming000000";
 
 /** A private agent directory holding one naming profile, for this file only. */
 let agentDir = "";
 
-beforeEach(() => {
-  agentDir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-retire-agent-`));
+/**
+ * Naming is on exactly when a profile is assigned to it (`docs/plain-chat.md`);
+ * there is no built-in to qualify and nothing else to switch.
+ */
+function writeSettings(naming: boolean): void {
   writeFileSync(
     join(agentDir, "settings.json"),
     JSON.stringify({
@@ -40,21 +43,22 @@ beforeEach(() => {
         updatedAt: "2026-01-01T00:00:00.000Z",
       }],
       defaultProfileId: NAMING_PROFILE_ID,
+      namingProfileId: naming ? NAMING_PROFILE_ID : null,
     }),
   );
+}
+
+beforeEach(() => {
+  agentDir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-retire-agent-`));
+  writeSettings(false);
 });
 
 afterEach(() => {
   rmSync(agentDir, { recursive: true, force: true });
 });
 
-function namerReady(): AgentsSnapshot {
-  const snapshot = fallbackSnapshot();
-  return { ...snapshot, builtinProfiles: { ...snapshot.builtinProfiles, namer: NAMING_PROFILE_ID } };
-}
-
 /**
- * A naming model whose completion this test releases by hand, so a real Namer
+ * A naming model whose completion this test releases by hand, so a real
  * completion is in flight while retirement is decided — driven only through
  * `agents/sync` and `session/prompt`.
  */
@@ -63,9 +67,9 @@ function gatedNamer() {
   return {
     asked: [] as string[],
     getModel: (provider: string, id: string) => ({ provider, id }),
-    completeSimple(_model: { provider: string; id: string }, context: NamerContext): Promise<NamerCompletion> {
+    completeSimple(_model: { provider: string; id: string }, context: CompletionContext): Promise<CompletionResult> {
       this.asked.push(context.messages.map((message) => message.content).join("\n"));
-      return new Promise<NamerCompletion>((resolve) => {
+      return new Promise<CompletionResult>((resolve) => {
         waiting.push((text) => resolve({ content: [{ type: "text", text }] }));
       });
     },
@@ -130,7 +134,7 @@ class FakeDriver implements SessionDriver {
   async dispose() { this.disposed = true; this.emit({ type: "closed", reason: "disposed" }); }
 }
 
-function world(options: { retireLeaseMs?: number; namer?: NamerModelRuntime } = {}) {
+function world(options: { retireLeaseMs?: number; namer?: CompletionRuntime } = {}) {
   const out: JsonRpcMessage[] = [];
   const drivers: FakeDriver[] = [];
   const server = new WorkerServer({
@@ -138,7 +142,7 @@ function world(options: { retireLeaseMs?: number; namer?: NamerModelRuntime } = 
     agentDir,
     createDriver: () => { const driver = new FakeDriver(); drivers.push(driver); return driver; },
     send: (message) => out.push(message),
-    ...(options.namer ? { namerModels: async () => options.namer! } : {}),
+    ...(options.namer ? { namingModels: async () => options.namer! } : {}),
     ...(options.retireLeaseMs !== undefined ? { retireLeaseMs: options.retireLeaseMs } : {}),
   });
   let id = 0;
@@ -232,11 +236,11 @@ describe("pi/worker/retire", () => {
 
   it("lets an explicit stop through an advisory pin, where the idle sweep would refuse", async () => {
     const namer = gatedNamer();
+    writeSettings(true);
     const w = world({ namer });
     await w.call("session/load", { path: PATH });
     // A session actually being named is advisory: real work, but not work a
     // person asking for a stop should be made to wait for.
-    await w.call("agents/sync", { snapshot: namerReady() });
     await w.call("session/prompt", { path: PATH, content: text("explore the repo") });
     await settle();
     expect(namer.asked.join("\n")).toContain("explore the repo");
@@ -254,14 +258,13 @@ describe("pi/worker/retire", () => {
     expect(w.server.sessionSafety().sessions[0]!.pins).toEqual([]);
   });
 
-  it("retires naturally with a first prompt no naming model can name", async () => {
+  it("retires naturally with a first prompt nothing is assigned to name", async () => {
     const namer = gatedNamer();
     const w = world({ namer });
     await w.call("session/load", { path: PATH });
-    // Credential-free: the prompt's words are parked in case a model ever
-    // appears, nothing is asked of any model, and nothing can perform that
-    // intent meanwhile. It must not keep this worker alive for the life of the
-    // process.
+    // Nothing is assigned to naming, so the request does not run: no model is
+    // asked, nothing is parked, and this worker is not kept alive by an intent
+    // nobody can perform (`docs/plain-chat.md`).
     expect(await w.call("session/prompt", { path: PATH, content: text("explore the repo") })).toHaveProperty("result");
     await settle();
     expect(namer.asked).toEqual([]);

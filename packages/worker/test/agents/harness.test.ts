@@ -508,7 +508,7 @@ describe("AgentHarness", () => {
     // No deadline: nothing ends a run for taking long (D-144).
     expect(running).not.toHaveProperty("timeoutAt");
     expect(world.events().map((e) => `${e.kind}@${e.sessionPath}`)).toEqual(["started@/sessions/child-1.jsonl", "message_sent@/sessions/root.jsonl"]);
-    expect(world.harness.sessionInfo("/sessions/child-1.jsonl")).toEqual({ agentName: "worker", kind: "child", subagentName: "Fix login", parentPath: root.path, rootPath: root.path, runId: result.runId, runStatus: "running" });
+    expect(world.harness.sessionInfo("/sessions/child-1.jsonl")).toEqual({ agentName: "worker", kind: "child", sessionKind: "project", subagentName: "Fix login", parentPath: root.path, rootPath: root.path, runId: result.runId, runStatus: "running" });
 
     // The child completes through its own bridge.
     const childBridge = world.harness.bridgeOf("/sessions/child-1.jsonl")!;

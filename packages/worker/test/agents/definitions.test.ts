@@ -1,8 +1,11 @@
 /**
- * M13-T3 · the worker's definitions cache: built-in fallbacks before the first
- * sync, the host's snapshot afterwards, missing built-ins re-seeded, listeners.
+ * M13-T3 · the worker's definitions cache: the shipped default before the
+ * first sync, the host's snapshot afterwards, listeners.
+ *
+ * M23: there are no built-in agents to re-seed. A name that used to be one is
+ * a name nothing answers to, and nothing may start it (`docs/plain-chat.md`).
  */
-import { DEFAULT_AGENT_NAME, PRODUCT_DISPLAY_NAME } from "@lasercode/protocol";
+import { DEFAULT_AGENT_NAME } from "@lasercode/protocol";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,26 +13,19 @@ import { describe, expect, it } from "vitest";
 import { DefinitionsCache, fallbackSnapshot, isStartable } from "../../src/agents/definitions.js";
 
 describe("DefinitionsCache", () => {
-  it("answers with built-in fallbacks until the host syncs", () => {
+  it("answers with the shipped default until the host syncs, and knows no built-ins", () => {
     const cache = new DefinitionsCache();
     expect(cache.isSynced).toBe(false);
     const fallback = cache.defaultAgent();
     expect(fallback).toMatchObject({ name: DEFAULT_AGENT_NAME, kind: "custom", engineInstructions: true, supportsSubagents: true, allowedAgents: [DEFAULT_AGENT_NAME] });
-    const beam = cache.definition("beam")!;
-    expect(beam).toMatchObject({ kind: "builtin", scopedSkills: false, skills: [] });
     // Tools are not part of a definition (D-144).
-    expect(beam).not.toHaveProperty("tools");
-    expect(beam.instructions).toContain(PRODUCT_DISPLAY_NAME);
-    expect(cache.definition("chat")).toMatchObject({ kind: "builtin" });
-    expect(cache.definition("namer")).toMatchObject({ kind: "builtin" });
+    expect(fallback).not.toHaveProperty("tools");
+    expect(cache.snapshot().agents.map((agent) => agent.name)).toEqual([DEFAULT_AGENT_NAME]);
+    for (const name of ["beam", "chat", "namer"]) expect(cache.definition(name)).toBeUndefined();
     expect(cache.policy()).toEqual({ maxDepth: 3, foregroundCommandSeconds: 120 });
-    expect(cache.namerProfileId()).toBeNull();
-    expect(cache.beamProfileId()).toBeNull();
-    // Chat follows the profile assigned to new sessions until a person chooses one.
-    expect(cache.chatProfileId()).toBeNull();
-    expect(cache.definition("chat")?.profileId).toBeNull();
-    for (const name of ["beam", "chat", "namer"]) expect(isStartable(cache.definition(name)!)).toBe(false);
     expect(isStartable(fallback)).toBe(true);
+    // Even if a snapshot ever named one, nothing may start it.
+    expect(isStartable({ ...fallback, name: "namer" })).toBe(false);
   });
 
   it("filters project scopes by real path and lets the local project shadow a global definition", () => {
@@ -52,13 +48,12 @@ describe("DefinitionsCache", () => {
       expect(cache.definition("reviewer")).toMatchObject({ description: "project", scope: "project", projectCwd: project });
       expect(cache.definition("foreign")).toBeUndefined();
       expect(cache.snapshot().agents.filter(agent => agent.name === "reviewer")).toHaveLength(1);
-      expect(cache.definition("beam")).toMatchObject({ kind: "builtin" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("takes the host's snapshot, re-seeds missing built-ins and notifies listeners", () => {
+  it("takes the host's snapshot exactly as it is, and notifies listeners", () => {
     const cache = new DefinitionsCache();
     const seen: number[] = [];
     const off = cache.onChange((snapshot) => seen.push(snapshot.revision));
@@ -70,14 +65,11 @@ describe("DefinitionsCache", () => {
       agents: [base.agents[0]!, custom],
       defaultAgent: "lead",
       policy: { maxDepth: 2, foregroundCommandSeconds: 30 },
-      builtinProfiles: { beam: "mp_testbeam0000000000000", chat: "mp_testchat0000000000000", namer: "mp_testnamer000000000000" },
     });
     expect(cache.isSynced).toBe(true);
     expect(cache.defaultAgent().name).toBe("lead");
-    expect(cache.definition("beam")?.profileId).toBe("mp_testbeam0000000000000");
-    expect(cache.definition("chat")).toBeDefined();
-    expect(cache.chatProfileId()).toBe("mp_testchat0000000000000");
-    expect(cache.namerProfileId()).toBe("mp_testnamer000000000000");
+    // Nothing synthesises a definition the host did not send.
+    expect(cache.snapshot().agents.map((agent) => agent.name).sort()).toEqual([DEFAULT_AGENT_NAME, "lead"]);
     expect(cache.policy()).toEqual({ maxDepth: 2, foregroundCommandSeconds: 30 });
     expect(seen).toEqual([7]);
     cache.sync({ ...base, revision: 8, agents: [custom], defaultAgent: "lead", renamedAgents: { worker: "lead" } });
@@ -85,12 +77,6 @@ describe("DefinitionsCache", () => {
     off();
     cache.sync({ ...base, revision: 9 });
     expect(seen).toEqual([7, 8]);
-    // A host that has not seeded the Chat definition still serves the person's
-    // choice: the re-seeded fallback takes the profile from the snapshot.
-    const seedless = new DefinitionsCache();
-    seedless.sync({ ...base, revision: 10, agents: [base.agents[0]!], builtinProfiles: { beam: null, chat: "mp_testchat2000000000000", namer: null } });
-    expect(seedless.definition("chat")?.profileId).toBe("mp_testchat2000000000000");
-    expect(seedless.chatProfileId()).toBe("mp_testchat2000000000000");
 
     // An unknown default falls back to the shipped default rather than nothing.
     cache.sync({ ...base, revision: 10, defaultAgent: "gone" });

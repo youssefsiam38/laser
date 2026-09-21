@@ -33,7 +33,8 @@ export interface AgentCatalogEntry {
 
 /** What this session is, for tool registration and the child's prompt. */
 export interface HarnessSessionRole {
-  agentName: string;
+  /** The definition this session runs. Absent for a plain Chat, which runs none. */
+  agentName?: string;
   kind: SessionAgentKind;
   subagentName?: string;
   /** 0 for a top-level session. */

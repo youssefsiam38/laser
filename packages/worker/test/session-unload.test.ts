@@ -17,7 +17,7 @@ import { ErrorCodes, LIFETIME_RETRY, PRODUCT_NAME } from "@lasercode/protocol";
 import type { AgentsSnapshot, ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, SessionUpdateParams, UiDialogRequest } from "@lasercode/protocol";
 import { WorkerServer } from "../src/server.js";
 import { fallbackSnapshot } from "../src/agents/definitions.js";
-import type { NamerCompletion, NamerContext, NamerModelRuntime } from "../src/agents/namer.js";
+import type { CompletionContext, CompletionResult, CompletionRuntime } from "../src/agents/session-naming.js";
 import type { DriverEvent, DriverListener, SessionDriver } from "../src/driver.js";
 
 const PATH = "/tmp/unload/s1.jsonl";
@@ -26,8 +26,11 @@ const NAMING_PROFILE_ID = "mp_testunloadnaming000000";
 /** A private agent directory holding one naming profile, for this file only. */
 let agentDir = "";
 
-beforeEach(() => {
-  agentDir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-unload-agent-`));
+/**
+ * Naming is on exactly when a profile is assigned to it (`docs/plain-chat.md`);
+ * there is no built-in to be unavailable and nothing else to switch.
+ */
+function writeSettings(naming: boolean): void {
   writeFileSync(
     join(agentDir, "settings.json"),
     JSON.stringify({
@@ -39,34 +42,34 @@ beforeEach(() => {
         updatedAt: "2026-01-01T00:00:00.000Z",
       }],
       defaultProfileId: NAMING_PROFILE_ID,
+      namingProfileId: naming ? NAMING_PROFILE_ID : null,
     }),
   );
+}
+
+beforeEach(() => {
+  agentDir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-unload-agent-`));
+  writeSettings(false);
 });
 
 afterEach(() => {
   rmSync(agentDir, { recursive: true, force: true });
 });
 
-/** The agents snapshot the host sends with, and without, a profile naming may use. */
-function namerSnapshot(model: { provider: string; id: string } | null): AgentsSnapshot {
-  const snapshot = fallbackSnapshot();
-  return { ...snapshot, builtinProfiles: { ...snapshot.builtinProfiles, namer: model ? NAMING_PROFILE_ID : null } };
-}
-
 /**
  * A naming model whose completion this test releases by hand, which is how a
- * real Namer completion in flight is represented without a private field: the
+ * real naming completion in flight is represented without a private field: the
  * worker is driven entirely through `session/prompt` and `agents/sync`.
  */
 function gatedNamer() {
   const waiting: Array<(text: string) => void> = [];
   return {
-    /** What Namer was actually asked about, one entry per completion. */
+    /** What a naming request actually asked about, one entry per completion. */
     asked: [] as string[],
     getModel: (provider: string, id: string) => ({ provider, id }),
-    completeSimple(_model: { provider: string; id: string }, context: NamerContext): Promise<NamerCompletion> {
+    completeSimple(_model: { provider: string; id: string }, context: CompletionContext): Promise<CompletionResult> {
       this.asked.push(context.messages.map((message) => message.content).join("\n"));
-      return new Promise<NamerCompletion>((resolve) => {
+      return new Promise<CompletionResult>((resolve) => {
         waiting.push((text) => resolve({ content: [{ type: "text", text }] }));
       });
     },
@@ -171,7 +174,7 @@ class FakeDriver implements SessionDriver {
   }
 }
 
-function world(options: { namer?: NamerModelRuntime } = {}) {
+function world(options: { namer?: CompletionRuntime } = {}) {
   const out: JsonRpcMessage[] = [];
   const drivers: FakeDriver[] = [];
   let pendingOpenGate: Promise<void> | undefined;
@@ -188,7 +191,7 @@ function world(options: { namer?: NamerModelRuntime } = {}) {
       return driver;
     },
     send: (message) => out.push(message),
-    ...(options.namer ? { namerModels: async () => options.namer! } : {}),
+    ...(options.namer ? { namingModels: async () => options.namer! } : {}),
     replayBuffer: 50,
   });
   let id = 0;
@@ -333,14 +336,13 @@ describe("pi/session/unload", () => {
     expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
   });
 
-  it("releases a session whose first prompt has no naming model to name it", async () => {
+  it("releases a session whose first prompt had nothing assigned to name it", async () => {
     const namer = gatedNamer();
     const w = world({ namer });
     await w.load();
-    // Credential-free: naming is off, so the first prompt's words are parked in
-    // case a model ever appears, and nothing is asked of any model. That intent
-    // cannot be performed by anyone, so it is not a refusal — an untitled
-    // conversation is the smaller loss.
+    // Nothing is assigned to naming, so the request does not run at all: no
+    // model is asked, nothing is parked and an untitled conversation holds
+    // nothing (`docs/plain-chat.md`).
     expect(await w.call("session/prompt", { path: PATH, content: text("explore the repo") })).toHaveProperty("result");
     await settle();
     expect(namer.asked).toEqual([]);
@@ -352,15 +354,12 @@ describe("pi/session/unload", () => {
     expect(w.drivers[0]!.aborts).toBe(0);
   });
 
-  it("refuses while a parked first prompt is actually being named, and releases once the title lands", async () => {
+  it("refuses while a naming completion is in flight, and releases once the title lands", async () => {
     const namer = gatedNamer();
+    writeSettings(true);
     const w = world({ namer });
     await w.load();
     expect(await w.call("session/prompt", { path: PATH, content: text("explore the repo") })).toHaveProperty("result");
-    await settle();
-    // The host qualifies Namer while the session is idle. The words it parked
-    // go in as a real completion — which is also what proves they were kept.
-    await w.call("agents/sync", { snapshot: namerSnapshot({ provider: "stub", id: "stub-1" }) });
     await settle();
     expect(namer.asked.join("\n")).toContain("explore the repo");
 
@@ -378,21 +377,20 @@ describe("pi/session/unload", () => {
     expect(await w.unload()).toEqual({ unloaded: true, pins: [] });
   });
 
-  it("keeps the pin when the naming model is taken away while its completion is still running", async () => {
+  it("keeps the pin when naming is switched off while its completion is still running", async () => {
     const namer = gatedNamer();
+    writeSettings(true);
     const w = world({ namer });
     await w.load();
-    await w.call("agents/sync", { snapshot: namerSnapshot({ provider: "stub", id: "stub-1" }) });
     expect(await w.call("session/prompt", { path: PATH, content: text("explore the repo") })).toHaveProperty("result");
     await settle();
     expect(namer.asked.join("\n")).toContain("explore the repo");
     expect((await w.safety()).sessions[0]!.pins.map((pin) => pin.kind)).toEqual(["naming"]);
 
-    // Namer's model selection is cleared (a person switched naming off, or a
-    // new snapshot arrived without one). The completion already started is
-    // still running against this runtime, so the evidence of it must not be
+    // The person clears the naming assignment. The completion already started
+    // is still running against this runtime, so the evidence of it must not be
     // erased by the setting going away.
-    await w.call("agents/sync", { snapshot: namerSnapshot(null) });
+    writeSettings(false);
     expect((await w.safety()).sessions[0]!.pins.map((pin) => pin.kind)).toEqual(["naming"]);
     expect(await w.unload()).toMatchObject({ unloaded: false, pins: [{ kind: "naming" }] });
 
@@ -404,9 +402,9 @@ describe("pi/session/unload", () => {
 
   it("leaves no naming record behind when the session ends under a running completion", async () => {
     const namer = gatedNamer();
+    writeSettings(true);
     const w = world({ namer });
     await w.load();
-    await w.call("agents/sync", { snapshot: namerSnapshot({ provider: "stub", id: "stub-1" }) });
     await w.call("session/prompt", { path: PATH, content: text("explore the repo") });
     await settle();
     expect((await w.safety()).sessions[0]!.pins.map((pin) => pin.kind)).toEqual(["naming"]);
@@ -428,9 +426,9 @@ describe("pi/session/unload", () => {
 
   it("names a session once: a second message during the completion starts no second attempt", async () => {
     const namer = gatedNamer();
+    writeSettings(true);
     const w = world({ namer });
     await w.load();
-    await w.call("agents/sync", { snapshot: namerSnapshot({ provider: "stub", id: "stub-1" }) });
     // Two eligible messages on an idle, still unnamed session. The session is
     // named from its first prompt, so the second does not ask a model the same
     // question again — one completion, one record, whatever a person types

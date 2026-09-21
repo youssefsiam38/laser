@@ -347,7 +347,7 @@ export class ModelsAdapter {
     return this.runtime;
   }
 
-  /** The shared runtime, for services that complete or check auth outside a session (Namer, the harness). */
+  /** The shared runtime, for work that completes or checks auth outside a session (naming, the harness). */
   modelRuntime(): Promise<ModelRuntime> {
     return this.models;
   }

@@ -11,7 +11,7 @@
  * a fence is closed is refused retryably, and its arrival is a reason to refuse
  * the transition rather than something to store.
  *
- * `WorkerServer` keeps the facts (the harness, the tray, the tasks, the namer)
+ * `WorkerServer` keeps the facts (the harness, the tray, the tasks, naming)
  * and hands them over as one snapshot function; this file owns the transitions.
  */
 import {

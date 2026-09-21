@@ -23,8 +23,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fallbackBeamAgent, fallbackDefaultAgent, fallbackPolicy, fallbackSnapshot } from "../../src/agents/definitions.js";
-import { ENGINE_BUILTIN_TOOLS, readSessionAgentRecord, rootRecord, rootRole } from "../../src/agents/session-config.js";
+import { fallbackDefaultAgent, fallbackPolicy, fallbackSnapshot } from "../../src/agents/definitions.js";
+import { ENGINE_BUILTIN_TOOLS, chatRecord, chatRole, readSessionAgentRecord, rootRecord, rootRole } from "../../src/agents/session-config.js";
 import { installToolLabels, StableSdkDriver } from "../../src/drivers/stable-sdk.js";
 import { WorkerServer } from "../../src/server.js";
 import type { DriverAgentOptions, DriverEvent } from "../../src/driver.js";
@@ -60,6 +60,11 @@ function agentOptions(
   extra: Partial<Pick<DriverAgentOptions, "bridge" | "backgroundWork">> = {},
 ): DriverAgentOptions {
   return { definition, role: rootRole(name), record: rootRecord(name), policy: fallbackPolicy(), ...extra };
+}
+
+/** A plain Chat: no definition at all (`docs/plain-chat.md`). */
+function chatOptions(): DriverAgentOptions {
+  return { role: chatRole(), record: chatRecord(), policy: fallbackPolicy() };
 }
 
 function rootBridge(): NonNullable<DriverAgentOptions["bridge"]> {
@@ -346,17 +351,17 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(system).toContain("beta-skill");
     expect(system).not.toContain("alpha-skill");
 
-    const beam = fallbackBeamAgent({ profileId: null });
+    // A plain Chat is unscoped too, and has no persona in front of the fields.
     const driver = new StableSdkDriver();
     drivers.push(driver);
     const settled = new Promise<void>((resolve) => driver.subscribe((e: DriverEvent) => { if (e.type === "update" && e.update.kind === "agent_settled") resolve(); }));
-    await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(beam, "beam") });
+    await driver.open({ cwd: join(base, "project"), agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: chatOptions() });
     await driver.prompt([{ type: "text", text: "where are my sessions?" }]);
     await settled;
     system = systemTextOf(stub.requests[2]!);
     expect(system).toContain("alpha-skill");
     expect(system).toContain("beta-skill");
-    expect(system.startsWith("You are Beam")).toBe(true);
+    expect(system.startsWith("Available tools:")).toBe(true);
   }, 90_000);
 
   it("opens a definition whose profile is gone on the default instead of refusing", async () => {
@@ -374,12 +379,13 @@ describe("StableSdkDriver with an agent definition", () => {
     expect(state.model).toMatchObject({ provider: "stub", id: "stub-1" });
   }, 60_000);
 
-  it("reopens a Beam session whose workspace folder vanished by recreating the folder", async () => {
-    const beam = fallbackBeamAgent({ profileId: null });
+  it("reopens a chat whose workspace folder vanished by recreating the folder", async () => {
+    // The old Beam layout is exactly this case: the folder under the state
+    // directory moved or was removed, and the conversation must still open.
     const workspace = join(base, "state", "workspaces", "beam");
     mkdirSync(workspace, { recursive: true });
     const driver = new StableSdkDriver();
-    const state = await driver.open({ cwd: workspace, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: agentOptions(beam, "beam") });
+    const state = await driver.open({ cwd: workspace, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), projectTrusted: true, agent: chatOptions() });
     await driver.prompt([{ type: "text", text: "hello" }]);
     await driver.dispose();
     expect(existsSync(state.path)).toBe(true);
@@ -388,7 +394,7 @@ describe("StableSdkDriver with an agent definition", () => {
     rmSync(workspace, { recursive: true, force: true });
     expect(existsSync(workspace)).toBe(false);
     const again = new StableSdkDriver();
-    const reopened = await again.open({ cwd: workspace, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), sessionPath: state.path, projectTrusted: true, agent: agentOptions(beam, "beam") });
+    const reopened = await again.open({ cwd: workspace, agentDir: join(base, "agent"), sessionDir: join(base, "sessions"), sessionPath: state.path, projectTrusted: true, agent: chatOptions() });
     expect(reopened.path).toBe(state.path);
     expect(reopened.cwd).toBe(workspace);
     // `state.agent` is the worker's decoration, not the driver's; what matters

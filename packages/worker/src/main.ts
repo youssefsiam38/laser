@@ -217,8 +217,8 @@ async function main(): Promise<void> {
 
   const agentDir = arg("agent-dir");
   const sessionDir = arg("session-dir");
-  // The host's own state directory (agents, runs, prefs), used by Beam's
-  // Laser-specific instructions. Optional for callers outside the host.
+  // The host's own state directory (agents, runs, prefs). Optional for
+  // callers outside the host.
   const stateDir = arg("state-dir");
   const projectTrusted = arg("project-trusted");
   const agentIsolation = arg("agent-isolation");

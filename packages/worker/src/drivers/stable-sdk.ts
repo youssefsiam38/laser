@@ -404,12 +404,7 @@ export class StableSdkDriver implements SessionDriver {
       }
       if (agent) {
         extensionFactories.push(
-          createInstructionTemplateExtension({
-            agent,
-            agentDir,
-            ...(options.stateDir ? { stateDir: options.stateDir } : {}),
-            session: () => liveSession,
-          }),
+          createInstructionTemplateExtension({ agent, agentDir, session: () => liveSession }),
         );
       }
       if (mcp) extensionFactories.push(mcp.extension);
@@ -458,7 +453,7 @@ export class StableSdkDriver implements SessionDriver {
         ? openingProfile.models.find((entry: { provider: string; id: string }) => entry.provider === effectiveModel.provider && entry.id === effectiveModel.id)?.thinking
         : undefined;
       const requestedThinking = thinkingOverride
-        ?? agent?.definition.thinkingLevel
+        ?? agent?.definition?.thinkingLevel
         ?? (resetThinking ? modelThinking : undefined)
         ?? modelThinking;
       const supportedThinking = effectiveModel
@@ -466,7 +461,7 @@ export class StableSdkDriver implements SessionDriver {
         : undefined;
       const selectedThinking = normalizeThinking && requestedThinking && supportedThinking && !supportedThinking.includes(requestedThinking)
         ? [
-            agent?.definition.thinkingLevel,
+            agent?.definition?.thinkingLevel,
             modelThinking,
             "off" as const,
             supportedThinking[0],
@@ -497,7 +492,7 @@ export class StableSdkDriver implements SessionDriver {
     };
 
     const agent = this.runtimeAgent;
-    // Beam and Chat run in the app's own workspace. The engine records the
+    // A Chat runs in the app's own workspace. The engine records the
     // directory in the session header and refuses to build a runtime whose
     // stored directory is gone, so a workspace that vanished (a moved state
     // directory, an older layout) is recreated here — before the runtime is
@@ -1438,7 +1433,7 @@ export class StableSdkDriver implements SessionDriver {
     if (pinned) return undefined;
     const { profiles, assignments } = readProfileSettings(this.agentDir);
     const chosen = this.runtimeFollowsAgentProfile ? undefined : this.explicitProfileId;
-    const wanted = chosen ?? agent?.definition.profileId ?? undefined;
+    const wanted = chosen ?? agent?.definition?.profileId ?? undefined;
     if (wanted) {
       const named = profiles.find((profile) => profile.id === wanted);
       if (named) return named;
@@ -1954,6 +1949,10 @@ function agentResourceOptions(agent: DriverAgentOptions, cwd: string): {
   skillsOverride: <T extends { skills: Array<{ name: string }>; diagnostics: unknown[] }>(base: T) => T;
 } {
   const { definition, role } = agent;
+  // A plain Chat runs no definition: it is offered every discovered skill and
+  // has no instructions of its own to override the engine's with, because its
+  // whole prompt is written by the template extension (`docs/plain-chat.md`).
+  if (!definition) return { skillsOverride: (base) => base };
   return {
     // The agent's own text only: the instruction-template extension adds the
     // core block exactly once when it renders the final prompt.

@@ -7,16 +7,14 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { fallbackBeamAgent, fallbackChatAgent, fallbackDefaultAgent } from "../../src/agents/definitions.js";
-import { ENGINE_BUILTIN_TOOLS, filterSkills, parseSessionAgentRecord, readSessionAgentRecord, rootRecord, rootRole } from "../../src/agents/session-config.js";
+import { fallbackDefaultAgent } from "../../src/agents/definitions.js";
+import { ENGINE_BUILTIN_TOOLS, chatRecord, chatRole, filterSkills, parseSessionAgentRecord, readSessionAgentRecord, rootRecord, rootRole } from "../../src/agents/session-config.js";
 
 describe("ENGINE_BUILTIN_TOOLS", () => {
   it("is every engine tool, in the engine's order: no definition narrows it", () => {
     expect(ENGINE_BUILTIN_TOOLS).toEqual(["read", "bash", "edit", "write", "grep", "find", "ls"]);
     // Tools left the definition (D-144); nothing here reads one.
-    for (const definition of [fallbackDefaultAgent(), fallbackBeamAgent({ model: null }), fallbackChatAgent()]) {
-      expect(definition).not.toHaveProperty("tools");
-    }
+    expect(fallbackDefaultAgent()).not.toHaveProperty("tools");
   });
 });
 
@@ -24,7 +22,6 @@ describe("filterSkills", () => {
   const skills = [{ name: "alpha" }, { name: "beta" }];
   it("offers every discovered skill to every unscoped agent", () => {
     expect(filterSkills(skills, { definition: fallbackDefaultAgent(), role: { kind: "root" } }).map((s) => s.name)).toEqual(["alpha", "beta"]);
-    expect(filterSkills(skills, { definition: fallbackBeamAgent({ model: null }), role: { kind: "beam" } }).map((s) => s.name)).toEqual(["alpha", "beta"]);
   });
   it("keeps only the listed skills when scoped", () => {
     const scoped = { scopedSkills: true, skills: [{ name: "beta", path: "/b", scope: "project" as const }, { name: "missing", path: "/m", scope: "project" as const }] };
@@ -34,11 +31,19 @@ describe("filterSkills", () => {
 });
 
 describe("roles and records", () => {
-  it("derives the built-in kinds from the agent name", () => {
+  it("names a project session's agent, and a chat's nothing at all", () => {
     expect(rootRole("default")).toEqual({ agentName: "default", kind: "root", depth: 0 });
-    expect(rootRole("beam")).toEqual({ agentName: "beam", kind: "beam", depth: 0 });
-    expect(rootRole("chat")).toEqual({ agentName: "chat", kind: "chat", depth: 0 });
-    expect(rootRecord("beam")).toEqual({ agentName: "beam", kind: "beam" });
+    expect(rootRecord("reviewer")).toEqual({ agentName: "reviewer", kind: "root" });
+    // A chat runs no definition, so neither its role nor its record names one.
+    expect(chatRole()).toEqual({ kind: "chat", depth: 0 });
+    expect(chatRecord()).toEqual({ kind: "chat" });
+  });
+  it("reads a record written before M23 as the chat it always was", () => {
+    // The file is never rewritten, and the name it still carries is not an
+    // agent any more, so it is dropped rather than looked up.
+    expect(parseSessionAgentRecord({ agentName: "beam", kind: "beam" })).toEqual({ kind: "chat" });
+    expect(parseSessionAgentRecord({ agentName: "chat", kind: "chat" })).toEqual({ kind: "chat" });
+    expect(parseSessionAgentRecord({ kind: "chat" })).toEqual({ kind: "chat" });
   });
   it("parses a record strictly", () => {
     expect(parseSessionAgentRecord({ agentName: "worker", kind: "child", subagentName: "w", parentPath: "/p", runId: "run_1", worktree: { path: "/w", branch: "agents/w", baseCommit: "abc" }, isolation: { mode: "worktree", shape: "repo", reason: "isolated" }, junk: 1 })).toEqual({ agentName: "worker", kind: "child", subagentName: "w", parentPath: "/p", runId: "run_1", worktree: { path: "/w", branch: "agents/w", baseCommit: "abc" }, isolation: { mode: "worktree", shape: "repo", reason: "isolated" } });
@@ -62,11 +67,11 @@ describe("readSessionAgentRecord", () => {
     const lines = [
       { type: "session", version: 3, id: "s1", cwd: "/repo", timestamp: "t" },
       { type: "custom", customType: "goal-state", id: "e1", data: { goal: null } },
-      { type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, id: "e2", data: { agentName: "beam", kind: "beam" } },
+      { type: "custom", customType: SESSION_AGENT_ENTRY_TYPE, id: "e2", data: { agentName: "reviewer", kind: "root" } },
       { type: "message", id: "e3", message: { role: "user", content: "hi" } },
     ];
     writeFileSync(path, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
-    expect(await readSessionAgentRecord(path)).toEqual({ agentName: "beam", kind: "beam" });
+    expect(await readSessionAgentRecord(path)).toEqual({ agentName: "reviewer", kind: "root" });
     writeFileSync(path, JSON.stringify(lines[0]) + "\n" + JSON.stringify(lines[3]) + "\n");
     expect(await readSessionAgentRecord(path)).toBeUndefined();
     expect(await readSessionAgentRecord(join(base, "missing.jsonl"))).toBeUndefined();
@@ -104,7 +109,7 @@ describe("readSessionAgentRecord", () => {
 });
 
 describe("workspace sessions whose folder is gone", () => {
-  it("reads the header cwd, recreates a Beam or Chat workspace, and leaves a project session to the engine", async () => {
+  it("reads the header cwd, recreates a chat's workspace, and leaves a project session to the engine", async () => {
     const { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
@@ -112,15 +117,14 @@ describe("workspace sessions whose folder is gone", () => {
     const base = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-workspace-cwd-`));
     try {
       const workspace = join(base, "old-layout", "beam");
-      const path = join(base, "beam.jsonl");
+      const path = join(base, "chat.jsonl");
       writeFileSync(path, `${JSON.stringify({ type: "session", version: 3, id: "s1", timestamp: "2026-09-08T10:00:00.000Z", cwd: workspace })}\n`);
       expect(await readSessionHeaderCwd(path)).toBe(workspace);
       expect(await readSessionHeaderCwd(join(base, "missing.jsonl"))).toBeUndefined();
 
+      // A session written under the old Beam layout reads as a chat and its
+      // folder is recreated all the same.
       expect(existsSync(workspace)).toBe(false);
-      await ensureWorkspaceSessionCwd("beam", workspace, path);
-      expect(existsSync(workspace)).toBe(true);
-      rmSync(workspace, { recursive: true, force: true });
       await ensureWorkspaceSessionCwd("chat", workspace, path);
       expect(existsSync(workspace)).toBe(true);
 
@@ -135,7 +139,7 @@ describe("workspace sessions whose folder is gone", () => {
       writeFileSync(join(base, "file-parent", "blocker"), "x");
       const blocked = join(base, "blocked.jsonl");
       writeFileSync(blocked, `${JSON.stringify({ type: "session", version: 3, id: "s2", timestamp: "2026-09-08T10:00:00.000Z", cwd: join(base, "file-parent", "blocker", "beam") })}\n`);
-      await expect(ensureWorkspaceSessionCwd("beam", join(base, "file-parent", "blocker", "beam"), blocked)).rejects.toThrow(/Beam's workspace folder .*blocker\/beam is missing and could not be recreated \(.*\)\. Start a new Beam chat/);
+      await expect(ensureWorkspaceSessionCwd("chat", join(base, "file-parent", "blocker", "beam"), blocked)).rejects.toThrow(/This chat's folder .*blocker\/beam is missing and could not be recreated \(.*\)\. Start a new chat/);
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

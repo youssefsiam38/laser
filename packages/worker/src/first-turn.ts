@@ -5,7 +5,7 @@ import { isSetupOnlyFallbackEntry } from "./fallback/state.js";
 export interface FirstTurnAdmission {
   state: SessionState;
   entries: readonly unknown[];
-  roleKind: "root" | "child" | "beam" | "chat" | undefined;
+  roleKind: "root" | "child" | "chat" | undefined;
   pendingTrayCount: number;
   dialogCount: number;
   hasGoal: boolean;

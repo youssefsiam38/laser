@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fallbackSnapshot } from "../../src/agents/definitions.js";
-import type { NamerModelRuntime } from "../../src/agents/namer.js";
+import type { CompletionRuntime } from "../../src/agents/session-naming.js";
 import type { DriverEvent, DriverListener, DriverOpenOptions, PromptOptions, SessionDriver } from "../../src/driver.js";
 import { WorkerServer } from "../../src/server.js";
 
@@ -61,8 +61,8 @@ class FakeDriver implements SessionDriver {
   async dispose() { this.emit({ type: "closed", reason: "disposed" }); }
 }
 
-/** A model runtime for Namer that never touches the engine; `calls` counts completions. */
-function fakeNamerRuntime(answer: () => string | Promise<string>): NamerModelRuntime & { calls: number } {
+/** A model runtime for naming that never touches the engine; `calls` counts completions. */
+function fakeNamingRuntime(answer: () => string | Promise<string>): CompletionRuntime & { calls: number } {
   const runtime = {
     calls: 0,
     getModel: (provider: string, id: string) => ({ provider, id }),
@@ -95,16 +95,11 @@ function writeNamingProfile(): void {
   );
 }
 
-function namedSnapshot() {
-  writeNamingProfile();
-  const snapshot = fallbackSnapshot();
-  return { ...snapshot, builtinProfiles: { ...snapshot.builtinProfiles, namer: NAMING_PROFILE_ID } };
-}
-
 /** Let every floated naming/labelling promise settle. */
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-function harness(options: { namerModels?: () => Promise<NamerModelRuntime>; projectTrusted?: boolean } = {}) {
+function harness(options: { namingModels?: () => Promise<CompletionRuntime>; projectTrusted?: boolean } = {}) {
+  if (options.namingModels) writeNamingProfile();
   const out: JsonRpcMessage[] = [];
   const drivers: FakeDriver[] = [];
   const server = new WorkerServer({
@@ -114,7 +109,7 @@ function harness(options: { namerModels?: () => Promise<NamerModelRuntime>; proj
     stateDir: join(base, "state"),
     createDriver: () => { const d = new FakeDriver(); drivers.push(d); return d; },
     send: (m) => out.push(m),
-    ...(options.namerModels ? { namerModels: options.namerModels } : {}),
+    ...(options.namingModels ? { namingModels: options.namingModels } : {}),
     ...(options.projectTrusted !== undefined ? { projectTrusted: options.projectTrusted } : {}),
   });
   const call = async (id: number, method: string, params?: unknown) => {
@@ -181,15 +176,19 @@ describe("WorkerServer agents", () => {
     expect(typeof opened.agent?.backgroundWork?.readTask).toBe("function");
   });
 
-  it("opens Beam and Chat with their built-in roles, refuses Namer and unknown names", async () => {
+  it("opens a plain chat with no definition and no agent name, and refuses names nothing answers to", async () => {
     const h = harness();
-    const beam = await h.call(1, "session/new", { cwd: join(base, "project"), agentName: "beam" });
-    expect(beam.result).toMatchObject({ state: { agent: { agentName: "beam", kind: "beam" } } });
-    expect(h.drivers[0]!.opened.agent?.definition).toMatchObject({ scopedSkills: false, skills: [] });
-    const chat = await h.call(2, "session/new", { cwd: join(base, "project"), agentName: "chat" });
-    expect(chat.result).toMatchObject({ state: { agent: { agentName: "chat", kind: "chat" } } });
-    expect((await h.call(3, "session/new", { cwd: join(base, "project"), agentName: "namer" })).error?.message).toMatch(/Namer names things/);
-    expect((await h.call(4, "session/new", { cwd: join(base, "project"), agentName: "nobody" })).error?.message).toMatch(/No agent is called "nobody"/);
+    const chat = await h.call(1, "session/new", { cwd: join(base, "project"), sessionKind: "chat" });
+    expect(chat.result).toMatchObject({ state: { agent: { kind: "chat", sessionKind: "chat" } } });
+    expect((chat.result as { state: SessionState }).state.agent).not.toHaveProperty("agentName");
+    // No definition at all: no persona, no scoped skills, nothing to edit.
+    expect(h.drivers[0]!.opened.agent?.definition).toBeUndefined();
+    expect(h.drivers[0]!.opened.agent?.record).toEqual({ kind: "chat" });
+    // The names that used to be built-in agents answer to nothing now.
+    for (const [id, name] of [[2, "beam"], [3, "chat"], [4, "namer"], [5, "nobody"]] as const) {
+      expect((await h.call(id, "session/new", { cwd: join(base, "project"), agentName: name })).error?.message)
+        .toMatch(new RegExp(`No agent is called "${name}"`));
+    }
   });
 
   it("uses the synced default agent and definitions", async () => {
@@ -198,21 +197,14 @@ describe("WorkerServer agents", () => {
     const lead = { ...snapshot.agents[0]!, name: "lead", instructions: "Lead.", engineInstructions: false };
     expect((await h.call(1, "agents/sync", { snapshot: { ...snapshot, revision: 3, agents: [...snapshot.agents, lead], defaultAgent: "lead" } })).result).toEqual({});
     const created = await h.call(2, "session/new", { cwd: join(base, "project") });
-    expect(created.result).toMatchObject({ state: { agent: { agentName: "lead", kind: "root" } } });
-    expect(h.drivers[0]!.opened.agent?.definition.instructions).toBe("Lead.");
+    expect(created.result).toMatchObject({ state: { agent: { agentName: "lead", kind: "root", sessionKind: "project" } } });
+    expect(h.drivers[0]!.opened.agent?.definition?.instructions).toBe("Lead.");
 
-    const customChat = snapshot.agents.find((agent) => agent.name === "chat")!;
-    const changed = { ...customChat, instructions: "Answer every question as a patient teacher." };
-    await h.call(3, "agents/sync", {
-      snapshot: {
-        ...snapshot,
-        revision: 4,
-        agents: snapshot.agents.map((agent) => (agent.name === "chat" ? changed : agent)),
-        builtinInstructions: { ...snapshot.builtinInstructions, chat: changed.instructions },
-      },
-    });
-    await h.call(4, "session/new", { cwd: join(base, "project"), agentName: "chat" });
-    expect(h.drivers.at(-1)!.opened.agent?.definition.instructions).toBe("Answer every question as a patient teacher.");
+    // A later sync replaces the definition a new session runs.
+    const revised = { ...lead, instructions: "Answer every question as a patient teacher." };
+    await h.call(3, "agents/sync", { snapshot: { ...snapshot, revision: 4, agents: [...snapshot.agents, revised], defaultAgent: "lead" } });
+    await h.call(4, "session/new", { cwd: join(base, "project") });
+    expect(h.drivers.at(-1)!.opened.agent?.definition?.instructions).toBe("Answer every question as a patient teacher.");
   });
 
   it("recovers a stored child session's agent from its record and decorates state updates", async () => {
@@ -329,33 +321,27 @@ describe("WorkerServer agents", () => {
     expect((await h.call(3, "agents/list", {})).error?.message).toMatch(/answered by the host/);
   });
 
-  it("names a session whose first prompt arrived before Namer had a model", async () => {
-    const runtime = fakeNamerRuntime(() => "Fix the login form");
-    const h = harness({ namerModels: async () => runtime });
+  it("does not name a session when nothing is assigned to naming", async () => {
+    // There is no built-in to be unavailable: with no assignment the request
+    // does not run, nothing is parked and no model is asked (`docs/plain-chat.md`).
+    const runtime = fakeNamingRuntime(() => "Fix the login form");
+    const h = harness();
     const created = await h.call(1, "session/new", { cwd: join(base, "project") });
     const path = (created.result as { state: SessionState }).state.path;
-    // The host's `agents/sync` has not landed (and qualification may still be
-    // running), so there is no model: the prompt is held, not dropped.
     await h.call(2, "session/prompt", { path, content: [{ type: "text", text: "please fix the login form" }] });
     await tick();
     expect(h.drivers[0]!.state().name).toBeUndefined();
     expect(runtime.calls).toBe(0);
-    // The model arrives: the waiting session is named from that first prompt.
-    await h.call(3, "agents/sync", { snapshot: namedSnapshot() });
+    await h.call(3, "agents/sync", { snapshot: fallbackSnapshot() });
     await tick();
-    expect(h.drivers[0]!.state().name).toBe("Fix the login form");
-    expect(runtime.calls).toBe(1);
-    // A later sync names nothing again: the prompt was consumed and the
-    // session now has a name.
-    await h.call(4, "agents/sync", { snapshot: namedSnapshot() });
-    await tick();
-    expect(runtime.calls).toBe(1);
+    expect(h.drivers[0]!.state().name).toBeUndefined();
+    expect(runtime.calls).toBe(0);
   });
 
   it("names on the first prompt once a model is there, and leaves a named session alone", async () => {
-    const runtime = fakeNamerRuntime(() => '"Rename the auth module."');
-    const h = harness({ namerModels: async () => runtime });
-    await h.call(1, "agents/sync", { snapshot: namedSnapshot() });
+    const runtime = fakeNamingRuntime(() => '"Rename the auth module."');
+    const h = harness({ namingModels: async () => runtime });
+    await h.call(1, "agents/sync", { snapshot: fallbackSnapshot() });
     const created = await h.call(2, "session/new", { cwd: join(base, "project") });
     const path = (created.result as { state: SessionState }).state.path;
     await h.call(3, "session/prompt", { path, content: [{ type: "text", text: "rename the auth module please" }] });
@@ -368,16 +354,16 @@ describe("WorkerServer agents", () => {
     expect(runtime.calls).toBe(1);
   });
 
-  it("does not ask Namer for a model completion when a tool starts", async () => {
-    const runtime = fakeNamerRuntime(() => "This must not be requested");
-    const h = harness({ namerModels: async () => runtime });
-    await h.call(1, "agents/sync", { snapshot: namedSnapshot() });
+  it("asks for no model completion when a tool starts", async () => {
+    const runtime = fakeNamingRuntime(() => "This must not be requested");
+    const h = harness({ namingModels: async () => runtime });
+    await h.call(1, "agents/sync", { snapshot: fallbackSnapshot() });
     await h.call(2, "session/new", { cwd: join(base, "project") });
     h.drivers[0]!.emit({ type: "update", update: { kind: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "ls", activity_label: "Listing files" } } });
     await tick();
     expect(runtime.calls).toBe(0);
     expect(h.notifications("pi/extension/message").some((notification) =>
-      (notification.params as { message: { type: string } }).message.type.includes("namer/label"),
+      (notification.params as { message: { type: string } }).message.type.includes("label"),
     )).toBe(false);
   });
 

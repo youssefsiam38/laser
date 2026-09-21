@@ -1,19 +1,18 @@
 /**
  * Commit messages and pull-request prose from the session's current model.
  *
- * The Namer is a small model for session titles and has not seen the code.
  * This talks to the same runtime the session is using, with recent commit
  * subjects and the project's instructions in the prompt. The result is text
  * to edit; nothing here commits.
  */
 import type { GitProseKind, GitProseResult } from "@lasercode/protocol";
-import type { NamerContext, NamerModelRuntime } from "../agents/namer.js";
+import type { CompletionContext, CompletionRuntime } from "../agents/session-naming.js";
 import { GitActionError } from "./paths.js";
 import type { ProcessRunner } from "./runner.js";
 
-/** Same engine seam the Namer uses; one type so the server assignment needs no cast. */
-export type GitProseRuntime = NamerModelRuntime;
-export type GitProseContext = NamerContext;
+/** The same bounded-completion seam session naming uses; one type, no cast. */
+export type GitProseRuntime = CompletionRuntime;
+export type GitProseContext = CompletionContext;
 
 export interface GenerateProseInput {
   run: ProcessRunner;
