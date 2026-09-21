@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T10:09:00+03:00 · claude-2026-09-21-leap · HEAD: 32d227eb
+**Last updated:** 2026-09-21T10:09:00+03:00 · claude-2026-09-21-leap · HEAD: 660e5b54
 **Current focus:** M23 Plain Chat is implemented, reviewed and fixed (`pnpm verify` green); M23-T6 is releasing 0.13.0. M26-T1/T2 tool-contract lint runs in parallel; M21 follows.
 
 | Milestone | State |
