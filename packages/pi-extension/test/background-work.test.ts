@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { BACKGROUND_TOOL_NAMES, TASK_EVENT_MESSAGE_TYPE, WIRE_NAMESPACE, backgroundTaskUpdateSchema, type BackgroundTaskUpdate } from "@lasercode/protocol";
+import { BACKGROUND_TOOL_NAMES, TASK_EVENT_MESSAGE_TYPE, WIRE_NAMESPACE, backgroundTaskUpdateSchema, parseToolError, toolContract, type BackgroundTaskUpdate } from "@lasercode/protocol";
+import { laserToolRegistry } from "../src/register-tool.js";
 import type { ReadTaskOutputResult } from "../src/agents-bridge.js";
 import { createLaserExtension } from "../src/index.js";
 import { createCommandBus, type ModuleContext, type ModuleDispose } from "../src/modules/index.js";
@@ -173,6 +174,34 @@ describe("background-work: the bash override", () => {
     // D-162: nothing the model reads names a waiting tool, tells it to block,
     // or tells it to poll.
     for (const tool of h.tools.values()) expect(modelText(tool)).not.toMatch(/task_wait|block until|\bwait\b|\bpoll/i);
+  });
+
+  // M26-T2: the two task tools are Laser's own and obey the contract. `bash`
+  // is the engine's tool with a Laser behaviour added, so it is not linted.
+  it("registers the task tools under the tool contract, with their annotations", () => {
+    harness(5);
+    const output = laserToolRegistry().get("task_output");
+    const stop = laserToolRegistry().get("task_stop");
+    expect(toolContract(output!)).toEqual([]);
+    expect(toolContract(stop!)).toEqual([]);
+    expect(output!.annotations).toEqual({ readOnly: true, idempotent: true, destructive: false, external: false });
+    expect(stop!.annotations).toEqual({ readOnly: false, idempotent: true, destructive: true, external: false });
+    expect(output!.label).toBe("injected");
+    expect(stop!.label).toBe("injected");
+    expect(laserToolRegistry().has("bash")).toBe(false);
+  });
+
+  it("refuses an unknown task in the contract's error shape, naming the next call", async () => {
+    const h = harness(5);
+    const failure = await h.call("task_output", { taskId: "t-missing" }).catch((error: unknown) => error);
+    expect(parseToolError((failure as Error).message)).toEqual({
+      code: "task_output_failed",
+      message: expect.stringContaining("No task t-missing was started by this session"),
+      committed: false,
+      next: expect.stringContaining("inspect_fleet"),
+    });
+    const stopped = await h.call("task_stop", { taskId: "t-missing" }).catch((error: unknown) => error);
+    expect(parseToolError((stopped as Error).message)?.code).toBe("task_stop_failed");
   });
 
   it("returns the engine's own result for a command that finishes before the limit", async () => {

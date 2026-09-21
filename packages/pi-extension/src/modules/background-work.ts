@@ -61,6 +61,7 @@ import {
 } from "@lasercode/protocol";
 import { Type } from "typebox";
 import type { BackgroundWorkOptions } from "../agents-bridge.js";
+import { registerLaserTool } from "../register-tool.js";
 import type { LaserModule, ModuleContext } from "./index.js";
 import { LOG_DIR_MODE, TaskLog } from "./task-log.js";
 import {
@@ -94,6 +95,18 @@ function projectEnvSpawnHook(
 
 /** Bytes of output kept in memory while a command runs. Released when it ends. */
 const TAIL_BYTES = 256 * 1024;
+/** The bound on a task id the model hands back; ids are this module's own. */
+const TASK_ID_MAX = 200;
+/** What `task_output` and `task_stop` say about one command (D-350). */
+const TASK_RESULT_FIELDS = {
+  taskId: { type: "string", description: "The command's id, as inspect_fleet and bash report it." },
+  command: { type: "string", description: "The command line that was run." },
+  status: { type: "string", description: "running, completed, failed or stopped." },
+  exitCode: { type: "integer", description: "Its exit code, or null for a command that was killed or has not ended." },
+  startedAt: { type: "string", description: "When it started, as an ISO timestamp." },
+  endedAt: { type: "string", description: "When it ended; absent while it runs." },
+  outputBytes: { type: "integer", description: "Exactly how many bytes it has printed, whatever was released." },
+} as const;
 const DEFAULT_TAIL_LINES = 100;
 /** Minimum spacing between two task re-emits for output growth alone. */
 const PUBLISH_THROTTLE_MS = 500;
@@ -760,86 +773,116 @@ export const backgroundWorkModule: LaserModule = {
       },
     });
 
-    pi.registerTool({
+    registerLaserTool(pi, {
       name: "task_output",
       label: "Read task output",
+      activityLabel: "injected",
+      annotations: { readOnly: true, idempotent: true, destructive: false, external: false },
+      recovery: {
+        code: "task_output_failed",
+        next: "call inspect_fleet to list every command in your tree with its taskId, then task_output with one of them",
+      },
+      output: {
+        type: "object",
+        properties: {
+          ...TASK_RESULT_FIELDS,
+          background: { type: "boolean", description: "Whether it was started in the background rather than promoted." },
+          promoted: { type: "boolean", description: "Whether a foreground command outran the limit and became a task." },
+          notify: { type: "boolean", description: "Whether its exit will wake a turn of yours." },
+          lines: { type: "integer", description: "How many lines of output this answer carries." },
+          logState: { type: "string", description: "Whether the window on disk is complete, truncated or released." },
+          retainedFromByte: { type: "integer", description: "The byte the readable window begins at; 0 when nothing was released." },
+          outputDigest: { type: "string", description: "A sha256 over every byte the command printed, released or not." },
+          owner: { type: "object", description: "Which agent's command this is, when it is not yours." },
+        },
+      },
       description:
         `Return the last lines of a background task's output (default ${DEFAULT_TAIL_LINES}), with its status. ` +
         "Takes any command in your tree: one you started, or one an agent under you started — inspect_fleet lists them with their taskId. Read-only.",
       promptSnippet: "Read the latest output of a background task, yours or an agent's under you",
       promptGuidelines: ["Use task_output with a task id to read what a background task has printed so far, before its exit reaches you; pass tail for more lines. inspect_fleet shows every task id in your tree."],
       parameters: Type.Object({
-        taskId: Type.String({ minLength: 1, description: "The task id, from bash's result or from inspect_fleet." }),
+        taskId: Type.String({ minLength: 1, maxLength: TASK_ID_MAX, description: "The task id, from bash's result or from inspect_fleet." }),
         tail: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000, description: `Lines from the end to return (default ${DEFAULT_TAIL_LINES}).` })),
-      }),
-      async execute(_toolCallId, { taskId, tail }): Promise<AgentToolResult<Record<string, unknown>>> {
-        const own = state.tasks.get(taskId);
-        if (own) {
-          // A running command answers from the window in memory; a finished one
-          // answers from the bounded window on disk, which is why its tail
-          // buffer could be released when it ended. What was released is said,
-          // never implied: the exact total and the digest are always there.
-          const durable = own.status === "running" ? undefined : own.log.readTail(TASK_OUTPUT_MAX_BYTES);
-          const body = durable !== undefined ? durable.toString("utf8") : heldText(own);
-          const lines = lastLines(body, tail ?? DEFAULT_TAIL_LINES);
-          const released = own.status !== "running" && durable === undefined;
-          const retainedFrom = own.log.retainedFromByte;
-          const note = released
-            ? `\n(the full output was released; ${own.bytes} bytes were produced, sha256 ${own.log.digest()}, and this is the last of it)`
-            : retainedFrom > 0
-              ? `\n(output before byte ${retainedFrom} was released; ${own.bytes} bytes were produced, sha256 ${own.log.digest()})`
-              : "";
-          const header = `task ${own.id} ${own.status}${typeof own.exitCode === "number" ? ` (exit code ${own.exitCode})` : ""} · ${own.bytes} bytes of output`;
-          return {
-            content: text(`${header}\n${lines || "(no output)"}${note}`),
-            details: {
-              ...summary(own),
-              lines: lines ? lines.split("\n").length : 0,
-              logState: own.log.state,
-              retainedFromByte: retainedFrom,
-              outputDigest: own.log.digest(),
-            },
-          };
-        }
-        // Not this session's: a command of an agent under it, read through
-        // the worker (D-163), which refuses anything outside the tree.
-        if (!options.readTask) throw new Error(`No task ${taskId} was started by this session.`);
-        const read = await options.readTask(taskId, tail ?? DEFAULT_TAIL_LINES);
-        const { task, owner } = read;
-        const header = `task ${task.id} ${task.status}${typeof task.exitCode === "number" ? ` (exit code ${task.exitCode})` : ""} · ${task.outputBytes} bytes of output · started by ${owner.subagentName} (sessionId ${owner.sessionId})`;
-        const body = read.text === undefined ? `(no log file kept; its last line was: ${task.activity ?? "nothing yet"})` : read.text || "(no output)";
+      }, { additionalProperties: false }),
+    }, async (_toolCallId, { taskId, tail }): Promise<AgentToolResult<Record<string, unknown>>> => {
+      const own = state.tasks.get(taskId);
+      if (own) {
+        // A running command answers from the window in memory; a finished one
+        // answers from the bounded window on disk, which is why its tail
+        // buffer could be released when it ended. What was released is said,
+        // never implied: the exact total and the digest are always there.
+        const durable = own.status === "running" ? undefined : own.log.readTail(TASK_OUTPUT_MAX_BYTES);
+        const body = durable !== undefined ? durable.toString("utf8") : heldText(own);
+        const lines = lastLines(body, tail ?? DEFAULT_TAIL_LINES);
+        const released = own.status !== "running" && durable === undefined;
+        const retainedFrom = own.log.retainedFromByte;
+        const note = released
+          ? `\n(the full output was released; ${own.bytes} bytes were produced, sha256 ${own.log.digest()}, and this is the last of it)`
+          : retainedFrom > 0
+            ? `\n(output before byte ${retainedFrom} was released; ${own.bytes} bytes were produced, sha256 ${own.log.digest()})`
+            : "";
+        const header = `task ${own.id} ${own.status}${typeof own.exitCode === "number" ? ` (exit code ${own.exitCode})` : ""} · ${own.bytes} bytes of output`;
         return {
-          content: text(`${header}\n${body}`),
-          details: { taskId: task.id, command: task.command, status: task.status, exitCode: task.exitCode ?? null, startedAt: task.startedAt, ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}), outputBytes: task.outputBytes, owner, lines: read.text ? read.text.split("\n").length : 0 },
+          content: text(`${header}\n${lines || "(no output)"}${note}`),
+          details: {
+            ...summary(own),
+            lines: lines ? lines.split("\n").length : 0,
+            logState: own.log.state,
+            retainedFromByte: retainedFrom,
+            outputDigest: own.log.digest(),
+          },
         };
-      },
+      }
+      // Not this session's: a command of an agent under it, read through
+      // the worker (D-163), which refuses anything outside the tree.
+      if (!options.readTask) throw new Error(`No task ${taskId} was started by this session.`);
+      const read = await options.readTask(taskId, tail ?? DEFAULT_TAIL_LINES);
+      const { task, owner } = read;
+      const header = `task ${task.id} ${task.status}${typeof task.exitCode === "number" ? ` (exit code ${task.exitCode})` : ""} · ${task.outputBytes} bytes of output · started by ${owner.subagentName} (sessionId ${owner.sessionId})`;
+      const body = read.text === undefined ? `(no log file kept; its last line was: ${task.activity ?? "nothing yet"})` : read.text || "(no output)";
+      return {
+        content: text(`${header}\n${body}`),
+        details: { taskId: task.id, command: task.command, status: task.status, exitCode: task.exitCode ?? null, startedAt: task.startedAt, ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}), outputBytes: task.outputBytes, owner, lines: read.text ? read.text.split("\n").length : 0 },
+      };
     });
 
-    pi.registerTool({
+    registerLaserTool(pi, {
       name: "task_stop",
       label: "Stop a task",
+      activityLabel: "injected",
+      // It kills a process tree: destructive, and safe to repeat — a task that
+      // has already ended is reported as it is rather than killed twice.
+      annotations: { readOnly: false, idempotent: true, destructive: true, external: false },
+      recovery: {
+        code: "task_stop_failed",
+        next: "call inspect_fleet to see whether that command is still running, then task_stop with the taskId it shows",
+      },
+      output: {
+        type: "object",
+        properties: { taskId: TASK_RESULT_FIELDS.taskId, status: TASK_RESULT_FIELDS.status, exitCode: TASK_RESULT_FIELDS.exitCode },
+      },
       description: "End a running background task by killing its process tree. A task that already ended is reported as is.",
       promptSnippet: "Stop a background task",
       promptGuidelines: ["Use task_stop with a task id to end a background task that is no longer needed."],
-      parameters: Type.Object({ taskId: Type.String({ minLength: 1, description: "The task id." }) }),
-      async execute(_toolCallId, { taskId }) {
-        const task = requireTask(taskId);
-        const stoppedNow = task.status === "running";
-        if (stoppedNow) {
-          stopTask(task, "agent");
-          let grace: NodeJS.Timeout | undefined;
-          await Promise.race([
-            task.done,
-            new Promise<void>((resolve) => {
-              grace = setTimeout(resolve, STOP_GRACE_MS);
-            }),
-          ]);
-          if (grace) clearTimeout(grace);
-        }
-        const result = { taskId: task.id, status: task.status, exitCode: task.exitCode ?? null };
-        const message = stoppedNow ? `Task ${task.id} ${task.status === "stopped" ? "stopped" : `ended with status ${task.status} before it could be stopped`}.` : `Task ${task.id} had already ended with status ${task.status}.`;
-        return { content: text(message), details: result };
-      },
+      parameters: Type.Object({ taskId: Type.String({ minLength: 1, maxLength: TASK_ID_MAX, description: "The task id." }) }, { additionalProperties: false }),
+    }, async (_toolCallId, { taskId }) => {
+      const task = requireTask(taskId);
+      const stoppedNow = task.status === "running";
+      if (stoppedNow) {
+        stopTask(task, "agent");
+        let grace: NodeJS.Timeout | undefined;
+        await Promise.race([
+          task.done,
+          new Promise<void>((resolve) => {
+            grace = setTimeout(resolve, STOP_GRACE_MS);
+          }),
+        ]);
+        if (grace) clearTimeout(grace);
+      }
+      const result = { taskId: task.id, status: task.status, exitCode: task.exitCode ?? null };
+      const message = stoppedNow ? `Task ${task.id} ${task.status === "stopped" ? "stopped" : `ended with status ${task.status} before it could be stopped`}.` : `Task ${task.id} had already ended with status ${task.status}.`;
+      return { content: text(message), details: result };
     });
   },
 
