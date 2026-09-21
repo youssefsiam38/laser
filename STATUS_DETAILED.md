@@ -6208,10 +6208,10 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | M22-T3 | Worker runtime on profiles | done | claude-2026-09-21-leap | `ad23a25e`; `pnpm -F @lasercode/worker test` (1211 passed) · `env -i PATH=$PATH HOME=$HOME pnpm -F @lasercode/host test` (1012 passed) | see notes |
 | M22-T4 | Agents and naming on profiles | done | claude-2026-09-21-leap | `c4d4ec48`; `pnpm -F @lasercode/worker test` (1211 passed) · `env -i PATH=$PATH HOME=$HOME pnpm -F @lasercode/host test` (1012 passed) | see notes |
 | M22-T5 | Host authority and projections | done | claude-2026-09-21-leap | `e9ba67c9`; `pnpm -F @lasercode/worker test` (1211 passed) · `env -i PATH=$PATH HOME=$HOME pnpm -F @lasercode/host test` (1012 passed) | see notes |
-| M22-T6 | Settings: Model profiles tab and assignment pickers | in-progress | claude-2026-09-21-leap | — | see notes |
-| M22-T7 | Onboarding profile review | in-progress | claude-2026-09-21-leap | — | see notes |
-| M22-T8 | Composer, status line, fleet and logs | in-progress | claude-2026-09-21-leap | — | see notes |
-| M22-T9 | Agents page and CLI | in-progress | claude-2026-09-21-leap | — | see notes |
+| M22-T6 | Settings: Model profiles tab and assignment pickers | done | claude-2026-09-21-leap | `14318ffa`; `pnpm -F @lasercode/ui test` (3008 passed) | see notes |
+| M22-T7 | Onboarding profile review | done | claude-2026-09-21-leap | `69f7bf9c`; `pnpm -F @lasercode/ui test` (3008 passed) | see notes |
+| M22-T8 | Composer, status line, fleet and logs | done | claude-2026-09-21-leap | `60671df9`; `pnpm -F @lasercode/ui test` (3008 passed) | see notes |
+| M22-T9 | Agents page and CLI | done | claude-2026-09-21-leap | `1e2c031c`; `pnpm -F @lasercode/ui test` (3008 passed) | see notes |
 | M22-T10 | Documents, identity guard and reconciliation | todo | — | — | `PLAN.md` M22 |
 | M22-T11 | Migration acceptance and release | todo | — | — | `PLAN.md` M22 |
 
@@ -6225,6 +6225,7 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 #### M22-T6–T9 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI/CLI worker on branch `agents/model-profiles-ui-and-cli-0d93c72c` based on `e692e4b9`, in parallel with the backend (write sets disjoint: packages/ui, packages/cli); plan and host assumptions in `docs/leap/m22-ui-plan.md`.
+- 2026-09-21 done, merged at `4718925a`: T6 `settings/models/ModelProfilesTab.tsx` + `profile-usage.ts` replace the fallback-chains tab (deleted with its test), assignment pickers for default/naming/consultation/design index, delete-with-replacement dialog, unavailable-model state; T7 `onboarding/ProfilesStep.tsx` replaces `ModelStep.tsx` (welcome → provider → profiles → project → ready; leaving without edits is skip); T8 `SessionModelSelector` profile + effective model, `session/profile/set` / `session/model/pin` with "Pinned · no fallback", status line "moving to", transcript "Moved to", fleet/session-list/usage attribution; T9 agents editor Profile section with unknown-profile warning, built-in profile cards, `BeamProfileDialog`, CLI `doctor` walks every profile model, `runs`/`session` print profile + effective model. Tests: `settings/model-profiles.test.tsx`, `onboarding/profiles-step.test.tsx`, `thread/profile-selector.test.tsx`, `thread/profile-status-line.test.tsx`, `thread/profile-move-record.test.ts`, `beam/profile-dialog.test.tsx`. Open for T10: `ProviderRequestContext.profileId` for captured-request attribution; `clean-machine.mjs` writes `modelProfiles` + `defaultProfileId` and the remembered onboarding step id is `profiles`. Visual acceptance of the composer control, the profiles tab and the onboarding step is the person's (D-342).
 
 #### M22-T0 notes
 - 2026-09-21 claimed by codex-2026-09-21-model-profiles: the person settled that fallback chains and the proposed model tiers collapse into one unlimited, person-named Model Profile concept; write the binding contract with the full breaking-change inventory.
