@@ -30,7 +30,8 @@
  *   `owner()` both answer the new path, for the running build and for a
  *   finished one alike;
  * - Stop from the fleet row still reaches the build after the move;
- * - settlement publishes its terminal row at the new path and clears the pin;
+ * - settlement publishes its terminal row at the new path — *stopped*, in the
+ *   person's own words, because that is what happened — and clears the pin;
  * - a build owned by another conversation is untouched by the fork.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -324,10 +325,17 @@ describe("an index build whose conversation is forked to a new file", () => {
     expect(stopped.result?.delivered).toBe(true);
 
     // Settlement lands where the conversation is now, and releases the pin.
+    //
+    // And it says what really happened: the person stopped this build while it
+    // was waiting for its model, so the terminal row is *stopped* in their own
+    // words — not "completed" because the descriptions came back afterwards.
     answerTheModel();
     const last = await settled(out, commandId);
     expect(last.path).toBe(forked);
     expect(last.task.sessionPath).toBe(forked);
+    expect(last.task.status, "a build the person stopped is stopped, whatever arrived after").toBe("stopped");
+    expect(last.task.terminalReason).toBe("you stopped it");
+    expect(rowsFor(out, commandId).some((entry) => entry.task.status === "completed"), "no row ever said it finished").toBe(false);
     expect(last.task.endedAt).toBeDefined();
     expect(rowsFor(out, commandId).filter((entry) => entry.path === source).every((entry) => entry.task.status === "running")).toBe(true);
     expect(await pinsOf(call, forked), "a build that has ended holds nothing").not.toContain("task");

@@ -167,63 +167,56 @@ export class TaskRegister {
    * `list(oldPath)` would hand a reconnecting client a *running* row for a
    * command that has since ended somewhere else.
    *
-   * The destination may already hold a row for the same command. The worker
-   * re-keys its own structures before it answers the fork, so anything
-   * published under the new path is newer than everything under the old one —
-   * that row wins, and only the private output metadata it happens to lack is
-   * carried over. A terminal row is never replaced by a running one, whichever
-   * side it is on.
+   * The destination may already hold a row for the same command, and that row
+   * is the newer one: the worker re-keys its own structures *before* it
+   * answers the fork, and its notifications travel the same ordered
+   * connection as that answer, so everything already filed under the new path
+   * was published after everything under the old one. The destination's row
+   * therefore wins, and only the private output metadata it happens to lack is
+   * carried over. The one exception is a guard rather than an ordering claim:
+   * a record that has already ended is never replaced by a running one,
+   * whichever side of the move it is on, because a command that finished did
+   * not start again because its session's file moved.
    */
   rekeySession(oldPath: string, newPath: string): void {
     if (oldPath === newPath) return;
     const moving = this.bySession.get(oldPath);
     if (!moving) return;
     this.bySession.delete(oldPath);
-    let destination = this.bySession.get(newPath);
-    if (!destination) {
-      destination = new Map();
-      this.bySession.set(newPath, destination);
-    }
-    const moved: BackgroundTask[] = [];
+    const destination = this.bySession.get(newPath) ?? new Map<string, Held>();
+    const changed: BackgroundTask[] = [];
     for (const [id, held] of moving) {
+      // Whatever ends up at the new path, this record is no longer held under
+      // the old one, so its bytes leave with it.
+      this.bytes -= Buffer.byteLength(held.serialized, "utf8");
       const existing = destination.get(id);
       // Private file fields survive the move whichever record wins: they are
       // how a ranged read finds bytes, and the newer row may have arrived
       // without repeating them.
       const logPath = existing?.logPath ?? held.logPath;
       const logSegments = existing?.logSegments ?? held.logSegments;
-      if (existing) {
-        this.bytes -= Buffer.byteLength(held.serialized, "utf8");
-        // The newer row is the destination's, except when it would undo an
-        // ending: a command that has already finished never goes back to
-        // running because its session's file moved.
-        const keepMoved = existing.task.status === "running" && held.task.status !== "running";
-        const winner = keepMoved ? { ...held } : existing;
-        if (keepMoved) {
-          const task = { ...held.task, sessionPath: newPath };
-          const serialized = JSON.stringify(task);
-          this.bytes += Buffer.byteLength(serialized, "utf8") - Buffer.byteLength(existing.serialized, "utf8");
-          destination.set(id, { task, logPath, logSegments, serialized });
-          moved.push(task);
-          continue;
-        }
-        destination.set(id, { ...winner, logPath, logSegments });
-        continue;
-      }
-      const task = { ...held.task, sessionPath: newPath };
-      const serialized = JSON.stringify(task);
-      this.bytes += Buffer.byteLength(serialized, "utf8") - Buffer.byteLength(held.serialized, "utf8");
+      const winner = existing !== undefined && !(existing.task.status === "running" && held.task.status !== "running")
+        ? existing
+        : held;
+      if (existing !== undefined) this.bytes -= Buffer.byteLength(existing.serialized, "utf8");
+      // One row, at the address that exists: whichever record won says the new
+      // path, so a client is never handed a command hanging under a file no
+      // runtime serves.
+      const task = winner.task.sessionPath === newPath ? winner.task : { ...winner.task, sessionPath: newPath };
+      const serialized = task === winner.task ? winner.serialized : JSON.stringify(task);
+      this.bytes += Buffer.byteLength(serialized, "utf8");
       destination.set(id, { task, logPath, logSegments, serialized });
-      moved.push(task);
+      // Told once, and only when the row a client holds really changed: the
+      // destination's own row was broadcast when it arrived.
+      if (winner === held || task !== winner.task) changed.push(task);
     }
-    if (destination.size === 0) this.bySession.delete(newPath);
+    if (destination.size === 0) return;
+    this.bySession.set(newPath, destination);
     // The public row, and only ever the public row: a client is told where a
     // command hangs, never where its bytes are.
-    for (const task of moved) this.deps.notify("tasks/update", { task });
-    if (this.bySession.has(newPath)) {
-      this.prune(destination);
-      this.pruneSessions(newPath);
-    }
+    for (const task of changed) this.deps.notify("tasks/update", { task });
+    this.prune(destination);
+    this.pruneSessions(newPath);
   }
 
   /** Every task of one session, oldest first; or of every session. */

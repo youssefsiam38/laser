@@ -459,6 +459,28 @@ describe("when builds end", () => {
   });
 
   /**
+   * Stopped, but by what?
+   *
+   * A fleet row's last word is read as a statement about the person's own
+   * doing. "You stopped it" about a build that ran into a bound this app set
+   * for it is simply false, so the row says which of the two it was, from the
+   * engine's own answer rather than from the fact that it ended early.
+   */
+  it("never tells a person they stopped a build that ran into its own budget", async () => {
+    const projectCwd = copyFixture("react-tailwind");
+    const { workspace, rowsFor } = realWorkspace(projectCwd);
+
+    const { command } = await workspace.build(buildParams({ maxFiles: 1 }));
+    await settledRows(rowsFor, [command.commandId]);
+
+    const last = rowsFor(command.commandId).at(-1)?.task;
+    expect(last?.status).toBe("stopped");
+    expect(last?.terminalReason, "nobody stopped this build").not.toBe("you stopped it");
+    expect(last?.terminalReason ?? "").toMatch(/budget/);
+    expect(last?.error, "a bound is not a failure").toBeUndefined();
+  });
+
+  /**
    * A build that really fails, at the place a build really can: the write at
    * the end. The index file's own path is a directory here, so the rename the
    * store does cannot land.

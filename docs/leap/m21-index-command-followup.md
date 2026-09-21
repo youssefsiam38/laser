@@ -193,10 +193,10 @@ pi/session/fork → rekeySessionState(old, new)
   build that reports nothing for a while would otherwise be missing from the
   conversation that now exists until it ended.
 
-Still open, deliberately, and **not** this milestone's: the host's own
-`TaskRegister` has no rekey either, so the host keeps the pre-fork row under the
-old path until the worker is lost. That is shared with every shell command a
-forked conversation owns — one host-side lifecycle fix, not a design one.
+That was half the move. The host's own `TaskRegister` had no rekey either, so
+the host kept the pre-fork row under the old path until the worker was lost —
+shared with every shell command a forked conversation owns. It is done now, in
+"The host end of the same move" below.
 
 ### F1 — a settlement observer that threw said nothing
 
@@ -326,6 +326,127 @@ Visual acceptance is the person's (D-342): the Design tab with and without an
 eligible conversation, in both themes and both widths, and the index build's
 fleet row while it runs and after Stop. `pnpm -r build && pnpm sandbox`.
 
-## Interrupted continuation checkpoint (not complete)
+## The host end of the same move, and a Stop that tells the truth
 
-Run `run_f0dc9f86` ended without its completion tool after merging `d7213b26` as `c8baee11`. Parent inspected the stopped run and three modified files, then preserved them for transfer: host Router's canonical rekey hook; a TaskRegister migration implementation; build command abort/outcome changes. **No new tests, typecheck or validation were completed for these partial changes.** The workspace/result stopped-reason plumbing and strengthened fork test remain unfinished. Review the destination-versus-source terminal precedence against the approved newer-destination rule; do not treat the untested implementation as authoritative. Parent resumption attempt failed with the exact returned session id. Preserve this checkpoint and finish the approved end-to-end milestone before its narrow independent review.
+Continued from the interrupted run `run_f0dc9f86`, whose partial edits were
+preserved as `641288f9` and are the ancestry of everything below. Two
+behaviours, both end-to-end, both proven from the seams a person's action
+really travels.
+
+### A. The host's register follows the fork (`TaskRegister.rekeySession`)
+
+The worker moved its own structures at `pi/session/fork`; the host did not. Its
+`TaskRegister` is keyed by session path, so after a fork the pre-fork rows sat
+under a file no runtime serves: a **running** ghost the fleet could never lose,
+handed back to any client that re-listed the old session, and left there until
+the worker was lost — which for a perfectly healthy worker is never.
+
+One authority says a session moved: the router's canonical moved-state branch,
+inside the route lease that forwarded the fork and moved the pool's row
+(`router.ts`, `this.deps.tasks?.rekeySession(path, moved)`). Nothing infers a
+move from a display name, from a project, or from a task update. The register
+is optional there, so a host without one still forks.
+
+The migration itself:
+
+- **The old bucket is removed, not copied.** `list(oldPath)` answers nothing,
+  `list(newPath)` answers the command, and the global list — what the fleet
+  keys by id — holds exactly one row per command, so an old-path row can never
+  overwrite the live one in a client's map.
+- **The destination's row wins**, and that is an *ordering* fact rather than a
+  preference: the worker re-keys its structures and publishes under the new
+  path **before** it answers the fork, and its notifications travel the same
+  ordered connection as that answer, so everything already filed at the new
+  path was published after everything at the old one. A terminal row that
+  arrived before the reply is the one that survives.
+- **A finished command never goes back to running.** The WIP carried this as an
+  "old terminal beats destination running" precedence; checked against the real
+  ordering it is not a precedence at all — that interleaving would require a
+  worker to republish a running row for a command it had already reported
+  terminal, which one ordered stream cannot produce. It is kept as a *guard*,
+  documented as one, and proved from both sides.
+- **Private fields survive the move whichever record wins**, because a ranged
+  read finds bytes through them and the newer row may not repeat them — and
+  they still never leave the host: a moved row's broadcast and every `list`
+  carry the public task only.
+- **The accounting stays exact.** Bytes are recomputed in UTF-8 for whatever is
+  kept, the per-session and per-register bounds are applied at the path the
+  rows moved to, and a command still running is exempt from both, as before.
+- **Nothing else moves.** Same path, a path never held, a second rekey, another
+  conversation's commands: all no-ops. A fork the worker refused migrates
+  nothing and says nothing. And closing the file the conversation *left* does
+  not end the command that moved — only losing the worker that really runs it
+  does, at the path it is.
+
+### B. A build that was stopped says it was stopped
+
+`buildDesignIndex` decided `stopped` once, in the file loop. A Stop accepted
+anywhere else was forgotten by the time the outcome was written — above all
+during *describing*, the build's one long await: the person pressed Stop, the
+model's descriptions came back, and the fleet row said **completed** about a
+command they had watched themselves stop.
+
+The flag is now asked, never remembered: the signal is read at every point the
+build could have been stopped — before the scan, in the loop, after synthesis,
+and once more after the write, which is the last moment before the outcome
+exists. From there to the return is one synchronous run, so a Stop that lands
+later is a Stop of something already over and changes nothing: settled is
+settled. A write that failed threw before that point and is still reported as
+the failure it is; being stopped never hides one. Everything parsed before the
+Stop is still in the index, and the index it had is still written.
+
+And the row says *which* early ending it was. `DesignBuildResult.stoppedBy`
+(`person` | `budget`) reaches the workspace's one `Settled` value, so a build
+that ran into its own file budget no longer tells a person "you stopped it" —
+it says it reached its budget. A build whose engine did not say which reads
+"it ended before the end" rather than putting words in the person's mouth.
+No cancellation framework, no retry queue: one flag, one reason, one outcome.
+
+### Evidence
+
+Frozen install, clean recursive build, then `env -i PATH="$PATH" HOME="$HOME"`,
+one suite at a time:
+
+| Command | Result |
+| --- | --- |
+| `pnpm -F @lasercode/worker exec vitest run test/design` | 241 passed (17 files) |
+| `pnpm -F @lasercode/worker exec vitest run test/session-safety.test.ts test/agents/tasks.test.ts test/session-unload.test.ts test/session-retire.test.ts test/server.test.ts` | 94 passed |
+| `pnpm -F @lasercode/host exec vitest run test/tasks test/session-route-lease.test.ts test/router.test.ts test/router.design.test.ts test/router.move.test.ts` | 115 passed |
+| `pnpm -F @lasercode/host typecheck`, `pnpm -F @lasercode/worker typecheck`, `pnpm identity:check` | clean |
+
+Every new proof was run against the code before the correction as well:
+
+- host, with `router.ts` and `tasks/register.ts` at `c8baee11`: **7 failed** —
+  the five register proofs (`rekeySession is not a function`) and the two
+  router proofs that assert the old path is empty and that one row survives;
+- worker, with `design/index/command.ts` at `c8baee11`: **5 failed** in
+  `test/design/command.test.ts`, and
+  `test/design/index-command-rekey.test.ts` failed with
+  `expected 'completed' to be 'stopped'` — the reported bug, at a real
+  `WorkerServer`, through a real `pi/task/stop`.
+
+Where the proofs are: `packages/host/test/tasks/register.test.ts` ("when a fork
+moves a session's file": migration and ghost, newer-row and the
+never-resurrect guard from both sides, output metadata plus the old path's
+refusal, exact bytes and bounds, the old file closing); `packages/host/test/
+tasks/fork-rekey.test.ts` (the real `Router`, its real lease and a real
+`TaskRegister`: per-session, global and re-listed views after a fork; a newer
+terminal row published before the reply; a fork that failed; a fork that named
+the same file); `packages/worker/test/design/command.test.ts` ("a Stop, and
+what the outcome says about it": stopped while the model was answering,
+stopped before the first file, stopped at the last moment, an ordinary
+completion, a write failure with a Stop in hand, no relabelling after
+settlement); `packages/worker/test/design/workspace.test.ts` (a budget-stopped
+build's row never says the person stopped it);
+`packages/worker/test/design/index-command-rekey.test.ts` (the forked build's
+terminal row is **stopped**, at the new path, with the pin gone, and no row
+ever said completed).
+
+### Not proven by tests
+
+Unchanged and pre-existing: the host tests that spawn a real worker fail in a
+worktree on launch identity (see above); none of them is touched here. The
+fleet's own appearance while a forked conversation's command moves is the
+person's acceptance (D-342): `pnpm -r build && pnpm sandbox`, fork a
+conversation with a command running, and check that the row moves rather than
+doubling. No UI source changed.

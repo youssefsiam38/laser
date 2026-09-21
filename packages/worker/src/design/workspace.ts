@@ -102,6 +102,26 @@ interface Settled {
   status: "completed" | "failed" | "stopped";
   /** Why it failed, as a sentence. Only ever set with `status: "failed"`. */
   failure?: string;
+  /**
+   * What ended it early, when something did. Only ever set with
+   * `status: "stopped"`, and only when the engine said which it was: a row
+   * must not tell a person they stopped a build that ran into its own budget.
+   */
+  stoppedBy?: "person" | "budget";
+}
+
+/**
+ * The last word on a build that did not run to its end.
+ *
+ * Three sentences, because there are three truths: the person stopped it, the
+ * build reached a bound this app set for it, or it ended early and this worker
+ * cannot say which — which is said as little as it knows rather than guessed
+ * into the person's own words.
+ */
+function stoppedReason(by: Settled["stoppedBy"]): string {
+  if (by === "person") return "you stopped it";
+  if (by === "budget") return "it reached its budget before the end";
+  return "it ended before the end";
 }
 
 interface Tracked {
@@ -277,7 +297,8 @@ export class DesignWorkspace {
     } else {
       held.progress = outcome.result.progress;
       const stopped = outcome.result.stopped === true || outcome.result.progress.phase === "stopped";
-      held.settled = { status: stopped ? "stopped" : "completed" };
+      const by = outcome.result.stoppedBy;
+      held.settled = { status: stopped ? "stopped" : "completed", ...(stopped && by !== undefined ? { stoppedBy: by } : {}) };
     }
     // The final row first, then the bookkeeping: a person watching the fleet
     // sees this build end before anything older is forgotten.
@@ -531,7 +552,7 @@ export class DesignWorkspace {
       activity: progressLine(held.progress),
       ...(settled === undefined ? {} : { endedAt: new Date(this.options.now?.() ?? Date.now()).toISOString(), exitCode: null }),
       ...(settled?.failure !== undefined ? { error: settled.failure, terminalReason: settled.failure } : {}),
-      ...(settled?.status === "stopped" ? { terminalReason: "you stopped it" } : {}),
+      ...(settled?.status === "stopped" ? { terminalReason: stoppedReason(settled.stoppedBy) } : {}),
       ...(settled?.status === "completed" ? { terminalReason: progressLine(held.progress) } : {}),
     };
     this.options.publishTask(held.sessionPath, task);
