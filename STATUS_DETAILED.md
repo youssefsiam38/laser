@@ -5984,8 +5984,8 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T4 | Bounded bodies, search and derived projections | done | claude-2026-09-21-leap | `ed23525f`; `project-work/bodies.test.ts` 16 over the wire | see notes |
 | M21-T5 | UI client store, reconcile and deep links | done | claude-2026-09-21-leap | `edac5b5c`; `pnpm -F @lasercode/ui test` (`test/project-work/*`) | see notes |
 | M21-T6 | Embedded workspace shell | done | claude-2026-09-21-leap | `83f454d3` (merged `f9e50378`); `pnpm -F @lasercode/ui test` (3055 passed, 50 new) | see notes |
-| M21-T7 | Specs and Research experience | in-progress | claude-2026-09-21-leap | — | see notes |
-| M21-T8 | Comments, reviews and approval gates | todo | — | — | `PLAN.md` M21 |
+| M21-T7 | Specs and Research experience | done | claude-2026-09-21-leap | `ae5eac62` (merged `cfd92e9f`); `pnpm -F @lasercode/ui test` (3086 passed; 30 new in `test/project-work/`) | see notes |
+| M21-T8 | Comments, reviews and approval gates | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T9 | Cross-session and cross-project mentions | todo | — | — | `PLAN.md` M21 |
 | M21-T10 | Design Index: static facts, synthesis, review, storage | done | claude-2026-09-21-leap | `9306d0fa`; `pnpm -F @lasercode/worker test` (1344 passed; `test/design/*` 70 incl. the parse-only module-graph and side-effect-marker proofs) | see notes |
 | M21-T11 | Framework-neutral DesignTree and React composition engine | todo | — | — | `PLAN.md` M21 |
@@ -6014,7 +6014,11 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap (row title aligned with `PLAN.md` as amended by D-353): worker-side Design Index (L0 parsers, L1 synthesis on `designIndexProfileId`, storage, review, digest cache, bounded Command) in parallel with the UI; plan in `docs/leap/m21-design-index-plan.md`.
 
 #### M21-T7 notes
+- 2026-09-21 done (`ae5eac62`): `SpecDocument.tsx` (structured fields + Markdown Source/Preview, brief vs full, revise fenced by the read revision, conflict banner with a real diff and "keep mine as a new revision", older-revision editing off), `ResearchDetail.tsx` (question tree, findings with rule-set confidence/licence chips, cited span marked literally, `[from …]`, Quote → composer, Open source, option matrix, unresolved, person-side resolutions via revise), `LinkDialog.tsx`, body search merged into the backlog filter with exact keys first, `research-report` adopted. Findings read-only until the loop lands (T17); Jira chip is M25's; global search is T9's; approvals/comments are T8's.
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI worker over the T6 slots (Spec/Research create/edit/revise/archive, brief vs full spec, Research question tree + findings + source panel, provenance UI, cross-links, search, Markdown editing) — host stays as the spine provides; T8's UI pieces follow in the same session once T15's host changes are merged.
+
+#### M21-T8 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: host gate rules (`project-work/gates.ts` + the store's comment/review/approve paths) and the UI comments/gate card/Approval Card; write set disjoint from T16 (plan/task/board files) and T17 (bridge/methods wiring).
 
 #### M21-T17 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: worker `project-work` companion module + typed bridge to the host authority, the compact tool surface, engine registration of the Design Index and Research tools, host-side research enforcement, context packet, `/design implement` hand-off packet, execution linking; T9's composer adapter is consumed later — the packet takes refs directly.
