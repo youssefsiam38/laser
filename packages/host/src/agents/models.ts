@@ -8,7 +8,7 @@
  */
 import { suggestBalancedModel, type ModelCatalogEntry, type ModelIdentity } from "@lasercode/protocol";
 
-export interface SuggestBeamModelOptions {
+export interface SuggestModelOptions {
   /**
    * Providers a credential is configured for. When given, only their models
    * qualify: the catalogue lists every model the engine knows, including ones
@@ -18,6 +18,6 @@ export interface SuggestBeamModelOptions {
 }
 
 /** The model a balanced, everyday profile should prefer. */
-export function suggestBeamModel(entries: readonly ModelCatalogEntry[], options: SuggestBeamModelOptions = {}): ModelIdentity | null {
+export function suggestEverydayModel(entries: readonly ModelCatalogEntry[], options: SuggestModelOptions = {}): ModelIdentity | null {
   return suggestBalancedModel(entries, { ...(options.configuredProviders ? { configuredProviders: options.configuredProviders } : {}) });
 }

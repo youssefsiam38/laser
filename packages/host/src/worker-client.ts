@@ -506,8 +506,8 @@ export class WorkerClient {
    * child exits: between those two there is a window where the process is
    * alive but the stream is finished, and a write into it throws
    * `ERR_STREAM_WRITE_AFTER_END` as an unhandled stream error rather than a
-   * rejected request. Background work that outlives a request — Namer's
-   * qualification is the one that found this — asks here before sending.
+   * rejected request. Background work that outlives a request asks here
+   * before sending.
    */
   get alive(): boolean {
     return !this.exited && !this.ending;

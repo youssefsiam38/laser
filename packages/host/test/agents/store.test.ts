@@ -3,14 +3,14 @@
  * seeded, what may be saved, what may be deleted and why not, and that the
  * file survives a restart without the built-ins ever being frozen into it.
  */
-import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, instructionTemplateToken, type AgentDefinitionInput, type AgentsSnapshot } from "@lasercode/protocol";
+import { PRODUCT_DISPLAY_NAME, PRODUCT_NAME, type AgentDefinitionInput, type AgentsSnapshot } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentStore } from "../../src/agents/store.js";
 
-const WORKSPACES = { beam: "/data/beam", chat: "/data/chat" };
+const WORKSPACES = { chat: "/data/chat" };
 let dir: string;
 beforeEach(() => (dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-agents-`))));
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -47,25 +47,18 @@ const issuesOf = (fn: () => unknown): Array<{ field: string; message: string }> 
 };
 
 describe("AgentStore · seeding", () => {
-  it("seeds the editable default and the three built-ins, default first", () => {
+  it("seeds the editable default and nothing else: there are no built-in agents", () => {
     const s = store();
     const snapshot = s.snapshot();
-    expect(snapshot.agents.map((a) => `${a.name}:${a.kind}`)).toEqual(["default:custom", "beam:builtin", "chat:builtin", "namer:builtin"]);
+    expect(snapshot.agents.map((a) => `${a.name}:${a.kind}`)).toEqual(["default:custom"]);
     expect(snapshot.defaultAgent).toBe("default");
     const def = snapshot.agents[0]!;
     expect(def).toMatchObject({ scope: "global", engineInstructions: true, excludeCoreInstructions: false, instructions: "", supportsSubagents: true, allowedAgents: ["default"] });
-    const beam = snapshot.agents.find((a) => a.name === "beam")!;
-    expect(beam.scopedSkills).toBe(false);
-    expect(beam.skills).toEqual([]);
-    expect(beam.instructions).toContain(instructionTemplateToken("sessionHistoryDirectory"));
-    expect(beam.instructions).toContain(instructionTemplateToken("availableSkills"));
-    expect(snapshot.agents.find((a) => a.name === "chat")).toMatchObject({ supportsSubagents: false });
-    const namer = snapshot.agents.find((a) => a.name === "namer")!;
-    expect(namer.instructions).toContain("name sessions");
-    expect(`${namer.description} ${namer.instructions}`).not.toMatch(/running action|tool call/i);
+    // Nothing synthesises the three names that were built-in agents (D-347).
+    for (const name of ["beam", "chat", "namer"]) expect(s.get(name)).toBeUndefined();
     expect(snapshot.policy).toEqual({ maxDepth: 3, foregroundCommandSeconds: 120 });
-    expect(snapshot.builtinProfiles).toEqual({ beam: null, chat: null, namer: null });
-    expect(snapshot.builtinInstructions).toEqual({ beam: null, chat: null, namer: null });
+    expect(snapshot).not.toHaveProperty("builtinProfiles");
+    expect(snapshot).not.toHaveProperty("builtinInstructions");
     expect(snapshot.workspaces).toEqual(WORKSPACES);
     expect(snapshot.warnings).toEqual([]);
   });
@@ -107,14 +100,15 @@ describe("AgentStore · save and validate", () => {
     ]);
   });
 
-  it("refuses the built-in names, on save and as another agent's child", () => {
+  it("keeps the retired names reserved, and drops one listed as a child instead of refusing", () => {
     const s = store();
     for (const name of ["beam", "chat", "namer"]) {
-      expect(issuesOf(() => s.save(custom(name)))).toEqual([{ field: "name", message: `"${name}" is a built-in agent and cannot be changed.` }]);
+      expect(issuesOf(() => s.save(custom(name)))).toEqual([{ field: "name", message: `"${name}" is a reserved name. Choose another name.` }]);
     }
-    expect(issuesOf(() => s.save(custom("lead", { supportsSubagents: true, allowedAgents: ["beam"] })))).toEqual([
-      { field: "allowedAgents[0]", message: '"beam" is a built-in agent and cannot be started by another agent.' },
-    ]);
+    // A definition a person wrote before M23 keeps working: the name is
+    // dropped, never refused (`docs/plain-chat.md`, "Migration").
+    const lead = s.save(custom("lead", { supportsSubagents: true, allowedAgents: ["beam", "lead"] }));
+    expect(lead.allowedAgents).toEqual(["lead"]);
   });
 
   it("validates every field and names it", () => {
@@ -160,9 +154,9 @@ describe("AgentStore · delete and default", () => {
   it("refuses to delete the default with the exact message, and the built-ins", () => {
     const s = store();
     expect(() => s.delete("default", { scope: "global" })).toThrow("This agent starts new sessions. Choose another default first.");
-    expect(() => s.delete("beam", { scope: "global" })).toThrow('"beam" is a built-in agent and cannot be deleted.');
+    expect(() => s.delete("beam", { scope: "global" })).toThrow('There is no agent named "beam".');
     expect(() => s.delete("nobody", { scope: "global" })).toThrow('There is no agent named "nobody" in this scope.');
-    expect(s.snapshot().agents).toHaveLength(4);
+    expect(s.snapshot().agents).toHaveLength(1);
   });
 
   it("deletes the former default once another is chosen, pruning it from every child list", () => {
@@ -173,7 +167,7 @@ describe("AgentStore · delete and default", () => {
     s.delete("default", { scope: "global" });
     const lead = s.get("lead")!;
     expect(lead.allowedAgents).toEqual(["lead"]);
-    expect(s.snapshot().agents.map((a) => a.name)).toEqual(["lead", "beam", "chat", "namer"]);
+    expect(s.snapshot().agents.map((a) => a.name)).toEqual(["lead"]);
     expect(() => s.delete("lead", { scope: "global" })).toThrow("This agent starts new sessions. Choose another default first.");
   });
 
@@ -230,9 +224,9 @@ describe("AgentStore · delete and default", () => {
     expect(writes).toBe(1);
   });
 
-  it("only a custom agent can be the default", () => {
+  it("only an agent that exists can be the default", () => {
     const s = store();
-    expect(() => s.setDefault("beam")).toThrow('"beam" is a built-in agent and cannot start project sessions.');
+    expect(() => s.setDefault("beam")).toThrow('There is no agent named "beam".');
     expect(() => s.setDefault("ghost")).toThrow('There is no agent named "ghost".');
     const before = s.currentRevision;
     s.setDefault("default");
@@ -240,57 +234,12 @@ describe("AgentStore · delete and default", () => {
   });
 });
 
-describe("AgentStore · policy, Beam and Namer", () => {
+describe("AgentStore · policy", () => {
   it("bounds the policy and reports the field", () => {
     const s = store();
     expect(s.setPolicy({ maxDepth: 2 })).toEqual({ maxDepth: 2, foregroundCommandSeconds: 120 });
     expect(issuesOf(() => s.setPolicy({ maxDepth: 9 }))).toEqual([{ field: "maxDepth", message: "Nesting depth is a whole number between 1 and 6." }]);
     expect(issuesOf(() => s.setPolicy({ foregroundCommandSeconds: 5 }))[0]?.field).toBe("foregroundCommandSeconds");
-  });
-
-  it("each built-in holds a profile id, and a replacement moves every reference at once", () => {
-    const s = store();
-    const BALANCED = "mp_testbalanced000000000";
-    const FAST = "mp_testfast00000000000000";
-    s.setBuiltinProfile("beam", BALANCED);
-    expect(s.get("beam")?.profileId).toBe(BALANCED);
-    expect(s.snapshot().builtinProfiles).toEqual({ beam: BALANCED, chat: null, namer: null });
-
-    s.setBuiltinProfile("namer", FAST);
-    expect(s.get("namer")?.profileId).toBe(FAST);
-    // `null` returns a built-in to the profile new conversations use.
-    s.setBuiltinProfile("beam", null);
-    expect(s.get("beam")?.profileId).toBeNull();
-
-    // A profile is chosen by id, never by name or by a model.
-    expect(issuesOf(() => s.setBuiltinProfile("chat", "Balanced"))).toEqual([
-      { field: "profile", message: "Choose one of your model profiles." },
-    ]);
-
-    // Deleting a profile moves everything that pointed at it, in one write.
-    s.setBuiltinProfile("chat", FAST);
-    expect(s.replaceBuiltinProfile(FAST, BALANCED)).toBe(true);
-    expect(s.snapshot().builtinProfiles).toEqual({ beam: null, chat: BALANCED, namer: BALANCED });
-    expect(s.replaceBuiltinProfile(FAST, BALANCED)).toBe(false);
-  });
-
-  it("edits and restores each built-in's effective instructions", () => {
-    const s = store();
-    for (const name of ["beam", "chat", "namer"] as const) {
-      const shipped = s.get(name)!.instructions;
-      s.setBuiltinInstructions(name, `Custom instructions for ${name}.`);
-      expect(s.get(name)?.instructions).toBe(`Custom instructions for ${name}.`);
-      expect(s.snapshot().builtinInstructions[name]).toBe(`Custom instructions for ${name}.`);
-      s.setBuiltinInstructions(name, null);
-      expect(s.get(name)?.instructions).toBe(shipped);
-      expect(s.snapshot().builtinInstructions[name]).toBeNull();
-    }
-    expect(issuesOf(() => s.setBuiltinInstructions("beam", "   "))).toEqual([
-      { field: "instructions", message: "Write instructions, or restore the built-in instructions." },
-    ]);
-    expect(issuesOf(() => s.setBuiltinInstructions("namer", "Use {{workingDirectory}}"))).toEqual([
-      { field: "instructions", message: "“workingDirectory” is not available here. Remove it and choose a field from Insert field." },
-    ]);
   });
 
   it("warnings count as a change only when they differ", () => {
@@ -307,19 +256,13 @@ describe("AgentStore · policy, Beam and Namer", () => {
 });
 
 describe("AgentStore · persistence", () => {
-  it("round-trips through the file without persisting the built-ins", () => {
+  it("round-trips through the file, and nothing built-in is ever in it", () => {
     const file = join(dir, "state", "agents.json");
     const first = store({ storePath: file });
     first.save(custom("reviewer"));
     first.save(custom("lead", { supportsSubagents: true, allowedAgents: ["reviewer"] }));
     first.setDefault("lead");
     first.setPolicy({ maxDepth: 2 });
-    first.setBuiltinProfile("beam", "mp_testbeam0000000000000");
-    first.setBuiltinProfile("chat", "mp_testchat0000000000000");
-    first.setBuiltinProfile("namer", "mp_testnamer000000000000");
-    first.setBuiltinInstructions("beam", "Read first, then answer.");
-    first.setBuiltinInstructions("chat", "Write with warmth.");
-    first.setBuiltinInstructions("namer", "Prefer concrete nouns.");
     first.close();
 
     const stored = JSON.parse(readFileSync(file, "utf8")) as { version: number; revision: number; defaultAgent: string; agents?: unknown };
@@ -333,35 +276,34 @@ describe("AgentStore · persistence", () => {
     const second = store({ storePath: file });
     const snapshot = second.snapshot();
     expect(snapshot.revision).toBe(stored.revision);
-    expect(snapshot.agents.map((a) => a.name)).toEqual(["default", "lead", "reviewer", "beam", "chat", "namer"]);
+    expect(snapshot.agents.map((a) => a.name)).toEqual(["default", "lead", "reviewer"]);
     expect(snapshot.defaultAgent).toBe("lead");
     expect(snapshot.policy.maxDepth).toBe(2);
-    expect(snapshot.builtinProfiles).toEqual({ beam: "mp_testbeam0000000000000", chat: "mp_testchat0000000000000", namer: "mp_testnamer000000000000" });
-    expect(snapshot.builtinInstructions).toEqual({ beam: "Read first, then answer.", chat: "Write with warmth.", namer: "Prefer concrete nouns." });
-    expect(second.get("beam")?.profileId).toBe("mp_testbeam0000000000000");
-    // The choice reaches the definition the worker runs, not only the snapshot's state block.
-    expect(second.get("chat")?.profileId).toBe("mp_testchat0000000000000");
-    expect(second.get("namer")?.profileId).toBe("mp_testnamer000000000000");
-    expect(second.get("beam")?.instructions).toBe("Read first, then answer.");
-    expect(second.get("chat")?.instructions).toBe("Write with warmth.");
-    expect(second.get("namer")?.instructions).toBe("Prefer concrete nouns.");
   });
 
-  it("keeps a stored Namer override that uses removed template fields", () => {
+  it("keeps the retired built-ins' stored choices byte-for-byte for one release", () => {
+    // Nothing runs on them any more, but rolling the app back must find them
+    // exactly as it left them (D-346, D-347).
     const file = join(dir, "state", "agents.json");
-    const first = store({ storePath: file });
-    first.setBuiltinInstructions("namer", "Prefer concrete nouns.");
-    first.close();
-    const stored = JSON.parse(readFileSync(file, "utf8")) as { builtinInstructions: Record<string, string | null> };
-    stored.builtinInstructions.namer = "Name {{toolName}} from {{namingTask}}.";
-    writeFileSync(file, JSON.stringify(stored));
-
-    const second = store({ storePath: file });
-    expect(second.snapshot().builtinInstructions.namer).toBe("Name {{toolName}} from {{namingTask}}.");
-    expect(second.get("namer")?.instructions).toBe("Name {{toolName}} from {{namingTask}}.");
-    second.close();
-    expect((JSON.parse(readFileSync(file, "utf8")) as { builtinInstructions: Record<string, string | null> }).builtinInstructions.namer)
-      .toBe("Name {{toolName}} from {{namingTask}}.");
+    writeFile(file, {
+      version: 2,
+      revision: 3,
+      defaultAgent: "default",
+      policy: { maxDepth: 3, foregroundCommandSeconds: 120 },
+      builtinProfiles: { beam: "mp_testbeam0000000000000", chat: "mp_testchat0000000000000", namer: "mp_testnamer000000000000" },
+      builtinInstructions: { beam: "Read first, then answer.", chat: "Write with warmth.", namer: "Name {{toolName}} from {{namingTask}}." },
+      renamedAgents: {},
+    });
+    const s = store({ storePath: file });
+    // The person's naming choice is the one thing that is read back out.
+    expect(s.retiredNamingProfileId).toBe("mp_testnamer000000000000");
+    expect(s.snapshot().agents.map((a) => a.name)).toEqual(["default"]);
+    s.save(custom("reviewer"));
+    s.close();
+    const written = JSON.parse(readFileSync(file, "utf8")) as { builtinProfiles: Record<string, string | null>; builtinInstructions: Record<string, string | null> };
+    expect(written.builtinProfiles).toEqual({ beam: "mp_testbeam0000000000000", chat: "mp_testchat0000000000000", namer: "mp_testnamer000000000000" });
+    // Even an override naming fields this version removed is kept verbatim.
+    expect(written.builtinInstructions.namer).toBe("Name {{toolName}} from {{namingTask}}.");
   });
 
   it("persists rename aliases for sessions written under the old name", () => {
@@ -381,7 +323,7 @@ describe("AgentStore · persistence", () => {
     first.delete("default", { scope: "global" });
     first.close();
     const second = store({ storePath: file });
-    expect(second.snapshot().agents.map((a) => a.name)).toEqual(["lead", "beam", "chat", "namer"]);
+    expect(second.snapshot().agents.map((a) => a.name)).toEqual(["lead"]);
 
     const broken = JSON.parse(readFileSync(file, "utf8")) as { defaultAgent: string };
     broken.defaultAgent = "vanished";
@@ -395,28 +337,26 @@ describe("AgentStore · persistence", () => {
     // Exactly what an earlier release wrote: model choices, no profiles.
     writeFile(file, { version: 1, revision: 4, agents: [], defaultAgent: "default", beam: { model: { provider: "openai", id: "gpt-5-mini" }, suggested: null, needsChoice: false } });
     const old = store({ storePath: file });
-    // The built-ins follow the profile new conversations use until the
-    // migration or a person gives them one; a raw model is never adopted.
-    expect(old.snapshot().builtinProfiles).toEqual({ beam: null, chat: null, namer: null });
-    expect(old.snapshot().builtinInstructions).toEqual({ beam: null, chat: null, namer: null });
-    expect(old.get("chat")?.profileId).toBeNull();
+    // A raw model is never adopted as a profile; the migration maps it.
+    expect(old.retiredNamingProfileId).toBeNull();
+    expect(old.snapshot().agents.map((a) => a.name)).toEqual(["default"]);
 
     // Hand-edited nonsense is dropped, never thrown on: the store must still boot.
-    for (const builtinProfiles of [{ chat: { provider: "openai" } }, { chat: "Balanced" }, {}]) {
+    for (const builtinProfiles of [{ namer: { provider: "openai" } }, { namer: "Balanced" }, {}]) {
       const junk = join(dir, `junk-${JSON.stringify(builtinProfiles).length}-agents.json`);
       writeFile(junk, { version: 1, revision: 1, agents: [], defaultAgent: "default", builtinProfiles });
-      expect(store({ storePath: junk }).snapshot().builtinProfiles).toEqual({ beam: null, chat: null, namer: null });
+      expect(store({ storePath: junk }).retiredNamingProfileId).toBeNull();
     }
     const wrongType = join(dir, "wrong-agents.json");
     writeFile(wrongType, { version: 1, revision: 1, agents: [], defaultAgent: "default", builtinProfiles: "Balanced" });
-    expect(store({ storePath: wrongType }).snapshot().builtinProfiles).toEqual({ beam: null, chat: null, namer: null });
+    expect(store({ storePath: wrongType }).retiredNamingProfileId).toBeNull();
   });
 
   it("starts from the seed on a corrupt file and recovers on the next write", () => {
     const file = join(dir, "agents.json");
     writeFile(file, "{ not json");
     const s = store({ storePath: file });
-    expect(s.snapshot().agents.map((a) => a.name)).toEqual(["default", "beam", "chat", "namer"]);
+    expect(s.snapshot().agents.map((a) => a.name)).toEqual(["default"]);
     s.save(custom("reviewer"));
     s.close();
     expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ version: 2 });

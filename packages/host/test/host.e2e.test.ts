@@ -34,7 +34,7 @@ function stubProvider(): Promise<{ server: Server; url: string; requests: Record
     req.on("end", () => {
       const request = JSON.parse(body) as Record<string, unknown>;
       requests.push(request);
-      // Namer no longer labels tools (D-277); every request is the conversation's.
+      // Nothing labels tools away from a turn; every request is the conversation's.
       const reply = REPLY;
       res.writeHead(200, { "content-type": "text/event-stream" });
       const base = { id: "c", object: "chat.completion.chunk", created: 1, model: "stub-1" };
@@ -100,7 +100,7 @@ beforeEach(async () => {
     JSON.stringify({ providers: { stub: { baseUrl: stub.url, api: "openai-completions", apiKey: "k", models: [{ id: "stub-1", contextWindow: 8000, maxTokens: 500 }] } } }),
   );
   // Only the stub is enabled. A developer machine may have a real provider
-  // configured from its environment, and Namer benchmarks whatever is
+  // configured from its environment, and naming uses whatever is
   // connected when a worker comes up — this keeps that offer to the stub, so
   // the run stays hermetic and costs nothing.
   writeFileSync(join(base, "agent", "settings.json"), JSON.stringify({ enabledModels: ["stub/stub-1"] }));
@@ -210,7 +210,7 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
     }
   });
 
-  it("reopens genuine empty project, Beam and Chat sessions after worker retirement and a full host restart", async () => {
+  it("reopens genuine empty project and chat sessions after worker retirement and a full host restart", async () => {
     // Give a later host a different default. The saved empty-session tuple,
     // not that changed default, must win on reopen.
     writeFileSync(
@@ -225,17 +225,16 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
     let client = new Client();
     await client.connect((await host.listen()).url);
     const roots = [
-      { name: "default", cwd: join(base, "project"), kind: "root" },
-      { name: "beam", cwd: join(base, "state", "workspaces", "beam"), kind: "beam" },
-      { name: "chat", cwd: join(base, "state", "workspaces", "chat"), kind: "chat" },
+      { params: { agentName: "default" }, cwd: join(base, "project"), agent: { agentName: "default", kind: "root", sessionKind: "project" } },
+      { params: { sessionKind: "chat" }, cwd: join(base, "state", "workspaces", "chat"), agent: { kind: "chat", sessionKind: "chat" } },
     ] as const;
     const created: SessionState[] = [];
     const bytesByPath = new Map<string, string>();
     const pidByCwd = new Map<string, number | undefined>();
     try {
       for (const item of roots) {
-        const { state } = await client.request<{ state: SessionState }>("session/new", { cwd: item.cwd, agentName: item.name });
-        expect(state).toMatchObject({ messageCount: 0, model: { provider: "stub", id: "stub-1" }, thinkingLevel: "low", agent: { agentName: item.name, kind: item.kind } });
+        const { state } = await client.request<{ state: SessionState }>("session/new", { cwd: item.cwd, ...item.params });
+        expect(state).toMatchObject({ messageCount: 0, model: { provider: "stub", id: "stub-1" }, thinkingLevel: "low", agent: item.agent });
         expect(existsSync(state.path)).toBe(true);
         const bytes = readFileSync(state.path, "utf8");
         const entries = bytes.trim().split("\n").map((line) => JSON.parse(line) as { type?: string; id?: string; cwd?: string });
@@ -280,8 +279,8 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
           .resolves.toEqual({ accepted: true, queued: false });
       }
       const firstTurns = stub.requests.filter((request) => JSON.stringify(request).includes('"first '));
-      expect(firstTurns).toHaveLength(3);
-      expect(firstTurns.map((request) => request.model)).toEqual(["stub-1", "stub-1", "stub-1"]);
+      expect(firstTurns).toHaveLength(2);
+      expect(firstTurns.map((request) => request.model)).toEqual(["stub-1", "stub-1"]);
     } finally { client.close(); }
   }, 120_000);
 
@@ -315,10 +314,9 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
   it("does not expose internal storage as projects or sessions, while genuine workspace sessions remain listed", async () => {
     const stateDir = join(base, "state");
     const agentDir = join(base, "agent");
-    const beamCwd = join(stateDir, "workspaces", "beam", "session-private");
     const chatCwd = join(stateDir, "workspaces", "chat", "session-private");
     mkdirSync(join(base, "sessions"), { recursive: true });
-    const paths = [stateDir, agentDir, beamCwd, chatCwd].map((cwd, i) => {
+    const paths = [stateDir, agentDir, chatCwd].map((cwd, i) => {
       const path = join(base, "sessions", `${i}.jsonl`);
       writeFileSync(path, `${JSON.stringify({ type: "session", version: 3, id: `s-${i}`, cwd })}\n`);
       return path;
@@ -331,7 +329,7 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
       expect(await client.request("pi/project/list", {})).toEqual({ projects: [] });
       const { sessions } = await client.request<{ sessions: Array<{ path: string }> }>("pi/session/list", {});
       expect(sessions.map(s => s.path).sort()).toEqual(paths.slice(2).sort());
-      for (const cwd of [stateDir, agentDir, beamCwd, chatCwd]) {
+      for (const cwd of [stateDir, agentDir, chatCwd]) {
         await expect(client.request("pi/project/add", { cwd })).rejects.toThrow(/internal app storage/);
       }
       await expect(client.request("session/new", { cwd: stateDir })).rejects.toThrow(/internal app storage/);
@@ -421,7 +419,7 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
     expect(prompted).toEqual({ accepted: true, queued: false });
     await client.waitFor((m) => "method" in m && m.method === "session/update" && (m.params as SessionUpdateParams).update.kind === "agent_settled");
     // M13-T22: no provider was signed in during this run — the stub's
-    // credentials were already on disk — so Namer qualified from the worker
+    // credentials were already on disk — so naming ran from the worker
     // coming up, and the session is named from its first prompt.
     const named = await client.waitFor((m) => {
       if (!("method" in m) || m.method !== "session/update") return false;
@@ -571,12 +569,12 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
       await client.request("pi/project/trust", { cwd: shippedProject, trusted: true });
       expect((await client.request<{ agents: Array<{ name: string }> }>("agents/list", {})).agents.some((agent) => agent.name === "shipped")).toBe(true);
 
-      // The workspaces live under the host's own state dir, and are not projects.
-      expect(existsSync(join(base, "state", "workspaces", "beam"))).toBe(true);
+      // The chat workspace lives under the host's own state dir, and is not a project.
       expect(existsSync(join(base, "state", "workspaces", "chat"))).toBe(true);
-      const listed = await client.request<{ agents: Array<{ name: string; kind: string }>; defaultAgent: string; workspaces: { beam: string; chat: string } }>("agents/list", {});
-      expect(listed.agents.map((a) => `${a.name}:${a.kind}`)).toEqual(["default:custom", "shipped:custom", "beam:builtin", "chat:builtin", "namer:builtin"]);
-      expect(listed.workspaces).toEqual({ beam: join(base, "state", "workspaces", "beam"), chat: join(base, "state", "workspaces", "chat") });
+      const listed = await client.request<{ agents: Array<{ name: string; kind: string }>; defaultAgent: string; workspaces: { chat: string } }>("agents/list", {});
+      // Only agents a person wrote; nothing built-in is listed (D-347).
+      expect(listed.agents.map((a) => `${a.name}:${a.kind}`)).toEqual(["default:custom", "shipped:custom"]);
+      expect(listed.workspaces).toEqual({ chat: join(base, "state", "workspaces", "chat") });
       await expect(client.request("agents/sync", { snapshot: listed })).rejects.toThrow("The app sends this to its own workers.");
 
       // A save is broadcast to every client and persisted for the next host.
@@ -616,8 +614,9 @@ await import(${JSON.stringify(pathToFileURL(defaultWorkerMain()).href)});
       expect(await client.request("agents/runs/list", { path: state.path })).toEqual({ runs: [] });
       const projects = await client.request<{ projects: Array<{ cwd: string }> }>("pi/project/list", {});
       expect(projects.projects.map((p) => p.cwd).sort()).toEqual([project, shippedProject].sort());
-      await expect(client.request("session/new", { cwd: project, agentName: "beam" })).rejects.toThrow(/Beam sessions start in/);
-      await expect(client.request("session/new", { cwd: project, agentName: "namer" })).rejects.toThrow(/does not run a session/);
+      for (const name of ["beam", "chat", "namer"]) {
+        await expect(client.request("session/new", { cwd: project, agentName: name })).rejects.toThrow(new RegExp(`There is no agent named "${name}"`));
+      }
 
       host.agents.close(); // flush the debounced write, as shutdown does
       expect(JSON.parse(readFileSync(join(base, "state", "agents.json"), "utf8"))).toMatchObject({ version: 2, defaultAgent: "default" });

@@ -14,7 +14,7 @@ import {
   canReferenceAgent,
   instructionTemplateIssue,
   isModelProfileId,
-  isBuiltinAgentName,
+  isRetiredAgentName,
   type AgentDefinition,
   type AgentDefinitionInput,
   type AgentIssue,
@@ -34,9 +34,13 @@ export interface ValidationContext {
   trustedProjectCwds: ReadonlySet<string>;
 }
 
-/** The agents another agent may start: custom ones, never Beam, Chat or Namer. */
+/**
+ * The agents another agent may start: every definition a person wrote. The
+ * three names that were built-in agents before M23 are not definitions any
+ * more and nothing answers to them (`docs/plain-chat.md`).
+ */
 export function isStartableChild(agent: AgentDefinition): boolean {
-  return agent.kind === "custom";
+  return !isRetiredAgentName(agent.name);
 }
 
 export function validateAgentInput(input: AgentDefinitionInput, context: ValidationContext): AgentIssue[] {
@@ -51,13 +55,12 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
       "name",
       `Names are lower case, start with a letter and use only letters, digits and hyphens (at most ${AGENT_NAME_MAX} characters).`,
     );
-  } else if (isBuiltinAgentName(input.name)) {
-    push("name", `"${input.name}" is a built-in agent. Choose another name.`);
+  } else if (isRetiredAgentName(input.name)) {
+    push("name", `"${input.name}" is a reserved name. Choose another name.`);
   } else {
     const collision = context.existing.some((agent) => {
       if (agent === context.original || sameDefinition(agent, context.original)) return false;
       if (agent.name !== input.name) return false;
-      if (agent.kind === "builtin") return true;
       if (agent.scope !== input.scope) return false;
       return agent.scope === "global" || canonical(agent.projectCwd ?? "") === canonical(input.projectCwd ?? "");
     });
@@ -86,7 +89,7 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
   } else if (!input.engineInstructions && input.instructions.trim().length === 0) {
     push("instructions", `Write instructions, or use ${PRODUCT_DISPLAY_NAME}'s default instructions.`);
   } else if (!input.engineInstructions) {
-    const templateIssue = instructionTemplateIssue(input.instructions, "agent");
+    const templateIssue = instructionTemplateIssue(input.instructions);
     if (templateIssue) push("instructions", templateIssue);
   }
 
@@ -104,11 +107,14 @@ export function validateAgentInput(input: AgentDefinitionInput, context: Validat
     );
     // A definition may start more instances of itself, so the name being saved
     // counts as existing even before its first save.
-    if (input.name && !isBuiltinAgentName(input.name)) startable.add(input.name);
+    if (input.name && !isRetiredAgentName(input.name)) startable.add(input.name);
     const seenAgents = new Set<string>();
     input.allowedAgents.forEach((name, index) => {
-      if (isBuiltinAgentName(name)) {
-        push(`allowedAgents[${index}]`, `"${name}" is a built-in agent and cannot be started by another agent.`);
+      // A name that used to be a built-in agent is dropped on load with a
+      // warning on this field, never refused: a definition a person wrote
+      // before M23 must keep working (`docs/plain-chat.md`, "Migration").
+      if (isRetiredAgentName(name)) {
+        // Nothing to say here; `retiredAllowedAgents` reports it.
       } else if (!startable.has(name)) {
         push(`allowedAgents[${index}]`, `There is no agent named "${name}".`);
       } else if (seenAgents.has(name)) {
