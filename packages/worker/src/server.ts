@@ -2135,7 +2135,7 @@ export class WorkerServer {
       // The attempt records the Model Profile as *intent* (leap, "Execution
       // and convergence"): an agent run started for a Task runs on the
       // session's own profile, and the link says which one, never a model.
-      execution: () => this.executionShape(openOptions.cwd, () => live.driver.state().profile?.id),
+      execution: () => this.executionShape(openOptions.cwd, () => live.driver.state().profile?.id, () => live.path),
     });
     return new ProjectWorkSession({
       bridge,
@@ -2154,7 +2154,7 @@ export class WorkerServer {
    * from git rather than remembered, and never fatal: an attempt in a
    * directory that is not a repository records its shape and no branch.
    */
-  private async executionShape(cwd: string, profileId?: () => string | undefined): Promise<ProjectWorkExecutionShape> {
+  private async executionShape(cwd: string, profileId?: () => string | undefined, sessionPath?: () => string | undefined): Promise<ProjectWorkExecutionShape> {
     let profile: string | undefined;
     try {
       profile = profileId?.();
@@ -2169,6 +2169,9 @@ export class WorkerServer {
       workspace: cwd === this.options.cwd ? "shared" : "worktree",
       checkout: cwd,
       ...(profile !== undefined ? { profileId: profile } : {}),
+      // The session file names the checkpoints this attempt made (M21-T18):
+      // by session key, not by a clock, so two sessions in one checkout stay apart.
+      ...(sessionPath?.() ? { sessionPath: sessionPath()! } : {}),
     };
     try {
       const run = createProcessRunner();
