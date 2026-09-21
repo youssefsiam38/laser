@@ -80,6 +80,23 @@ class FakeDriver implements SessionDriver {
     this.st = { ...this.st, isStreaming: streaming };
   }
 
+  /**
+   * Park every send inside the driver, *before* it takes an identity. That is
+   * the window the real driver has too: the route checks the ceiling, then
+   * awaits (a phrase still being transcribed, a first-turn lease, the tray's
+   * own drain) and only then does the driver take a slot.
+   */
+  hold(): () => void {
+    let open = () => {};
+    this.gate = new Promise<void>((resolve) => { open = () => resolve(); });
+    return () => {
+      this.gate = undefined;
+      open();
+    };
+  }
+
+  private gate: Promise<void> | undefined;
+
   async open(options: { mentionContext?: SessionMentionContext }) {
     this.mentions = options.mentionContext;
     return this.st;
@@ -88,17 +105,26 @@ class FakeDriver implements SessionDriver {
   subscribe(listener: DriverListener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   emit(event: DriverEvent) { for (const listener of this.listeners) listener(event); }
 
+  /**
+   * Exactly the real driver's order: take the identity **first**, because a
+   * refusal there must happen before the engine is asked anything, and only
+   * then record the send. A send whose slot was refused never appears here.
+   */
   private note(route: Sent["route"], content: ContentBlock[], projectWork?: readonly ProjectWorkMentionProjection[]): void {
+    const id = projectWork?.length && this.mentions ? this.mentions.reserve(projectWork) : undefined;
     this.sent.push({
       route,
       text: content.map((block) => (block.type === "text" ? block.text : "")).join(""),
       keys: (projectWork ?? []).map((item) => item.key),
     });
-    // What a driver does with an accepted message: take an identity for it and
-    // say which of the engine's doors it went through.
-    if (!projectWork?.length || !this.mentions) return;
-    const id = this.mentions.reserve(projectWork);
-    this.mentions.admitted(id, route === "prompt" ? "direct" : route);
+    // What a driver does with an accepted message: say which of the engine's
+    // doors it went through.
+    if (id !== undefined) this.mentions?.admitted(id, route === "prompt" ? "direct" : route);
+  }
+
+  /** The carrier this session was opened with, for a test that inspects it. */
+  mentionContext(): SessionMentionContext | undefined {
+    return this.mentions;
   }
 
   async prompt(content: ContentBlock[], options?: PromptOptions) {
@@ -108,7 +134,10 @@ class FakeDriver implements SessionDriver {
     this.emit({ type: "update", update: { kind: "agent_settled" } });
     return { accepted: true, queued: false };
   }
-  async steer(content: ContentBlock[], options?: QueuedSendOptions) { this.note("steer", content, options?.projectWork); }
+  async steer(content: ContentBlock[], options?: QueuedSendOptions) {
+    if (this.gate) await this.gate;
+    this.note("steer", content, options?.projectWork);
+  }
   async followUp(content: ContentBlock[], options?: QueuedSendOptions) { this.note("followUp", content, options?.projectWork); }
   async clearQueue() { return { steering: [], followUp: [] }; }
   async abort() {}
@@ -160,7 +189,6 @@ describe("what a message mentioned, on every send path", () => {
     await h.call(4, "pi/session/follow_up", { path, content: text("three"), projectWork: [projection("DES-3")] });
     await h.call(5, "session/prompt", { path, content: text("four") });
 
-    console.error("SENT", JSON.stringify(h.drivers.map(d=>d.sent)), JSON.stringify((await h.call(9,"pi/session/steer",{path,content:text("x"),projectWork:[projection("Z-1")]}))));
     expect(h.drivers[0]!.sent).toEqual([
       { route: "prompt", text: "one", keys: ["TASK-44"] },
       { route: "steer", text: "two", keys: ["SPEC-7"] },
@@ -225,6 +253,47 @@ describe("what a message mentioned, on every send path", () => {
     const plain = await h.call(101, "pi/session/steer", { path, content: text("no mentions here") });
     expect(plain.error).toBeUndefined();
     expect(driver.sent.at(-1)).toEqual({ route: "steer", text: "no mentions here", keys: [] });
+    // A message that mentions nothing holds no slot either, so it can never
+    // be the reason the next mentioning message is turned away.
+    expect(driver.mentionContext()!.held()).toHaveLength(16);
+  });
+
+  it("lets only one of two simultaneous sends take the last slot, and the loser reaches no engine", async () => {
+    const h = harness();
+    await h.call(1, "session/new", { cwd: "/tmp/fake" });
+    const driver = h.drivers[0]!;
+    const path = driver.state().path;
+    driver.setStreaming(true);
+
+    for (let at = 0; at < 15; at += 1) {
+      await h.call(10 + at, "pi/session/steer", { path, content: text(`m${String(at)}`), projectWork: [projection(`TASK-${String(at + 1)}`)] });
+    }
+    expect(driver.mentionContext()!.held()).toHaveLength(15);
+
+    // Both of these pass the route's friendly check — fifteen are waiting when
+    // each of them looks — and only then does either take a slot. Every send
+    // route awaits in between, so this is the ordinary case and not a
+    // contrived one; the ceiling therefore has to hold at the slot itself.
+    const release = driver.hold();
+    const both = Promise.all([
+      h.call(200, "pi/session/steer", { path, content: text("first of two"), projectWork: [projection("TASK-16")] }),
+      h.call(201, "pi/session/steer", { path, content: text("second of two"), projectWork: [projection("TASK-17")] }),
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(driver.mentionContext()!.held(), "both passed the ceiling check while fifteen were held").toHaveLength(15);
+
+    release();
+    const answers = await both;
+
+    const refused = answers.filter((answer) => answer.error !== undefined);
+    expect(refused, "one of the two is refused, not both and not neither").toHaveLength(1);
+    expect(refused[0]!.error!.code).toBe(ErrorCodes.SessionBusy);
+    expect(refused[0]!.error!.message).toContain("clear the queue");
+    // The ceiling held, and the refused message left nothing behind.
+    expect(driver.mentionContext()!.held()).toHaveLength(16);
+    const delivered = driver.sent.filter((send) => send.text.endsWith("of two"));
+    expect(delivered, "the refused message never reached the engine").toHaveLength(1);
+    expect([["TASK-16"], ["TASK-17"]]).toContainEqual(delivered[0]!.keys);
   });
 
   it("keeps two conversations in one worker apart", async () => {

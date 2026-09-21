@@ -1165,14 +1165,35 @@ export class StableSdkDriver implements SessionDriver {
     const mentions = options?.projectWork?.length ? this.mentionContext : undefined;
     const correlationId = mentions && options?.projectWork ? mentions.reserve(options.projectWork) : undefined;
     let admitted = false;
-    // A goal command needs the goal tools before it dispatches (see below).
-    if (isGoalCommand(text)) activateGoalTools(session);
-    // A bare concurrent prompt is refused immediately. Explicit queue waiters
-    // pass every preceding preflight fence in admission order; after each await
-    // they re-check because another waiter may have claimed the newly idle slot.
-    while (this.promptPreflight) {
-      if (!options?.streamingBehavior) return { accepted: false, queued: false };
-      await this.promptPreflight;
+    let accepted = false;
+    /**
+     * Give the slot back on every way out of this method that never reached
+     * the engine: a goal command whose tool activation threw, the bare
+     * concurrent-prompt refusal, a caller's invocation observer that threw. A
+     * message the engine was never asked to take must cost the session
+     * nothing, or sixteen refused sends would close the door on the next real
+     * one. Discarding an id that is already gone does nothing, so this is safe
+     * to call beside the acceptance-time cleanup below.
+     */
+    const dropUnlessAccepted = () => {
+      if (correlationId !== undefined && !accepted) mentions?.discard(correlationId);
+    };
+    try {
+      // A goal command needs the goal tools before it dispatches (see below).
+      if (isGoalCommand(text)) activateGoalTools(session);
+      // A bare concurrent prompt is refused immediately. Explicit queue waiters
+      // pass every preceding preflight fence in admission order; after each await
+      // they re-check because another waiter may have claimed the newly idle slot.
+      while (this.promptPreflight) {
+        if (!options?.streamingBehavior) {
+          dropUnlessAccepted();
+          return { accepted: false, queued: false };
+        }
+        await this.promptPreflight;
+      }
+    } catch (error) {
+      dropUnlessAccepted();
+      throw error;
     }
 
     let release = () => {};
@@ -1184,7 +1205,6 @@ export class StableSdkDriver implements SessionDriver {
       release();
     };
     const streaming = session.isStreaming || this.fallback?.busy === true;
-    let accepted = false;
     const accept = () => {
       if (accepted) return;
       if (this.firstTurn.isCancelled()) {
@@ -1228,7 +1248,15 @@ export class StableSdkDriver implements SessionDriver {
       ...(options?.admissionLease ? { admissionLease: options.admissionLease } : {}),
       accept,
     });
-    options?.onInvocation?.(context.ref);
+    try {
+      options?.onInvocation?.(context.ref);
+    } catch (error) {
+      // The caller never saw the invocation, and the engine was never asked:
+      // release this call's own fence and the slot it was holding.
+      finishPreflight();
+      dropUnlessAccepted();
+      throw error;
+    }
     try {
       if (streaming && !options?.streamingBehavior) {
         return { accepted: false, queued: false };

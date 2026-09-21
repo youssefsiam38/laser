@@ -30,8 +30,18 @@ import { randomBytes } from "node:crypto";
 
 /** How many messages may be waiting with project-work context at once. */
 export const MENTION_CONTEXT_MESSAGES_MAX = 16;
-/** How much mention context one model call may carry. */
+/**
+ * How much mention context one model call may carry, in **UTF-8 bytes** — the
+ * unit the provider request is actually measured in. A title or an excerpt in
+ * Arabic, Japanese or emoji costs two to four bytes per character, so counting
+ * characters would let a conforming render be twice this size on the wire.
+ */
 export const MENTION_CONTEXT_RENDER_MAX = 24_000;
+
+/** The ceiling's own unit: what this text costs in the request. */
+function byteSize(text: string): number {
+  return Buffer.byteLength(text, "utf8");
+}
 
 /** Which of the engine's three doors a message went through. */
 export type MentionSendLane = "direct" | "steer" | "followUp";
@@ -74,10 +84,7 @@ export class SessionMentionContext {
   refuseIfFull(projections: readonly ProjectWorkMentionProjection[] | undefined): void {
     if (!projections || projections.length === 0) return;
     if (this.envelopes.length < MENTION_CONTEXT_MESSAGES_MAX) return;
-    throw new ProtocolError(
-      ErrorCodes.SessionBusy,
-      `${String(MENTION_CONTEXT_MESSAGES_MAX)} messages that mention project work are already waiting for this agent. Let it read some, or clear the queue, then send this again.`,
-    );
+    throw tooManyWaiting();
   }
 
   /**
@@ -90,6 +97,15 @@ export class SessionMentionContext {
    * admitted is dropped by {@link discard}.
    */
   reserve(projections: readonly ProjectWorkMentionProjection[]): string {
+    // The ceiling is enforced *here*, at the mutation that consumes a slot.
+    // {@link refuseIfFull} is the early, friendly word to the caller, but every
+    // send route awaits between that check and this call — a phrase still being
+    // transcribed, a first-turn runtime replacement, an admission lease, a tray
+    // drain — so two sends can both pass it and only one can have the last
+    // slot. Refusing at the mutation happens before the engine is asked
+    // anything on either path, so a refusal is never a message accepted and
+    // then quietly stripped of its context.
+    if (this.envelopes.length >= MENTION_CONTEXT_MESSAGES_MAX) throw tooManyWaiting();
     const id = `lmc-${randomBytes(9).toString("hex")}`;
     this.envelopes.push({ id, lane: "direct", state: "pending", projections: [...projections] });
     return id;
@@ -192,6 +208,15 @@ export class SessionMentionContext {
    * activity — leaves its block at the end of the list, labelled for what it
    * is, because the projection still belongs to the turn in flight and must
    * never be matched to some other message instead.
+   *
+   * **The ceiling is shared honestly, and it is measured in bytes.** Every
+   * message the model is reading is first given the space for its own short
+   * summary — so no message's context can be squeezed out by the messages
+   * ahead of it — and only what is left over upgrades summaries to the full
+   * projection, oldest message first. The sum of everything returned is at
+   * most {@link MENTION_CONTEXT_RENDER_MAX} UTF-8 bytes, whatever the
+   * alphabet, and nothing is ever omitted or evicted: an envelope that could
+   * not be upgraded keeps its complete projection for the next call.
    */
   blocks(messages: readonly MentionContextMessage[]): MentionContextBlock[] {
     const positions = new Map<string, number>();
@@ -205,20 +230,29 @@ export class SessionMentionContext {
     for (const envelope of this.envelopes) {
       if (positions.has(envelope.id)) envelope.state = "active";
     }
-    const blocks: MentionContextBlock[] = [];
-    let budget = MENTION_CONTEXT_RENDER_MAX;
-    for (const envelope of this.envelopes) {
-      if (envelope.state !== "active") continue;
+    const active = this.envelopes.filter((envelope) => envelope.state === "active");
+    if (active.length === 0) return [];
+    // Each active message's guaranteed share, clamped so that the summaries
+    // alone can never exceed the ceiling: the admission max is the divisor, so
+    // the share does not grow when fewer messages are live, and it shrinks if
+    // the carrier is ever asked to render more than the admission max allows.
+    const share = Math.floor(MENTION_CONTEXT_RENDER_MAX / Math.max(active.length, MENTION_CONTEXT_MESSAGES_MAX));
+    const drafts = active.map((envelope) => {
       const at = positions.get(envelope.id);
-      const full = renderProjections(envelope.projections, at === undefined);
-      // Past the budget a message says what it named and where to read it,
-      // which is short and bounded by the keys themselves. It is never simply
-      // left out: a message whose context was promised always says something.
-      const text = full.length <= budget ? full : renderKeysOnly(envelope.projections, at === undefined);
-      budget -= text.length;
-      blocks.push({ afterIndex: at ?? messages.length - 1, text });
-    }
-    return blocks;
+      // Reserved for every message, before anything is upgraded: a message
+      // whose context was promised always says something of its own.
+      const summary = renderKeysOnly(envelope.projections, at === undefined, share);
+      return { envelope, at, summary, summaryBytes: byteSize(summary) };
+    });
+    let spare = MENTION_CONTEXT_RENDER_MAX - drafts.reduce((total, draft) => total + draft.summaryBytes, 0);
+    return drafts.map((draft) => {
+      const full = renderProjections(draft.envelope.projections, draft.at === undefined);
+      // What the full projection costs *beyond* the summary already reserved.
+      const upgrade = byteSize(full) - draft.summaryBytes;
+      const fits = upgrade <= spare;
+      if (fits) spare -= upgrade;
+      return { afterIndex: draft.at ?? messages.length - 1, text: fits ? full : draft.summary };
+    });
   }
 
   private find(id: string): Envelope | undefined {
@@ -231,6 +265,21 @@ const ORPHAN_HEADER =
 const HEADER = "Project work mentioned in the message above.";
 const PREAMBLE =
   "Read at the exact revision the message named, bounded, and not re-read at the current revision.";
+/**
+ * What to do when the details did not fit: something true of every session,
+ * with or without project work of its own, and needing no tool and no
+ * authority the session was not already given.
+ */
+const RECOVERY =
+  "Their details did not fit this call, because the context for the other messages waiting here filled the space. If you need them, say so: the person can send them again, a few at a time.";
+
+/** One sentence, used by both the early check and the reservation itself. */
+function tooManyWaiting(): ProtocolError {
+  return new ProtocolError(
+    ErrorCodes.SessionBusy,
+    `${String(MENTION_CONTEXT_MESSAGES_MAX)} messages that mention project work are already waiting for this agent. Let it read some, or clear the queue, then send this again.`,
+  );
+}
 
 /** One projection, exactly as the host supplied it. */
 function renderProjection(projection: ProjectWorkMentionProjection): string {
@@ -250,18 +299,51 @@ function renderProjections(projections: readonly ProjectWorkMentionProjection[],
 }
 
 /**
- * The same message's mentions as identities alone, when the whole projection
- * does not fit this model call. It is never dropped: the keys say what was
- * named and how to read the rest, and the projection itself is still held for
- * the next call.
+ * What this message named, when its whole projection does not fit this model
+ * call. It is never dropped: the keys say what was named, the projection
+ * itself is still held for the next call, and the way back is one a session
+ * with no project work of its own can take too.
+ *
+ * There is deliberately **no tool named here**. A projectless chat and a
+ * session discussing another project's work both receive mention context and
+ * neither registers a single lifecycle tool, so naming one would be an
+ * instruction the model cannot follow — and teaching it one would hand a
+ * session authority over a project it was never given.
  */
-function renderKeysOnly(projections: readonly ProjectWorkMentionProjection[], orphaned: boolean): string {
+function renderKeysOnly(
+  projections: readonly ProjectWorkMentionProjection[],
+  orphaned: boolean,
+  maxBytes: number,
+): string {
+  const head = `## ${orphaned ? ORPHAN_HEADER : HEADER}`;
   const keys = projections.map((projection) => projection.key);
-  const shown = keys.slice(0, KEYS_MAX).join(", ");
-  const rest = keys.length > KEYS_MAX ? ` and ${String(keys.length - KEYS_MAX)} more` : "";
-  const head = orphaned ? ORPHAN_HEADER : HEADER;
-  return [
-    `## ${head}`,
-    `This message named ${shown}${rest}. Their details are not in this call because the context for the messages waiting ahead of it filled the space. Read them with inspect_project_work.`,
-  ].join("\n\n");
+  const compose = (shown: readonly string[]): string => {
+    const rest = keys.length - shown.length;
+    const named = shown.length > 0
+      ? `This message named ${shown.join(", ")}${rest > 0 ? ` and ${String(rest)} more` : ""}.`
+      : `This message named ${String(keys.length)} ${keys.length === 1 ? "piece" : "pieces"} of project work.`;
+    return [head, `${named} ${RECOVERY}`].join("\n\n");
+  };
+  // As many identities as this message's own share pays for, whole ones only,
+  // and an honest count of the rest.
+  const shown: string[] = [];
+  for (const key of keys.slice(0, KEYS_MAX)) {
+    if (byteSize(compose([...shown, key])) > maxBytes) break;
+    shown.push(key);
+  }
+  // The fixed sentences are far shorter than any share the two ceilings can
+  // produce; clamped regardless, so the total bound is a property of this code
+  // rather than of the wording above.
+  return clampBytes(compose(shown), maxBytes);
+}
+
+/** Cut to a byte budget without ever splitting a character in half. */
+function clampBytes(text: string, maxBytes: number): string {
+  const buffer = Buffer.from(text, "utf8");
+  if (buffer.length <= maxBytes) return text;
+  let end = Math.max(maxBytes, 0);
+  // A continuation byte at the cut means it landed inside a character: walk
+  // back to that character's first byte and drop the whole character.
+  while (end > 0 && (buffer[end]! & 0b1100_0000) === 0b1000_0000) end -= 1;
+  return buffer.subarray(0, end).toString("utf8");
 }

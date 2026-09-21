@@ -221,6 +221,11 @@ fields: this is explicit contextual data on a message, not a prompt field.
 
 ## 5. Bounds: refused at the door, never accepted and forgotten
 
+> Both bounds below were corrected after review; the text is kept as written
+> and what actually shipped is ["Corrections after the first
+> inspection"](#corrections-after-the-first-inspection) at the foot.
+
+
 1. **Admission.** At most `MENTION_CONTEXT_MESSAGES_MAX` = 16 live envelopes
    per session. A send that would exceed it is refused **before the engine is
    asked**, with an actionable sentence and no partial effect: "You have 16
@@ -343,3 +348,118 @@ Validation: `pnpm -F @lasercode/protocol test`, `-F @lasercode/host test`,
   `packages/host/test/project-work/mentions.test.ts` (25, thirteen new),
   `packages/pi-extension/test/project-work.test.ts` (14, five new).
 - Suite totals and gates are in the task's handoff note.
+
+## Corrections after the first inspection
+
+Owner: worker "Finish mention budget corrections", branch
+`agents/finish-mention-budget-corrections-e90c1ce4`, which merged the whole of
+`agents/complete-mention-context-delivery-1d9184ae` (`98bd11f4`, `e7ec426d`)
+onto `d405e5d5` with no conflicts. Four findings from the parent's inspection,
+and the lifecycle evidence D-362 was accepted on and the first pass did not
+produce. Nothing else in the path changed.
+
+### C1 · The render ceiling is bytes, and every message is paid for first
+
+`blocks()` compared `text.length` against `MENTION_CONTEXT_RENDER_MAX`, which
+is a **character** count: a Japanese title or an Arabic excerpt costs three
+bytes a character, so a "24 000" render could be 60 KB on the wire. It also
+emitted the keys-only fallback whether or not the budget had room for it, so a
+call with sixteen overflowing messages could exceed the ceiling by the whole
+of fifteen fallbacks.
+
+What it does now, in `packages/worker/src/project-work/mentions.ts`:
+
+1. Every active envelope is first rendered as its **own short summary**,
+   bounded by its share of the ceiling
+   (`RENDER_MAX / max(active, MESSAGES_MAX)` = 1 500 bytes), so the summaries
+   of even sixteen messages cannot exceed the ceiling.
+2. What is left over is spent upgrading summaries to the complete projection,
+   oldest message first, one whole message at a time — never a projection cut
+   in half to fill the last bytes.
+3. The sum of every block returned is therefore `≤ 24 000` UTF-8 bytes by
+   construction, with no message omitted, evicted or silently shortened, and
+   every envelope keeps its complete projection for the next call.
+
+A summary that has to drop keys names as many as its share pays for and says
+"and N more"; the clamp that guarantees the bound never splits a character.
+
+### C2 · The sixteen-message ceiling is enforced at the slot, not only before it
+
+`refuseIfFull()` is called by the five send routes, and every one of them
+awaits afterwards — a phrase still being transcribed, a first-turn runtime
+replacement and its lease, the tray's drain. Two sends could both pass it and
+both reserve, so a seventeenth envelope could exist. `reserve()` now refuses at
+the mutation itself with the same sentence; `refuseIfFull()` stays as the early,
+friendly word. Both refusals happen before the engine is asked anything on
+every path, and a refused reservation leaves nothing behind.
+
+### C3 · The overflow line no longer names a tool the session may not have
+
+It said "Read them with `inspect_project_work`". A projectless chat, and any
+session discussing another project's work, receive mention context and
+register **no lifecycle tool at all** (§2), so that was an instruction the
+model could not follow — and giving it the tool would hand a session authority
+over a project it was never given. The line now ends: "If you need them, say
+so: the person can send them again, a few at a time." No tool, no new
+capability, no change to the rest of the render or to any send contract.
+
+### C4 · A reserved slot is owed only to a message that was really sent
+
+`StableSdkDriver.prompt()` reserved its correlation id before the preflight
+fence, and two exits jumped over the cleanup: the bare concurrent-prompt
+refusal (`return { accepted: false }` from inside the `while` loop) and a
+caller's `onInvocation` observer that throws. Both leaked a slot, and sixteen
+of them would have closed the door on the next real message. The reservation's
+lifetime now covers every pre-engine exit: the goal-command activation, the
+fence refusal and the observer are inside a guard that returns the slot, and a
+throwing observer also releases the fence that call installed. Admission and
+first-turn semantics are untouched.
+
+### C5 · The lifecycle proof against the real engine
+
+D-362 required real pinned-engine evidence for compaction and for a held
+fallback settle; the first pass proved those synthetically.
+`packages/worker/test/mention-context-lifecycle.live.test.ts` (5) now drives
+both through public seams only — `driver.open`, `prompt`, `steer`, `followUp`,
+the session's own updates, and what the stub provider received:
+
+- **An in-activity compaction.** The engine's own threshold compaction runs
+  inside the activity, its cut falls inside the turn being read, and the
+  person's message is summarised out of the window. The turn then calls the
+  model again — a message the person sent *while the summary was being
+  written* is waiting in the engine's queue — and that call carries the
+  compacted-away message's projection at the end of the list, labelled "no
+  longer in the window", beside the queued message's own projection in its own
+  place. Nothing is owed after the final settle, and the summarisation request
+  itself carries no mention context.
+- **A fallback retry.** The first model dies mid-turn, the chain moves the
+  same turn to the next model, and the retry carries the same projection
+  beside the same message: the settle a fallback holds is not the settle that
+  retires it.
+- **Refusals.** A seventeenth mentioning message is refused with no provider
+  request and nothing on disk; a message that mentions nothing is never
+  refused and holds no slot; the two leaking exits of C4 give their slot back.
+
+### Evidence for the corrections
+
+```
+pnpm -r build                                   # required: the live tests run the built workspace
+pnpm -F @lasercode/worker exec vitest run \
+  test/project-work/mentions.test.ts test/server.mentions.test.ts \
+  test/pending.test.ts test/pi-correlation-seam.live.test.ts \
+  test/mention-context.live.test.ts test/mention-context-lifecycle.live.test.ts
+#   6 files, 67 tests, all passing
+pnpm -F @lasercode/worker test                  # 1682 passed, 4 skipped (137 files)
+pnpm -F @lasercode/worker typecheck             # clean
+pnpm identity:check                             # clean
+```
+
+Each correction was checked against the behaviour it fixes: with the ceiling
+restored to characters two carrier tests fail; with the atomic refusal removed
+the carrier test and the two-simultaneous-sends server test fail; with either
+guard removed in the driver the two "gives the slot back" live tests fail.
+
+One observation left for the reviewer, not changed here: the merged branch's
+live tests only pass against a **built** workspace — a fresh checkout that runs
+`vitest` before `pnpm -r build` sees the pre-merge `dist` of `protocol` and
+`pi-extension` and six of these tests fail for that reason alone.
