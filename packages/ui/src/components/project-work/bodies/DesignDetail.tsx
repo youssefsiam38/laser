@@ -19,7 +19,7 @@
  * The phone gets the same canvas, read-only: pan, zoom, tap to inspect, and a
  * full-screen prototype. Editing needs a wider window, and it says so.
  */
-import { Copy, Hammer, Layers, Maximize2, MessageSquare, Play, RefreshCw, Save, Send, Undo2, X } from "lucide-react";
+import { Compass, Copy, Hammer, Layers, Maximize2, MessageSquare, Play, RefreshCw, Save, Send, Undo2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ClientRequests, DesignBody, DesignIndex, DesignIndexEntry, DesignTokenGroup } from "@lasercode/protocol";
 import { designAggregateFidelity, designIsSketchOnly, designTokenDocumentSchema, validateDesignBody } from "@lasercode/protocol";
@@ -53,13 +53,22 @@ import { quoteIntoComposer } from "../quote.js";
 import type { WorkBodyContext } from "./context.js";
 import { EmptyBody, Prose, Section } from "./fields.js";
 
+/** What "Start a foundation" puts in the composer, naming this exact design. */
+export function foundationRequestFor(workKey: string): string {
+  return `Start a design foundation on @${workKey}: propose the first step (principles) with propose_foundation.`;
+}
+
 /** What "Implement…" does, said before it is done. */
 export const IMPLEMENT_SENTENCE =
   "Hand-off pulls this exact revision — its screens, the index entries it uses, its fixtures and unresolved comments — into the conversation as the implementation context. The command goes into the composer, so you send it when you are ready.";
 
-/** The Foundation section: M21-T14's, and drawn as the slot it is. */
+/** What a foundation is, for a design that has none yet. */
 export const FOUNDATION_PENDING_SENTENCE =
-  "A foundation is what a project with no UI code starts from: principles, then tokens, themes, type, spacing, motion, icons and the core component contracts, each one proposed and edited before anything is built. It is not part of this design yet — start one from the chat with this design open, and it will appear here with everything it proposes.";
+  "A foundation is what a project with no interface code starts from: principles, then tokens, themes, type, spacing, motion, icons and the core component contracts, each one proposed and edited here before anything is built.";
+
+/** Why the button sends rather than starts: the proposal is the model's work. */
+export const FOUNDATION_START_SENTENCE =
+  "Starting one puts the request in the composer with this design's key. The steps are proposed in the conversation — nothing is written here until one comes back, and nothing is written into the project until a build implements it.";
 
 interface BlobRequest {
   request: <M extends "project/work/blob/read">(
@@ -177,6 +186,14 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
 
   // -- tokens and entries ---------------------------------------------------
   const [foundationTokens, setFoundationTokens] = useState<DesignTokenGroup | undefined>(undefined);
+  // Case A's own affordance, on any design that has no foundation yet: the
+  // header override of `docs/design-phase.md` ("Start a foundation"), which
+  // exists in an established project too.
+  const startFoundation = useCallback(() => {
+    const request = foundationRequestFor(context.detail.entity.key);
+    quoteIntoComposer({ text: request, workKey: context.detail.entity.key });
+    actions.toast("info", `${request} is in the composer — send it when you are ready.`);
+  }, [actions, context.detail.entity.key]);
   useEffect(() => {
     const blobId = body.foundation?.tokensBlobId;
     const reader = clientRef.current;
@@ -279,7 +296,9 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
   const ground = groundSketch ?? (wireGroundSketch ? groundFromWire : undefined);
 
   // -- sections, pins and the reference image -------------------------------
-  const [section, setSection] = useState<DesignSection>("screens");
+  // A greenfield design *is* its foundation until it has screens, so that is
+  // the section it opens on; everything else still opens on the canvas.
+  const [section, setSection] = useState<DesignSection>(() => (body.foundation && body.screens.length === 0 ? "foundation" : "screens"));
   const [reference, setReference] = useState<ClientRequests["design/host/ground"]["result"]["referenceImage"] | undefined>(undefined);
   const pins = useMemo(() => designPins(draft, context.detail.comments), [draft, context.detail.comments]);
   const inContext = draft.hostPage !== undefined || routeFromBrief(draft.brief) !== undefined;
@@ -368,50 +387,13 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
   const sketchOnly = designIsSketchOnly(draft);
   const validation = useMemo(() => validateDesignBody(draft, { primitives: KIT_NAMES }), [draft]);
 
-  // The Foundation slot (M21-T14): a greenfield design is its foundation
-  // until it has screens, so the wizard is the body rather than a panel
-  // beside an empty canvas.
+  // The Foundation (M21-T14) lives in its own section, beside the other four
+  // (M21-T13): a greenfield design opens on it, and a design that has both a
+  // foundation and screens can still be read as a design.
   const foundation = draft.foundation;
-  if (foundation) {
-    return (
-      <div data-slot="design-detail" className="flex min-w-0 flex-col gap-5">
-        <Section title="Brief">
-          <Prose text={draft.brief} />
-        </Section>
-        <FoundationWizard
-          body={draft}
-          foundation={foundation}
-          context={context}
-          editable={editable}
-          dirty={dirty}
-          onChange={(next) => setDraft((current) => ({ ...current, foundation: next }))}
-          onSave={save}
-          index={liveIndex}
-        />
-        {dirty && editable ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="ghost" disabled={saving} onClick={() => setDraft(body)}>
-              <Undo2 />
-              Discard
-            </Button>
-            <Button size="sm" disabled={saving} onClick={() => void save()}>
-              <Save />
-              {saving ? "Saving…" : "Save revision"}
-            </Button>
-          </div>
-        ) : null}
-        {conflict ? (
-          <p role="alert" className="text-xs leading-xs text-ink-2">
-            {conflict} Your edits are still here; read the latest revision and apply them again.
-          </p>
-        ) : null}
-        {!designIsEmpty(draft) ? <DesignCanvas body={draft} tokenProperties={tokens.properties} contextFor={editContext} sketchBytes={sketchBytes} className="h-[32rem] min-h-80" /> : null}
-        <DesignIndexPanel access={access} />
-      </div>
-    );
-  }
+  const nothingDrawn = designIsEmpty(draft);
 
-  if (designIsEmpty(draft)) {
+  if (!foundation && nothingDrawn) {
     return (
       <div data-slot="design-detail" className="flex flex-col gap-5">
         <Section title="Brief">
@@ -421,6 +403,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
           what="This design has a brief and nothing drawn yet."
           next="Screens arrive as the model composes them from this project's design index — or as a sketch, when the ask is exploratory. Ask for either in the chat with this design open."
         />
+        <FoundationStart access={access} editable={editable} onStart={startFoundation} />
         {inContext ? (
           <HostContextPanel
             body={draft}
@@ -504,7 +487,9 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
   return (
     <div data-slot="design-detail" className="flex min-w-0 flex-col gap-4" onKeyDown={onDetailKeyDown}>
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-line bg-surface px-3 py-2">
-        <Badge variant={FIDELITY_TONE[aggregate]}>{FIDELITY_LABEL[aggregate]}</Badge>
+        {/* A design with nothing drawn has no fidelity to report; "Mapped"
+            over zero screens would be a claim about nothing. */}
+        {nothingDrawn ? <Badge variant="live">Proposed</Badge> : <Badge variant={FIDELITY_TONE[aggregate]}>{FIDELITY_LABEL[aggregate]}</Badge>}
         {draft.strategy ? <Badge variant="outline">{draft.strategy.kind === "island" ? "Island" : "Conform"}</Badge> : null}
         {draft.hostPage ? <Badge variant="mono">{draft.hostPage.routeOrPath}</Badge> : null}
         <span className="text-xs leading-xs text-ink-3">
@@ -513,7 +498,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
           {tokens.tokens.length > 0 ? ` · ${String(tokens.tokens.length)} tokens` : ""}
         </span>
         <span className="ms-auto flex flex-wrap items-center gap-1.5">
-          {prototype ? (
+          {nothingDrawn ? null : prototype ? (
             <Button size="sm" variant="outline" onClick={() => setPrototype(undefined)}>
               <Layers />
               Design
@@ -531,7 +516,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
               Prototype
             </Button>
           )}
-          {!fullScreen ? (
+          {!fullScreen && !nothingDrawn ? (
             <Button size="sm" variant="ghost" onClick={() => setFullScreen(true)}>
               <Maximize2 />
               Full screen
@@ -639,7 +624,17 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
       {section === "index" ? (
         <DesignIndexPanel access={access} usedEntryIds={usedEntryIds} />
       ) : section === "foundation" ? (
-        <FoundationSection body={draft} />
+        <FoundationSection
+          body={draft}
+          context={context}
+          access={access}
+          editable={editable}
+          dirty={dirty}
+          index={liveIndex}
+          onChange={(next) => setDraft((current) => ({ ...current, foundation: next }))}
+          onSave={save}
+          onStart={startFoundation}
+        />
       ) : section === "review" ? (
         <ReviewSection
           body={draft}
@@ -667,7 +662,20 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
               />
             ) : null}
             {section === "flows" ? <FlowsSection body={draft} onSelectScreen={(screenId) => setSelectedScreenId(screenId)} /> : null}
-            {!fullScreen ? (stage ?? canvas) : <p className="text-xs leading-xs text-ink-3">The canvas is open full screen. Esc brings it back here.</p>}
+            {nothingDrawn ? (
+              <div role="status" data-slot="design-nothing-drawn" className="rounded-lg border border-dashed border-line p-3">
+                <p className="text-sm leading-5 font-medium text-ink">Nothing is drawn on this design yet</p>
+                <p className="mt-0.5 text-xs leading-xs text-ink-2">
+                  {foundation
+                    ? "The foundation is in its own section above. Screens come next: ask for one in the chat with this design open, and it is composed from the language the foundation sets."
+                    : "Screens arrive as the model composes them from this project's design index — or as a sketch, when the ask is exploratory. Ask for either in the chat with this design open."}
+                </p>
+              </div>
+            ) : !fullScreen ? (
+              (stage ?? canvas)
+            ) : (
+              <p className="text-xs leading-xs text-ink-3">The canvas is open full screen. Esc brings it back here.</p>
+            )}
             {tokens.tokens.length === 0 ? (
               <p role="status" className="text-xs leading-xs text-ink-3">
                 Drawn in this app's own tokens: this design has no token document to skin the kit with yet.
@@ -687,34 +695,104 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
   );
 }
 
-/** Case A's slot: designed, honest, and M21-T14's to fill. */
-function FoundationSection({ body }: { body: DesignBody }) {
+/**
+ * Case A, in its own section (M21-T14).
+ *
+ * A design that has a foundation gets the wizard — the ordered steps, the
+ * samples, the licence checks, Approve and the Plan — and a design that has
+ * none gets the honest slot with the one action that can start one.
+ */
+function FoundationSection({
+  body,
+  context,
+  access,
+  editable,
+  dirty,
+  index,
+  onChange,
+  onSave,
+  onStart,
+}: {
+  body: DesignBody;
+  context: WorkBodyContext;
+  access: DesignIndexAccess;
+  editable: boolean;
+  dirty: boolean;
+  index: DesignIndex | undefined;
+  onChange: (next: DesignBody["foundation"] & object) => void;
+  onSave: () => Promise<void> | void;
+  onStart: () => void;
+}) {
   const foundation = body.foundation;
   if (!foundation) {
     return (
-      <div role="status" data-slot="design-foundation" className="flex flex-col gap-1.5 rounded-lg border border-dashed border-line p-3">
-        <p className="text-sm font-medium text-ink">This design has no foundation</p>
-        <p className="text-xs leading-xs text-ink-2">{FOUNDATION_PENDING_SENTENCE}</p>
+      <div data-slot="design-foundation" className="flex min-w-0 flex-col gap-3">
+        <div role="status" className="flex flex-col gap-1.5 rounded-lg border border-dashed border-line p-3">
+          <p className="text-sm font-medium text-ink">This design has no foundation</p>
+          <p className="text-xs leading-xs text-ink-2">{FOUNDATION_PENDING_SENTENCE}</p>
+        </div>
+        <FoundationStart access={access} editable={editable} onStart={onStart} />
       </div>
     );
   }
   return (
-    <section data-slot="design-foundation" aria-label="Foundation" className="flex min-w-0 flex-col gap-3">
-      <h3 className="eyebrow">Foundation</h3>
-      {foundation.principles.length > 0 ? (
-        <ul role="list" className="flex flex-col gap-1">
-          {foundation.principles.map((principle) => (
-            <li key={principle} className="text-sm leading-5 text-ink-2">
-              {principle}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {foundation.notes ? <Prose text={foundation.notes} /> : null}
-      <p className="text-xs leading-xs text-ink-3">
-        Everything a foundation proposes stays <Badge variant="live">Proposed</Badge> until it is built: the repository is unchanged before Build.
+    <div data-slot="design-foundation" className="flex min-w-0 flex-col gap-4">
+      <FoundationWizard
+        body={body}
+        foundation={foundation}
+        context={context}
+        editable={editable}
+        dirty={dirty}
+        onChange={onChange}
+        onSave={onSave}
+        {...(index ? { index } : {})}
+      />
+    </div>
+  );
+}
+
+/**
+ * "Start a foundation" — the header override of `docs/design-phase.md`, which
+ * a person may take in any project, not only one the index says is empty.
+ *
+ * It sends nothing and writes nothing: the steps are proposed by the model
+ * through `propose_foundation`, so the request goes into the composer naming
+ * this exact design, and the person sends it. What is said about this
+ * project's own state is said only once the index has actually answered —
+ * while it is still being read, or when reading it failed, this offers the
+ * action without claiming anything about the project.
+ *
+ * And what "no index" means is exactly that: no index has been built here. It
+ * is **not** evidence that the project has no interface code — only an index
+ * build reads the source. The copy therefore never calls an unindexed project
+ * greenfield; the foundation stays available either way, as the override it
+ * is.
+ */
+function FoundationStart({ access, editable, onStart }: { access: DesignIndexAccess; editable: boolean; onStart: () => void }) {
+  const state = access.state;
+  const ground =
+    state.kind === "loading"
+      ? "Reading this project's design system…"
+      : state.kind === "absent"
+        ? "This project has no design index yet, so there is nothing here to compose from. Whether it has interface code to index is not something this says — building the index is what answers that."
+        : state.kind === "ready"
+          ? "This project already has a design index, so new work is normally composed from it. A foundation is still yours to start — it proposes a new language rather than reading the one that is there."
+          : state.kind === "error"
+            ? `This project's design system could not be read: ${state.message}`
+            : state.detail;
+  return (
+    <div data-slot="foundation-start" className="flex min-w-0 flex-col gap-2 rounded-lg border border-line bg-surface px-3 py-2">
+      <p role="status" className="text-xs leading-xs text-ink-2">
+        {ground}
       </p>
-    </section>
+      <p className="text-xs leading-xs text-ink-3">{FOUNDATION_START_SENTENCE}</p>
+      {editable ? (
+        <Button size="sm" variant="outline" className="self-start" onClick={onStart}>
+          <Compass />
+          Start a foundation
+        </Button>
+      ) : null}
+    </div>
   );
 }
 

@@ -78,10 +78,22 @@ describe("the profile walk", () => {
     const result = await synthesise(index, l0.facts, { models: runtime({}).models, profile: null });
     expect(result.ran).toBe(false);
     expect(result.entries).toEqual([]);
-    expect(result.gaps[0]?.reason).toContain("no model profile is assigned");
+    expect(result.gaps[0]?.reason).toContain("No model profile is connected for design work");
     const applied = applySynthesis(index, result, "design-index");
     expect(applied.builtWith?.layers).toEqual(["l0"]);
-    expect(applied.gaps.some((gap) => gap.reason.includes("no model profile"))).toBe(true);
+    expect(applied.gaps.some((gap) => gap.reason.includes("No model profile"))).toBe(true);
+  });
+
+  it("says which profile had nothing in it, rather than that nothing happened", async () => {
+    const { index, l0 } = await buildFixture("vue-scss");
+    const result = await synthesise(index, l0.facts, {
+      models: runtime({}).models,
+      profile: profile([]),
+      unavailable: "\u201cSmart\u201d, the profile assigned to design work, has no model in it.",
+    });
+    expect(result.ran).toBe(false);
+    expect(result.gaps[0]?.reason).toContain("the profile assigned to design work, has no model in it");
+    expect(result.gaps[0]?.reason).toContain("connect or assign a design profile in Settings");
   });
 
   it("says so when every model of the profile answered unusably", async () => {

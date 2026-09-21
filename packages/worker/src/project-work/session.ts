@@ -91,8 +91,12 @@ export interface ProjectWorkSessionOptions {
    * The models Foundation mode proposes with (M21-T14), when this machine has
    * a Design-index profile. Absent is a working state, not a broken one: each
    * step falls back to the documented neutral foundation and says so.
+   *
+   * A thunk, resolved once per tool call: the profile design work runs on is a
+   * setting, and a session open for hours must not keep proposing on the
+   * profile that was assigned when it opened.
    */
-  foundationModels?: FoundationModelAccess | undefined;
+  foundationModels?: FoundationModelAccess | (() => FoundationModelAccess | undefined) | undefined;
   /** This session's research run, and the adapters it may use. */
   research?: { bridge: ResearchBridge; adapters: readonly ResearchAdapterId[] } | undefined;
   /** The Task this session is an attempt on, when it was opened for one. */
@@ -167,6 +171,12 @@ export class ProjectWorkSession implements ExtensionProjectWorkBridge {
     ];
   }
 
+  /** The models Foundation mode may use on this call, or nothing. */
+  private foundationAccess(): FoundationModelAccess | undefined {
+    const models = this.options.foundationModels;
+    return typeof models === "function" ? models() : models;
+  }
+
   designTools(): ProjectWorkToolBinding[] {
     const design = this.options.design;
     if (!design) return [];
@@ -196,14 +206,16 @@ export class ProjectWorkSession implements ExtensionProjectWorkBridge {
             {
               spec: PROPOSE_FOUNDATION_SPEC,
               recovery: PROPOSE_FOUNDATION_RECOVERY,
-              run: (input: Record<string, unknown>) =>
-                proposeFoundationTool(
+              run: (input: Record<string, unknown>) => {
+                const access = this.foundationAccess();
+                return proposeFoundationTool(
                   {
                     work: this.options.bridge!,
-                    ...(this.options.foundationModels ? { access: this.options.foundationModels } : {}),
+                    ...(access ? { access } : {}),
                   },
                   input as unknown as ProposeFoundationInput,
-                ),
+                );
+              },
             },
           ]
         : []),

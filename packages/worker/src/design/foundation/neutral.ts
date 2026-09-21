@@ -33,8 +33,23 @@ import type {
 import { checkSource, KNOWN_SOURCES } from "./licence.js";
 
 /** The sentence a fallback step carries, wherever it is shown. */
-export const FOUNDATION_FALLBACK_NOTE =
-  `No model profile is connected for design work, so this is ${PRODUCT_DISPLAY_NAME}'s own neutral starting point rather than a proposal about your product. Change anything here — it is all tokens — or connect a design profile in Settings and ask for it again.`;
+export const FOUNDATION_FALLBACK_TAIL =
+  `This is ${PRODUCT_DISPLAY_NAME}'s own neutral starting point rather than a proposal about your product: change anything here — it is all tokens — or connect a design profile in Settings and ask for it again.`;
+
+/** The fact a machine with nothing connected for design work states. */
+export const FOUNDATION_NO_PROFILE_FACT = "No model profile is connected for design work.";
+
+export const FOUNDATION_FALLBACK_NOTE = `${FOUNDATION_NO_PROFILE_FACT} ${FOUNDATION_FALLBACK_TAIL}`;
+
+/**
+ * The note a step carries when there was no model to ask, with the reason
+ * this machine has none — an unassigned surface, an assigned profile with no
+ * model in it, or nothing connected at all. The reason is the caller's,
+ * because only the caller knows which of those it is.
+ */
+export function foundationFallbackNote(reason?: string): string {
+  return `${reason ?? FOUNDATION_NO_PROFILE_FACT} ${FOUNDATION_FALLBACK_TAIL}`;
+}
 
 /** The sentence a step carries when the model answered with nothing usable. */
 export const FOUNDATION_MODEL_FALLBACK_NOTE =
