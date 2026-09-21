@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T07:24:17+03:00 · claude-2026-09-21-leap · HEAD: c6fa9277
-**Current focus:** M22 Model profiles is implemented, reviewed and fixed (`f14a152f`, `pnpm verify` green); 0.12.0 is published and Latest. M23 Plain Chat is in progress.
+**Last updated:** 2026-09-21T10:09:00+03:00 · claude-2026-09-21-leap · HEAD: eadefb1c
+**Current focus:** M23 Plain Chat is implemented, reviewed and fixed (`pnpm verify` green); M23-T6 is releasing 0.13.0. M26-T1/T2 tool-contract lint runs in parallel; M21 follows.
 
 | Milestone | State |
 | --- | --- |
@@ -36,7 +36,7 @@
 | MX Cross-cutting | in-progress |
 
 **Blockers:** M19-T7 source work waits for M19-T6 to release shared `LaserPaths` and migration-storage ownership. M21 remains dependency-gated on the person's M20 sandbox acceptance; the leap goal (`docs/goal-project-lifecycle-leap.md`) proceeds M22 → M23 → M26 → M21 → M24 → M25.
-**In flight:** M23-T1–T3 Plain Chat backend (worker). 0.12.0 is published. Browser acceptance of the profiles tab, onboarding profile step and the two-line composer control is the person's (D-342).
+**In flight:** M23-T6 release of 0.13.0; M26-T1/T2 (worker). Browser acceptance of the Chat entry points, the Agents empty state and the profile surfaces is the person's (D-342).
 **Published:** v0.12.0 is Latest (`19cdd565` candidate; 12 verified assets).
-**Next up:** M23-T1 protocol removal and `sessionKind` (after 0.12.0 is Latest); M26-T1 `toolContract()` lint; M19-T6 T6B launcher/daemon/desktop binding.
-**Recently done:** M22-T1–T10 Model profiles: protocol (`e692e4b9`), worker settings/migration/seeds (`717c7c33`), runtime on profiles (`ad23a25e`), agents and naming (`c4d4ec48`), host authority (`e9ba67c9`), settings tab (`14318ffa`), onboarding (`69f7bf9c`), composer/fleet/logs (`60671df9`), agents page + CLI (`1e2c031c`), docs/guard/reconciliation (`1a1efdcd`, `05fbb7aa`), review fixes (`8095f43f`); migration preview on the person's settings (`docs/leap/m22-real-migration-preview.json`, D-356).
+**Next up:** M26-T3 evaluation harness and M26-T4 UI error/preview rendering; M21-T1 protocol domain for the lifecycle; M24-T1 after M26-T1.
+**Recently done:** M23-T1–T5 Plain Chat: protocol (`5aebaee4`), worker chat prompt + one-shot naming (`0051d591`), host without built-ins (`79404b7c`), UI without Beam (`72f0a3a1`), docs/guard (`c91eec1b`, `70d8f4ad`), review fixes (`3a27fe38`), naming kept on the person's choice (`40eabcee`); M22 released as v0.12.0 (`19cdd565`).
