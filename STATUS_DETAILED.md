@@ -6012,6 +6012,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-20 correction claimed: move the binding contract into its own document and reduce `PLAN.md` M21 to the repository's dependency index.
 - 2026-09-20 correction done: `docs/project-lifecycle-leap.md` is the binding contract; `PLAN.md` retains only the stable milestone summary and dependency-ordered task index.
 - 2026-09-20 correction claimed by codex-2026-09-20-git-revisions: make artifact-revision ↔ repository-state provenance a typed, exact, many-to-many contract rather than leaving commits and diffs as generic evidence.
+- 2026-09-21 UX structure bound (D-355): keys, type badges, Project work control, Work/Board/Needs you/Recent, kind-aware detail and inspector, transcript/mention/search carriage; leap "Embedded workspace" rewritten.
 - 2026-09-21 ladder bound (D-354): Sketch (sandboxed HTML/JS) → Tree → Native, DOM canvas + Shadow DOM frames + primitive kit + declarative prototypes, `/design implement`/`from` forms; leap rules and M21-T11/T17 amended.
 - 2026-09-21 design bound (D-353): `docs/design-phase.md` — parse-only Design Index (L0/L1), review, `.laser/design/` storage, re-index, Foundation mode, design in context with static host grounding and Conform/Island; native runner dropped; leap Design contract, fidelity and M21-T10/T12/T13/T19 amended.
 - 2026-09-21 loosened (D-352, corrected after the person's review): every artifact kind alone, any order, links optional in every direction, gates only when chosen, `/plan <text>` with the text as the brief; projectless Chat uses the project picker — the "personal workspace" owner from the first draft is withdrawn. Leap "Flexibility" section, Design/Plan/commands text and `docs/research-phase.md` updated.
@@ -6274,6 +6275,35 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 #### M26-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/agent-tool-contract.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M26 tasks added; D-350 recorded. Implementation not started.
+
+### D-355 · 2026-09-21 · The workspace borrows the tracker's shape, not its lies
+
+Decision: the leap's "Embedded workspace" section is the binding UX structure.
+Every entity has a per-project, monotonic, never-reused key (`SPEC-12`,
+`RES-7`, `DES-3`, `PLAN-2`, `TASK-44`) as its person-facing handle beside the
+opaque protocol id; every kind has a type badge — one colour token and one SVG
+icon, never emoji — rendered wherever the entity appears, separate from the
+status chip that speaks each kind's own vocabulary. The workspace opens from
+one top-bar **Project work** control with live counts and has four tabs:
+**Work** (one backlog of every kind with filters; per-kind views are saved
+filters), **Board** (Tasks only; drag performs a real transition and refuses
+illegal ones by name), **Needs you** (gates, blocking comments, handed-over
+questions, blocked tasks, index review) and **Recent**. Detail and inspector
+are kind-aware; transcript cards, mention chips, search and the sidebar all
+carry key and badge. Refused: workflow columns for kinds without a workflow,
+points, sprints, burndown, percentages, due dates, ETAs.
+
+Why: the person's review of a mockup — a made-up structure costs developers
+the familiarity they already have with issue trackers, while copying a
+tracker's board for Specs, Research and Designs would invent state those
+kinds do not have. Keys and type identity are the cheap, true part of that
+familiarity; the board is right only where a workflow exists.
+
+Consequences: `ProjectWorkRef` gains a `key` projection in M21-T1; M21-T2
+allocates keys per project; M21-T6 is the workspace shell as specified;
+M21-T16 is the Board and Task surfaces; kind colour tokens join the theme
+token set and Settings; the mockup that informed this is local scratch, not
+source.
 
 ### D-354 · 2026-09-21 · Sketch → Tree → Native; `/design` hands off
 

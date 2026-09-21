@@ -563,46 +563,130 @@ storage layout and return references rather than large bodies.
 
 ## Embedded workspace
 
-The selected project's top bar has one **Specs** control with concise state,
-for example `3 specs · 1 review`. It opens a Laser-owned workspace inside the
-main shell; it does not open a browser, a second window or a transcript panel.
-The conversation remains mounted so its scroll, draft, stream and approvals
-survive closing the workspace.
+This section is the binding UX structure (D-355). It fixes *what exists, where
+it lives and how a person moves through it*. It does not fix pixels: the
+product implementation must be better than any mockup, built on Laser's
+tokens, motion and the adopted assistant-ui elements
+([`ux-elements.md`](ux-elements.md)), and held to the bar in `AGENTS.md`.
 
-Desktop workspace:
+### Familiar shape, Laser's rules
+
+The workspace borrows what developers already know from issue trackers —
+keys, type badges, one backlog, filters, a board — and refuses what those tools
+get wrong. Adopted: stable keys, type identity, a unified list, saved filters,
+a Tasks board, a needs-you queue. Refused: workflow columns for kinds that
+have no workflow, story points, sprints, burndown, percentages, due dates,
+invented ETAs, and emoji as identity.
+
+### Keys and type identity
+
+- Every entity has a **key**: `SPEC-12`, `RES-7`, `DES-3`, `PLAN-2`,
+  `TASK-44`. Keys are per project, monotonic, never reused, never renumbered,
+  speakable, greppable, usable in commit messages and branch names,
+  mentionable as `@TASK-44`, and 1:1 with a Jira key on export
+  ([`external-work-links.md`](external-work-links.md)). The opaque id remains
+  the identity in the protocol; the key is the person-facing handle.
+- Every kind has a **type badge**: one colour token per kind
+  (`--kind-spec`, `--kind-research`, `--kind-design`, `--kind-plan`,
+  `--kind-task`) plus one icon, rendered wherever the entity appears — list
+  rows, table cells, board cards, transcript cards, mention chips, search
+  results, graph nodes, approval cards, the Jira preview. Icons are SVG
+  through the icon token set, never emoji: they must theme, mirror for RTL
+  and stay legible at the 12px floor.
+- The **status chip** is separate from the type badge and speaks each kind's
+  own vocabulary: Spec `Draft · Brief awaiting approval · Design approved ·
+  …`; Research `open · partial · answered · unanswerable · superseded`;
+  Design `Sketch · Mapped · Proposed` plus strategy; Plan task counts; Task
+  `todo · ready · running · blocked · needs_review · done`. A "needs you"
+  chip is the only cross-kind status.
+
+### Opening and closing
+
+- The selected project's top bar carries one **Project work** control with
+  live counts (`18 items · 4 need you`). It opens the workspace inside the
+  main shell — never a browser, a second window or a transcript panel.
+- The workspace takes the main area and temporarily borrows the room held by
+  Fleet and Monitor; saved shell preferences return on close. The
+  conversation stays mounted: scroll, draft, stream and approvals survive.
+- "← Back to the conversation" closes it. Opening is a morph, not a pop;
+  reduced motion loses the movement only.
+- Other ways in, all landing on the exact entity: a transcript artifact card,
+  a mention chip, a slash command, the command palette, a deep link, search.
+
+### Structure
 
 ```text
-[project + back] [Overview · Specs · Research · Designs · Plans · Tasks] [search]
-┌ entity list / filters ┬ document, graph or canvas ┬ inspect / comments / history ┐
-│ status and attention │ exact selected revision   │ sources, links, review        │
-└───────────────────────┴───────────────────────────┴───────────────────────────────┘
+[← conversation] [project]  Work · Board · Needs you · Recent          [+ Create]
+
+Work (default)
+┌ backlog ───────────────┬ detail ─────────────────────────┬ inspector ──────────┐
+│ filters: type chips,   │ KEY · type badge · title ·      │ kind-aware:         │
+│ text, needs-you        │ status chip · actions           │ gate / links /      │
+│ rows: KEY badge title  │ Spec document · Research tree   │ comments / history  │
+│ status · updated       │ Design canvas · Plan document   │ Design Index /      │
+│                        │ or graph · Task evidence        │ sources / deps      │
+└────────────────────────┴─────────────────────────────────┴─────────────────────┘
 ```
 
-The workspace uses the thread's available width. It temporarily gives its
-primary artifact the room normally held by Fleet and Monitor rather than adding
-another permanent shell column; a person's saved shell preferences return on
-close. At constrained desktop widths, inspector and comments become a sheet.
-On phone, project overview → entity list → full-screen detail is a forward/back
-path with a sticky review footer and no horizontal page scroll.
+| Surface | What it is | Adopted elements |
+| --- | --- | --- |
+| **Work** | one backlog of every kind in the project; filter by type, text, needs-you, has-link, era; sort by updated, key, status; a saved filter is a named view, and the per-kind entries are just saved filters | `data-table` for the wide form, Laser list rows for the narrow form |
+| **Board** | Tasks only. Columns are the Task states; drag between columns performs a real transition and refuses an illegal one with the missing keys named; `done` still requires acceptance evidence and is never set by a drop from `running` alone | Laser-owned board on the adopted card surface; `todo-list` for the compact form |
+| **Needs you** | the queue of everything waiting on a person: gates, blocking comments, handed-over questions, blocked tasks, index entries awaiting review; the count is the badge on the tab and on the top-bar control | `approval-card`, `artifact-card` |
+| **Recent** | what changed, by revision, newest first, with who and from which session | `timeline`, `checkpoint-history` |
+| **+ Create** | one dialog: pick a kind, type the title or question or brief; nothing above it is required; the next key is shown before creating | Laser dialog |
 
-The Overview answers five questions: what is active, what needs review, what is
-ready, what is blocked, and what changed recently. Specs show lifecycle stage
-and linked artifacts. Research is source-first. Designs open flows/canvas and
-review. Plans show declared dependencies. Tasks offer list and dependency-board
-views without a percentage or timeline guess.
+Detail, by kind (middle column):
 
-All entity surfaces have intentional empty, loading, stale, conflict, offline,
-permission and damaged-data states. Keyboard, pointer and touch reach the same
-actions. Dark/light, LTR/RTL, coarse pointer, reduced motion and the 12px data
-floor are release requirements.
+| Kind | Detail | Inspector |
+| --- | --- | --- |
+| Spec | header `KEY · badge · title · status · Jira chip · actions`; revision switcher; Markdown document with source/preview; edit disabled on an older revision; conflict banner on `expectedRevisionId` mismatch ("view difference · keep mine as a new revision"), never a silent overwrite | gate card (Approve disabled while blocking comments exist, "Enter never approves"), optional links as key+badge cards, comments, history |
+| Research | compact bar (standalone / supports, budget spent); question tree left, findings for the selected question right; each finding: confidence chip by rule, licence chip, source kind and trust, verbatim excerpt with the cited span highlighted, `[from …]` provenance, Quote and Open source | none (the tree and source panel are the inspector) |
+| Design | the canvas ([`design-phase.md`](design-phase.md)): frames, edges, Prototype mode, Sketch/Tree chip, Ground it, Implement…, Full screen (Esc exits) | Design Index panel: entries by era/kind with confidence and review chips, Accept/Rename/Merge/Reject, Re-index as a stoppable Command; node inspector when a node is selected; comments anchored to node ids |
+| Plan | compact bar (from `SPEC-n` or standalone — "the prompt was the brief"); Document and Dependencies views; graph nodes carry key and state | none |
+| Task | compact bar (Start…, Jira, attempts); acceptance, attempts and evidence, checkpoints from git, blocked banner naming the keys; belongs-to Plan | dependencies as key cards, Plan, Jira |
+
+Actions common to every kind: Archive (default, reversible, links kept) and
+Delete (permanent, typed confirmation, lists what will orphan); Enter confirms
+neither. Link something… from any inspector; links are optional, always.
+
+### Outside the workspace
+
+- **Transcript**: an artifact appears only as a compact card — key, type
+  badge, title, revision and status — never its body. Review requests use
+  the existing Approval Card above the composer with the key in it.
+- **Composer**: `@` mentions offer entities by key and title with the type
+  badge; a pinned mention chip shows `KEY` with the kind colour.
+- **Fleet**: index builds and research runs are Commands with budget; no
+  fabricated rows.
+- **Sessions sidebar**: an execution session shows its linked `TASK-n` chip.
+- **Search**: keys match exactly and rank first.
+
+### Widths and inputs
+
+At constrained desktop widths the inspector becomes a sheet and the backlog
+collapses to a drawer. On phone: Work list → full-screen detail is a
+forward/back path with a sticky review footer, the board scrolls
+horizontally by column with no page scroll, and the canvas is read-only with
+tap-to-inspect and full-screen Prototype mode. Keyboard, pointer and touch
+reach the same actions; dark/light, LTR/RTL, coarse pointer, reduced motion
+and the 12px data floor are release requirements.
+
+All surfaces have intentional empty, loading (progress by files, never
+percent), stale, conflict, offline, permission and damaged-data states.
+
+### Elements and the bar
 
 Use the assistant-ui catalog rather than recreating claimed surfaces:
 `agent-plan`, `todo-list`, `research-report`, `approval-card`, `artifact-card`,
 `timeline`, `spec-sheet`, `data-table`, `checkpoint-history`, `canvas-split`
 and the shared Markdown renderer are installed or reinstated when their producer
-lands, stripped of demo data and restyled through Laser tokens. The inventory is
-updated in the same change. The design canvas itself is Laser's domain surface,
-not assistant-ui Generative UI and not model-authored presentation.
+lands, stripped of demo data and restyled through Laser tokens; the inventory
+in [`ux-elements.md`](ux-elements.md) is updated in the same change. The board,
+the type badge, the key tag and the design canvas are Laser's own domain
+surfaces — not assistant-ui Generative UI and not model-authored presentation.
+Every colour, size, radius, shadow, spacing and duration is a token; the kind
+tokens are editable in Settings like every other token.
 
 Lifecycle review requests appear in the transcript only as a durable, compact
 link to the exact revision and, when an answer is required, through the existing
