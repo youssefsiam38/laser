@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
 **Last updated:** resumed leap integration · code checkpoint: d408e8ea
-**Current focus:** M21 integration and acceptance gaps. T10/T13 and T14 integrated/done; T18/T19 durable evidence and verification lifetime remain. T21 reviewed corrections integrated/done. M26 v0.14.0 is published and verified; M21 remains the next release gate.
+**Current focus:** M21 integration and acceptance gaps. T10/T13 and T14 integrated/done; T18/T19 evidence/lifetime remain, and T2 canonical metadata quota coverage is reopened. T21 reviewed corrections integrated/done. M26 v0.14.0 is published and verified; M21 remains the next release gate.
 
 | Milestone | State |
 | --- | --- |
@@ -37,10 +37,11 @@
 
 **Active owners:**
 - T10/T13: done; reviewed source merged `b4ed1003` + correction `d408e8ea`. Parent450 focused tests and merged full verify/identity pass.
-- T18/T19: checkpoint `29032c86` returned; parent found proof-viewer, bounded-page and scope-fencing gaps. Same owner is correcting them (`run_8ce6b95d`). Verification runtime pin/rekey/settlement plan is approved with D-364 corrections; implementation waits for the proof checkpoint. First full T19 review remains pending.
+- T18/T19: backend/protocol checkpoint `36e163ed` settled; UI source-text reading/fencing corrections continue (`run_8d80dad8`). D-364 verification runtime implementation runs independently (`run_801faae2`). First full T19 review remains pending.
+- T2: canonical metadata/history was not charged to quotas; read-only accounting/migration plan underway (`run_e545e799`).
 - Integrated: T9/T17 mentions, T14 Foundation, T21 interop, image fixture and transcript continuity repairs. Exact ancestry/owners in `STATUS_DETAILED.md`.
 
 **Gate:** integrated Command/mention/transcript **`pnpm verify && pnpm identity:check` pass** (`t-37896cd3`, 141.7s, source `d408e8ea`; clean graphical environment). Current integration branch, **not final main**; excludes pending capture/verification work. Person-owned browser acceptance remains unclaimed (D-342).
 **Published:** v0.14.0 Latest (M26), v0.13.0 (M23), v0.12.0 (M22). Candidate `ac098597`; source CI `35616431166` and release `35616858358` attempt4 pass. Twelve assets/digests/source provenance verified; `docs/leap/m26-release-evidence.json`.
-**Next:** finish capture/verification corrections and full review → T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
+**Next:** close canonical quota gap, finish capture/verification corrections and reviews → T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
 **Other retained blocker:** M19-T7 waits for M19-T6 shared storage ownership. Person-owned M20/visual acceptance must not be inferred from unit tests.
