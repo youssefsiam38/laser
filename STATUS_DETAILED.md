@@ -6204,10 +6204,10 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | --- | --- | --- | --- | --- | --- |
 | M22-T0 | Binding contract and affected-area inventory | done | codex-2026-09-21-model-profiles | `docs/model-profiles.md`; `PLAN.md` M22; D-346; `git diff --check -- docs PLAN.md STATUS.md STATUS_DETAILED.md` | see notes |
 | M22-T1 | Protocol: profiles, assignments, methods, policy | done | claude-2026-09-21-leap | `e692e4b9`; `pnpm -F @lasercode/protocol build && pnpm -F @lasercode/protocol test` (464 passed) | see notes |
-| M22-T2 | Worker settings, migration and seeds | in-progress | claude-2026-09-21-leap | — | see notes |
-| M22-T3 | Worker runtime on profiles | in-progress | claude-2026-09-21-leap | — | see notes |
-| M22-T4 | Agents and naming on profiles | in-progress | claude-2026-09-21-leap | — | see notes |
-| M22-T5 | Host authority and projections | in-progress | claude-2026-09-21-leap | — | see notes |
+| M22-T2 | Worker settings, migration and seeds | done | claude-2026-09-21-leap | `717c7c33`; `pnpm -F @lasercode/worker test` (1211 passed) · `env -i PATH=$PATH HOME=$HOME pnpm -F @lasercode/host test` (1012 passed) | see notes |
+| M22-T3 | Worker runtime on profiles | done | claude-2026-09-21-leap | `ad23a25e`; `pnpm -F @lasercode/worker test` (1211 passed) · `env -i PATH=$PATH HOME=$HOME pnpm -F @lasercode/host test` (1012 passed) | see notes |
+| M22-T4 | Agents and naming on profiles | done | claude-2026-09-21-leap | `c4d4ec48`; `pnpm -F @lasercode/worker test` (1211 passed) · `env -i PATH=$PATH HOME=$HOME pnpm -F @lasercode/host test` (1012 passed) | see notes |
+| M22-T5 | Host authority and projections | done | claude-2026-09-21-leap | `e9ba67c9`; `pnpm -F @lasercode/worker test` (1211 passed) · `env -i PATH=$PATH HOME=$HOME pnpm -F @lasercode/host test` (1012 passed) | see notes |
 | M22-T6 | Settings: Model profiles tab and assignment pickers | in-progress | claude-2026-09-21-leap | — | see notes |
 | M22-T7 | Onboarding profile review | in-progress | claude-2026-09-21-leap | — | see notes |
 | M22-T8 | Composer, status line, fleet and logs | in-progress | claude-2026-09-21-leap | — | see notes |
@@ -6221,6 +6221,7 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 #### M22-T2–T5 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: backend worker session continues from M22-T1 on branch `agents/model-profiles-backend-819b3a73` (worker → host), one commit per task; plan and checkpoints in `docs/leap/m22-backend-plan.md`.
+- 2026-09-21 done, merged at `076b5af7`: T2 `packages/worker/src/profiles/{migrate,seeds}.ts` + settings descriptors, fixtures for a 0.11 file, an empty file and a half-migrated file; T3 activation keyed by profile with snapshot, start-time walk, pin, edit-during-run, legacy `chainKey` history, `SessionDriver.setProfile` on both drivers (seam green), M15-T3/T8 list re-run (76 passed in `test/fallback/*`); T4 agent `profile:` inherit/unknown-profile warning/substitution, one-shot naming on `namingProfileId`; T5 methods routed, migration at host start via new host→worker `models/profiles/migrate` (native reach, settings scope), `models/profiles/seeded` prompt, `SessionSummary.profileId`, delete-with-replacement refused server-side. Worker decisions D-e (migrated lists named "<Model> profile", never "chain"), D-f (naming needs an explicit `namingProfileId`), D-g (catalog projection carries profile) in the plan file. Host tests need a scrubbed environment when run from inside Laser (`pnpm verify` scrubs it itself).
 
 #### M22-T6–T9 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI/CLI worker on branch `agents/model-profiles-ui-and-cli-0d93c72c` based on `e692e4b9`, in parallel with the backend (write sets disjoint: packages/ui, packages/cli); plan and host assumptions in `docs/leap/m22-ui-plan.md`.
