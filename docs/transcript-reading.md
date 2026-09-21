@@ -247,13 +247,22 @@ nothing else in the document a geometry it did not ask for.
 
 ## Live activity and disclosure
 
+Nothing in this surface depends on what kind of conversation it is showing: a
+plain Chat (`sessionKind: "chat"`, no definition, no project) and a project
+session are the same transcript, with the same geometry, the same rows and the
+same reading rules. The one difference is outside the list: a Chat's
+`SessionAgentInfo` has no `agentName`, so the chrome around the transcript has
+no agent label to draw.
+
 - assistant-ui treats a tool's `result` as terminal, even when the message is
   still running. Keep partial output in its UI-only `artifact` channel and
   reserve `result` for `tool_execution_end`; never trade live status for output.
 - The default `GroupedParts` indicator also appears after tool calls. Our
   transcript uses `indicator="empty"`, with neutral waiting copy; actual
-  reasoning and running tools own their row beam. Test with partial output,
-  not only a resultless tool, and verify both aggregate and child status.
+  reasoning and running tools own their row's travelling light (`ActivityBeam`
+  in `thinking-indicator.tsx`, `.activity-beam` in `globals.css`: a drawing,
+  not an assistant). Test with partial output, not only a resultless tool, and
+  verify both aggregate and child status.
 - Batch disclosure changes anchor visible content through the animation.
   Start the animation window after React commits, not at the menu click: a
   large history can take longer to render than the animation itself.

@@ -98,6 +98,17 @@ run row and a notification follow the fleet's rule
 ([`ux-fleet.md`](ux-fleet.md)): the model is what fits in one line, the profile
 is what an expansion adds.
 
+### A conversation that is not about a project
+
+The phone has the same two tabs the desktop has, in the sessions sheet: **Chat**
+first, then **Code**. On the Chat tab the sheet's first row is a full-width
+**New chat** button (the docked desktop panel puts the same verb on a `+` in
+its header); it lands in the same composer as any other session. There is no
+floating launcher, no second conversation surface and nothing hovering over the
+transcript on any width ([`plain-chat.md`](plain-chat.md), D-347). The phone
+has no rail, so agents, settings and logs are reached from the sheet's footer
+instead.
+
 ### Approvals with one hand
 
 A question that blocks the turn is a **card directly above the composer**, on
@@ -139,8 +150,10 @@ results land at the owning composer's caret while typing remains available.
 Recording has no duration cutoff: Stop flushes remaining speech, and the neutral
 × beside it discards untranscribed audio and pending results without sending or
 replacing the draft. A device or browser interruption is reported with a next
-action. Closing the owning composer releases its microphone. Opening Beam
-prepares an empty session immediately, so its bubble has the same microphone.
+action. Closing the owning composer releases its microphone. A phone has one
+composer on screen at a time, so the microphone belongs to whichever
+conversation or landing is in front of you — including a new chat, which
+prepares its empty session immediately and has the same microphone.
 
 ## Limitations, plainly
 

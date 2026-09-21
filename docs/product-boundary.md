@@ -15,7 +15,7 @@ package installation.
 | `packages/pi-goal` | exact upstream goal pin, loader entrypoint and stable state reader |
 | `packages/pi-extension` | in-process translation from supported engine capabilities to the Laser protocol; the model-facing agent harness tools (`start_agent` and siblings, `complete_agent_run`), the child's role block and parent event delivery, from the worker's bridge; long commands as background tasks |
 | Worker | the only Pi imports; feature-to-engine loading and `SessionDriver` mapping; agent execution — per-agent session configuration, child sessions, `.worktrees/` isolation when the parent asks for it, parent events, user-skill discovery, Model Profile storage, validation and one-way migration, the profile walk a session or a naming request runs on |
-| Protocol, host and UI | engine-neutral settings, feature policy, session state and presentation; agent definitions and policy (`agents.json`), the Agents page, the run registry (`agent-runs.json`), sub-sessions in the sidebar, the live map, the profile a surface is assigned and the effective model it records, and the built-in agents' product integrations (Beam's spark and bubble, the Chat tab, Namer's session titles) |
+| Protocol, host and UI | engine-neutral settings, feature policy, session state and presentation; agent definitions and policy (`agents.json`), the Agents page, the run registry (`agent-runs.json`), sub-sessions in the sidebar, the live map, the profile a surface is assigned and the effective model it records, the Chat tab and its plain conversations, and the titles conversations are given |
 
 New backend behavior starts as a reusable Pi-native package, whether local or
 exact-pinned upstream. It must work without the Laser UI. Laser then adds a

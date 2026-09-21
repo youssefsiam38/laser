@@ -88,6 +88,42 @@ fields, and the M13-T100 overlap rule that existed only for the bubble.
 
 ## Breaking change — affected areas
 
+**Status: every row below has landed** — M23-T1 `5aebaee4` (protocol), M23-T2
+`0051d591` (worker), M23-T3 `79404b7c` (host), M23-T4 `72f0a3a1` (UI and CLI),
+M23-T5 `0cd83795` (identity guard) and this document's own commit (docs).
+Four things landed differently from this document and are marked `≠` below:
+
+- `≠` **`scripts/browser-check` Beam fixtures.** Deleted with the UI in
+  M23-T4; the soak creates Chat sessions (`sessionKind: 'chat'`) and no
+  fixture drives a bubble any more.
+- `≠` **`clean-machine.mjs` no longer expects the Beam skill.** Nothing to
+  remove: by the time M23 ran, that script asserted only the `subagents` and
+  `background-work` modules and the adapter's own published skills. The row is
+  satisfied without an edit.
+- `≠` **A Chat's tools.** The "Chat" table above says "every tool the engine
+  offers, plus the harness and background tools". What landed is every engine
+  tool plus the background-work tools; the harness tools are not there, because
+  `start_agent` and its siblings are registered only when `canDelegate()` is
+  true, and that reads `definition.supportsSubagents` — a Chat has no
+  definition. A Chat therefore starts no agents
+  (`packages/pi-extension/src/modules/subagents.ts`,
+  `packages/worker/src/agents/harness.ts`). Deciding whether a plain
+  conversation *should* be able to delegate is a product question, not a
+  documentation one; it is recorded here rather than quietly written either
+  way.
+- `≠` **The identity guard** is check 3 of `scripts/identity/check.mjs`, beside
+  the model-vocabulary patterns rather than as a guard of its own: `\bBeam\b`
+  and `\bNamer\b` are forbidden in person-facing string literals in
+  `packages/{ui,cli,host,worker,desktop}/src`. Identifiers, comments and the
+  startup drawing's plural "beams" are deliberately outside it.
+
+One deliberate leftover, flagged rather than done: `LaserThreadScope` (with its
+store, history window, refusal context and `view-cache` scope accounting) is
+kept and still tested, but has **no mount point** — the removed bubble was its
+only caller. It is a generic "second conversation on screen" seam; removing it
+touches `history-owners.ts`, `view-cache.ts` and `transcript-presentation.ts`
+and is a larger change than this milestone.
+
 | Layer | What changes |
 | --- | --- |
 | Protocol | `AgentKind` → `"custom"` only; `BUILTIN_AGENT_NAMES`, `BuiltinAgentName`, `BeamState`, `NamerState`, `ChatState` removed; `agents/builtin/*`, `agents/beam/choose-model`, `agents/namer/qualify` removed from messages, schemas and policy; `SessionAgentInfo` gains `sessionKind`; instruction-template field catalogue loses the Beam and Namer fields; `startup-screen.ts` "beam" is a drawing, untouched |

@@ -4,9 +4,10 @@ Status: **binding for M13 (D-140).** Agents are first-class in Laser: a
 person defines reusable agents on an Agents page, any session can start other
 agents through one `start_agent` tool, every child is a sub-session the person
 can chat with — in a worktree of its own unless its parent said otherwise — a
-live map shows each top-level session's agent tree, long commands run as
-background tasks, and Beam, Chat and Namer are built-in agents with their own
-product integrations.
+live map shows each top-level session's agent tree, and long commands run as
+background tasks. Every agent on the Agents page is one a person wrote: the
+product ships no agent of its own beyond the seeded, editable `default`
+(D-347, [`plain-chat.md`](plain-chat.md)).
 
 The binding references are
 [`agents-leap/references/original-request.md`](agents-leap/references/original-request.md)
@@ -34,14 +35,14 @@ characters. There is no separate agent id, type or profile name.
 
 | Agents page field | Protocol field | Notes |
 | --- | --- | --- |
-| Name | `name` | Comes from the Markdown filename; lower-case and unique within its scope. A project agent may shadow a global one of the same name. Built-in names (`beam`, `chat`, `namer`), current names and global historical rename aliases are refused |
+| Name | `name` | Comes from the Markdown filename; lower-case and unique within its scope. A project agent may shadow a global one of the same name. Current names, global historical rename aliases and the three names retired in M23 (`RETIRED_AGENT_NAMES`) are refused: “… is a reserved name. Choose another name.” — an agent taking one of them would be dropped again by the rules that drop it from an `allowedAgents` list |
 | Scope | `scope`, `projectCwd`, `path` | `global` lives under `<stateDir>/agents/`; `project` lives under a trusted project's `.laser/agents/`. A project that ships this directory requires the person's trust before its definitions are read; the first definition written through Laser records trust because the person authored it. `projectCwd` is canonical and present only for project agents; the host reports the absolute `path` |
 | Description | `description` | ≤ 300 chars. Answers "when should another agent start this one?" — it is the compact catalog text |
-| Instructions | `instructions`, `engineInstructions`, `excludeCoreInstructions` | The Markdown body, byte-preserved and interpreted as a Handlebars template, answers "how should this agent work?" Every custom agent first gets the shared `packages/worker/src/agents/core-instructions.md` unless `excludeCoreInstructions` is on; built-ins never do. The shipped `default` agent starts with `engineInstructions: true`: Laser's own neutral coding prompt, readable through `agents/engine-instructions`; a person may replace it with their own text |
+| Instructions | `instructions`, `engineInstructions`, `excludeCoreInstructions` | The Markdown body, byte-preserved and interpreted as a Handlebars template, answers "how should this agent work?" Every agent first gets the shared `packages/worker/src/agents/core-instructions.md` unless `excludeCoreInstructions` is on. The shipped `default` agent starts with `engineInstructions: true`: Laser's own neutral coding prompt, readable through `agents/engine-instructions`; a person may replace it with their own text |
 | Model profile | `profileId` | The id of one of the person's Model Profiles ([`model-profiles.md`](model-profiles.md)), or `null` to inherit `defaultProfileId`. A profile id nothing answers to is a warning on the `profile` field, never a refusal: the agent runs on `defaultProfileId`, and the run records the substitution so the fleet row shows it |
 | Thinking | `thinkingLevel` | `null` follows the default |
 | Supports subagents | `supportsSubagents` | When on, the agent gets `start_agent` and its siblings |
-| Agents it can run | `allowedAgents` | Multi-select of custom agents, including another instance of the same definition; never a built-in. Meaningful only with `supportsSubagents` |
+| Agents it can run | `allowedAgents` | Multi-select of the person's agents, including another instance of the same definition. A definition written before M23 that still lists a retired name validates with a warning on that field and runs with the name dropped. Meaningful only with `supportsSubagents` |
 | Scoped skills | `scopedSkills`, `skills` | Off by default: every discovered skill is offered. On: only the listed `AgentSkillRef`s (`name`, `path`, `scope`), chosen from what Laser discovers at definition time (`agents/skills`, listing `<agentDir>/skills` and `~/.agents/skills` as `global`, `<project>/.laser/skills` and `<project>/.agents/skills` as `project` when the project is trusted) |
 | Default | snapshot `defaultAgent` | "Default" only means the agent a new session opens with (the `i` mark beside the toggle says so). The current default cannot be deleted; pick another default first |
 
@@ -63,7 +64,7 @@ Until that rewrite happens the agent runs on `defaultProfileId` with a warning
 on its `profile` field ([`model-profiles.md`](model-profiles.md)).
 
 The Agents page uses Settings' single explicit target. **Global** shows global
-custom definitions plus built-ins and owns the default and harness policy;
+custom definitions and owns the default and harness policy;
 **Project** shows that project's definitions plus read-only Global sources;
 **Effective** shows the resolved catalog and permits no writes. It never borrows
 Code's project or a first project. New definitions capture Global or the exact
@@ -82,8 +83,9 @@ prompt binds the choice to that same unstarted session before delivery, exactly
 once; a started session's identity never changes. After start, the top bar keeps
 the canonical persisted agent visible as a read-only label beside the model. It
 never offers switching and never substitutes tentative state or today's default
-when a historical session has no recorded attribution. Built-ins stay reserved
-for their dedicated product channels and never enter this list.
+when a historical session has no recorded attribution. A plain Chat runs no
+definition at all, so it never appears in this list and never shows an agent
+label (§7).
 
 Policy (`AgentPolicy`, `agents/set-policy`): `maxDepth` (default 3, at most 6)
 and `foregroundCommandSeconds` (default 120, 10–3600).
@@ -106,18 +108,17 @@ snapshot; the Agents page shows a gentle yellow warning and deep-links to the
 exact field. `since` is when the problem was first seen and does not move
 between ticks.
 
-Kinds: `custom` (a person's, including the seeded `default`) and `builtin`
-(Beam, Chat, Namer — visible at the bottom of the Agents page, never deletable,
-never the default and never another agent's child). A person may edit each
-built-in's system instructions and choose the Model Profile it runs on
-(`agents/builtin/set-profile`); restoring instructions drops the override and
-follows the shipped prompt again. All three use the same profile picker, and a
-profile offers only connected models while it is edited (D-145).
-`AgentsSnapshot` carries `builtinInstructions` plus `builtinProfiles` — one
-profile id, or `null`, for each of `beam`, `chat` and `namer`. `null` inherits
-the assignment that matches what the built-in is for: `defaultProfileId` for
-Beam and Chat, `namingProfileId` for Namer. No built-in holds a model of its
-own any more, so none of them needs a suggestion or a benchmark behind it.
+Kinds: `AgentKind` is `custom` and nothing else (D-347). Every definition is a
+person's, including the seeded `default`, which is an ordinary editable
+definition and not a protected one — nothing is synthesised, and one list,
+**Your agents**, holds them all. When that list holds nothing but the shipped
+default, its empty state (`No agents of your own yet`) says what an agent is
+and offers **New agent**, in the column where the new one will appear.
+
+Every agent runs on a Model Profile ([`model-profiles.md`](model-profiles.md)):
+`profileId`, or `null` to follow `defaultProfileId`. A profile offers only
+connected models while it is edited (D-145). There is no second kind of model
+choice anywhere in this family.
 
 ## 2. The harness
 
@@ -569,13 +570,14 @@ A worktree of a project runs in that project's worker: invariant 5 reads a
 
 Every child is a real session with a real file, attributed by its first custom
 entry (`lasercode/agent`). The catalog carries `SessionSummary.agent`
-(`agentName`, `kind`, `subagentName`, `parentPath`, `rootPath`, `runId`,
-`runStatus`), and the sessions sidebar lists a child under its parent —
+(`agentName`, `kind`, `sessionKind`, `subagentName`, `parentPath`, `rootPath`,
+`runId`, `runStatus`), and the sessions sidebar lists a child under its parent —
 D-19's "children never appear in the session list" is superseded. Opening a
 child is the normal chat: the person reads it, sends a message to queue or to
 interrupt, and ends the run through an end-agent action whose optional reason
-reaches the parent. Beam sessions list under a Beam group with its own mark
-rather than a folder; projectless chats live in the Chat tab.
+reaches the parent. Which tab a session lists in is its `sessionKind`, not its
+directory: every `chat` lists in the Chat tab, every `project` session under
+its project in Code. No session row carries a mark for being one or the other.
 
 ## 5. The live map
 
@@ -666,30 +668,62 @@ a run ends only when the agent reports through `complete_agent_run`, a person
 or its parent ends it, or it fails. A project with a run still going is never
 idle, so its worker is never retired underneath it.
 
-## 7. Built-in agents
+## 7. Chat, and how a conversation is named
 
-| Agent | Runs in | Tools | Integration |
-| --- | --- | --- | --- |
-| `beam` | one opaque, persistent directory per session under `<state>/workspaces/beam` | every tool and every user- or project-discovered skill, like any unscoped agent | two ways in (D-143, D-173): every press of the spark at the bottom left beside Settings starts a fresh bubble chat, while earlier Beam sessions remain in Beam's sidebar group; the `+` on that group starts a fresh chat in the window. Opening the bubble immediately creates or reuses an unstarted Beam session without moving the main view (D-183). The sidebar `+` uses the same launcher, reusing that empty session even in its private subdirectory; simultaneous requests allocate once. The bubble's maximize control moves its current chat into the window and selects Code. No other Beam entry point exists |
-| `chat` | one opaque, persistent directory per session under `<state>/workspaces/chat` | every tool, isolated from unrelated Chat sessions | the Chat tab, first in the sidebar before Code; projectless chats |
-| `namer` | the project's own worker | not a session agent | names a new session from its first prompt, on the profile assigned to session naming |
+**Chat is not an agent** (D-347, [`plain-chat.md`](plain-chat.md)). It is a
+session with `sessionKind: "chat"` and no definition at all: the product's
+plain conversation, with nobody's persona in front of it.
 
-The Agents page exposes the effective system instructions for all three.
-Saving writes a durable override; restoring stores `null` so a later release's
-improved shipped prompt takes effect. Beam and Chat apply the effective prompt
-when a session opens. Namer layers it into the session-title request while
-keeping the short-output contract.
+| Property | What it is |
+| --- | --- |
+| Identity | none. No product name, no role paragraph, no hidden coding persona, and no `agentName` on its record or its `SessionAgentInfo` |
+| Instructions | exactly `{{availableTools}}\n\n{{toolGuidelines}}\n\n{{availableSkills}}` — `CHAT_INSTRUCTION_TEMPLATE` in `packages/worker/src/agents/instruction-templates.ts`, a worker constant with no editor and no stored override behind it |
+| Project | none. No project instructions, and no `AGENTS.md`: there is no project |
+| Model | the profile assigned to new conversations (`defaultProfileId`), changeable per session like any session |
+| Runs in | one opaque, persistent directory per session under `<state>/workspaces/chat`; the host creates and owns it, and a session whose folder is gone has it recreated rather than becoming unopenable |
+| Tools | every tool the engine offers, plus the background-work tools (`bash` with `background`, `task_output`, `task_stop`). Not the harness tools: `start_agent` and its siblings need a definition that says `supportsSubagents`, and `canDelegate()` is false for a session that runs no definition, so a Chat starts no agents |
+| Skills | every discovered global skill (a project skill needs a project) |
+| Sidebar | the Chat tab, first, before Code |
 
-Instructions are restricted Handlebars templates (D-175). The editor owns the
-syntax: **Insert field** shows searchable, human-labelled live values and puts
-the chosen field at the caret, so a person never has to type or remember a
-template name. The available fields are scoped to the agent. They cover the
-current product, agent, model, reasoning level and working directory; the live
-tool catalogue and its guidance; project instructions, discovered skills and
-additional instructions; the allowed child-agent catalogue; Beam's state
-locations; and Namer's current naming input. Unknown fields, helpers, blocks
-and malformed templates are refused before saving. At `before_agent_start`
-the worker renders the template from the real session resources, before the
+The compulsory companion additions at `before_agent_start` (the role and goal
+blocks, D-140) belong to agent runs. A Chat is not one, so it receives none of
+them: the rendered prompt is the three fields and nothing else. That is proved
+byte-for-byte rather than asserted — `packages/worker/test/agents/chat-prompt.test.ts`
+runs a real turn and reads the recorded instruction provenance: three regions,
+in that order, the first starting at byte 0, the last ending at the last byte,
+exactly `\n\n` between them, and no span attributed to a definition, a core
+block or an unrecorded writer.
+
+**Three ways in, and they are one verb.** `newChat()` on the shell context
+backs all of them, so there is one implementation and one set of refusals
+("Not connected to the host yet.", "Chat is not ready yet. Try again in a
+moment."):
+
+| Entry point | Where |
+| --- | --- |
+| `+` in the Chat tab | `SessionsPanel`: the docked panel's header button, with the shortcut on its tooltip; in the sheet (tablet and phone) the same verb is a full-width **New chat** row under the tabs |
+| **New chat** in the command palette | `Mod+K`, App group, with its key on the row |
+| `Mod+Shift+N` | anywhere in the window, including from inside the composer — the editable-target guard applies only to the unmodified `[`, `]` and `\` keys. `⇧⌘N` on Apple, `Ctrl+Shift+N` elsewhere, beside `Mod+N` for a new session in the current project, and listed in Settings → Help and shortcuts |
+
+Each one opens an empty Chat with the composer focused and no agent chip; the
+request is `session/new { cwd: workspaces.chat, sessionKind: "chat" }` and an
+already-empty Chat is reused rather than a second one created (reuse keys on
+cwd, agent *and* kind, so a blank Chat and a blank project session never take
+each other over). The Chat tab's empty state is its own designed state: *No
+chats yet — Chats are conversations that are not about a project. Ask
+anything; nothing here touches your code.*
+
+Instructions are restricted Handlebars templates (D-175). There is exactly one
+kind of editable instruction — an agent's — so the catalogue has no target to
+be scoped to (`instructionTemplateFields()` takes no argument). The editor owns
+the syntax: **Insert field** shows searchable, human-labelled live values and
+puts the chosen field at the caret, so a person never has to type or remember a
+template name. The twelve fields cover the current product, agent, model,
+reasoning level and working directory; the live tool catalogue and its
+guidance; project instructions, discovered skills and additional instructions;
+and the allowed child-agent catalogue. Unknown fields, helpers, blocks and
+malformed templates are refused before saving. At `before_agent_start` the
+worker renders the template from the real session resources, before the
 companion adds compulsory role and goal context. The saved template is exact:
 only fields the person inserted expand, with no legacy additions appended.
 
@@ -701,8 +735,8 @@ operating system's picker in the desktop app, a typed path in a browser) and
 the folder becomes a project. Nothing is converted or copied: the session
 keeps its history, its name and its id, and only where it lives changes. The
 host does the move (`pi/session/move { path, cwd } → { path }`) while no
-worker holds the file: it closes the session in the Chat worker when one has
-it open (`pi/session/close`, host → worker only), rewrites the file into the
+worker holds the file: it closes the session in the chat workspace's worker
+when one has it open (`pi/session/close`, host → worker only), rewrites the file into the
 project's session directory with the header's `cwd` set to the project and
 the `lasercode/agent` record replaced in place by the default agent's plain
 top-level record (never appended — the first record wins), renames it into
@@ -711,44 +745,46 @@ caches for both paths, carries the seen mark across so the move does not
 light the row up as unread, and registers the project as Add project would.
 Refused, with the reason a person can act on: a streaming turn (the worker's
 refusal), a live agent run of the session, a child session (its parent's tree
-is one thing), a target that is missing, a file, a built-in workspace or a
-worktree. After the move the Code tab shows the session selected under its
-project, and the transcript is the same transcript.
+is one thing), a target that is missing, a file, the chat workspace itself
+("That folder is where chats are kept, not a project. Choose a project
+folder.") or a worktree. After the move the Code tab shows the session
+selected under its project, and the transcript is the same transcript.
 
 **Skills are discovered, not managed.** Laser ships and writes no skills. It
 discovers a person's global skills and trusted project skills from the roots
 listed in the definition table, then either offers all of them or the subset
-chosen for a scoped agent. Beam is unscoped. Its product-specific knowledge —
-where Laser stores sessions, agents, runs, preferences, projects and logs — is
-part of its editable built-in instructions, not a hidden skill.
+chosen for a scoped agent. A Chat is unscoped and is offered every discovered
+global skill; it ships with none of its own, and there is no product-guidance
+skill behind it.
 
-**Beam runs on a profile**, like everything else that used to choose a model.
-When the first provider is connected, the host prepares the profiles
-(`models/profiles/migrate`) and notifies `models/profiles/seeded` with what
-Laser filled in from the connected models; the UI opens the review step, which
-explains what the profiles are for. A built-in that has made no choice of its
-own takes the matching assignment at that moment — Beam and Chat
-`defaultProfileId`, Namer `namingProfileId` — and a person changes any of them
-in the same picker on the Agents page. Nothing is chosen for a person twice:
-the review is offered once per host run and nothing stays pending afterwards.
+**Every model choice is a profile.** When the first provider is connected, the
+host prepares the profiles (`models/profiles/migrate`) and notifies
+`models/profiles/seeded` with what Laser filled in from the connected models;
+the UI opens the review step, which explains what the profiles are for. A
+surface that has chosen nothing of its own follows the assignment that matches
+what it is for — a Chat and a new project session `defaultProfileId`, a naming
+request `namingProfileId` — and a person changes those in Settings → Providers
+and models. Nothing is chosen for a person twice: the review is offered once
+per host run and nothing stays pending afterwards.
 
-**Namer** (`packages/worker/src/agents/namer.ts`) is a service, never a
-session: one small completion per model with an 8 s ceiling each, and it never
-throws — a name that does not arrive is simply not shown. It accepts a plain
-answer as well as harmless quotes, prefixes, Markdown fences and small JSON
-wrappers, then safely shortens the result instead of rejecting useful wording
-for its packaging. It names a session from its first prompt (25–30 characters,
-`SESSION_NAME_MIN`/`SESSION_NAME_MAX`, quotes and trailing punctuation stripped,
-cut at a word boundary). Its models are the naming profile's, in the person's
-own order: naming is a **one-shot walk** of `namingProfileId`
-([`model-profiles.md`](model-profiles.md) "Runtime"), one model at a time,
-stopping at the first usable title and giving up quietly when the profile is
-exhausted. Only an explicit assignment turns naming on: with neither Namer's own profile nor
-`namingProfileId` set, nothing is named, because falling through to the profile
-new conversations use would spend a person's best model on titles. There is no
-benchmark, no candidate ranking and no qualification step: the ordered list the
-person wrote is the answer, and the qualification method, its stored verdicts
-and the state they lived in are gone with it.
+**Naming a conversation is one function, not an agent**
+(`packages/worker/src/agents/session-naming.ts`, `nameSession`). It has no
+identity, no editable prompt, no state and no session; it appears in no fleet
+row and never throws — a name that does not arrive is simply not shown, and a
+request that cannot start does not run. One small bounded completion per model
+of the naming profile, in the person's own order, with an 8 s ceiling each
+(`NAMING_TIMEOUT_MS`), stopping at the first usable title: a **one-shot walk**
+of `namingProfileId` ([`model-profiles.md`](model-profiles.md) "Runtime"). It
+names a session from its first prompt (25–30 characters,
+`SESSION_NAME_MIN`/`SESSION_NAME_MAX`, quotes and trailing punctuation
+stripped, cut at a word boundary), accepting a plain answer as well as harmless
+quotes, prefixes, Markdown fences and small JSON wrappers and safely shortening
+the result rather than rejecting useful wording for its packaging. Only an
+explicit assignment turns naming on: with no `namingProfileId`, nothing is
+named, because falling through to the profile new conversations use would spend
+a person's best model on titles. There is no benchmark, no candidate ranking
+and no qualification step, and no queue of conversations waiting to be named:
+the ordered list the person wrote is the answer.
 
 ## 8. Persistence
 
@@ -756,16 +792,17 @@ and the state they lived in are gone with it.
 | --- | --- |
 | `<stateDir>/agents/<name>.md` | one global custom definition: YAML frontmatter plus the byte-preserved instructions body. The seeded `default` is global |
 | `<project>/.laser/agents/<name>.md` | one project custom definition. The directory is trust-gated: shipped definitions are read and watched only after the registry lists that canonical project root as trusted; the first definition a person writes through Laser records that trust before creating the file. An untrusted project is neither read nor written. A project definition shadows a same-named global definition for that project |
-| `<stateDir>/agents.json` | version 2 metadata only: `defaultAgent` (always global), policy, revision, durable global rename aliases, and every built-in's instruction override and profile choice. On first load, version 1 definitions migrate to Markdown files after an exact `agents.json.v1.bak` is made; existing Markdown names win |
+| `<stateDir>/agents.json` | version 2 metadata only: `defaultAgent` (always global), policy, revision and durable global rename aliases. The instruction and profile choices the three retired names held before M23 are private legacy state: read once (so the person's naming choice survives the removal) and written back verbatim for one release, so rolling the app back finds them exactly as it left them. On first load, version 1 definitions migrate to Markdown files after an exact `agents.json.v1.bak` is made; existing Markdown names win |
 | `<stateDir>/agent-runs.json` | every `AgentRun` the host has heard of, fed by `agents/run` notifications; terminal runs kept 30 days and at most 500 per project; non-terminal runs are failed on host load and on worker loss |
-| session custom entry `lasercode/agent` (`SESSION_AGENT_ENTRY_TYPE`) | the first custom entry of every agent-started or agent-defined session: `SessionAgentRecord { agentName, kind, subagentName, parentPath, parentSessionId, rootPath, runId, worktree? }` — `worktree` is absent for a child started with `worktree: false`, and that absence is what a reloaded session reads back — so a catalog that only reads files can attribute it |
+| session custom entry `lasercode/agent` (`SESSION_AGENT_ENTRY_TYPE`) | the first custom entry of every agent-started, agent-defined or chat session: `SessionAgentRecord { agentName?, kind, subagentName, parentPath, parentSessionId, rootPath, runId, worktree? }` — `agentName` is absent for a Chat, which runs no definition, and `worktree` is absent for a child started with `worktree: false`, and that absence is what a reloaded session reads back — so a catalog that only reads files can attribute it. A record is never rewritten: one written before M23 keeps whatever it says, and `sessionKindOf` reads its stored kind as the product's `SessionKind` (`chat` → `chat`, anything else → `project`) |
 | session custom entry `lasercode/agent-run` (`SESSION_RUN_ENTRY_TYPE`) | run lifecycle moments in the child session (started, completed, blocked, failed, cancelled); a question is transient and is not written |
 | parent custom message `lasercode/agent-event` (`AGENT_EVENT_MESSAGE_TYPE`) | one message per event the parent received, stored once |
 | `<project>/.worktrees/<slug>` | the child's checkout; `<gitdir>/info/exclude` hides it |
 
 The worker keeps a cache of the definitions (`agents/sync` after
-`pi/worker/status: ready` and on every change) with built-in fallbacks so a
-session opened in the first milliseconds still runs as an agent.
+`pi/worker/status: ready` and on every change) with a fallback `default`
+definition, so a session opened in the first milliseconds still runs as an
+agent.
 
 ## 9. Protocol
 
@@ -783,10 +820,8 @@ Requests (client → host unless noted):
 | `agents/engine-instructions` | `{ cwd }` → `{ text }` (routed by cwd) |
 | `agents/runs/list` | `{ path? }` → `{ runs }` (`path` narrows to that session's tree) |
 | `agents/runs/stop` | `{ runId, reason? }` → `{ run }` (recorded as user-initiated; the parent is told) |
-| `agents/builtin/set-profile` | `{ name, profileId }` → `{ snapshot }` (`name` is `beam`, `chat` or `namer`; `null` inherits the matching assignment — `defaultProfileId` for Beam and Chat, `namingProfileId` for Namer) |
-| `agents/builtin/set-instructions` | `{ name, instructions }` → `{ snapshot }` (`instructions` is the replacement system prompt; `null` restores the shipped prompt) |
 | `agents/sync` | host → worker only; refused from clients |
-| `session/new` | gains `agentName?` (omitted = the default agent) |
+| `session/new` | gains `agentName?` (omitted = the default agent) and `sessionKind?`. `sessionKind: "chat"` starts a plain Chat; it is refused beside an `agentName`, on the field a person would have to change |
 | `pi/session/move` | `{ path, cwd }` → `{ path }` (a Chat session becomes `cwd`'s; the result is where it lives now, M13-T58) |
 | `pi/session/close` | host → worker only; refused from clients (the host lets a worker go of a session before moving its file) |
 
@@ -795,12 +830,18 @@ Notifications (host → client): `agents/updated` (`AgentsSnapshot`),
 `models/profiles/seeded` (`{ profiles }`, the profiles Laser filled in for
 review). `SessionSummary.agent` and `SessionState.agent` carry
 `SessionAgentInfo`; `SessionSummary.profileId` and `SessionState.profile` carry
-the profile a conversation is running on.
+the profile a conversation is running on. `SessionAgentInfo` also carries
+`sessionKind` — the host's answer to "is this a plain conversation?" — and an
+optional `agentName`, absent for a Chat.
+
+There are no `agents/builtin/*` methods: they were removed from the request
+map, the Zod table, the method policy and the round-trip samples, so an older
+client calling one gets an unknown method rather than a refused one.
 
 The profiles themselves are their own family — `models/profiles/list`, `save`,
 `delete`, `migrate`, plus `session/profile/set` and `session/model/pin` — and
 live in [`model-profiles.md`](model-profiles.md); the agents family only names
-the profile each definition and built-in runs on.
+the profile each definition runs on.
 
 Every method has a schema, a round-trip sample and a router owner
 (`packages/protocol/test/schemas.test.ts`, `docs/search-content.md`).
@@ -868,20 +909,29 @@ blockers, not advice.
   settle-without-completion and reload attribution.
 - Background promotion keeps output and exit state.
 - The live map never re-layouts on output updates.
-- Beam has two ways in, and no more: every spark press prepares an unstarted
-  bubble chat immediately without deleting earlier sessions. The sidebar `+`
-  reuses and selects that same empty session, including private workspaces and
-  simultaneous quiet/selecting requests; a started session is never reused.
+- A Chat has no definition and no identity: its whole system prompt is
+  `{{availableTools}}`, `{{toolGuidelines}}`, `{{availableSkills}}`, in that
+  order, with exactly `\n\n` between them and nothing before or after — no core
+  block, no engine prompt, no project instructions, no role or goal block. Test
+  it against the recorded provenance of a real turn, not against a string.
+- The three Chat entry points are one verb: the Chat tab's `+`, the palette's
+  **New chat** and `Mod+Shift+N` each send one `session/new` with
+  `sessionKind: "chat"` and no `agentName`, reuse an already-empty Chat instead
+  of creating a second, and leave the composer focused. A started session is
+  never reused, and a blank Chat and a blank project session never take each
+  other over.
+- The Agents page shows only agents a person wrote. Nothing is synthesised,
+  nothing is undeletable for being the product's, and a session row carries no
+  built-in badge.
 - A project composer's pre-turn custom-agent choice is tentative: choosing,
   changing back or navigating away sends no session/settings request and keeps
   text and attachments in place. Its first prompt binds one chosen identity to
   the same unstarted session and is delivered once across concurrent activation
   and retryable failure; no duplicate is deleted to make the count look right.
-- Dictation belongs to the composer that started it: with the bubble open,
-  two composers are mounted, and a phrase must land where it was spoken. The
-  transcription scope is claimed on the way into recording, never on mount, and
-  a finished phrase is typed into the composer that owns the microphone, never
-  into the first textarea in the document.
+- Dictation belongs to the composer that started it: a phrase must land where
+  it was spoken. The transcription scope is claimed on the way into recording,
+  never on mount, and a finished phrase is typed into the composer that owns
+  the microphone, never into the first textarea in the document.
 - Parent messages have exactly four modes (D-204): `interrupt` (the default)
   cancels the current invocation and its foreground tools/question, fences it,
   then runs first ahead of preserved queued work; `steer` reaches the next

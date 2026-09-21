@@ -196,9 +196,9 @@ arrived, never proof of a deletion. If the child of a deleted root is itself
 the chat being read, its tree is the tree, headed *session deleted*, and the
 line is empty.
 
-**No session open** — a fresh window, only Beam's bubble — is a designed
-state of its own: the column says whose tree it would show and how to get one
-open. It does not say "nothing is running", which would be a claim about the
+**No session open** — a fresh window, or a landing with nothing selected — is a
+designed state of its own: the column says whose tree it would show and how to
+get one open (`fleet-no-session`). It does not say "nothing is running", which would be a claim about the
 project that this column no longer makes.
 
 **Clear (D-154) is one mark per viewer, applied to what is shown.** Pressing

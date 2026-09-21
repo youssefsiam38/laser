@@ -71,7 +71,7 @@ Simple choices first, depth behind a disclosure.
 
 | Control | Choices |
 | --- | --- |
-| Theme | A gallery of presets, each a live swatch card. Default is the Laser brand pair: black, warm white and beam green in dark mode; warm white, black and an accessible beam-green tone in light mode |
+| Theme | A gallery of presets, each a live swatch card. Default is the Laser brand pair: black, warm white and the mark's green in dark mode; warm white, black and an accessible green tone in light mode |
 | Accent | A hue row; picking one re-derives `--live` and its on-colour for both bases |
 | Attention hue | Separate from accent, because "needs you" must never be the same colour as "running" |
 | Interface font | A curated list, each rendered in itself so the choice is visible |
@@ -86,6 +86,24 @@ Simple choices first, depth behind a disclosure.
 
 Every change previews live on the real app behind the settings surface. There
 is a Reset for each group and one for everything.
+
+**A removed surface leaves no token behind.** The theme data
+(`packages/ui/src/theme/presets.ts`) is semantic tokens, fonts, density,
+radius, contrast and motion, and nothing in it is named after a surface: when
+the floating assistant went (D-347, [`plain-chat.md`](plain-chat.md)) there was
+no token family to delete, only preset taglines that had borrowed its name for
+the brand green. They now read *the mark's green*, *green* and *an accessible
+green tone*, which is what the colour always was: `ACCENT_HUES.green` through
+`--live`, the same token every running state uses.
+
+Two *drawings* keep the word "beam" in `globals.css`, and both are light rather
+than an assistant. The startup restoration screen's rails carry layer-3
+component tokens — `--startup-beam-duration` (`calc(var(--motion-morph) * 7)`),
+`--startup-beam-width`, `--startup-beam-track-opacity` — in the block pinned to
+the startup drawing the protocol owns. `.activity-beam`, the travelling light
+under a running tool row, declares no token of its own and mixes `--live` with
+`--motion-slow` and `--motion-ease` directly. Both follow the person's accent
+and motion settings, and neither is person-visible copy.
 
 ## Fonts
 

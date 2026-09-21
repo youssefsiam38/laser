@@ -22,7 +22,8 @@
 │  ui-bridge (ExtensionUIContext → pi/ui/*)                   │
 │  engine adapter + Laser-owned feature loader                 │
 │  agent harness: child sessions, .worktrees/, timeouts,     │
-│  parent events; Beam; Namer; the profile walk (agents.md)  │
+│  parent events; the chat prompt; session naming;           │
+│  the profile walk (agents.md)                              │
 │  loads packages/pi-extension into the session:             │
 │    one extension, modules/{provider-log,subagents,         │
 │    background-work,transcribe,goal,...} activated          │
@@ -103,8 +104,9 @@ ACP-inspired JSON-RPC:
   package installation is not a Laser capability.
 - New product capabilities use engine-neutral methods: `feature/list`,
   `feature/set`, `session/goal/get`, `session/goal/action`, and the `agents/*`
-  family (definitions, policy, runs, Beam and Namer while they exist;
-  `session/new` takes an `agentName`) with the `agents/updated`, `agents/run`
+  family (definitions, policy, runs; `session/new` takes an `agentName`, or
+  `sessionKind: "chat"` for a plain conversation that runs no definition — the
+  two are refused together) with the `agents/updated`, `agents/run`
   and `agents/event` notifications — see [`agents.md`](agents.md). Model
   routing belongs to the same family: `models/profiles/list`, `save`, `delete`
   and `migrate` own the person's Model Profiles, `session/profile/set` moves
@@ -198,19 +200,21 @@ in-memory engine overrides.
 - `<Laser data>/state/agents/*.md`: global custom agent definitions; project
   definitions live in `<project>/.laser/agents/*.md`.
   `<Laser data>/state/agents.json` keeps the default agent, durable rename
-  aliases, the policy and each built-in agent's instruction/model choices.
+  aliases and the policy.
   `<Laser data>/state/agent-runs.json`:
   every agent run the host has heard of, fed by worker `agents/run`
   notifications ([`agents.md`](agents.md) §8).
-- `<Laser data>/state/workspaces/beam` and `.../chat`: containers whose opaque,
-  persistent child directories give every Beam and Chat session its own workspace
-  of the projectless built-in agents; not projects. They live under the state
-  directory the host creates and owns, so a sandboxed or relocated state
-  directory keeps its workspaces with it, and a Beam or Chat session whose
-  folder is gone has it recreated instead of becoming unopenable.
+- `<Laser data>/state/workspaces/chat`: the container whose opaque, persistent
+  child directories give every plain Chat conversation its own workspace; not a
+  project. It lives under the state directory the host creates and owns, so a
+  sandboxed or relocated state directory keeps its workspaces with it, and a
+  Chat whose folder is gone has it recreated instead of becoming unopenable.
+  A conversation that ran in the retired sibling directory before M23 is moved
+  into `chat` at host start, keeps its history, and is still recognised as a
+  chat by its own unrewritten session header if the move could not happen.
 - Internal agent/state storage is never a project. Project add, session create,
-  session move and worker startup enforce this; only designated Beam/Chat
-  workspaces and the projectless Settings service may start internal workers.
+  session move and worker startup enforce this; only the chat workspace and the
+  projectless Settings service may start internal workers.
   Invalid storage-root transcripts are omitted from normal session/search
   navigation and refused on load, without rewriting or reclassifying history.
 - Worker processes start in their assigned cwd. A persisted-session load requires

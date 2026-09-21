@@ -326,11 +326,10 @@ bounded, admission-gated, and never logged or exported.
 | --- | --- |
 | `destination` | the remembered tab and code destination |
 | `sessions`, `project` | the last session per project, and the last project |
-| `beam-session` | the Beam chat this device was in |
 | `archived`, `session-groups`, `session-pins`, `session-folds` | client-local list state, all of it session paths or project directories |
 | `activity-detail`, `activity-disclosure` | per-session disclosure choices, each one bounded |
 | `fleet-cleared` | this viewer's "I have read these" mark |
-| `drafts` | **content**: unsent composer text, per session and per landing |
+| `drafts` | **content**: unsent composer text, one entry per session path and one per landing — the Chat landing and each project landing. One conversation is on screen at a time, so a draft belongs to the surface it was typed on and there is no second composer to hand it to |
 | `descriptor` | the contract/capabilities/cache fingerprint this namespace was written under |
 
 Environment-neutral values stay outside the namespace, and they are the only
@@ -342,8 +341,10 @@ machine, which is the whole test.
 ### 7.2 Purged, never adopted
 
 The pre-environment keys (`laser-draft:<path>`, `laser-archived`,
-`laser-session`, `laser-project`, `laser-session-tab-last`, `laser-beam-session`,
-`laser-session-groups`, `laser-session-pins`, `laser-session-folds`,
+`laser-session`, `laser-project`, `laser-session-tab-last`,
+`laser-beam-session` (written by a surface this version does not have; purged
+all the same, because a key nothing reads is exactly the orphan this list is
+for), `laser-session-groups`, `laser-session-pins`, `laser-session-folds`,
 `laser-activity-detail:<path>`, `laser-activity-disclosure-overrides`,
 `laser-fleet-cleared`, and the dead pre-M2 `laser-projects` list) recorded
 paths and content without recording which environment they came from. Handing
@@ -412,7 +413,7 @@ authority.
 
 The in-memory half: the reducer drops sessions, open transcripts, loads,
 workers, toasts, agent runs and background tasks; the module-level stores
-(fleet mark, Beam session, collapsed groups and pins, folds, archive) follow
+(fleet mark, collapsed groups and pins, folds, archive) follow
 the device store's own lifecycle and re-read the newly opened namespace, so an
 environment a person comes back to still remembers what it knew; and the
 client's attachment/resume map is dropped **synchronously**, before the
