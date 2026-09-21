@@ -378,7 +378,12 @@ describe("a full budget", () => {
     const data = refused.data as ProjectWorkQuotaRefusal;
     expect(data.refused).toBe("quota");
     expect(data.scope).toBe("project");
-    expect(data.recovery).toContain("Export or delete");
+    expect(data.recovery).toContain("Export or permanently delete");
+    // Archiving keeps every byte of an item's history, so the copy must never
+    // offer it as a way to make room (M21-T2, D-365).
+    expect(data.recovery).toContain("Archiving an item hides it and keeps its history");
+    // A count ceiling is a count. This one is bytes, and says so by omission.
+    expect(data.measure).toBeUndefined();
     expect(data.limitBytes).toBe(4096);
     expect(refused.message).toContain("size limit");
     // Nothing canonical was evicted to make room.

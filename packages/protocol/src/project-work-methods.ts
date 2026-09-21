@@ -143,7 +143,15 @@ export interface ProjectWorkConflict {
   expectedRevisionId: string;
 }
 
-/** The data a refused durable write carries at a quota cap. */
+/**
+ * The data a refused durable write carries at a quota cap.
+ *
+ * `usedBytes` and `limitBytes` are always bytes and only ever bytes. A store
+ * also refuses at a **count** ceiling — canonical records kept, or items in a
+ * project — and says so through `measure` with its own `usedCount`/
+ * `limitCount` pair, so a client never has to read a number of rows as a
+ * number of bytes (M21-T2, D-365).
+ */
 export interface ProjectWorkQuotaRefusal {
   refused: "quota";
   scope: "project" | "global";
@@ -151,6 +159,11 @@ export interface ProjectWorkQuotaRefusal {
   recovery: string;
   usedBytes: number;
   limitBytes: number;
+  /** Which ceiling was reached. Absent means the byte one, as it always did. */
+  measure?: "bytes" | "records" | "entities";
+  /** The count that was reached, when `measure` is not `bytes`. Never bytes. */
+  usedCount?: number;
+  limitCount?: number;
 }
 
 // ---------------------------------------------------------------------------

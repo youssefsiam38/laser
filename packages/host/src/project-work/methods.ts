@@ -1253,6 +1253,9 @@ export function toProtocolError(error: unknown): unknown {
       recovery: error.recovery,
       usedBytes: error.usedBytes,
       limitBytes: error.limitBytes,
+      ...(error.measure === "bytes"
+        ? {}
+        : { measure: error.measure, ...(error.usedCount !== undefined ? { usedCount: error.usedCount } : {}), ...(error.limitCount !== undefined ? { limitCount: error.limitCount } : {}) }),
     } satisfies ProjectWorkQuotaRefusal);
   }
   if (error instanceof ProjectWorkRefusedError) {
