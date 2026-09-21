@@ -1206,6 +1206,10 @@ export class WorkerServer {
         const providers = await this.modelCatalog().providers().catch(() => undefined);
         const report = await migrateModelProfiles(this.settings(), {
           at: new Date().toISOString(),
+          // The host's own pre-M22 choices: each built-in's model and each
+          // agent file's `model:`. Only this process writes the settings file,
+          // so they are resolved to profiles here, in the same write.
+          ...(req.params.legacyChoices ? { legacyChoices: req.params.legacyChoices } : {}),
           ...(catalog ? { models: catalog.models } : {}),
           ...(providers
             ? { configuredProviders: new Set(providers.providers.filter((provider) => provider.configured).map((provider) => provider.id)) }

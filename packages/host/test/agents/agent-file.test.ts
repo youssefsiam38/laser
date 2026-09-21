@@ -68,7 +68,6 @@ describe("agent definition Markdown files", () => {
     ["broken YAML", "---\n[broken\n---\nDo it.", "Fix the YAML frontmatter"],
     ["duplicate key", "---\ndescription: one\ndescription: two\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.", "Fix the YAML frontmatter"],
     ["a profile that is not an id", "---\ndescription: x\nprofile: Balanced\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.", "the id of one of your model profiles"],
-    ["a model where a profile belongs", "---\ndescription: x\nmodel: anthropic/claude\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.", "unknown frontmatter field"],
     ["wrong scalar type", "---\ndescription: 3\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.", "description a string"],
     ["wrong list", "---\ndescription: x\nallowedAgents: nope\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.", "allowedAgents a list"],
     ["wrong skill", "---\ndescription: x\nskills:\n  - name: one\n    path: /x\n    scope: elsewhere\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.", "skills[0]"],
@@ -78,6 +77,26 @@ describe("agent definition Markdown files", () => {
     ["bad dates", "---\ndescription: x\ncreatedAt: today\nupdatedAt: later\n---\nDo it.", "createdAt"],
   ])("reports %s in plain language", (_label, text, expected) => {
     expect(parseAgentFile(text, "reviewer").issues?.join(" ")).toContain(expected);
+  });
+
+  it("reads a file written before Model Profiles instead of breaking it", () => {
+    // `model:` is migratable input, not an unknown field: the migration
+    // rewrites it to `profile:` once, and until then the agent loads and runs
+    // on the default (`docs/model-profiles.md`, "Migration"; D-k).
+    const text = "---\ndescription: x\nmodel: anthropic/claude-opus-4\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.";
+    const parsed = parseAgentFile(text, "reviewer");
+    expect(parsed.issues).toBeUndefined();
+    expect(parsed.definition?.profileId).toBeNull();
+    expect(parsed.legacyModel).toEqual({ provider: "anthropic", id: "claude-opus-4" });
+
+    // Anything that is not a `provider/id` is simply not a model choice this
+    // can carry forward — and still never stops the file from loading.
+    const odd = parseAgentFile(text.replace("model: anthropic/claude-opus-4", "model: 3"), "reviewer");
+    expect(odd.issues).toBeUndefined();
+    expect(odd.legacyModel).toBeUndefined();
+
+    // And the rewrite drops the field: serializing never writes it back.
+    expect(serializeAgentFile(parsed.definition!)).not.toContain("model:");
   });
 
   it("warns when a frontmatter name disagrees and always trusts the filename", () => {

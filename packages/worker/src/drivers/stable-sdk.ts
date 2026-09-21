@@ -591,6 +591,11 @@ export class StableSdkDriver implements SessionDriver {
     this.extensionAdmission.setAfterNativeTurn(() => this.settleFallback());
     this.fallback.restore(this.session().sessionManager.getEntries());
     this.fallback.activateIfUnset();
+    // A session starts on the first model of its profile it can actually use.
+    // Without this the first prompt would fail once on a model this machine
+    // has no credential for, and the move would read as an ordinary failure
+    // rather than the start it is (`docs/model-profiles.md`, "Runtime").
+    await this.walkProfileStart();
     return this.state();
   }
 
@@ -824,6 +829,15 @@ export class StableSdkDriver implements SessionDriver {
           ? (this.state().thinkingLevel ?? options.thinkingLevel)
           : hasModelIntent ? null : undefined,
       });
+      // The accepted agent may bring its own profile. Re-anchor to it and walk
+      // it here, inside the attempt's transaction: what is written is kept by
+      // acceptance and discarded by a rollback, and the runtime the first
+      // prompt meets is already on a model it can reach. A named model is a
+      // pin, and a pin has nothing to walk.
+      if (!options.model) {
+        this.fallback?.activateForPreparedSelection();
+        await this.walkProfileStart();
+      }
     } catch (error) {
       // Async replacement may have been cancelled/disposed and even followed by
       // another attempt. Never let stale completion restore the newer owner.

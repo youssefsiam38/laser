@@ -6,10 +6,22 @@ import {
   isModelProfileId,
   type AgentDefinition,
   type AgentSkillRef,
+  type ModelIdentity,
 } from "@lasercode/protocol";
 import { parseDocument, stringify } from "yaml";
 
-export type AgentFileParseResult = { definition: AgentDefinition; issues?: never } | { definition?: never; issues: string[] };
+export type AgentFileParseResult =
+  | {
+      definition: AgentDefinition;
+      /**
+       * The model a file written before Model Profiles still names. The
+       * migration turns it into `profile:` once; until it does, the agent
+       * runs on the profile new conversations use.
+       */
+      legacyModel?: ModelIdentity;
+      issues?: never;
+    }
+  | { definition?: never; legacyModel?: never; issues: string[] };
 
 const FRONTMATTER_KEYS = new Set([
   "name",
@@ -25,6 +37,16 @@ const FRONTMATTER_KEYS = new Set([
   "createdAt",
   "updatedAt",
 ]);
+/**
+ * Fields this format no longer writes but still reads.
+ *
+ * `model:` is what every agent file carried before Model Profiles. It is
+ * migratable input, never an error: the one-way migration rewrites it to
+ * `profile:` (`docs/model-profiles.md`, "Migration"), and a file that still
+ * has one afterwards loads and runs on the default with a warning — a person's
+ * own file is never made unreadable by a format change.
+ */
+const LEGACY_FRONTMATTER_KEYS = new Set(["model"]);
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /** Parse one definition file. Its identity always comes from `name`, the filename stem. */
@@ -50,7 +72,9 @@ export function parseAgentFile(text: string, name: string, fallbackTimestamp = n
   }
   if (!isRecord(value)) return { issues: ["Make the YAML frontmatter a mapping of field names to values."] };
   for (const key of Object.keys(value)) {
-    if (!FRONTMATTER_KEYS.has(key)) issues.push(`Remove the unknown frontmatter field “${key}”.`);
+    if (!FRONTMATTER_KEYS.has(key) && !LEGACY_FRONTMATTER_KEYS.has(key)) {
+      issues.push(`Remove the unknown frontmatter field “${key}”.`);
+    }
   }
   if (value.name !== undefined && value.name !== name) {
     issues.push(`Remove the name field or change it to “${name}”; the filename is the agent name.`);
@@ -59,6 +83,7 @@ export function parseAgentFile(text: string, name: string, fallbackTimestamp = n
   const description = readString(value, "description", "description", issues, "");
   if (description.length > AGENT_DESCRIPTION_MAX) issues.push(`Shorten description to at most ${AGENT_DESCRIPTION_MAX} characters.`);
   const profileId = readProfile(value.profile, issues);
+  const legacyModel = readLegacyModel(value.model);
   const thinkingLevel = readThinkingLevel(value.thinkingLevel, issues);
   const supportsSubagents = readBoolean(value, "supportsSubagents", issues);
   const allowedAgents = readStringList(value.allowedAgents, "allowedAgents", issues);
@@ -87,6 +112,7 @@ export function parseAgentFile(text: string, name: string, fallbackTimestamp = n
   if (issues.length > 0) return { issues };
 
   return {
+    ...(legacyModel ? { legacyModel } : {}),
     definition: {
       name,
       kind: "custom",
@@ -182,6 +208,20 @@ function readProfile(value: unknown, issues: string[]): string | null {
     return null;
   }
   return value.trim();
+}
+
+/**
+ * The pre-M22 `model: provider/id`, read for the migration alone.
+ *
+ * Anything else under that key is simply not a model choice this can carry
+ * forward; it never fails the parse, because a field this format no longer
+ * writes must not stop a person's agent from loading.
+ */
+function readLegacyModel(value: unknown): ModelIdentity | undefined {
+  if (typeof value !== "string") return undefined;
+  const slash = value.indexOf("/");
+  if (slash <= 0 || slash === value.length - 1) return undefined;
+  return { provider: value.slice(0, slash).trim(), id: value.slice(slash + 1).trim() };
 }
 
 function readThinkingLevel(value: unknown, issues: string[]): AgentDefinition["thinkingLevel"] {

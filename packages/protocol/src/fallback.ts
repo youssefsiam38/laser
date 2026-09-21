@@ -557,6 +557,25 @@ export const FALLBACK_DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
 /** The file the one-way migration writes its preview under, in the state directory. */
 export const MODEL_PROFILE_MIGRATION_RECORD = "model-profiles-migration.json";
 
+/**
+ * One model a pre-M22 surface was set to, on its way to becoming a profile.
+ *
+ * The host holds these — a built-in agent's model choice, an agent file's
+ * `model:` field — and only the worker may write the global settings file, so
+ * they travel with the migration request and come back resolved to profile
+ * ids (`docs/model-profiles.md`, "Migration").
+ */
+export interface LegacyModelChoice {
+  /** The caller's own key for this choice: a built-in's name, a file path. */
+  key: string;
+  /** What a profile created for it is named after: the built-in, or the agent. */
+  label: string;
+  model: ModelIdentity;
+}
+
+/** Enough for every built-in and every definition a person could plausibly own. */
+export const MAX_LEGACY_MODEL_CHOICES = 500;
+
 /** The settings half of the migration: what the worker wrote, and why. */
 export interface ModelProfileMigrationReport {
   /**
@@ -569,6 +588,13 @@ export interface ModelProfileMigrationReport {
   assignments: ProfileAssignments;
   /** One sentence per thing it did, for the preview a person reads. */
   notes: string[];
+  /**
+   * Each {@link LegacyModelChoice} key mapped to the profile it became — the
+   * one that already preferred that model, or the one created for it. Present
+   * whether or not anything was written: a second run resolves the same keys
+   * to the same profiles and writes nothing.
+   */
+  resolved?: Record<string, string>;
 }
 
 /** The whole preview record, written once by the authority that owns the state directory. */
@@ -576,9 +602,13 @@ export interface ModelProfileMigrationRecord {
   version: 1;
   at: string;
   settings: ModelProfileMigrationReport;
-  /** Built-in agents whose model choice became a profile id. */
+  /**
+   * Built-in agents whose model choice became a profile id. `from` is the
+   * model they were on, written as `provider/id`; a built-in that had no
+   * choice of its own is not listed at all.
+   */
   builtins?: Array<{ name: string; from: string | null; to: string | null }>;
-  /** Definition files whose `model:` became `profile:`. */
+  /** Definition files whose `model:` became `profile:`. Only files actually rewritten. */
   agentFiles?: Array<{ path: string; from: string | null; to: string | null; note?: string }>;
 }
 
@@ -619,7 +649,10 @@ declare module "./messages.js" {
      * person reviews is written by the authority that owns the state
      * directory. Idempotent — a second call reports `ran: false`.
      */
-    "models/profiles/migrate": { params: { cwd: string }; result: { report: ModelProfileMigrationReport } };
+    "models/profiles/migrate": {
+      params: { cwd: string; legacyChoices?: LegacyModelChoice[] };
+      result: { report: ModelProfileMigrationReport };
+    };
     /** Re-anchor one session to a profile: it continues on that profile's first model. */
     "session/profile/set": { params: { path: string; profileId: string }; result: { state: SessionState } };
     /**

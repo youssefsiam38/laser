@@ -8,7 +8,7 @@
  * involved. The worker is the only writer of the settings file, so what it
  * answers is what the host has to believe.
  */
-import { PRODUCT_NAME, type AgentsSnapshot } from "@lasercode/protocol";
+import { GLOBAL_AGENTS_DIR_NAME, PRODUCT_NAME, type AgentsSnapshot } from "@lasercode/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,12 +34,48 @@ const MIGRATION_REPORT = {
  * method it saw. `configured` says whether the stub provider has credentials;
  * with `loginAfter` set it connects one and announces it, the way a sign-in
  * through the UI does.
+ *
+ * `models/profiles/migrate` answers the way the real planner does: a legacy
+ * choice whose model already begins a profile resolves to that profile, and
+ * anything else gets one created for it. The planner's own rules are proven in
+ * `packages/worker/test/profiles/migrate.test.ts`; what matters here is that
+ * the host offers its choices and applies the answer.
  */
-function fakeWorker(options: { log: string; configured: boolean; loginAfter?: string }): string {
+function fakeWorker(options: { log: string; configured: boolean; loginAfter?: string; choicesLog?: string; ranMarker?: string }): string {
   return `
 import { Socket } from "node:net";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 const LOG = ${JSON.stringify(options.log)};
+const CHOICES_LOG = ${JSON.stringify(options.choicesLog ?? null)};
+const RAN_MARKER = ${JSON.stringify(options.ranMarker ?? null)};
+const REPORT = ${JSON.stringify(MIGRATION_REPORT)};
+
+/** The planner's find-or-create rule, in the small: same key, same answer. */
+function migrate(params) {
+  const report = JSON.parse(JSON.stringify(REPORT));
+  const choices = (params && params.legacyChoices) || [];
+  if (CHOICES_LOG) writeFileSync(CHOICES_LOG, JSON.stringify(choices));
+  const resolved = {};
+  for (const choice of choices) {
+    const key = (choice.model.provider + "/" + choice.model.id).toLowerCase();
+    const existing = report.profiles.find((profile) => (profile.models[0].provider + "/" + profile.models[0].id).toLowerCase() === key);
+    resolved[choice.key] = existing ? existing.id : createdIdFor(choice);
+  }
+  report.resolved = resolved;
+  // A settings file that already says all of this is not written again.
+  if (RAN_MARKER) {
+    report.ran = !existsSync(RAN_MARKER);
+    writeFileSync(RAN_MARKER, "done");
+  }
+  return report;
+}
+
+/** Deterministic, so a second host start resolves the same key to the same profile. */
+function createdIdFor(choice) {
+  const slug = (choice.model.provider + choice.model.id).replace(/[^0-9A-Za-z]/g, "").slice(0, 20);
+  return "mp_" + slug.padEnd(20, "0");
+}
+
 const LOGIN_AFTER = ${JSON.stringify(options.loginAfter ?? null)};
 let configured = ${options.configured ? "true" : "false"};
 const cwd = process.argv[process.argv.indexOf("--cwd") + 1];
@@ -59,7 +95,7 @@ socket.on("data", (chunk) => {
     appendFileSync(LOG, req.method + "\\n");
     let result = { ok: true };
     if (req.method === "pi/providers/list") result = { providers: [{ id: "stub", name: "Stub", configured, methods: [] }] };
-    else if (req.method === "models/profiles/migrate") result = { report: ${JSON.stringify(MIGRATION_REPORT)} };
+    else if (req.method === "models/profiles/migrate") result = { report: migrate(req.params) };
     else if (req.method === "agents/skills") result = { skills: [], roots: [] };
     send({ jsonrpc: "2.0", id: req.id, result });
     if (LOGIN_AFTER && req.method === LOGIN_AFTER) {
@@ -173,7 +209,10 @@ describe("the model-profile migration at host start", () => {
     expect(record.version).toBe(1);
     expect(record.settings.ran).toBe(true);
     expect(record.settings.notes.join(" ")).toContain("Balanced");
-    expect(record.builtins?.some((entry) => entry.name === "namer")).toBe(true);
+    // Nothing on this machine chose a model before profiles existed, so the
+    // record claims no conversion: it says what happened, never what a
+    // built-in ended up on (B1).
+    expect(record.builtins).toBeUndefined();
   });
 
   it("offers the seeded profiles for review when a provider is connected, once", async () => {
@@ -184,6 +223,86 @@ describe("the model-profile migration at host start", () => {
     // The seeded set is offered, never applied silently.
     expect(c.notifications("models/profiles/seeded")).toHaveLength(1);
     expect(c.notifications("models/profiles/seeded")[0]).toMatchObject({ profiles: [{ name: "Balanced" }, { name: "Fast" }] });
+  });
+
+  it("turns the built-ins' models and an agent file's model into profiles, once", async () => {
+    // What a machine upgrading from the previous generation actually holds:
+    // built-in model choices in `agents.json` and a definition file that still
+    // says `model:` (`docs/model-profiles.md`, "Migration"; B1/B2).
+    writeFileSync(join(base, "state", "agents.json"), JSON.stringify({
+      version: 2,
+      revision: 3,
+      defaultAgent: "default",
+      beam: { model: { provider: "stub", id: "stub-1" }, suggested: null, needsChoice: false },
+      chat: { model: null },
+      namer: { status: "ready", model: { provider: "stub", id: "stub-old" }, candidates: [] },
+    }));
+    mkdirSync(join(base, "state", GLOBAL_AGENTS_DIR_NAME), { recursive: true });
+    const reviewer = join(base, "state", GLOBAL_AGENTS_DIR_NAME, "reviewer.md");
+    writeFileSync(reviewer, [
+      "---",
+      "description: reviews changes",
+      "model: stub/stub-1",
+      "---",
+      "Act as reviewer.",
+      "",
+    ].join("\n"));
+    const choicesLog = join(base, "choices.json");
+    const ranMarker = join(base, "migrated.marker");
+    writeFileSync(workerMain, fakeWorker({ log, configured: true, choicesLog, ranMarker }));
+
+    const c = await startHost();
+    await c.request("agents/skills", { cwd: project });
+    await vi.waitFor(async () => expect((await builtinProfilesOf(c)).beam).toBe(BALANCED), { timeout: 10_000, interval: 25 });
+
+    // Beam was on a model a profile already prefers; Namer's model was not, so
+    // one profile was created for it. Chat never chose, so it takes the
+    // assignment like any built-in with nothing of its own.
+    const profiles = await builtinProfilesOf(c);
+    expect(profiles.beam).toBe(BALANCED);
+    expect(profiles.chat).toBe(BALANCED);
+    expect(profiles.namer).toMatch(/^mp_stubstubold/);
+
+    // The file was rewritten exactly once, and only the field changed.
+    await vi.waitFor(() => expect(readFileSync(reviewer, "utf8")).toContain(`profile: ${BALANCED}`), { timeout: 10_000, interval: 25 });
+    const rewritten = readFileSync(reviewer, "utf8");
+    expect(rewritten).not.toContain("model:");
+    expect(rewritten.endsWith("Act as reviewer.\n")).toBe(true);
+
+    // Every choice this host held was offered to the only writer there is.
+    const offered = JSON.parse(readFileSync(choicesLog, "utf8")) as Array<{ key: string; label: string; model: { provider: string; id: string } }>;
+    expect(offered).toEqual(expect.arrayContaining([
+      { key: "builtin:beam", label: "Beam", model: { provider: "stub", id: "stub-1" } },
+      { key: "builtin:namer", label: "Namer", model: { provider: "stub", id: "stub-old" } },
+      { key: reviewer, label: "reviewer", model: { provider: "stub", id: "stub-1" } },
+    ]));
+
+    // The preview record is evidence: real `from` values, and only the things
+    // that were actually converted.
+    const recordPath = join(base, "state", "model-profiles-migration.json");
+    const record = JSON.parse(readFileSync(recordPath, "utf8")) as {
+      builtins?: Array<{ name: string; from: string | null; to: string | null }>;
+      agentFiles?: Array<{ path: string; from: string | null; to: string | null }>;
+    };
+    expect(record.builtins).toEqual([
+      { name: "beam", from: "stub/stub-1", to: BALANCED },
+      expect.objectContaining({ name: "namer", from: "stub/stub-old" }),
+    ]);
+    expect(record.agentFiles).toEqual([{ path: reviewer, from: "stub/stub-1", to: BALANCED }]);
+
+    // A second start converts nothing: the file is left alone and the record
+    // of the run that did the work is not overwritten with an empty one.
+    const recordBefore = readFileSync(recordPath, "utf8");
+    client?.close();
+    await host?.close();
+    host = undefined;
+    const next = await startHost();
+    await next.request("agents/skills", { cwd: project });
+    await vi.waitFor(() => expect(methodsSeen().filter((m) => m === "models/profiles/migrate")).toHaveLength(2), { timeout: 10_000, interval: 25 });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(readFileSync(reviewer, "utf8")).toBe(rewritten);
+    expect(readFileSync(recordPath, "utf8")).toBe(recordBefore);
+    expect(JSON.parse(readFileSync(choicesLog, "utf8"))).toEqual([]);
   });
 
   it("never overrules a built-in profile a person already chose", async () => {

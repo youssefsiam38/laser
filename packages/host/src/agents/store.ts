@@ -18,6 +18,7 @@ import {
   AGENT_MAX_DEPTH_LIMIT,
   AGENT_INSTRUCTIONS_MAX,
   AGENT_NAME_PATTERN,
+  BUILTIN_AGENT_NAMES,
   DEFAULT_AGENT_NAME,
   ErrorCodes,
   FOREGROUND_COMMAND_SECONDS_DEFAULT,
@@ -34,12 +35,15 @@ import {
   type AgentIssue,
   type AgentLocation,
   isModelProfileId,
+  PROFILE_NAME_MAX,
   type AgentPolicy,
   type AgentWarning,
   type AgentsSnapshot,
   type BuiltinAgentName,
   type BuiltinInstructionOverrides,
   type BuiltinProfiles,
+  type LegacyModelChoice,
+  type ModelIdentity,
 } from "@lasercode/protocol";
 import { serializeAgentFile } from "./agent-file.js";
 import {
@@ -83,7 +87,15 @@ interface StoredV2 extends Omit<StoredV1, "version" | "agents"> {
   version: 2;
 }
 
-type Stored = Partial<Omit<StoredV1, "version"> & { version: 1 | 2 }>;
+/**
+ * The built-in model choices the previous generation wrote (`beam`, `chat`,
+ * `namer`, each with a `model`). They are read by the one-way migration and
+ * written back untouched for one release, so rolling the app back finds them
+ * exactly as it left them (D-346).
+ */
+type LegacyBuiltinState = Partial<Record<BuiltinAgentName, unknown>>;
+
+type Stored = Partial<Omit<StoredV1, "version"> & { version: 1 | 2 }> & LegacyBuiltinState;
 type Location = AgentFileLocation;
 
 const DELETE_DEFAULT_MESSAGE = "This agent starts new sessions. Choose another default first.";
@@ -98,6 +110,10 @@ export class AgentStore {
   private renamedAgents: Readonly<Record<string, string>> = {};
   private skillWarnings: AgentWarning[] = [];
   private readonly fileWarnings = new Map<string, AgentWarning>();
+  /** Definition files that still name a model, by path (`docs/model-profiles.md`). */
+  private readonly legacyModels = new Map<string, ModelIdentity>();
+  /** The built-ins' pre-M22 model choices, kept verbatim for one release (D-346). */
+  private legacyBuiltins: LegacyBuiltinState = {};
   private readonly digests = new Map<string, string>();
   private trustedProjects = new Set<string>();
   private revision = 0;
@@ -124,6 +140,7 @@ export class AgentStore {
       warning: (path) => this.fileWarnings.get(path),
       warningPaths: () => this.fileWarnings.keys(),
       setWarning: (path, warning) => warning === undefined ? this.fileWarnings.delete(path) : void this.fileWarnings.set(path, warning),
+      setLegacyModel: (path, model) => model === undefined ? void this.legacyModels.delete(path) : void this.legacyModels.set(path, model),
       commit: () => this.commit(),
       now: () => this.now(),
       log: (line) => this.log(line),
@@ -325,6 +342,99 @@ export class AgentStore {
   }
 
   /**
+   * Every pre-M22 model choice this store still holds: each built-in that has
+   * chosen no profile, and each definition file that still names a model.
+   *
+   * The worker turns them into profiles, because it is the only writer of the
+   * global settings file; this side only says what was chosen, and applies the
+   * answer in {@link applyLegacyModelMigration} (`docs/model-profiles.md`,
+   * "Migration").
+   */
+  legacyModelChoices(): LegacyModelChoice[] {
+    const choices: LegacyModelChoice[] = [];
+    for (const name of BUILTIN_AGENT_NAMES) {
+      if (this.builtinProfiles[name] !== null) continue;
+      const model = readLegacyBuiltinModel(this.legacyBuiltins[name]);
+      if (model) choices.push({ key: builtinChoiceKey(name), label: builtinLabel(name), model });
+    }
+    for (const [path, model] of this.legacyModels) {
+      const agent = this.definitionAt(path);
+      if (agent) choices.push({ key: path, label: agent.name.slice(0, PROFILE_NAME_MAX), model });
+    }
+    return choices;
+  }
+
+  /**
+   * The host's half of the one-way migration: a built-in that chose a model
+   * takes the profile that model became, and a definition file that still
+   * names one is rewritten to name that profile instead — once, because the
+   * rewritten file no longer carries a model.
+   *
+   * Returns exactly what changed, and nothing it did not do: the preview a
+   * person reads is evidence, not a summary.
+   */
+  applyLegacyModelMigration(resolved: Readonly<Record<string, string>>): {
+    builtins: Array<{ name: string; from: string; to: string }>;
+    agentFiles: Array<{ path: string; from: string; to: string }>;
+  } {
+    const builtins: Array<{ name: string; from: string; to: string }> = [];
+    for (const name of BUILTIN_AGENT_NAMES) {
+      if (this.builtinProfiles[name] !== null) continue;
+      const model = readLegacyBuiltinModel(this.legacyBuiltins[name]);
+      const to = model ? resolved[builtinChoiceKey(name)] : undefined;
+      if (!model || !to || !isModelProfileId(to)) continue;
+      this.builtinProfiles = { ...this.builtinProfiles, [name]: to };
+      builtins.push({ name, from: modelText(model), to });
+    }
+    const agentFiles: Array<{ path: string; from: string; to: string }> = [];
+    for (const [path, model] of [...this.legacyModels]) {
+      const to = resolved[path];
+      const agent = this.definitionAt(path);
+      if (!agent || !to || !isModelProfileId(to)) continue;
+      try {
+        this.save({ ...agent, profileId: to }, agent.name);
+      } catch (error) {
+        // The file stays exactly as the person wrote it, warning and all, and
+        // the next start tries again: a failed rewrite is never a lost choice.
+        this.log(`agents: ${path} still names a model; it could not be rewritten: ${messageOf(error)}`);
+        continue;
+      }
+      this.legacyModels.delete(path);
+      this.fileWarnings.delete(path);
+      agentFiles.push({ path, from: modelText(model), to });
+    }
+    if (builtins.length > 0) this.commit();
+    return { builtins, agentFiles };
+  }
+
+  /**
+   * Say on the definition itself that its profile could not be changed.
+   *
+   * Deleting a profile moves every reference in the same call; when one of
+   * those writes fails the id is already gone, so the person is told at once
+   * rather than at the next periodic check (`router.ts`, delete-with-replacement).
+   */
+  noteProfileWarning(agent: AgentDefinition, message: string, cause?: unknown): void {
+    if (cause !== undefined) this.log(`agents: ${agent.name} kept its model profile id: ${messageOf(cause)}`);
+    if (!agent.path) return;
+    const previous = this.fileWarnings.get(agent.path);
+    this.fileWarnings.set(agent.path, {
+      agentName: agent.name,
+      field: "profile",
+      path: agent.path,
+      ...(agent.profileId ? { target: agent.profileId } : {}),
+      message,
+      since: previous?.since ?? this.now().toISOString(),
+    });
+    this.commit();
+  }
+
+  /** The definition a path holds, whatever scope it is in. */
+  private definitionAt(path: string): AgentDefinition | undefined {
+    return [...this.custom.values()].find((agent) => agent.path === path);
+  }
+
+  /**
    * Move every built-in that pointed at `from` to `to`. Part of deleting a
    * profile: nothing is ever left pointing at one that is gone.
    */
@@ -463,6 +573,7 @@ export class AgentStore {
     const profiles = readBuiltinProfiles(parsed?.builtinProfiles);
     if (profiles) this.builtinProfiles = profiles;
     this.builtinInstructions = readBuiltinInstructions(parsed?.builtinInstructions);
+    this.legacyBuiltins = readLegacyBuiltins(parsed);
   }
 
   private migrateV1(parsed: Stored): StoredV2 | undefined {
@@ -477,7 +588,10 @@ export class AgentStore {
         this.writeFileAtomic(path, serializeAgentFile({ ...agent, scope: "global", path }));
       }
       copyFileSync(file, nextMigrationBackupPath(file));
-      const v2: StoredV2 = {
+      const v2: StoredV2 & LegacyBuiltinState = {
+        // Whatever the previous generation wrote about the built-ins comes
+        // across untouched; the profile migration reads it (D-346).
+        ...readLegacyBuiltins(parsed),
         version: 2,
         revision: typeof parsed.revision === "number" ? parsed.revision : 0,
         defaultAgent: typeof parsed.defaultAgent === "string" ? parsed.defaultAgent : DEFAULT_AGENT_NAME,
@@ -499,6 +613,7 @@ export class AgentStore {
     if (agent.path) {
       this.digests.delete(agent.path);
       this.fileWarnings.delete(agent.path);
+      this.legacyModels.delete(agent.path);
       if (!diskAlreadyGone) this.unlinkDefinition(agent.path, true);
     }
     if (agent.scope === "global") this.renamedAgents = Object.fromEntries(Object.entries(this.renamedAgents).filter(([, target]) => target !== agent.name));
@@ -587,7 +702,8 @@ export class AgentStore {
   private persist(): void {
     const file = this.options.storePath;
     if (!file || this.migrationBlocked) return;
-    const stored: StoredV2 = {
+    const stored: StoredV2 & LegacyBuiltinState = {
+      ...this.legacyBuiltins,
       version: 2,
       revision: this.revision,
       defaultAgent: this.defaultAgent,
@@ -687,6 +803,40 @@ function messageOf(error: unknown): string {
 
 const isString = (value: unknown): value is string => typeof value === "string";
 const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(isString);
+
+/** How a built-in's pre-M22 model choice is keyed while the migration resolves it. */
+function builtinChoiceKey(name: BuiltinAgentName): string {
+  return `builtin:${name}`;
+}
+
+/** What a profile created for a built-in is named after. */
+function builtinLabel(name: BuiltinAgentName): string {
+  return `${name[0]!.toUpperCase()}${name.slice(1)}`;
+}
+
+function modelText(model: ModelIdentity): string {
+  return `${model.provider}/${model.id}`;
+}
+
+/** The `beam`/`chat`/`namer` blobs the previous generation wrote, verbatim (D-346). */
+function readLegacyBuiltins(parsed: Stored | undefined): LegacyBuiltinState {
+  const state: LegacyBuiltinState = {};
+  for (const name of BUILTIN_AGENT_NAMES) {
+    const value = parsed?.[name];
+    if (value && typeof value === "object" && !Array.isArray(value)) state[name] = value;
+  }
+  return state;
+}
+
+/** The model one of those blobs named, when it named one. */
+function readLegacyBuiltinModel(raw: unknown): ModelIdentity | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const model = (raw as { model?: unknown }).model;
+  if (!model || typeof model !== "object") return undefined;
+  const { provider, id } = model as { provider?: unknown; id?: unknown };
+  if (!isString(provider) || !isString(id) || provider.trim() === "" || id.trim() === "") return undefined;
+  return { provider: provider.trim(), id: id.trim() };
+}
 
 /** The profile a stored legacy definition named, when it names a real one. */
 function readStoredProfileId(value: Record<string, unknown>): string | null {

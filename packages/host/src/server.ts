@@ -1202,10 +1202,21 @@ export class HostServer {
     }
     if (this.closing || !worker.alive) return undefined;
     try {
-      const { report } = await worker.request<ClientRequests["models/profiles/migrate"]["result"]>("models/profiles/migrate", { cwd });
+      // What this host still holds from before profiles existed: each
+      // built-in's model and each definition file's `model:`. The worker maps
+      // them to profiles in the same write, because it is the only writer of
+      // the settings file (`docs/model-profiles.md`, "Migration").
+      const legacyChoices = this.agents.legacyModelChoices();
+      const { report } = await worker.request<ClientRequests["models/profiles/migrate"]["result"]>("models/profiles/migrate", {
+        cwd,
+        ...(legacyChoices.length > 0 ? { legacyChoices } : {}),
+      });
       this.knownProfileIds = new Set(report.profiles.map((profile) => profile.id));
+      const migrated = this.agents.applyLegacyModelMigration(report.resolved ?? {});
       this.adoptSeededBuiltinProfiles(report);
-      if (report.ran || !this.profilesMigrated) this.writeMigrationRecord(report);
+      if (report.ran || migrated.builtins.length > 0 || migrated.agentFiles.length > 0 || !this.profilesMigrated) {
+        this.writeMigrationRecord(report, migrated);
+      }
       this.profilesMigrated = true;
       this.skillsCheck.run();
       // Laser filled these in for the person; they review them and edit or
@@ -1248,21 +1259,28 @@ export class HostServer {
    * The preview a person reads: what the migration did to their settings, and
    * what it did to the definitions this host owns. One file, one writer.
    */
-  private writeMigrationRecord(report: ModelProfileMigrationReport): void {
+  private writeMigrationRecord(
+    report: ModelProfileMigrationReport,
+    migrated: { builtins: Array<{ name: string; from: string; to: string }>; agentFiles: Array<{ path: string; from: string; to: string }> },
+  ): void {
     const stateDir = this.stateDir;
     if (!stateDir) return;
+    const path = join(stateDir, MODEL_PROFILE_MIGRATION_RECORD);
+    // Only what this run actually changed. A built-in that had no model of its
+    // own and a file that was never rewritten are not conversions, and a
+    // preview that claimed them would be the one thing this file cannot be.
     const record: ModelProfileMigrationRecord = {
       version: 1,
       at: new Date().toISOString(),
       settings: report,
-      builtins: (Object.entries(this.agents.builtinProfileIds) as Array<[string, string | null]>)
-        .map(([name, to]) => ({ name, from: null, to })),
-      agentFiles: this.agents.snapshot().agents
-        .filter((agent) => agent.kind === "custom" && agent.path)
-        .map((agent) => ({ path: agent.path!, from: null, to: agent.profileId })),
+      ...(migrated.builtins.length > 0 ? { builtins: migrated.builtins } : {}),
+      ...(migrated.agentFiles.length > 0 ? { agentFiles: migrated.agentFiles } : {}),
     };
+    // A later run that converted nothing must not overwrite the record of the
+    // run that did: the person reads this once, whenever they get to it.
+    if (!record.builtins && !record.agentFiles && !report.ran && existsSync(path)) return;
     try {
-      writeFileSync(join(stateDir, MODEL_PROFILE_MIGRATION_RECORD), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+      writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
     } catch (error) {
       this.log(`agents: the model-profile migration record could not be written: ${error instanceof Error ? error.message : String(error)}`);
     }

@@ -18,7 +18,7 @@
  *   session/load         worker for the cwd that owns the path (pool memory,
  *                        else the run registry, else the session file header
  *                        via the catalog — a child's worktree maps to its project)
- *   agents/skills, agents/engine-instructions, agents/namer/qualify
+ *   agents/skills, agents/engine-instructions
  *                        worker for params.cwd (they need the engine)
  *   everything with a path → same lookup
  *   pi/ui/response       every live worker (the worker that owns the dialog id
@@ -1553,6 +1553,19 @@ export class Router {
         `This profile is still used by ${used.join(", ")}. Choose the profile that should take its place, then delete it.`,
       );
     }
+    // Anything that would refuse the rewrite is refused *before* the profile
+    // goes: the replacement has to be a change every definition can actually
+    // take, or there is nothing to delete yet.
+    if (params.replacementId) {
+      for (const agent of definitions) {
+        const issues = store.validate({ ...agent, profileId: params.replacementId }, agent.name);
+        if (issues.length === 0) continue;
+        throw new ProtocolError(
+          ErrorCodes.InvalidParams,
+          `“${agent.name}” cannot be moved to that profile, so this one was not deleted: ${issues[0]!.message}`,
+        );
+      }
+    }
     const { worker, cwd } = await this.settingsWorker(params.cwd);
     // The worker validates the replacement and moves the assignments; do that
     // first, so a refusal leaves every definition exactly as it was.
@@ -1562,9 +1575,16 @@ export class Router {
       for (const agent of definitions) {
         try {
           store.save({ ...agent, profileId: params.replacementId }, agent.name);
-        } catch {
-          // A definition that refuses the change keeps its own id; the next
-          // validation pass flags it rather than losing the delete.
+        } catch (error) {
+          // The profile is already gone by now, and the two writes are not one
+          // transaction: a crash between them leaves the same residue. Say so
+          // on the definition itself rather than waiting for the periodic
+          // profile check in `skills-check.ts` to find it.
+          store.noteProfileWarning(
+            agent,
+            "The profile this agent used was deleted and it could not be moved to the replacement, so it runs on the profile new conversations use. Choose a profile for it.",
+            error,
+          );
         }
       }
     }

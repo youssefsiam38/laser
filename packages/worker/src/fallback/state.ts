@@ -59,9 +59,15 @@ function fallbackEntryData(raw: unknown): SessionFallbackEntry | undefined {
  * Whether one retained session entry proves only a person's pre-turn model setup.
  *
  * This is intentionally narrower than "a fallback entry": traversal, failure
- * memory, a moved activation, malformed data, and contradictory identities all
- * mean the conversation has history. The strict protocol schema owns the wire
- * shape; the canonical model helpers own identity comparisons.
+ * memory, malformed data, and contradictory identities all mean the
+ * conversation has history. The strict protocol schema owns the wire shape;
+ * the canonical model helpers own identity comparisons.
+ *
+ * The one moved activation that is still setup is the **start-time walk**: a
+ * session that has run no turn at all, standing on the first model of its
+ * profile it can reach, with the models it passed over recorded as skips
+ * (`docs/model-profiles.md`, "Runtime"). Counting that as history would refuse
+ * the first-turn agent choice on exactly the machines the walk exists for.
  */
 export function isSetupOnlyFallbackEntry(raw: unknown): boolean {
   const entry = fallbackEntryData(raw);
@@ -70,11 +76,10 @@ export function isSetupOnlyFallbackEntry(raw: unknown): boolean {
     !entry.to
     || entry.from !== undefined
     || entry.failure !== undefined
-    || entry.failover !== undefined
     || Object.keys(entry.models).length > 0
   ) return false;
-  if (entry.event === "cleared") return entry.activation === null;
-  if (entry.event !== "activated" || !entry.activation || entry.activation.position !== 0) return false;
+  if (entry.event === "cleared") return entry.activation === null && entry.failover === undefined;
+  if (entry.event !== "activated" || !entry.activation) return false;
   // Persisted records are not necessarily current app writes. Refuse an
   // activation our setup path cannot produce, even if its fields pass the
   // wire schema — including a pre-M22 one, which is history and never setup.
@@ -82,7 +87,17 @@ export function isSetupOnlyFallbackEntry(raw: unknown): boolean {
   if (!isModelProfileId(entry.activation.profileId)) return false;
   const models = entry.activation.models;
   if (models.length === 0 || models.length !== new Set(models.map(modelKey)).size) return false;
-  return sameModel(models[0], entry.to);
+  const position = entry.activation.position;
+  if (!isStartWalkOnly(entry.failover, position)) return false;
+  return sameModel(models[position], entry.to);
+}
+
+/** A closed traversal that only ever skipped, one skip per model it started past. */
+function isStartWalkOnly(failover: FallbackEvent | undefined, position: number): boolean {
+  if (!failover) return position === 0;
+  if (position === 0 || failover.ended !== "switched" || !failover.endedAt) return false;
+  if (failover.attempts.length !== position) return false;
+  return failover.attempts.every((attempt) => attempt.outcome === "skipped" && attempt.class === undefined);
 }
 
 /** The record for one transition: the whole state, plus what caused this write. */

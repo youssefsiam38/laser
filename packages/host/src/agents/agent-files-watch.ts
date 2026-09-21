@@ -6,6 +6,7 @@ import {
   type AgentDefinition,
   type AgentLocation,
   type AgentWarning,
+  type ModelIdentity,
 } from "@lasercode/protocol";
 import { parseAgentFile } from "./agent-file.js";
 
@@ -25,6 +26,8 @@ export interface AgentFilesWatchOptions {
   warning(path: string): AgentWarning | undefined;
   warningPaths(): Iterable<string>;
   setWarning(path: string, warning: AgentWarning | undefined): void;
+  /** The model a file written before Model Profiles still names, for the migration. */
+  setLegacyModel(path: string, model: ModelIdentity | undefined): void;
   commit(): void;
   now(): Date;
   log(line: string): void;
@@ -99,6 +102,7 @@ export class AgentFilesWatch {
       if (dirname(path) !== directory || paths.has(path)) continue;
       this.options.setWarning(path, undefined);
       this.options.setDigest(path, undefined);
+      this.options.setLegacyModel(path, undefined);
       changed = true;
     }
     if (changed && notify) this.options.commit();
@@ -123,6 +127,7 @@ export class AgentFilesWatch {
         this.options.removeDefinition(current);
         changed = true;
       }
+      this.options.setLegacyModel(path, undefined);
       if (this.options.warning(path)) {
         this.options.setWarning(path, undefined);
         changed = true;
@@ -133,6 +138,7 @@ export class AgentFilesWatch {
     }
     const digest = agentFileDigest(text);
     if (this.options.digest(path) === digest) return false;
+    this.options.setLegacyModel(path, undefined);
     this.options.setDigest(path, digest);
     const name = basename(path, ".md");
     const parsed = parseAgentFile(text, name, fallbackTimestamp);
@@ -156,7 +162,24 @@ export class AgentFilesWatch {
       path,
     };
     this.options.replaceDefinition(location, definition);
-    this.options.setWarning(path, undefined);
+    // A file that still names a model loads and runs on the profile new
+    // conversations use; the warning says so on the field a person can act on
+    // (`docs/model-profiles.md`, "Assignments"). The one-way migration clears
+    // it by rewriting the file.
+    if (parsed.legacyModel) {
+      this.options.setLegacyModel(path, parsed.legacyModel);
+      const previous = this.options.warning(path);
+      this.options.setWarning(path, {
+        agentName: name,
+        field: "profile",
+        path,
+        target: `${parsed.legacyModel.provider}/${parsed.legacyModel.id}`,
+        message: `This agent names the model ${parsed.legacyModel.provider}/${parsed.legacyModel.id} instead of a model profile, so it runs on the profile new conversations use. Choose a profile for it.`,
+        since: previous?.since ?? this.options.now().toISOString(),
+      });
+    } else {
+      this.options.setWarning(path, undefined);
+    }
     if (notify) this.options.commit();
     return true;
   }

@@ -219,3 +219,49 @@ variables unset (`env -i PATH=… HOME=… pnpm -F @lasercode/host test`).
   by the catalog scan above and by `SessionState.profile` / `AgentRun.profileId`.
   `session-projection.ts` plans history pages and carries no model attribution
   at all, so there was nothing there to extend.
+
+## Review follow-up (M22 review B1, B2, S1, S2, S4)
+
+The independent review (`docs/leap/m22-review.md`) found the migration half
+incomplete: the built-ins' models and the agent files' `model:` were dropped
+rather than migrated, and the preview record claimed conversions that had not
+happened. These are the decisions the fix took.
+
+- **D-h** The old `defaultProvider`/`defaultModel` is read whenever
+  `defaultProfileId` is unset, not only when this run created the profiles
+  (S4). The contract's rule is followed literally, and it still converges: the
+  same run writes the assignment, so the second run finds one and never looks
+  at the old key again. A half-migrated file gains at most one profile, once.
+- **D-i** The host cannot create a profile — only the worker writes the global
+  settings file — so `models/profiles/migrate` carries the host's pre-M22
+  choices with it: `legacyChoices: [{ key, label, model }]`, answered by
+  `report.resolved` (key → profile id). One write, one planner, and the same
+  find-or-create rule (`profileStartingWith`, else a new single-model profile
+  named after the built-in or the agent) for both kinds of choice. The
+  resolution is returned whether or not anything was written, which is what
+  makes the host's half idempotent: the second run resolves the same keys to
+  the same profiles and changes nothing.
+- **D-j** The legacy built-in blobs (`beam`/`chat`/`namer` in `agents.json`)
+  are kept and written back verbatim by `AgentStore.persist()` for one release
+  (D-346). Before this, the first persist after an upgrade destroyed the
+  person's choices.
+- **D-k** `model:` in an agent file is **migratable input**, not an unknown
+  field: the parser reads it, the definition loads, and the file carries a
+  warning on its `profile` field while it runs on `defaultProfileId`. The
+  migration rewrites it once and clears the warning. The M22-T4 checkpoint's
+  "that is how a person learns the format changed" is superseded — a format
+  change must not make a person's own file stop working.
+- **D-l** The preview record lists only what a run actually converted, with
+  real `from` values (`provider/id`), and a later run that converted nothing
+  does not overwrite the record of the run that did.
+- **D-m** The start-time walk runs at `open()` and again when a first-turn
+  preparation moves the session to another profile, inside that attempt's
+  append transaction (S1). A start-time walk is therefore **setup, not
+  history**: `isSetupOnlyFallbackEntry` accepts a closed skip-only traversal,
+  or the first-turn agent choice would be refused on exactly the machines the
+  walk exists for. A pinned first turn never walks.
+- **D-n** Delete-with-replacement validates every definition rewrite before
+  the profile is deleted and refuses the delete when one would fail (S2).
+  After the settings write the two halves are not one transaction, so a failed
+  rewrite is logged and raised as a warning on that definition's `profile`
+  field at once, instead of waiting for the periodic check.
