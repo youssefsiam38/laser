@@ -1145,9 +1145,9 @@ describe("WorkerServer settings writes and live sessions", () => {
 
   it("a project write reaches only the sessions in this project's checkout", async () => {
     const h = await twoSessions();
-    const written = await h.call(3, "pi/settings/set", { cwd: h.cwd, scope: "project", changes: [{ path: "defaultThinkingLevel", op: "set", value: "high" }] });
+    const written = await h.call(3, "pi/settings/set", { cwd: h.cwd, scope: "project", changes: [{ path: "hideThinkingBlock", op: "set", value: true }] });
     expect(written.error).toBeUndefined();
-    expect(JSON.parse(readFileSync(join(h.cwd, PROJECT_DIR_NAME, "settings.json"), "utf8"))).toEqual({ defaultThinkingLevel: "high" });
+    expect(JSON.parse(readFileSync(join(h.cwd, PROJECT_DIR_NAME, "settings.json"), "utf8"))).toEqual({ hideThinkingBlock: true });
     // The worktree session reads its own `.laser`, which this write did not touch.
     expect(h.project.reloads).toBe(1);
     expect(h.worktree.reloads).toBe(0);

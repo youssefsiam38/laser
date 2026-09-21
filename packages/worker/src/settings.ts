@@ -30,14 +30,22 @@
  */
 
 import {
-  FALLBACK_CHAINS_SETTING,
+  DEFAULT_PROFILE_SETTING,
+  DESIGN_INDEX_PROFILE_SETTING,
+  EMPTY_PROFILE_ASSIGNMENTS,
+  MODEL_PROFILES_SETTING,
+  NAMING_PROFILE_SETTING,
+  ORACLE_PROFILE_SETTING,
   PRODUCT_DISPLAY_NAME,
   PRODUCT_NAME,
+  PROFILE_ASSIGNMENT_SETTINGS,
   PROJECT_DIR_NAME,
-  modelKey,
-  readFallbackChainsValue,
-  validateFallbackChains,
-  type FallbackChain,
+  isModelProfileId,
+  profileById,
+  readModelProfilesValue,
+  validateModelProfiles,
+  type ModelProfile,
+  type ProfileAssignments,
 } from "@lasercode/protocol";
 import {
   SettingsManager,
@@ -54,7 +62,7 @@ import type {
   SettingsSection,
   SettingsSnapshot,
 } from "@lasercode/protocol";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { applyDurableOverrides } from "./settings-overrides.js";
 
@@ -143,7 +151,11 @@ export const PI_SETTINGS_TOP_LEVEL_KEYS: readonly string[] = [
  * hides every model added later. The disable list holds exact `provider/id`
  * references instead; a model it does not name stays offered.
  */
-export const LASER_SETTINGS_KEYS: readonly string[] = ["disabledModels", FALLBACK_CHAINS_SETTING];
+export const LASER_SETTINGS_KEYS: readonly string[] = [
+  "disabledModels",
+  MODEL_PROFILES_SETTING,
+  ...PROFILE_ASSIGNMENT_SETTINGS,
+];
 
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: "model", title: "Model and thinking", description: "Which model starts a session, and how hard it thinks." },
@@ -176,7 +188,7 @@ const PRODUCT_SECTIONS: readonly SettingsSection[] = [
 ];
 
 const GENERAL_KEYS = new Set([
-  "defaultProvider", "defaultModel", "defaultThinkingLevel", "modelThinkingLevels", "enabledModels",
+  "enabledModels",
   "hideThinkingBlock", "steeringMode", "followUpMode", "compaction", "images",
 ]);
 const ADVANCED_KEYS = new Set([
@@ -184,6 +196,11 @@ const ADVANCED_KEYS = new Set([
   "httpProxy", "httpIdleTimeoutMs", "websocketConnectTimeoutMs", "warnings",
 ]);
 const INTERNAL_KEYS = new Set([
+  // Which model a session starts on, and how hard it thinks, are decided by
+  // the person's Model Profiles now (docs/model-profiles.md, D-346). The
+  // engine's own keys stay classified so a pin bump still fails loudly, but
+  // nothing in the product writes or shows them.
+  "defaultProvider", "defaultModel", "defaultThinkingLevel", "modelThinkingLevels",
   "lastChangelogVersion", "theme", "defaultProjectTrust", "npmCommand", "enableInstallTelemetry",
   "enableAnalytics", "trackingId", "packages", "extensions", "skills", "prompts", "themes",
   "enableSkillCommands", "defaultTools", "sessionDir",
@@ -262,17 +279,57 @@ export const SETTINGS_FIELDS: readonly SettingDescriptor[] = [
     advanced: true,
   },
   {
-    path: FALLBACK_CHAINS_SETTING,
-    key: FALLBACK_CHAINS_SETTING,
-    label: "Fallback chains",
+    path: MODEL_PROFILES_SETTING,
+    key: MODEL_PROFILES_SETTING,
+    label: "Model profiles",
     description:
-      "Ordered lists of models. The first model of a list starts it; the rest take over when it cannot answer. Edited in Providers and models.",
+      "Your named, ordered lists of models. The first model of a profile is the one it prefers; the rest take over when it cannot answer. Edited in Providers and models.",
     section: "model",
     type: { control: "json" },
-    // Global only (docs/model-fallback-chains.md §1.1): a chain is a statement
+    // Global only (docs/model-profiles.md, "Domain"): a profile is a statement
     // about which of a person's provider accounts can stand in for which, not
-    // about a repository, and two files would make "one chain per starting
-    // model" ambiguous.
+    // about a repository. A project chooses which global profile a surface
+    // uses; it never defines its own models.
+    scopes: GLOBAL_ONLY,
+    advanced: true,
+  },
+  {
+    path: DEFAULT_PROFILE_SETTING,
+    key: DEFAULT_PROFILE_SETTING,
+    label: "Profile for new sessions",
+    description: "The profile a new conversation starts on. Chosen in Providers and models.",
+    section: "model",
+    type: { control: "text", placeholder: "mp_…" },
+    scopes: GLOBAL_ONLY,
+    advanced: true,
+  },
+  {
+    path: NAMING_PROFILE_SETTING,
+    key: NAMING_PROFILE_SETTING,
+    label: "Profile for session names",
+    description: "The profile that writes a conversation's title. One short request, never a conversation of its own.",
+    section: "model",
+    type: { control: "text", placeholder: "mp_…" },
+    scopes: GLOBAL_ONLY,
+    advanced: true,
+  },
+  {
+    path: ORACLE_PROFILE_SETTING,
+    key: ORACLE_PROFILE_SETTING,
+    label: "Profile for a second opinion",
+    description: "The profile used when a conversation asks for a fresh look at the problem from outside its own history.",
+    section: "model",
+    type: { control: "text", placeholder: "mp_…" },
+    scopes: GLOBAL_ONLY,
+    advanced: true,
+  },
+  {
+    path: DESIGN_INDEX_PROFILE_SETTING,
+    key: DESIGN_INDEX_PROFILE_SETTING,
+    label: "Profile for design synthesis",
+    description: "The profile that reads a project's design material and proposes foundations from it.",
+    section: "model",
+    type: { control: "text", placeholder: "mp_…" },
     scopes: GLOBAL_ONLY,
     advanced: true,
   },
@@ -1086,8 +1143,7 @@ export function settingsCatalog(): SettingsCatalog {
 }
 
 function fullConfigurationOnly(path: string): boolean {
-  return path !== "defaultProvider" && path !== "defaultModel" && path !== "defaultThinkingLevel" &&
-    path !== "steeringMode" && path !== "followUpMode" && path !== "compaction.enabled" &&
+  return path !== "steeringMode" && path !== "followUpMode" && path !== "compaction.enabled" &&
     path !== "images.autoResize" && path !== "images.blockImages" && path !== "retry.enabled";
 }
 
@@ -1209,34 +1265,111 @@ export function readEffectiveProductSettings(cwd: string, agentDir: string, proj
 }
 
 /**
- * The person's fallback chains, from the global settings file only (M15-T3).
+ * The person's Model Profiles, from the global settings file only
+ * (`docs/model-profiles.md`).
  *
- * Deliberately not the effective merge: chains are written at global scope, so
- * reading a project file here would let a checked-in `.laser/settings.json`
- * silently change which model a conversation falls back to.
+ * Deliberately not the effective merge: profiles are written at global scope,
+ * so reading a project file here would let a checked-in `.laser/settings.json`
+ * silently change which model a conversation runs on.
  *
- * A file edited by hand is read for what it does say: a chain with fewer than
- * two models, or a second chain starting on a model that already starts one,
- * is dropped and the rest still work. A value that is not a list at all reads
- * as no chains, and a session with no chain behaves exactly as it does today.
+ * A file edited by hand is read for what it does say. A profile with no usable
+ * model, a repeated id or a repeated name is dropped and the rest still work;
+ * a value that is not a list at all reads as no profiles, and a session with no
+ * profile is a pinned session.
  */
-export function readFallbackChains(agentDir: string): FallbackChain[] {
-  const starters = new Set<string>();
-  return readFallbackChainsValue(readGlobalSettingsFile(agentDir)[FALLBACK_CHAINS_SETTING]).flatMap((chain) => {
-    // A duplicate inside one chain is dropped rather than the chain: the intent
-    // of the list is still readable, and the runtime tries each model once.
-    const seen = new Set<string>();
-    const models = chain.models.filter((model) => {
-      const key = modelKey(model);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    const first = models[0];
-    if (!first || models.length < 2 || starters.has(modelKey(first))) return [];
-    starters.add(modelKey(first));
-    return [{ models }];
+export function readModelProfiles(agentDir: string): ModelProfile[] {
+  return readProfileSettings(agentDir).profiles;
+}
+
+/**
+ * Profiles and assignments together, cached against the settings file's own
+ * stamp.
+ *
+ * A session publishes its state many times a turn and every one of those
+ * snapshots names the profile it is running on, so this is read far more often
+ * than it changes. The cache is invalidated by the file itself — size and
+ * modification time — rather than by anyone remembering to clear it, so a write
+ * from another process, another worktree or a hand edit is picked up on the
+ * next read.
+ */
+export function readProfileSettings(agentDir: string): { profiles: ModelProfile[]; assignments: ProfileAssignments } {
+  const path = join(resolve(agentDir), "settings.json");
+  let stamp = "absent";
+  try {
+    const file = statSync(path);
+    stamp = `${file.mtimeMs}:${file.size}`;
+  } catch {
+    // An absent or unreadable file is a stable state of its own.
+  }
+  const cached = profileSettingsCache.get(path);
+  if (cached && cached.stamp === stamp) return cached.value;
+  const doc = readGlobalSettingsFile(agentDir);
+  const profiles = profilesFromDoc(doc);
+  const value = { profiles, assignments: assignmentsFromDoc(doc, profiles) };
+  profileSettingsCache.set(path, { stamp, value });
+  return value;
+}
+
+const profileSettingsCache = new Map<
+  string,
+  { stamp: string; value: { profiles: ModelProfile[]; assignments: ProfileAssignments } }
+>();
+
+/** The same read, from a settings document already in hand. */
+export function profilesFromDoc(doc: Doc): ModelProfile[] {
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  return readModelProfilesValue(doc[MODEL_PROFILES_SETTING]).filter((profile) => {
+    const name = profile.name.toLowerCase();
+    if (ids.has(profile.id) || names.has(name)) return false;
+    ids.add(profile.id);
+    names.add(name);
+    return true;
   });
+}
+
+/**
+ * Which profile each assignable surface uses.
+ *
+ * An id that names no profile reads as `null`, never as itself: an assignment
+ * is either a profile that exists or nothing at all, so no surface can be left
+ * pointing at something that is gone.
+ */
+export function readProfileAssignments(agentDir: string, profiles?: readonly ModelProfile[]): ProfileAssignments {
+  if (!profiles) return readProfileSettings(agentDir).assignments;
+  return assignmentsFromDoc(readGlobalSettingsFile(agentDir), profiles);
+}
+
+export function assignmentsFromDoc(doc: Doc, profiles: readonly ModelProfile[]): ProfileAssignments {
+  const read = (key: string): string | null => {
+    const value = doc[key];
+    if (typeof value !== "string") return null;
+    return profileById(profiles, value)?.id ?? null;
+  };
+  return {
+    ...EMPTY_PROFILE_ASSIGNMENTS,
+    defaultProfileId: read(DEFAULT_PROFILE_SETTING),
+    namingProfileId: read(NAMING_PROFILE_SETTING),
+    oracleProfileId: read(ORACLE_PROFILE_SETTING),
+    designIndexProfileId: read(DESIGN_INDEX_PROFILE_SETTING),
+  };
+}
+
+/**
+ * The profile a surface should use, with the ordinary inheritance rule: the
+ * surface's own assignment, then the default for new sessions, then the first
+ * profile there is. Never a dangling id, and never a raw model.
+ */
+export function resolveProfile(
+  profiles: readonly ModelProfile[],
+  assignments: ProfileAssignments,
+  surface: keyof ProfileAssignments = "defaultProfileId",
+): ModelProfile | undefined {
+  return (
+    profileById(profiles, assignments[surface])
+    ?? profileById(profiles, assignments.defaultProfileId)
+    ?? profiles[0]
+  );
 }
 
 /** Read a dotted path. Returns undefined when any link is missing or not an object. */
@@ -1305,7 +1438,13 @@ export function validateSettingValue(field: SettingDescriptor, value: unknown): 
     case "boolean":
       return typeof value === "boolean" ? undefined : `${field.path} must be true or false.`;
     case "text":
-      return typeof value === "string" ? undefined : `${field.path} must be a string.`;
+      if (typeof value !== "string") return `${field.path} must be a string.`;
+      // An assignment holds a profile id and nothing else, so a surface can
+      // never be left pointing at a name, a model, or something that is gone.
+      if ((PROFILE_ASSIGNMENT_SETTINGS as readonly string[]).includes(field.path) && !isModelProfileId(value)) {
+        return "Choose one of your model profiles.";
+      }
+      return undefined;
     case "number": {
       if (typeof value !== "number" || !Number.isFinite(value)) return `${field.path} must be a number.`;
       if (type.integer && !Number.isInteger(value)) return `${field.path} must be a whole number.`;
@@ -1337,11 +1476,11 @@ export function validateSettingValue(field: SettingDescriptor, value: unknown): 
     case "json": {
       // Anything JSON-serializable. The value already came through JSON.
       if (value === undefined) return `${field.path} must not be undefined.`;
-      // …except where the product owns the shape. Fallback chains are checked
-      // with the same function the Settings screen draws its messages from, so
-      // the two cannot disagree (docs/model-fallback-chains.md §1.2).
-      if (field.path === FALLBACK_CHAINS_SETTING) {
-        const issue = validateFallbackChains(value)[0];
+      // …except where the product owns the shape. Profiles are checked with
+      // the same function the Settings screen draws its messages from, so the
+      // two cannot disagree (docs/model-profiles.md, "Bounds and policy").
+      if (field.path === MODEL_PROFILES_SETTING) {
+        const issue = validateModelProfiles(value)[0];
         if (issue) return issue.message;
       }
       return undefined;

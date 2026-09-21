@@ -11,7 +11,7 @@
  *   pi.session-management  → open / dispose (create, attach, detach)
  *   pi.agent-controller    → prompt, requestAbort, steer, followUp, compact, navigate
  *   pi.transcript          → replicated state → SessionUpdate stream
- *   pi.models              → listModels, setModel, setThinkingLevel
+ *   pi.models              → listModels, setModel/setProfile, setThinkingLevel
  *   keyed dialog services  → ui_request / respondToUi
  */
 
@@ -51,6 +51,7 @@ export class ChordDriver implements SessionDriver {
   async abort(): Promise<void> { throw new DriverUnavailableError(this.kind, NOT_YET); }
   async listModels(): Promise<ModelRef[]> { throw new DriverUnavailableError(this.kind, NOT_YET); }
   async setModel(model: ModelRef): Promise<SessionState> { void model; throw new DriverUnavailableError(this.kind, NOT_YET); }
+  async setProfile(profileId: string): Promise<SessionState> { void profileId; throw new DriverUnavailableError(this.kind, NOT_YET); }
   async setThinkingLevel(level: ThinkingLevel): Promise<SessionState> { void level; throw new DriverUnavailableError(this.kind, NOT_YET); }
   async rename(name: string): Promise<void> { void name; throw new DriverUnavailableError(this.kind, NOT_YET); }
   async compact(instructions?: string): Promise<void> { void instructions; throw new DriverUnavailableError(this.kind, NOT_YET); }

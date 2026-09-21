@@ -185,14 +185,14 @@ describe("StableSdkDriver, end to end", () => {
   };
 
   it("carries this project's values into the open session", async () => {
-    writeGlobal({ defaultModel: "from-global", steeringMode: "one-at-a-time" });
-    writeLaser({ defaultModel: "from-project", defaultThinkingLevel: "low" });
+    writeGlobal({ shellPath: "from-global", steeringMode: "one-at-a-time" });
+    writeLaser({ shellPath: "from-project", hideThinkingBlock: true });
 
     await driver.open({ cwd, agentDir, sessionDir: join(base, "sessions"), projectTrusted: true });
 
     const settings = engineSettings();
-    expect(settings.getDefaultModel()).toBe("from-project");
-    expect(settings.getDefaultThinkingLevel()).toBe("low");
+    expect(settings.getShellPath()).toBe("from-project");
+    expect(settings.getHideThinkingBlock()).toBe(true);
     // Not overridden by the project: the global file still decides.
     expect(settings.getSteeringMode()).toBe("one-at-a-time");
     // Engine-owned discovery stays off, whatever the files say.
@@ -204,64 +204,64 @@ describe("StableSdkDriver, end to end", () => {
   }, 60_000);
 
   it("keeps them across a mid-session reload", async () => {
-    writeLaser({ defaultModel: "from-project" });
+    writeLaser({ shellPath: "from-project" });
     await driver.open({ cwd, agentDir, sessionDir: join(base, "sessions"), projectTrusted: true });
 
     const settings = engineSettings();
     // What an extension's ctx.reload() and a resource refresh both go through.
     await settings.reload();
-    expect(settings.getDefaultModel()).toBe("from-project");
+    expect(settings.getShellPath()).toBe("from-project");
     expect(settings.getPackages()).toEqual([]);
 
     // The whole session reload: settings, then the resource loader, then the
     // extension runner rebuilt around them.
     const runtime = (driver as unknown as { runtime: { session: { reload(): Promise<void> } } }).runtime;
     await runtime.session.reload();
-    expect(engineSettings().getDefaultModel()).toBe("from-project");
+    expect(engineSettings().getShellPath()).toBe("from-project");
     expect(engineSettings().getPackages()).toEqual([]);
   }, 60_000);
 
   it("ignores the project entirely when the host withheld trust", async () => {
-    writeGlobal({ defaultModel: "from-global" });
-    writeLaser({ defaultModel: "from-project" });
-    writeLegacyPi({ defaultModel: "from-dot-pi" });
+    writeGlobal({ shellPath: "from-global" });
+    writeLaser({ shellPath: "from-project" });
+    writeLegacyPi({ shellPath: "from-dot-pi" });
 
     await driver.open({ cwd, agentDir, sessionDir: join(base, "sessions"), projectTrusted: false });
 
     const settings = engineSettings();
-    expect(settings.getDefaultModel()).toBe("from-global");
+    expect(settings.getShellPath()).toBe("from-global");
     expect(settings.getPackages()).toEqual([]);
   }, 60_000);
 });
 
 describe("SettingsAdapter", () => {
   it(`keeps ${PROJECT_DIR_NAME} values and the discovery switches across refresh`, async () => {
-    writeGlobal({ defaultModel: "from-global" });
-    writeLaser({ defaultModel: "from-project", defaultThinkingLevel: "low" });
+    writeGlobal({ shellPath: "from-global" });
+    writeLaser({ shellPath: "from-project", hideThinkingBlock: true });
     const adapter = new SettingsAdapter({ cwd, agentDir });
 
-    expect(adapter.settingsManager.getDefaultModel()).toBe("from-project");
+    expect(adapter.settingsManager.getShellPath()).toBe("from-project");
     expect(adapter.settingsManager.getPackages()).toEqual([]);
 
     await adapter.refresh();
-    expect(adapter.settingsManager.getDefaultModel()).toBe("from-project");
-    expect(adapter.settingsManager.getDefaultThinkingLevel()).toBe("low");
+    expect(adapter.settingsManager.getShellPath()).toBe("from-project");
+    expect(adapter.settingsManager.getHideThinkingBlock()).toBe(true);
     expect(adapter.settingsManager.getPackages()).toEqual([]);
 
     // A reload driven by a consumer we handed the manager to must not undo it.
     await adapter.settingsManager.reload();
-    expect(adapter.settingsManager.getDefaultModel()).toBe("from-project");
+    expect(adapter.settingsManager.getShellPath()).toBe("from-project");
     expect(adapter.settingsManager.getPackages()).toEqual([]);
   });
 
   it("applies nothing from an untrusted project", async () => {
-    writeGlobal({ defaultModel: "from-global" });
-    writeLaser({ defaultModel: "from-project" });
+    writeGlobal({ shellPath: "from-global" });
+    writeLaser({ shellPath: "from-project" });
     const adapter = new SettingsAdapter({ cwd, agentDir, hostTrusted: false });
 
-    expect(adapter.settingsManager.getDefaultModel()).toBe("from-global");
+    expect(adapter.settingsManager.getShellPath()).toBe("from-global");
     await adapter.settingsManager.reload();
-    expect(adapter.settingsManager.getDefaultModel()).toBe("from-global");
+    expect(adapter.settingsManager.getShellPath()).toBe("from-global");
     // The switches are laser's, not the project's: they hold either way.
     expect(adapter.settingsManager.getPackages()).toEqual([]);
   });

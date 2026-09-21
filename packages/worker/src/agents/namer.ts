@@ -1,14 +1,14 @@
 /**
- * Namer — the built-in service that names a session from its first prompt.
+ * Naming — the service that titles a session from its first prompt.
  *
- * It makes one small completion per request through the engine's model runtime,
- * with the model the host qualified (or a person chose) and an 8 s ceiling. It
- * never throws — a name that does not arrive is simply not shown.
+ * It is a **one-shot walk of the naming profile** (`docs/model-profiles.md`,
+ * "Runtime"): one small completion per model, in the profile's own order, with
+ * an 8 s ceiling each, stopping at the first usable title. There is no
+ * benchmark, no candidate ranking and no qualification step — the person chose
+ * an ordered list of models, and that list is the answer.
  *
- * `qualify()` is the benchmark the host asks for as soon as a worker can run
- * it against a configured provider: rank connected candidates, test the real
- * session-title job, and keep the best quality/latency/price result. It is not
- * waited on by anything a person is looking at.
+ * It never throws, creates no session and appears in no fleet row: a name that
+ * does not arrive is simply not shown.
  */
 import {
   PRODUCT_DISPLAY_NAME,
@@ -16,19 +16,12 @@ import {
   SESSION_NAME_MAX,
   SESSION_NAME_MIN,
   renderInstructionTemplate,
-  type AgentModelChoice,
-  type ModelCatalogEntry,
-  type NamerCandidate,
-  type NamerState,
+  type ModelIdentity,
+  type ModelProfile,
 } from "@lasercode/protocol";
 import { FALLBACK_NAMER_INSTRUCTIONS } from "./definitions.js";
 
 export const NAMER_TIMEOUT_MS = 8_000;
-export const NAMER_MAX_CANDIDATES = 6;
-/** Above this price a model is a fallback, not excluded when it is the only usable choice. */
-export const NAMER_COST_CEILING = 3;
-const EXPENSIVE = /opus|pro|ultra|max/i;
-const CHEAP = /mini|nano|flash|haiku|lite|luna|small/i;
 
 /** The engine's model runtime, reduced to what naming needs (so tests can fake it). */
 export interface NamerModel {
@@ -52,12 +45,13 @@ export interface NamerModelRuntime {
 
 export interface NamerServiceOptions {
   models: () => Promise<NamerModelRuntime>;
-  /** The model to name with; null means naming is off. */
-  model: () => AgentModelChoice | null;
+  /**
+   * The profile session naming runs on. `null` means naming is off: there is
+   * no profile assigned to it and nothing to walk.
+   */
+  profile: () => ModelProfile | null;
   /** The effective prompt from the editable built-in definition. */
   instructions?: () => string;
-  /** The catalogue and the providers with credentials, for `qualify()`. */
-  catalog?: () => Promise<{ models: ModelCatalogEntry[]; configuredProviders: ReadonlySet<string> }>;
   timeoutMs?: number;
   now?: () => number;
 }
@@ -93,52 +87,7 @@ export function sessionNamePrompt(text: string, instructions?: string): NamerCon
   };
 }
 
-export function listCost(model: Pick<ModelCatalogEntry, "cost">): number | undefined {
-  const input = model.cost?.input;
-  const output = model.cost?.output;
-  if (typeof input !== "number" && typeof output !== "number") return undefined;
-  return (typeof input === "number" ? input : 0) + (typeof output === "number" ? output : 0);
-}
-
-/**
- * Connected, enabled candidates for Namer: recognisably small and affordable
- * models first, then increasingly expensive fallbacks, at most `limit`. Pure,
- * so candidate selection is testable without a provider.
- */
-export function selectNamerCandidates(
-  models: readonly ModelCatalogEntry[],
-  configuredProviders: ReadonlySet<string>,
-  limit = NAMER_MAX_CANDIDATES,
-  preferred?: AgentModelChoice | null,
-): ModelCatalogEntry[] {
-  const eligible = models.filter((model) => {
-    if (!configuredProviders.has(model.provider)) return false;
-    // A model the person switched off is off everywhere, naming included.
-    if (model.enabled === false) return false;
-    return true;
-  });
-  const rank = (model: ModelCatalogEntry) => {
-    if (preferred?.provider === model.provider && preferred.id === model.id) return -1;
-    const affordable = (listCost(model) ?? Number.POSITIVE_INFINITY) <= NAMER_COST_CEILING;
-    if (CHEAP.test(model.id) && affordable && !EXPENSIVE.test(model.id)) return 0;
-    if (affordable && !EXPENSIVE.test(model.id)) return 1;
-    if (CHEAP.test(model.id)) return 2;
-    return 3;
-  };
-  eligible.sort((a, b) => {
-    const byPreference = rank(a) - rank(b);
-    if (byPreference !== 0) return byPreference;
-    const byCost = (listCost(a) ?? Number.POSITIVE_INFINITY) - (listCost(b) ?? Number.POSITIVE_INFINITY);
-    if (byCost !== 0) return byCost;
-    return `${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`);
-  });
-  return eligible.slice(0, limit);
-}
-
-/** The fixed prompt every candidate is timed on. */
-export const QUALIFY_SAMPLE = "Fix the login form so pressing Enter submits it, and make the error banner disappear after a successful sign-in.";
-
-/** True for a title the benchmark accepts. */
+/** True for a title this service will use. */
 export function validSessionName(name: string): boolean {
   return name.length > 0 && name.length <= SESSION_NAME_MAX;
 }
@@ -201,107 +150,37 @@ export class NamerService {
 
   /** Whether naming can happen at all right now. */
   enabled(): boolean {
-    return this.options.model() !== null;
+    return (this.options.profile()?.models.length ?? 0) > 0;
   }
 
-  /** A title for a session from its first prompt, or null when none arrives. Never throws. */
+  /**
+   * A title for a session from its first prompt, or null when none arrives.
+   *
+   * One request per model of the naming profile, in the profile's order, until
+   * one answers with a usable title. A model that is missing, slow or failing
+   * is passed over exactly as it would be inside a conversation; when the
+   * profile is spent the session keeps the name it already has. Never throws.
+   */
   async nameSession(text: string): Promise<string | null> {
-    const choice = this.options.model();
-    if (!choice || text.trim() === "") return null;
-    const raw = await this.complete(choice, sessionNamePrompt(text, this.renderInstructions(choice, text)), 48);
-    if (raw === null) return null;
-    const name = normalizeSessionName(raw).value;
-    return validSessionName(name) ? name : null;
+    const profile = this.options.profile();
+    if (!profile || text.trim() === "" ) return null;
+    for (const entry of profile.models) {
+      const choice: ModelIdentity = { provider: entry.provider, id: entry.id };
+      const raw = await this.complete(choice, sessionNamePrompt(text, this.renderInstructions(choice, text)), 48);
+      if (raw === null) continue;
+      const name = normalizeSessionName(raw).value;
+      if (validSessionName(name)) return name;
+    }
+    return null;
   }
 
-  /** Benchmark connected candidates on the session-title job, concurrently. */
-  async qualify(): Promise<NamerState> {
-    const qualifiedAt = new Date(this.now()).toISOString();
-    if (!this.options.catalog) return { status: "unavailable", model: null, candidates: [], qualifiedAt, reason: "No model catalogue is available in this worker." };
-    let selected: ModelCatalogEntry[];
-    try {
-      const { models, configuredProviders } = await this.options.catalog();
-      selected = selectNamerCandidates(models, configuredProviders, NAMER_MAX_CANDIDATES, this.options.model());
-    } catch (error) {
-      return { status: "unavailable", model: null, candidates: [], qualifiedAt, reason: error instanceof Error ? error.message : String(error) };
-    }
-    if (selected.length === 0) {
-      return { status: "unavailable", model: null, candidates: [], qualifiedAt, reason: "No connected provider offers a model Namer can try. Connect a provider in Settings → Providers and models." };
-    }
-    let runtime: NamerModelRuntime;
-    try {
-      runtime = await this.options.models();
-    } catch (error) {
-      const current = this.options.model();
-      const detail = error instanceof Error ? error.message : String(error);
-      return current
-        ? { status: "ready", model: current, candidates: [], qualifiedAt, reason: `The new check could not run, so Namer kept its current model. ${detail}` }
-        : { status: "unqualified", model: null, candidates: [], qualifiedAt, reason: `The model check could not run and will remain retryable. ${detail}` };
-    }
-    const trials = await Promise.all(selected.map(async (entry) => {
-      const choice = { provider: entry.provider, id: entry.id };
-      const cost = listCost(entry);
-      const started = this.now();
-      let candidate: NamerCandidate;
-      let quality = 0;
-      try {
-        const sessionInstructions = this.renderInstructions(choice, QUALIFY_SAMPLE);
-        const raw = await this.completeWithRuntime(runtime, choice, sessionNamePrompt(QUALIFY_SAMPLE, sessionInstructions), 48, true);
-        const title = raw === null ? { value: "", fidelity: 0 } : normalizeSessionName(raw);
-        const latencyMs = this.now() - started;
-        const titleValid = validSessionName(title.value);
-        quality = title.fidelity;
-        candidate = {
-          model: choice,
-          latencyMs,
-          valid: titleValid,
-          ...(title.value ? { sample: title.value } : {}),
-          ...(!titleValid ? { error: "Its session title could not be made usable." } : {}),
-        };
-      } catch (error) {
-        candidate = { model: choice, latencyMs: null, valid: false, error: error instanceof Error ? error.message : String(error) };
-      }
-      if (cost !== undefined) candidate.costPerMillion = cost;
-      return { candidate, quality };
-    }));
-    const candidates = trials.map(({ candidate }) => candidate);
-    const winner = trials
-      .filter(({ candidate }) => candidate.valid && candidate.latencyMs !== null)
-      .sort((a, b) => {
-        if (a.quality !== b.quality) return b.quality - a.quality;
-        const burden = ({ candidate }: (typeof trials)[number]) =>
-          (candidate.latencyMs ?? Number.POSITIVE_INFINITY) + (candidate.costPerMillion ?? NAMER_COST_CEILING * 2) * 200;
-        return burden(a) - burden(b);
-      })[0]?.candidate;
-    if (!winner) {
-      const current = this.options.model();
-      if (current) {
-        return {
-          status: "ready",
-          model: current,
-          candidates,
-          qualifiedAt,
-          reason: "The new check did not find a better usable model, so Namer kept the model that was already working.",
-        };
-      }
-      return {
-        status: "unqualified",
-        model: null,
-        candidates,
-        qualifiedAt,
-        reason: "No candidate completed the naming check. Namer will try again automatically; you can also run the check again now.",
-      };
-    }
-    return { status: "ready", model: winner.model, candidates, qualifiedAt };
-  }
-
-  private renderInstructions(choice: AgentModelChoice, sourceText: string): string | undefined {
+  private renderInstructions(choice: ModelIdentity, sourceText: string): string | undefined {
     const template = this.options.instructions?.()?.trim();
     if (!template) return undefined;
     const values = {
       productName: PRODUCT_DISPLAY_NAME,
       agentName: "Namer",
-      agentDescription: "Names sessions with a fast, inexpensive model.",
+      agentDescription: "Names sessions on the profile chosen for session names.",
       model: `${choice.provider}/${choice.id}`,
       sourceText,
     };
@@ -314,7 +193,7 @@ export class NamerService {
   }
 
   /** One bounded completion; null when the model is missing, times out or fails (unless `rethrow`). */
-  private async complete(choice: AgentModelChoice, context: NamerContext, maxTokens: number, rethrow = false): Promise<string | null> {
+  private async complete(choice: ModelIdentity, context: NamerContext, maxTokens: number, rethrow = false): Promise<string | null> {
     try {
       const runtime = await this.options.models();
       return await this.completeWithRuntime(runtime, choice, context, maxTokens, rethrow);
@@ -324,7 +203,7 @@ export class NamerService {
     }
   }
 
-  private async completeWithRuntime(runtime: NamerModelRuntime, choice: AgentModelChoice, context: NamerContext, maxTokens: number, rethrow = false): Promise<string | null> {
+  private async completeWithRuntime(runtime: NamerModelRuntime, choice: ModelIdentity, context: NamerContext, maxTokens: number, rethrow = false): Promise<string | null> {
     try {
       const model = runtime.getModel(choice.provider, choice.id);
       if (!model) {

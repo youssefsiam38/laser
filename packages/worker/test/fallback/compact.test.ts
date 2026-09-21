@@ -7,8 +7,8 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
   SESSION_FALLBACK_ENTRY_TYPE,
   modelKey,
-  type FallbackChain,
-  type FallbackModelRef,
+  type ModelIdentity,
+  type ModelProfile,
   type ProviderFailureSignal,
   type SessionFallbackEntry,
   type SessionUpdate,
@@ -18,10 +18,10 @@ import { FallbackController, type FallbackEngine } from "../../src/fallback/cont
 import { dropTrailingErrorAssistant } from "../../src/fallback/engine-port.js";
 import { CONTEXT_TOO_LONG_REASON, type CandidateModel } from "../../src/fallback/policy.js";
 
-const A: FallbackModelRef = { provider: "stub", id: "a" };
-const B: FallbackModelRef = { provider: "stub", id: "b" };
-const C: FallbackModelRef = { provider: "stub", id: "c" };
-const D: FallbackModelRef = { provider: "stub", id: "d" };
+const A: ModelIdentity = { provider: "stub", id: "a" };
+const B: ModelIdentity = { provider: "stub", id: "b" };
+const C: ModelIdentity = { provider: "stub", id: "c" };
+const D: ModelIdentity = { provider: "stub", id: "d" };
 
 const ACCESS: ProviderFailureSignal = { errorMessage: "Internal server error", response: { status: 500, headers: {} } };
 const OVERFLOW: ProviderFailureSignal = { errorMessage: "maximum context length exceeded" };
@@ -36,7 +36,7 @@ function savedEntry(entry: Partial<SessionFallbackEntry>): unknown {
 }
 
 function catalogue(
-  refs: FallbackModelRef[],
+  refs: ModelIdentity[],
   windows: Record<string, number>,
   extras: Partial<Record<string, Partial<CandidateModel>>> = {},
 ): Map<string, CandidateModel> {
@@ -54,7 +54,7 @@ function catalogue(
   return entries;
 }
 
-function namesOf(refs: FallbackModelRef[]): Map<string, FallbackModelRef & { name: string }> {
+function namesOf(refs: ModelIdentity[]): Map<string, ModelIdentity & { name: string }> {
   return new Map(refs.map((ref) => [modelKey(ref), { ...ref, name: `Stub ${ref.id.toUpperCase()}` }]));
 }
 
@@ -62,14 +62,14 @@ interface Harness {
   controller: FallbackController;
   updates: SessionUpdate[];
   entries: SessionFallbackEntry[];
-  setModels: FallbackModelRef[];
+  setModels: ModelIdentity[];
   continues: Array<{ retries: "none" | "normal" }>;
   compacts: number;
   settle: () => Promise<boolean>;
 }
 
 function harness(over: {
-  models?: FallbackModelRef[];
+  models?: ModelIdentity[];
   position?: number;
   tokens?: number | null;
   windows?: Record<string, number>;
@@ -77,23 +77,29 @@ function harness(over: {
   auto?: boolean;
   failure?: ProviderFailureSignal | undefined;
   compact?: (signal: AbortSignal) => Promise<{ estimatedTokensAfter: number }>;
-  setModel?: (model: FallbackModelRef) => Promise<void>;
+  setModel?: (model: ModelIdentity) => Promise<void>;
   continueTurn?: (options: { retries: "none" | "normal"; signal: AbortSignal }) => Promise<void>;
   afterContinueFailure?: () => ProviderFailureSignal | undefined;
   catalogue?: () => ReadonlyMap<string, CandidateModel> | Promise<ReadonlyMap<string, CandidateModel>>;
 }): Harness {
   const models = over.models ?? [A, B, C];
-  const chains: FallbackChain[] = [{ models }];
+  const profile: ModelProfile = {
+    id: "mp_01jcompact00000000000000",
+    name: "Balanced",
+    models,
+    origin: "seeded",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
   let selected = models[over.position ?? 0] ?? A;
   let failure: ProviderFailureSignal | undefined = over.failure === undefined ? ACCESS : over.failure;
   const updates: SessionUpdate[] = [];
   const entries: SessionFallbackEntry[] = [];
-  const setModels: FallbackModelRef[] = [];
+  const setModels: ModelIdentity[] = [];
   const continues: Array<{ retries: "none" | "normal" }> = [];
   let compacts = 0;
   let ids = 0;
   const engine: FallbackEngine = {
-    chains: () => chains,
+    profile: () => profile,
     selectedModel: () => selected,
     catalogue: async () => over.catalogue ? over.catalogue() : catalogue(models, over.windows ?? {}, over.extras),
     names: () => namesOf(models),
@@ -126,7 +132,7 @@ function harness(over: {
     controller.restore([savedEntry({
       activation: {
         id: "saved",
-        chainKey: modelKey(models[0]!),
+        profileId: profile.id,
         startedAt: "2026-01-01T00:00:00.000Z",
         models,
         position: over.position ?? 0,
@@ -227,7 +233,7 @@ it("aborts compact when the failover is cancelled", async () => {
   expect(fallbacks(h.updates).some((event) => event.phase === "exhausted")).toBe(false);
 });
 
-it("gives a manual selection the last word during compact", async () => {
+it("gives a pin the last word during compact", async () => {
   let compactStarted!: () => void;
   const started = new Promise<void>((resolve) => { compactStarted = resolve; });
   const h = harness({
@@ -248,7 +254,7 @@ it("gives a manual selection the last word during compact", async () => {
   });
   const settling = h.settle();
   await started;
-  h.controller.onManualSelection(C);
+  h.controller.onPin(C);
   expect(await settling).toBe(false);
   expect(fallbacks(h.updates).some((event) => event.phase === "switched")).toBe(false);
   expect(h.controller.summary()).toBeUndefined();
@@ -298,7 +304,7 @@ it("treats a missing compact estimate as compact failure, not a blind attempt", 
   expect(fallbacks(h.updates).at(-1)?.detail).toContain(CONTEXT_TOO_LONG_REASON);
 });
 
-it("manual selection fences an invalid estimate even when compact resolves", async () => {
+it("a pin fences an invalid estimate even when compact resolves", async () => {
   let compactStarted!: () => void;
   let releaseCompact!: () => void;
   const started = new Promise<void>((resolve) => { compactStarted = resolve; });
@@ -315,7 +321,7 @@ it("manual selection fences an invalid estimate even when compact resolves", asy
   });
   const settling = h.settle();
   await started;
-  h.controller.onManualSelection(C);
+  h.controller.onPin(C);
   releaseCompact();
   expect(await settling).toBe(false);
   expect(fallbacks(h.updates).some((event) => event.phase === "exhausted")).toBe(false);

@@ -106,3 +106,34 @@ Changed: `protocol/src/{fallback,messages,agents,schemas,method-policy,transport
 Green: `pnpm -F @lasercode/protocol build` and `test` (464 tests, 0 type errors),
 `pnpm identity:check`.
 Left for T2–T5: every downstream package is red until the worker and host move.
+
+### M22-T2 checkpoint — done
+
+Changed: `protocol/src/fallback.ts` (seeding rule, migration record,
+`models/profiles/migrate`), `protocol/src/{schemas,method-policy}.ts`,
+`worker/src/settings.ts` (`readModelProfiles`, `readProfileSettings`,
+`readProfileAssignments`, `resolveProfile`, descriptors, validation),
+`worker/src/profiles/{migrate,seeds}.ts`, `worker/src/packages.ts` (catalogue
+carries profiles and assignments; per-model thinking comes from profile
+entries), plus the mechanical rename the package needs to compile
+(`fallback/*`, `drivers/*`, `driver.ts`, `agents/*`, `server.ts`) and every
+test that named a chain, a default model or a Namer model.
+
+Surprise, recorded as a decision: the whole worker had to move in this commit,
+because `AgentDefinition.model` and `FallbackChain` are gone from the protocol
+and the package does not compile without it. T3 and T4 carry the behaviour
+that is genuinely theirs (start-time walk, pin, `setProfile` seam, agent
+inheritance, one-shot naming) and their own tests.
+
+Two more decisions the contract was silent on:
+
+- **D-e** Profiles named after a saved list are `"<Model> profile"`, not the
+  `"Sonnet chain"` example in the contract: the same document forbids the word
+  "chain" on a person-facing surface, and a profile name is one.
+- **D-f** Naming runs only on an explicit `namingProfileId` (or the built-in's
+  own choice). Falling through to the profile new sessions use would spend the
+  person's best model on titles, which is the opposite of the assignment's
+  purpose. The migration and the seeds always set it.
+
+Green: `pnpm -F @lasercode/worker test` (1208 passed, 4 skipped),
+`pnpm -F @lasercode/protocol test`, `pnpm identity:check`.

@@ -109,7 +109,7 @@ export async function checkPackagedSession(fixture: string): Promise<PackagedSes
     const definitions = new DefinitionsCache(join(root, "project"));
     const definition = { ...definitions.defaultAgent(), model: { provider: "probe", id: "probe" } };
     const harness = new AgentHarness({
-      host: { openChild: () => Promise.reject(new Error("no children in the probe")), driver: () => undefined, notify: () => undefined, modelAvailable: async () => false },
+      host: { openChild: () => Promise.reject(new Error("no children in the probe")), driver: () => undefined, notify: () => undefined, modelAvailable: async () => false, resolveProfile: (profileId: string | null) => ({ profileId }) },
       definitions,
       worktrees: new WorktreeManager(),
     });

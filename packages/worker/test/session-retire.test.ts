@@ -10,8 +10,11 @@
  * request that arrives is refused retryably, and its arrival is itself a reason
  * to refuse.
  */
-import { describe, expect, it } from "vitest";
-import { ErrorCodes, LIFETIME_RETRY } from "@lasercode/protocol";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ErrorCodes, LIFETIME_RETRY, PRODUCT_NAME } from "@lasercode/protocol";
 import type { AgentsSnapshot, ClientRequests, ContentBlock, JsonRpcMessage, ModelRef, SessionState, UiDialogRequest } from "@lasercode/protocol";
 import type { DriverEvent, DriverListener, DriverReleaseReadiness, SessionDriver } from "../src/driver.js";
 import { fallbackSnapshot } from "../src/agents/definitions.js";
@@ -19,9 +22,35 @@ import type { NamerCompletion, NamerContext, NamerModelRuntime } from "../src/ag
 import { WorkerServer } from "../src/server.js";
 
 /** The agents snapshot the host sends once a model Namer may use exists. */
+const NAMING_PROFILE_ID = "mp_testretirenaming000000";
+
+/** A private agent directory holding one naming profile, for this file only. */
+let agentDir = "";
+
+beforeEach(() => {
+  agentDir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-retire-agent-`));
+  writeFileSync(
+    join(agentDir, "settings.json"),
+    JSON.stringify({
+      modelProfiles: [{
+        id: NAMING_PROFILE_ID,
+        name: "Fast",
+        models: [{ provider: "stub", id: "stub-1" }],
+        origin: "seeded",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }],
+      defaultProfileId: NAMING_PROFILE_ID,
+    }),
+  );
+});
+
+afterEach(() => {
+  rmSync(agentDir, { recursive: true, force: true });
+});
+
 function namerReady(): AgentsSnapshot {
   const snapshot = fallbackSnapshot();
-  return { ...snapshot, namer: { ...snapshot.namer, status: "ready", model: { provider: "stub", id: "stub-1" } } };
+  return { ...snapshot, builtinProfiles: { ...snapshot.builtinProfiles, namer: NAMING_PROFILE_ID } };
 }
 
 /**
@@ -106,6 +135,7 @@ function world(options: { retireLeaseMs?: number; namer?: NamerModelRuntime } = 
   const drivers: FakeDriver[] = [];
   const server = new WorkerServer({
     cwd: "/tmp/retire",
+    agentDir,
     createDriver: () => { const driver = new FakeDriver(); drivers.push(driver); return driver; },
     send: (message) => out.push(message),
     ...(options.namer ? { namerModels: async () => options.namer! } : {}),

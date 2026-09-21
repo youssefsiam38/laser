@@ -315,6 +315,8 @@ export const METHOD_POLICY = {
   // Writing the person's profiles is configuration that outlives a turn, and
   // it goes to the global settings file through `SettingsManager`.
   "models/profiles/save": { scope: "settings", reach: "any" },
+  // Host → worker plumbing: the settings half of the one-way migration.
+  "models/profiles/migrate": { scope: "settings", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
   "models/profiles/delete": { scope: "settings", reach: "any" },
   // The private variable overlay a shell or terminal hands down. A page,
   // local or not, must never be able to repoint a worker's environment.

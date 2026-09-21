@@ -1,7 +1,8 @@
 /**
- * The fallback chain controller (M15-T3, `docs/model-fallback-chains.md` §2–§4).
+ * The Model Profile controller (`docs/model-profiles.md` "Runtime"; the
+ * mechanics are M15-T3's, recorded in `docs/model-fallback-chains.md` §2–§4).
  *
- * It owns one session's chain: when one activates, what a failed turn does to
+ * It owns one session's profile: when one activates, what a failed turn does to
  * it, which model is tried next, and what is written down. Everything it needs
  * from the engine comes through {@link FallbackEngine}, so the whole state
  * machine runs in tests without a provider — the driver is the only thing that
@@ -25,9 +26,10 @@ import {
   modelKey,
   sameModel,
   type FallbackActivation,
-  type FallbackChain,
   type FallbackEvent,
-  type FallbackModelRef,
+  type ModelIdentity,
+  type ModelProfile,
+  type ProfileModelRef,
   type ModelRef,
   type ProviderFailure,
   type ProviderFailureClass,
@@ -46,6 +48,7 @@ import {
   nextCandidate,
   opensFailover,
   rememberFailure,
+  startPosition,
   type CandidateModel,
   type SkippedCandidate,
 } from "./policy.js";
@@ -67,7 +70,7 @@ type RecoverResult =
   | { kind: "exhausted" }
   | { kind: "none" }
   | { kind: "reenter"; tokens: number; skipped: readonly SkippedCandidate[] }
-  | { kind: "failed"; failure: ProviderFailure; candidate: FallbackModelRef; tokens: number };
+  | { kind: "failed"; failure: ProviderFailure; candidate: ProfileModelRef; tokens: number };
 
 /**
  * Person-facing exhaustion reasons: drop bookkeeping, drop a size skip that a
@@ -96,9 +99,12 @@ function personFacingSkips(
 
 /** Everything the controller needs from the live session, and nothing more. */
 export interface FallbackEngine {
-  /** Read fresh: a saved edit applies to the next activation, never to this one. */
-  chains(): FallbackChain[];
-  selectedModel(): FallbackModelRef | null;
+  /**
+   * The profile this session is running on, read fresh. A saved edit applies
+   * to the next activation, never to the one already in flight.
+   */
+  profile(): ModelProfile | null;
+  selectedModel(): ProfileModelRef | null;
   /** Eligibility facts per `provider/id`. */
   catalogue(): Promise<ReadonlyMap<string, CandidateModel>>;
   /** Names for what a person reads, per `provider/id`. */
@@ -110,7 +116,7 @@ export interface FallbackEngine {
    * guess: a normal response clears it.
    */
   lastFailure(): ProviderFailureSignal | undefined;
-  setModel(model: FallbackModelRef): Promise<void>;
+  setModel(model: ProfileModelRef): Promise<void>;
   /** Stop whatever the engine has in flight, so a person's choice is final. */
   abortTurn(): void;
   /** Continue the interrupted turn on the model that is selected now. */
@@ -133,7 +139,7 @@ export class FallbackController {
   /** Bumped by a person's own model choice; a failover step older than this stops. */
   private generation = 0;
   private switching = false;
-  private lastSwitch: { from: FallbackModelRef; to: FallbackModelRef; reason: ProviderFailureClass; at: string } | undefined;
+  private lastSwitch: { from: ProfileModelRef; to: ProfileModelRef; reason: ProviderFailureClass; at: string } | undefined;
   private abort: AbortController | undefined;
 
   constructor(private readonly engine: FallbackEngine) {}
@@ -144,11 +150,18 @@ export class FallbackController {
   }
 
   summary(): SessionFallbackSummary | undefined {
+    const profile = this.engine.profile();
     return summaryFor(this.state, {
       catalogue: this.engine.names(),
+      ...(profile && profile.id === this.state.activation?.profileId ? { profile } : {}),
       ...(this.switching ? { switching: true } : {}),
       ...(this.lastSwitch ? { lastSwitch: this.lastSwitch } : {}),
     });
+  }
+
+  /** The profile id this session is actually running on, or null when it is pinned. */
+  activeProfileId(): string | null {
+    return this.state.activation?.profileId ?? null;
   }
 
   /** The session file's own last word, restored verbatim (§4). */
@@ -188,28 +201,88 @@ export class FallbackController {
   }
 
   /**
-   * A person chose a model. Their choice wins over anything in flight: the
-   * failover is cancelled, the activation is replaced by whatever chain that
-   * model starts (or none), and the marks that only a decision can clear go
-   * with it. Cooldowns are instants and survive.
+   * A person pinned this session to one model.
+   *
+   * A pin is the deliberate escape hatch: the session leaves its profile and
+   * has nothing to move to. Anything in flight is cancelled, the activation
+   * goes, and the marks only a decision can clear go with it. Cooldowns are
+   * instants and survive.
    */
-  onManualSelection(model: FallbackModelRef): void {
-    const wasSwitching = this.switching;
-    this.generation++;
-    this.abort?.abort();
-    // A request may already be out on a model the person has just replaced.
-    // Stopping the engine is what makes their choice final rather than a race:
-    // a late answer would otherwise land, and its failure would open another
-    // failover on a chain that no longer applies.
-    if (wasSwitching) this.engine.abortTurn();
+  onPin(model: ProfileModelRef): void {
+    this.stopInFlight();
     const had = this.state.activation !== null || Object.keys(this.state.models).length > 0;
-    const activation = activate(this.engine.chains(), model, { id: this.engine.newId(), at: this.iso() });
-    this.state = {
-      activation,
-      models: clearActivationMarks(this.state.models),
-    };
+    this.state = { activation: null, models: clearActivationMarks(this.state.models) };
     this.lastSwitch = undefined;
-    if (had) this.write(activation ? "activated" : "cleared", { to: model });
+    if (had) this.write("cleared", { to: model });
+  }
+
+  /**
+   * A person chose a profile. Their choice wins over anything in flight: the
+   * session re-anchors to that profile's first model and starts a fresh
+   * activation, with a fresh snapshot of the profile as it is now.
+   */
+  onProfileChosen(profile: ModelProfile): FallbackActivation | null {
+    this.stopInFlight();
+    const activation = activate(profile, { id: this.engine.newId(), at: this.iso() });
+    this.state = { activation, models: clearActivationMarks(this.state.models) };
+    this.lastSwitch = undefined;
+    this.write(activation ? "activated" : "cleared", {
+      ...(activation?.models[activation.position] ? { to: activation.models[activation.position]! } : {}),
+    });
+    return activation;
+  }
+
+  /**
+   * Where this session should begin inside its profile.
+   *
+   * The profile's first model unless it cannot be used right now, in which case
+   * the walk continues in order and every model it passed over is recorded —
+   * exactly as a move would record it, so "why am I not on the model I chose"
+   * is answerable from the session's own file.
+   *
+   * Returns the model to select, or `null` when position 0 already stands.
+   * A session with a traversal behind it is never re-walked.
+   */
+  async startWalk(): Promise<ProfileModelRef | null> {
+    const activation = this.state.activation;
+    if (!activation || activation.position !== 0 || this.state.failover) return null;
+    const catalogue = await this.engine.catalogue();
+    const { position, skipped } = startPosition({
+      activation,
+      // Availability only. A cooldown is what a *move* respects; at the moment
+      // a person anchors a session to a profile, the question is whether the
+      // model can be reached at all — not whether it was unlucky ten minutes
+      // ago (`docs/model-profiles.md`, "Runtime").
+      memory: {},
+      catalogue,
+      contextTokens: null,
+      now: this.engine.now(),
+    });
+    if (position === 0 || skipped.length === 0) return null;
+    const at = this.iso();
+    this.state = {
+      ...this.state,
+      activation: { ...activation, position },
+      failover: {
+        id: this.engine.newId(),
+        startedAt: at,
+        attempts: skipped.map((entry) => ({ model: modelKey(entry.model), at, outcome: "skipped" as const, reason: entry.reason })),
+        endedAt: at,
+        ended: "switched" as const,
+      },
+    };
+    const model = activation.models[position]!;
+    this.write("activated", { to: model });
+    this.engine.emit({
+      kind: "model_fallback",
+      phase: "switched",
+      to: this.ref(model),
+      reason: "unknown",
+      detail: `Started on ${this.name(model)}: ${skipped.map((entry) => `${this.name(entry.model)} ${entry.reason}`).join(", ")}.`,
+      profileId: activation.profileId,
+      position,
+    });
+    return model;
   }
 
   /** Stop a failover: an abort, a cancelled turn, a disposed session. */
@@ -278,6 +351,7 @@ export class FallbackController {
         from: this.ref(failed),
         reason: failure.class,
         detail: `${this.name(failed)} ${failureWording(failure.class)}.`,
+        profileId: activation.profileId,
         position: activation.position,
       });
 
@@ -376,9 +450,9 @@ export class FallbackController {
    * ordinary attempt path joins after `setModel`.
    */
   private async finishAttempt(options: {
-    origin: FallbackModelRef;
+    origin: ProfileModelRef;
     originFailure: ProviderFailure;
-    candidate: FallbackModelRef;
+    candidate: ProfileModelRef;
     position: number;
     direction: "return" | "advance";
     retries: "none" | "normal";
@@ -411,6 +485,7 @@ export class FallbackController {
       to: this.ref(options.candidate),
       reason: next.class,
       detail: `${this.name(options.candidate)} ${failureWording(next.class)}.`,
+      ...this.profileRef(),
       position: options.position,
     });
     this.write("attempt_failed", { to: options.candidate, failure: { class: next.class, at: this.iso() } });
@@ -424,7 +499,7 @@ export class FallbackController {
     return { kind: "failed", failure: next };
   }
 
-  private async selectCandidate(candidate: FallbackModelRef): Promise<"selected" | "refused"> {
+  private async selectCandidate(candidate: ProfileModelRef): Promise<"selected" | "refused"> {
     try {
       await this.engine.setModel(candidate);
       return "selected";
@@ -454,10 +529,10 @@ export class FallbackController {
     allSkipped: SkippedCandidate[];
     catalogue: ReadonlyMap<string, CandidateModel>;
     exhaustionPosition: number;
-    models: readonly FallbackModelRef[];
-    origin: FallbackModelRef;
+    models: readonly ProfileModelRef[];
+    origin: ProfileModelRef;
     originFailure: ProviderFailure;
-    standing: FallbackModelRef;
+    standing: ProfileModelRef;
     standingFailure: ProviderFailure;
     generation: number;
     abort: AbortController;
@@ -518,10 +593,27 @@ export class FallbackController {
   }
 
   private activationForSelectedModel(): FallbackActivation | null {
-    return activate(this.engine.chains(), this.engine.selectedModel(), {
+    const profile = this.engine.profile();
+    if (!profile) return null;
+    const selected = this.engine.selectedModel();
+    const index = selected ? profile.models.findIndex((model) => sameModel(model, selected)) : -1;
+    return activate(profile, {
       id: this.engine.newId(),
       at: this.iso(),
+      ...(index > 0 ? { position: index } : {}),
     });
+  }
+
+  /** Cancel whatever is in flight so a person's own choice is final, not a race. */
+  private stopInFlight(): void {
+    const wasSwitching = this.switching;
+    this.generation++;
+    this.abort?.abort();
+    // A request may already be out on a model the person has just replaced.
+    // Stopping the engine is what makes their choice final: a late answer would
+    // otherwise land, and its failure would open a move inside a profile that
+    // no longer applies.
+    if (wasSwitching) this.engine.abortTurn();
   }
 
   private stale(generation: number, abort: AbortController): boolean {
@@ -532,7 +624,7 @@ export class FallbackController {
     return this.state.failover ?? { id: "none", startedAt: this.iso(), attempts: [] };
   }
 
-  private openEvent(failed: FallbackModelRef, failure: ProviderFailure): void {
+  private openEvent(failed: ProfileModelRef, failure: ProviderFailure): void {
     const at = this.iso();
     this.state = {
       ...this.state,
@@ -561,7 +653,7 @@ export class FallbackController {
     return false;
   }
 
-  private recordAttempt(model: FallbackModelRef, outcome: Omit<FallbackEvent["attempts"][number], "model" | "at">): void {
+  private recordAttempt(model: ProfileModelRef, outcome: Omit<FallbackEvent["attempts"][number], "model" | "at">): void {
     const failover = this.state.failover;
     if (!failover) return;
     this.state = {
@@ -571,8 +663,8 @@ export class FallbackController {
   }
 
   private succeeded(
-    from: FallbackModelRef,
-    to: FallbackModelRef,
+    from: ProfileModelRef,
+    to: ProfileModelRef,
     position: number,
     direction: "return" | "advance",
     failure: ProviderFailure,
@@ -594,14 +686,15 @@ export class FallbackController {
       to: this.ref(to),
       reason: failure.class,
       detail: `${this.name(from)} ${failureWording(failure.class)}.`,
+      ...this.profileRef(),
       position,
     });
   }
 
   private exhausted(
-    failed: FallbackModelRef,
+    failed: ProfileModelRef,
     failure: ProviderFailure,
-    skipped: ReadonlyArray<{ model: FallbackModelRef; reason: string }>,
+    skipped: ReadonlyArray<{ model: ProfileModelRef; reason: string }>,
   ): void {
     const at = this.iso();
     this.closeEvent("exhausted");
@@ -613,13 +706,14 @@ export class FallbackController {
       from: this.ref(failed),
       reason: failure.class,
       detail,
+      ...this.profileRef(),
       position: this.state.activation?.position ?? 0,
     });
   }
 
   private write(
     event: SessionFallbackEntry["event"],
-    options: { from?: FallbackModelRef; to?: FallbackModelRef; failure?: { class: ProviderFailureClass; at: string } } = {},
+    options: { from?: ProfileModelRef; to?: ProfileModelRef; failure?: { class: ProviderFailureClass; at: string } } = {},
   ): void {
     try {
       this.engine.appendEntry(
@@ -639,11 +733,17 @@ export class FallbackController {
     }
   }
 
-  private ref(model: FallbackModelRef): ModelRef {
+  /** The profile a move happened inside, for the update a client draws. */
+  private profileRef(): { profileId?: string } {
+    const id = this.state.activation?.profileId;
+    return id ? { profileId: id } : {};
+  }
+
+  private ref(model: ProfileModelRef): ModelRef {
     return this.engine.names().get(modelKey(model)) ?? { provider: model.provider, id: model.id };
   }
 
-  private name(model: FallbackModelRef): string {
+  private name(model: ProfileModelRef): string {
     const known = this.engine.names().get(modelKey(model));
     return known?.name ?? model.id;
   }

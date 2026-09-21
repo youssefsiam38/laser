@@ -11,10 +11,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SettingDescriptor, SettingsScope } from "@lasercode/protocol";
-import { FALLBACK_CHAINS_SETTING } from "@lasercode/protocol";
+import { DEFAULT_PROFILE_SETTING, MODEL_PROFILES_SETTING, PROFILE_ASSIGNMENT_SETTINGS } from "@lasercode/protocol";
 import {
   LASER_SETTINGS_KEYS,
-  readFallbackChains,
+  readModelProfiles,
+  readProfileAssignments,
+  resolveProfile,
   PI_SETTINGS_TOP_LEVEL_KEYS,
   SETTINGS_CLASSIFICATIONS,
   SETTINGS_FIELDS,
@@ -55,7 +57,10 @@ function sampleFor(field: SettingDescriptor): unknown {
     case "boolean":
       return field.default === true ? false : true;
     case "text":
-      return `${PRODUCT_NAME}-${field.path}`;
+      // An assignment holds a profile id and nothing else.
+      return (PROFILE_ASSIGNMENT_SETTINGS as readonly string[]).includes(field.path)
+        ? "mp_testsample00000000000"
+        : `${PRODUCT_NAME}-${field.path}`;
     case "number": {
       const min = type.min ?? 1;
       const max = type.max ?? min + 1000;
@@ -71,9 +76,15 @@ function sampleFor(field: SettingDescriptor): unknown {
     case "enum-map":
       return { "anthropic/claude-sonnet-4-20250514": type.options[0]!.value };
     case "json":
-      // The product owns the shape of this one, so its sample is a real chain.
-      return field.path === FALLBACK_CHAINS_SETTING
-        ? [{ models: [{ provider: "anthropic", id: "claude-sonnet-4-5" }, { provider: "deepseek", id: "deepseek-chat" }] }]
+      // The product owns the shape of this one, so its sample is a real profile.
+      return field.path === MODEL_PROFILES_SETTING
+        ? [{
+            id: "mp_testsample00000000000",
+            name: "Balanced",
+            models: [{ provider: "anthropic", id: "claude-sonnet-4-5" }, { provider: "deepseek", id: "deepseek-chat" }],
+            origin: "person",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          }]
         : [{ source: "pi-skills", skills: ["brave-search"] }];
   }
 }
@@ -354,64 +365,96 @@ describe("project trust", () => {
   });
 });
 
-describe("fallback chains", () => {
-  const chain = (...models: Array<[string, string]>) => ({ models: models.map(([provider, id]) => ({ provider, id })) });
-  const sonnetThenDeepseek = chain(["anthropic", "claude-sonnet-4-5"], ["deepseek", "deepseek-chat"]);
+describe("model profiles", () => {
+  const profile = (id: string, name: string, ...models: Array<[string, string]>) => ({
+    id,
+    name,
+    models: models.map(([provider, modelId]) => ({ provider, id: modelId })),
+    origin: "person" as const,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const BALANCED = profile("mp_testbalanced000000000", "Balanced", ["anthropic", "claude-sonnet-4-5"], ["deepseek", "deepseek-chat"]);
+  const FAST = profile("mp_testfast00000000000000", "Fast", ["deepseek", "deepseek-chat"]);
   const writeGlobal = (value: unknown) =>
-    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ fallbackChains: value }), "utf8");
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ modelProfiles: value }), "utf8");
 
   it("is a product key the catalogue offers at global scope only", () => {
-    const field = SETTINGS_FIELDS.find((f) => f.path === FALLBACK_CHAINS_SETTING)!;
-    expect(LASER_SETTINGS_KEYS).toContain(FALLBACK_CHAINS_SETTING);
+    const field = SETTINGS_FIELDS.find((f) => f.path === MODEL_PROFILES_SETTING)!;
+    expect(LASER_SETTINGS_KEYS).toContain(MODEL_PROFILES_SETTING);
     expect(field.scopes).toEqual(["global"]);
-    expect(settingsCatalog().fields.some((f) => f.path === FALLBACK_CHAINS_SETTING)).toBe(true);
+    expect(settingsCatalog().fields.some((f) => f.path === MODEL_PROFILES_SETTING)).toBe(true);
+    // And every assignment is a product key of its own, global too.
+    for (const key of PROFILE_ASSIGNMENT_SETTINGS) {
+      expect(LASER_SETTINGS_KEYS).toContain(key);
+      expect(SETTINGS_FIELDS.find((f) => f.path === key)!.scopes).toEqual(["global"]);
+    }
+    // The engine's own model defaults are no longer a surface at all.
+    for (const gone of ["defaultProvider", "defaultModel", "defaultThinkingLevel", "modelThinkingLevels"]) {
+      expect(settingsCatalog().fields.some((f) => f.path === gone), gone).toBe(false);
+    }
   });
 
-  it("refuses a chain a person could not have meant, with the sentence they would read", () => {
-    const field = SETTINGS_FIELDS.find((f) => f.path === FALLBACK_CHAINS_SETTING)!;
-    expect(validateSettingValue(field, [sonnetThenDeepseek])).toBeUndefined();
-    expect(validateSettingValue(field, [chain(["anthropic", "claude-sonnet-4-5"])])).toMatch(/Add a model to fall back to/);
-    expect(
-      validateSettingValue(field, [sonnetThenDeepseek, chain(["anthropic", "claude-sonnet-4-5"], ["google", "gemini-2.5-pro"])]),
-    ).toMatch(/already starts a chain/);
-    expect(validateSettingValue(field, "chains")).toMatch(/must be a list/);
+  it("refuses a profile a person could not have meant, with the sentence they would read", () => {
+    const field = SETTINGS_FIELDS.find((f) => f.path === MODEL_PROFILES_SETTING)!;
+    expect(validateSettingValue(field, [BALANCED, FAST])).toBeUndefined();
+    expect(validateSettingValue(field, [{ ...BALANCED, name: "" }])).toMatch(/Give this profile a name/);
+    expect(validateSettingValue(field, [BALANCED, { ...FAST, name: "balanced" }])).toMatch(/already called/);
+    expect(validateSettingValue(field, "profiles")).toMatch(/must be a list/);
   });
 
-  it("writes nothing when the chain is invalid, and round-trips one that is not", async () => {
+  it("refuses an assignment that is not one of the person's profiles", () => {
+    const field = SETTINGS_FIELDS.find((f) => f.path === DEFAULT_PROFILE_SETTING)!;
+    expect(validateSettingValue(field, BALANCED.id)).toBeUndefined();
+    expect(validateSettingValue(field, "Balanced")).toMatch(/Choose one of your model profiles/);
+  });
+
+  it("writes nothing when the profile is invalid, and round-trips one that is not", async () => {
     const settings = adapter();
     await expect(
-      settings.apply("global", [{ path: FALLBACK_CHAINS_SETTING, op: "set", value: [chain(["openai", "gpt-5"])] }]),
+      settings.apply("global", [{ path: MODEL_PROFILES_SETTING, op: "set", value: [{ ...BALANCED, id: "balanced" }] }]),
     ).rejects.toBeInstanceOf(SettingsError);
-    expect(readFallbackChains(agentDir)).toEqual([]);
+    expect(readModelProfiles(agentDir)).toEqual([]);
 
-    const snapshot = await settings.apply("global", [{ path: FALLBACK_CHAINS_SETTING, op: "set", value: [sonnetThenDeepseek] }]);
-    expect(snapshot.global.values[FALLBACK_CHAINS_SETTING]).toEqual([sonnetThenDeepseek]);
-    expect(readFallbackChains(agentDir)).toEqual([sonnetThenDeepseek]);
+    const snapshot = await settings.apply("global", [{ path: MODEL_PROFILES_SETTING, op: "set", value: [BALANCED] }]);
+    expect(snapshot.global.values[MODEL_PROFILES_SETTING]).toEqual([BALANCED]);
+    expect(readModelProfiles(agentDir)).toEqual([BALANCED]);
   });
 
   it("is a person's own configuration: a project file cannot change it", async () => {
     await expect(
-      adapter(true).apply("project", [{ path: FALLBACK_CHAINS_SETTING, op: "set", value: [sonnetThenDeepseek] }]),
+      adapter(true).apply("project", [{ path: MODEL_PROFILES_SETTING, op: "set", value: [BALANCED] }]),
     ).rejects.toThrow(/only be set at global scope/);
-    // Even written by hand, a project file is not where chains are read from.
+    // Even written by hand, a project file is not where profiles are read from.
     mkdirSync(join(cwd, PROJECT_DIR_NAME), { recursive: true });
-    writeFileSync(join(cwd, PROJECT_DIR_NAME, "settings.json"), JSON.stringify({ fallbackChains: [sonnetThenDeepseek] }), "utf8");
-    expect(readFallbackChains(agentDir)).toEqual([]);
+    writeFileSync(join(cwd, PROJECT_DIR_NAME, "settings.json"), JSON.stringify({ modelProfiles: [BALANCED] }), "utf8");
+    expect(readModelProfiles(agentDir)).toEqual([]);
   });
 
   it("reads a hand-edited file for what it does say, and nothing for what it cannot", () => {
     writeGlobal("nonsense");
-    expect(readFallbackChains(agentDir)).toEqual([]);
-    // A chain of one and a duplicate starter are dropped; the rest still work.
+    expect(readModelProfiles(agentDir)).toEqual([]);
+    // A repeated id, a repeated name and a profile with no usable model are
+    // dropped; the rest still work.
     writeGlobal([
-      chain(["openai", "gpt-5"]),
-      sonnetThenDeepseek,
-      chain(["Anthropic", "Claude-Sonnet-4-5"], ["google", "gemini-2.5-pro"]),
-      chain(["deepseek", "deepseek-chat"], ["DeepSeek", "deepseek-chat"], ["openrouter", "auto"]),
+      BALANCED,
+      { ...FAST, id: BALANCED.id },
+      { ...FAST, name: "BALANCED" },
+      { ...FAST, models: [] },
+      FAST,
     ]);
-    expect(readFallbackChains(agentDir)).toEqual([
-      sonnetThenDeepseek,
-      chain(["deepseek", "deepseek-chat"], ["openrouter", "auto"]),
-    ]);
+    expect(readModelProfiles(agentDir).map((entry) => entry.name)).toEqual(["Balanced", "Fast"]);
+  });
+
+  it("never points an assignment at a profile that is gone", () => {
+    writeFileSync(
+      join(agentDir, "settings.json"),
+      JSON.stringify({ modelProfiles: [BALANCED], defaultProfileId: BALANCED.id, namingProfileId: "mp_testgone00000000000000" }),
+      "utf8",
+    );
+    const assignments = readProfileAssignments(agentDir);
+    expect(assignments.defaultProfileId).toBe(BALANCED.id);
+    expect(assignments.namingProfileId).toBeNull();
+    // Resolution falls through to the profile new sessions use.
+    expect(resolveProfile(readModelProfiles(agentDir), assignments, "namingProfileId")).toEqual(BALANCED);
   });
 });
