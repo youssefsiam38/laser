@@ -7,6 +7,7 @@ export { DesignCanvas, type DesignCanvasProps } from "./DesignCanvas.js";
 export { DesignIndexPanel, type DesignIndexAccess, type DesignIndexState, type DesignReindexState, type DesignReviewVerb } from "./DesignIndexPanel.js";
 export { HostContextPanel, HOST_PENDING_SENTENCE, type GroundHostPage, type HostContextPanelProps } from "./HostContextPanel.js";
 export { useDesignAccess, DISCONNECTED_SENTENCE, type DesignWorkspaceAccess } from "./use-design-access.js";
+export { useDesignBuildOwner, designBuildOwnerHasSession, DESIGN_BUILD_NEEDS_SESSION_SENTENCE, type DesignBuildOwner } from "./build-owner.js";
 export { FlowsPanel, flowActionLabel, type FlowsPanelProps } from "./FlowsPanel.js";
 export { FoundationCanvas, type FoundationCanvasProps } from "./FoundationCanvas.js";
 export {

@@ -72,9 +72,22 @@ describe("params", () => {
   });
 
   it("takes the host's cwd but never requires it of a client", () => {
-    const schema = designWorkspaceParamsSchemas["design/index/build"];
+    const schema = designWorkspaceParamsSchemas["design/index/get"];
     expect(schema.safeParse({ projectId: PROJECT }).success).toBe(true);
     expect(schema.safeParse({ projectId: PROJECT, cwd: "/home/p" }).success).toBe(true);
+  });
+
+  /**
+   * A build is a Command in a conversation — watched by files and stopped
+   * there — so the method cannot be called without naming the one that owns
+   * it. This is the wire's half of that rule; the worker checks the session is
+   * one it actually holds.
+   */
+  it("refuses a build that names no owning conversation", () => {
+    const schema = designWorkspaceParamsSchemas["design/index/build"];
+    expect(schema.safeParse({ projectId: PROJECT }).success).toBe(false);
+    expect(schema.safeParse({ projectId: PROJECT, sessionPath: "" }).success).toBe(false);
+    expect(schema.safeParse({ projectId: PROJECT, sessionPath: "/s.jsonl" }).success).toBe(true);
   });
 });
 
@@ -95,6 +108,7 @@ describe("results", () => {
       currentPath: "src/Button.tsx",
       elapsedMs: 900,
       running: true,
+      sessionPath: "/s.jsonl",
     };
     expect(designWorkspaceResultSchemas["design/index/build"].parse({ command })).toEqual({ command });
     // Nothing in the shape can carry a percentage: the row shows files.

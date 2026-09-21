@@ -25,11 +25,31 @@ import { FEATURE_SIZES } from "../host/strategy.js";
 import type { HostGroundingBridge } from "../host/ground.js";
 import { DESIGN_REVIEW_ACTIONS, reviewProgress, type DesignReviewAction, type ReviewActor } from "./review.js";
 
-/** What the tools need from the worker. One place to script, one to wire. */
+/**
+ * The session a build belongs to.
+ *
+ * Decided when the build is admitted and carried with it from there: the row
+ * a person watches, and the Stop they press, hang under this session
+ * (D-328: one command, one session). Nothing reads an owner back off a
+ * mutable field afterwards, so two sessions building at once cannot take each
+ * other's command.
+ */
+export interface DesignBuildOwner {
+  sessionPath: string;
+}
+
+/**
+ * What the tools need from the worker. One place to script, one to wire.
+ *
+ * The instance a session's tools hold is **bound to that session**: its
+ * `startBuild` knows which conversation is asking, so the model never names an
+ * owner and can never name someone else's. The worker builds one per session
+ * over the project's single index; a scripted world binds a fixture session.
+ */
 export interface DesignIndexBridge {
   /** The reviewed index of this project, or undefined when it has never been built. */
   index(): Promise<DesignIndex | undefined>;
-  /** Start a build; returns the command the fleet shows. */
+  /** Start a build owned by this bridge's session; returns the command the fleet shows. */
   startBuild(input: { rebuild: boolean; appRoot?: string; maxFiles?: number }): Promise<{ commandId: string; title: string; appRoot: string }>;
   /** Apply one review decision; returns the entry as it now reads. */
   review(input: {
@@ -485,7 +505,7 @@ export async function buildDesignIndexTool(bridge: DesignIndexBridge, input: Bui
     commandId: started.commandId,
     title: started.title,
     appRoot: started.appRoot,
-    note: "The index is being built in the background; it shows in the fleet with its progress in files, and the person can stop it. Carry on with your own work and read it with inspect_design_index when it is done.",
+    note: "The index is being built in the background; it shows in this conversation's fleet with its progress in files, and the person can stop it there. Carry on with your own work and read it with inspect_design_index when it is done.",
   };
 }
 
