@@ -8,7 +8,7 @@ export const MODES = Object.freeze({
   quick: Object.freeze({
     name: 'quick',
     projects: 1, sessionsPerProject: 3, longSessions: 1, longMessages: 80,
-    workspaceSessionsPerKind: 1,
+    chatSessions: 1,
     children: 2, foregroundCalls: 3, backgroundCalls: 3,
     images: 2, imageSide: 512, reasoningBytes: 256 * 1024,
     markdownBytes: 256 * 1024, toolBytes: 512 * 1024,
@@ -31,7 +31,7 @@ export const MODES = Object.freeze({
   full: Object.freeze({
     name: 'full',
     projects: 5, sessionsPerProject: 10, longSessions: 4, longMessages: 240,
-    workspaceSessionsPerKind: 2,
+    chatSessions: 2,
     children: 10, foregroundCalls: 100, backgroundCalls: 100,
     images: 12, imageSide: 2048, reasoningBytes: 2 * 1024 * 1024,
     markdownBytes: 2 * 1024 * 1024, toolBytes: 8 * 1024 * 1024,
@@ -71,7 +71,8 @@ export function modeConfig(name) {
 /** What the fixture must produce, derived from the mode, never from a literal. */
 export function expected(config) {
   const projectSessions = config.projects * config.sessionsPerProject;
-  const workspaceSessions = config.workspaceSessionsPerKind * 2;
+  // One private workspace since M23: Chat (`docs/plain-chat.md`).
+  const workspaceSessions = config.chatSessions;
   const shortSessions = projectSessions - config.longSessions;
   return {
     projectSessions,

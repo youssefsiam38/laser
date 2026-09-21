@@ -1,4 +1,5 @@
 /** Small formatters shared by the table-printing commands. */
+import { sessionKindOf, type SessionAgentInfo } from "@lasercode/protocol";
 import { homedir } from "node:os";
 import { basename, dirname, sep } from "node:path";
 
@@ -25,6 +26,22 @@ export function shortCwd(cwd: string): string {
   const parts = collapsed.split(sep).filter(Boolean);
   if (parts.length <= 2) return collapsed;
   return `…${sep}${parts.slice(-2).join(sep)}`;
+}
+
+/**
+ * Where a conversation belongs, for a table cell: a project by its directory,
+ * a plain Chat by its name (`docs/plain-chat.md`). A Chat has no project and
+ * no agent, so printing the private workspace directory it happens to run in
+ * would name an implementation detail instead of the thing.
+ *
+ * A record written before M23 still says `beam`; `sessionKindOf` reads it as
+ * the Chat it now is. A conversation the host has not attributed yet (no file
+ * on disk to read a record from) is printed by its directory, as before.
+ */
+export function sessionPlace(session: { cwd: string; agent?: SessionAgentInfo | undefined }): string {
+  const agent = session.agent;
+  const kind = agent === undefined ? "project" : agent.sessionKind ?? sessionKindOf(agent.kind);
+  return kind === "chat" ? "Chat" : shortCwd(session.cwd);
 }
 
 /** The part of a session path a person can retype: its file name. */

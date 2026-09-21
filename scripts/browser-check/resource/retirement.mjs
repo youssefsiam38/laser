@@ -155,13 +155,12 @@ export async function traverseRetainedViews(check, sessions, workspaceSessions, 
   const retained = [...sessions, ...workspaceSessions];
   assert.equal(retained.length, expectedCount, 'retirement traversal has the expected retained view count');
   assert.equal(new Set(retained.map(session => session.path)).size, expectedCount, 'retirement traversal paths are unique');
-  const rank = session => session.kind === 'chat' ? 2 : session.kind === 'beam' ? 1 : 0;
+  const rank = session => session.kind === 'chat' ? 1 : 0;
   const ordered = retained.map((session, index) => ({ session, index })).sort((a, b) => rank(a.session) - rank(b.session) || a.index - b.index);
   for (const { session } of ordered) await select(check, session);
   const kinds = ordered.reduce((counts, { session }) => {
-    const kind = session.kind === 'chat' ? 'chat' : session.kind === 'beam' ? 'beam' : 'project';
-    counts[kind] += 1; return counts;
-  }, { project: 0, beam: 0, chat: 0 });
+    counts[session.kind === 'chat' ? 'chat' : 'project'] += 1; return counts;
+  }, { project: 0, chat: 0 });
   return { visited: ordered.length, unique: expectedCount, ...kinds };
 }
 

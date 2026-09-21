@@ -16,7 +16,7 @@ import type { AgentRun, AgentRunStatus, BackgroundTask, ModelProfile, SessionSum
 import { bool, str } from "../args.js";
 import type { Command, CommandContext } from "../command.js";
 import { CliError, ExitCode } from "../errors.js";
-import { plural, shortCwd } from "../format.js";
+import { plural, sessionPlace } from "../format.js";
 import { sanitizeDeep, table } from "../output.js";
 import { HostRpcError, describeRpcError, type HostRpc } from "../rpc.js";
 import { listSessions, resolveProject } from "../session-ref.js";
@@ -293,7 +293,7 @@ this is exactly what the app shows.`,
           { header: "profile", get: (row) => (row.substitutedFor ? `${row.profile ?? "—"} (for ${row.substitutedFor})` : row.profile ?? "—") },
           { header: "model", get: (row) => row.model ?? "—" },
           { header: "elapsed", get: (row) => { const ms = elapsedOf(row, now); return ms === undefined ? "—" : formatElapsed(ms); }, align: "right" },
-          { header: "project", get: (row) => shortCwd(row.session.cwd) },
+          { header: "project", get: (row) => sessionPlace(row.session) },
         ],
         ctx.term.out,
       )) {

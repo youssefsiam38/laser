@@ -62,7 +62,6 @@ export default async function environmentAffordances(check) {
 
   const settings = page.getByRole('button', { name: 'Settings', exact: true });
   if (!await settings.isVisible()) await page.getByRole('button', { name: 'Sessions', exact: true }).click();
-  assert.equal(await page.getByRole('button', { name: 'Beam', exact: true }).count(), 0, 'Beam affordance stays hidden');
   await settings.click();
   await page.getByRole('button', { name: 'General', exact: true }).waitFor();
   await page.getByText(/read these settings/i).first().waitFor();

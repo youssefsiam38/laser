@@ -3,20 +3,19 @@ import { createSessions } from '../fixtures.mjs';
 import { hydrate, selectSession } from '../sidebar.mjs';
 import { slopeSummary } from '../report.mjs';
 
-async function createWorkspaceSessions(run, perKind) {
+async function createWorkspaceSessions(run, count) {
   const { check } = run;
   const snapshot = await check.rpc('agents/list', {});
   const sessions = [];
-  for (const name of ['beam', 'chat']) {
-    const cwd = snapshot.workspaces?.[name];
-    assert.equal(typeof cwd, 'string', `${name} workspace is unavailable from the authoritative catalog`);
-    for (let ordinal = 1; ordinal <= perKind; ordinal++) {
-      const state = (await check.rpc('session/new', { cwd, agentName: name })).state;
-      await check.rpc('pi/model/set', { path: state.path, model: { provider: 'stub', id: 'stub-1' } });
-      const alias = `${name === 'beam' ? 'Beam' : 'Chat'}-${ordinal}`;
-      await check.rpc('pi/session/rename', { path: state.path, name: alias });
-      sessions.push({ path: state.path, cwd, alias, kind: name, groupRows: perKind });
-    }
+  const cwd = snapshot.workspaces?.chat;
+  assert.equal(typeof cwd, 'string', 'the Chat workspace is unavailable from the authoritative catalog');
+  for (let ordinal = 1; ordinal <= count; ordinal++) {
+    // A plain Chat: its kind, no agent name (`docs/plain-chat.md`).
+    const state = (await check.rpc('session/new', { cwd, sessionKind: 'chat' })).state;
+    await check.rpc('pi/model/set', { path: state.path, model: { provider: 'stub', id: 'stub-1' } });
+    const alias = `Chat-${ordinal}`;
+    await check.rpc('pi/session/rename', { path: state.path, name: alias });
+    sessions.push({ path: state.path, cwd, alias, kind: 'chat', groupRows: count });
   }
   await hydrate(check, sessions, run.config.hydrateCheckpointEvery);
   for (const session of sessions) await selectSession(check, session);
@@ -43,11 +42,11 @@ export default {
     });
     assert.equal(open, sessions.length, 'every distinct project session is held by the UI store');
     for (const session of sessions) await selectSession(check, session);
-    const workspaceSessions = await createWorkspaceSessions(run, config.workspaceSessionsPerKind);
+    const workspaceSessions = await createWorkspaceSessions(run, config.chatSessions);
     assert.equal(workspaceSessions.length, expected.workspaceSessions);
     report.visitCheckpoints = visitCheckpoints;
     report.visitSlopeCheckpoints = visitSlopeCheckpoints;
-    report.workspaceSessions = { beam: workspaceSessions.filter(row => row.kind === 'beam').length, chat: workspaceSessions.filter(row => row.kind === 'chat').length };
+    report.workspaceSessions = { chat: workspaceSessions.filter(row => row.kind === 'chat').length };
 
     const onePerWorkspace = [...new Map([...sessions, ...workspaceSessions].map(session => [session.cwd, session])).values()];
     // Every project and private workspace ready at one moment. A worker that

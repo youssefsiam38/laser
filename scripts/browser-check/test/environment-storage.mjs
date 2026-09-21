@@ -52,7 +52,7 @@ export default async function environmentStorage(check) {
   ]);
   const NEUTRAL_PREFIXES = [storageKey('mobile-insecure-dismissed:')];
   const SUFFIXES = new Set([
-    'destination', 'sessions', 'project', 'beam-session', 'archived', 'session-groups', 'session-pins',
+    'destination', 'sessions', 'project', 'archived', 'session-groups', 'session-pins',
     'session-folds', 'activity-detail', 'activity-disclosure', 'fleet-cleared', 'drafts', 'descriptor',
   ]);
 

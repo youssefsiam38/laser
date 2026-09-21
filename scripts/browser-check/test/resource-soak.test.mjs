@@ -48,7 +48,7 @@ test('quick fixture still exercises every bounded mechanism', () => {
   assert.deepEqual([quick.projects * quick.sessionsPerProject, quick.longMessages, quick.children,
     quick.foregroundCalls + quick.backgroundCalls, quick.images, quick.imageSide], [3, 80, 2, 6, 2, 512]);
   const values = expected(quick);
-  assert.deepEqual([values.retainedViews, values.workspaceSessions, values.workers, values.seedRequests, values.historyPages], [5, 2, 3, 44, 1]);
+  assert.deepEqual([values.retainedViews, values.workspaceSessions, values.workers, values.seedRequests, values.historyPages], [4, 1, 2, 44, 1]);
 });
 
 test('PNG generator is deterministic, valid and uniquely seeded', () => {
@@ -512,32 +512,29 @@ test('adversarial slow client resumes, terminates and waits for close', async ()
   assert.equal(settled, true);
 });
 
-function fixtureViews(projects, sessionsPerProject, beam, chat) {
+function fixtureViews(projects, sessionsPerProject, chat) {
   const sessions = Array.from({ length: projects * sessionsPerProject }, (_, index) => ({ path: `/project-${index}`, alias: `P-${index}` }));
-  const workspace = [
-    ...Array.from({ length: beam }, (_, index) => ({ path: `/beam-${index}`, alias: `B-${index}`, kind: 'beam' })),
-    ...Array.from({ length: chat }, (_, index) => ({ path: `/chat-${index}`, alias: `C-${index}`, kind: 'chat' })),
-  ];
+  const workspace = Array.from({ length: chat }, (_, index) => ({ path: `/chat-${index}`, alias: `C-${index}`, kind: 'chat' }));
   return { sessions, workspace };
 }
 
 test('quick retirement traversal selects every retained view once in stable kind order', async () => {
   const quick = modeConfig('quick'); const values = expected(quick);
-  const { sessions, workspace } = fixtureViews(quick.projects, quick.sessionsPerProject, quick.workspaceSessionsPerKind, quick.workspaceSessionsPerKind);
+  const { sessions, workspace } = fixtureViews(quick.projects, quick.sessionsPerProject, quick.chatSessions);
   const selected = [];
   const result = await traverseRetainedViews({}, sessions, workspace, values.retainedViews, { select: async (_check, session) => selected.push(session.path) });
-  assert.deepEqual(result, { visited: values.retainedViews, unique: values.retainedViews, project: values.projectSessions, beam: 1, chat: 1 });
+  assert.deepEqual(result, { visited: values.retainedViews, unique: values.retainedViews, project: values.projectSessions, chat: 1 });
   assert.deepEqual(selected, [...sessions, ...workspace].map(session => session.path));
 });
 
 test('full retirement traversal selects every retained view once in stable kind order', async () => {
   const full = modeConfig('full'); const values = expected(full);
-  const { sessions, workspace } = fixtureViews(full.projects, full.sessionsPerProject, full.workspaceSessionsPerKind, full.workspaceSessionsPerKind);
+  const { sessions, workspace } = fixtureViews(full.projects, full.sessionsPerProject, full.chatSessions);
   const selected = [];
   const result = await traverseRetainedViews({}, sessions, workspace, values.retainedViews, { select: async (_check, session) => selected.push(session.path) });
-  assert.deepEqual(result, { visited: values.retainedViews, unique: values.retainedViews, project: values.projectSessions, beam: 2, chat: 2 });
+  assert.deepEqual(result, { visited: values.retainedViews, unique: values.retainedViews, project: values.projectSessions, chat: 2 });
   assert.equal(new Set(selected).size, values.retainedViews);
-  assert.deepEqual(selected.slice(-4), workspace.map(session => session.path));
+  assert.deepEqual(selected.slice(-workspace.length), workspace.map(session => session.path));
 });
 
 // A view whose rows only ever change because a real "Load more" was clicked.

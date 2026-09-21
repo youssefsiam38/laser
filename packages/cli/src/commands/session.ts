@@ -12,7 +12,7 @@ import type { Command, CommandContext } from "../command.js";
 import { appUrl } from "../config.js";
 import { CliError, ExitCode } from "../errors.js";
 import { openBrowser } from "../host-control.js";
-import { ago, clip, sessionLabel, shortCwd, shortId } from "../format.js";
+import { ago, clip, sessionLabel, sessionPlace, shortCwd, shortId } from "../format.js";
 import { table, type Terminal } from "../output.js";
 import { recentSession, rememberSession } from "../recent.js";
 import { TailRenderer, firstLine } from "../render.js";
@@ -130,7 +130,9 @@ wherever a command takes a session.
         shown,
         [
           { header: "id", get: (session) => term.out.bold(shortId(session.id)) },
-          { header: "project", get: (session) => shortCwd(session.cwd) },
+          // A Chat belongs to no project; it says so rather than exposing its
+          // private workspace directory (`docs/plain-chat.md`).
+          { header: "project", get: (session) => sessionPlace(session) },
           { header: "modified", get: (session) => ago(session.modifiedAt) },
           {
             header: "name",
@@ -237,7 +239,7 @@ directory.
         term.data({ session: state, url, browserOpened: opened });
         return;
       }
-      term.note(`${term.err.green("attached")} ${shortId(state.id)} in ${shortCwd(state.cwd)}`);
+      term.note(`${term.err.green("attached")} ${shortId(state.id)} in ${sessionPlace(state)}`);
       term.print(url);
       if (bool(context.args, "open") && !opened) term.warn(`could not open a browser. Open ${url} yourself.`);
     } finally {
@@ -762,7 +764,7 @@ class SessionStream {
     });
     if (!term.json) {
       term.note(
-        `${term.err.dim("tailing")} ${shortId(session.id)} ${term.err.dim("in")} ${shortCwd(session.cwd)} ${term.err.dim("— Ctrl-C to stop")}`,
+        `${term.err.dim("tailing")} ${shortId(session.id)} ${term.err.dim("in")} ${sessionPlace(session)} ${term.err.dim("— Ctrl-C to stop")}`,
       );
     }
 

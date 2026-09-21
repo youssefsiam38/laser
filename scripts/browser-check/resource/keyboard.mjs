@@ -14,7 +14,7 @@ export async function dispatchFindShortcut({ cdp, page, platform = process.platf
   await page.bringToFront();
   const before = await page.evaluate(() => {
     const mainThreads = [...document.querySelectorAll('[data-slot="thread"]')]
-      .filter(thread => !thread.closest('[data-slot="beam-bubble"]') && thread.getClientRects().length > 0);
+      .filter(thread => thread.getClientRects().length > 0);
     const mainThread = mainThreads.length === 1 ? mainThreads[0] : null;
     const nonOwningDialog = mainThread && [...document.querySelectorAll('[role="dialog"]')]
       .some(dialog => !dialog.contains(mainThread));

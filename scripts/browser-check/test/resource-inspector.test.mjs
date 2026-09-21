@@ -176,7 +176,7 @@ test('host attachment and delivery rows are read from the RP-6 membership view o
 
   // Attached: one admitted surface, one still loading, on two conversations.
   delivery.begin(load(1, path)).finish({ jsonrpc: '2.0', id: 1, result: {} });
-  delivery.begin(load(2, path, 'beam'));
+  delivery.begin(load(2, path, 'second'));
   delivery.begin(load(3, other)).finish({ jsonrpc: '2.0', id: 3, result: {} });
   const attached = projectHost.call(hostWithDeliveries([delivery]));
   assert.deepEqual([attached.transcriptLoaded, attached.transcriptLoading, attached.transcriptPaths], [2, 1, 2],
@@ -194,7 +194,7 @@ test('host attachment and delivery rows are read from the RP-6 membership view o
   assert.deepEqual([both.transcriptLoaded, both.attachmentRefs, both.attachedPaths, both.transcriptDelivery.connections], [3, 4, 2, 2]);
 
   // Detached: the same counters come back down, on the real release path.
-  for (const [id, target, owner] of [[5, path], [6, path, 'beam'], [7, other]]) delivery.begin(detach(id, target, owner));
+  for (const [id, target, owner] of [[5, path], [6, path, 'second'], [7, other]]) delivery.begin(detach(id, target, owner));
   const released = projectHost.call(hostWithDeliveries([delivery]));
   assert.deepEqual([released.transcriptLoaded, released.transcriptLoading, released.transcriptPaths, released.attachmentRefs, released.attachedPaths], [0, 0, 0, 0, 0]);
   assert.equal(released.transcriptDelivery.available, true);
