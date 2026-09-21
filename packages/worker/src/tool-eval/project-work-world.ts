@@ -34,7 +34,7 @@ import {
   type ProjectWorkState,
   type ResearchOperation,
 } from "@lasercode/protocol";
-import type { ProjectWorkBridge, ProjectWorkExecutionShape, ProjectWorkSessionIdentity } from "../project-work/bridge.js";
+import { projectWorkFailure, type ProjectWorkBridge, type ProjectWorkExecutionShape, type ProjectWorkSessionIdentity } from "../project-work/bridge.js";
 
 /** One item of the fixture's project, as its world declares it. */
 export interface ToolEvalProjectWorkItem {
@@ -122,7 +122,15 @@ export class ScriptedProjectWorkWorld implements ProjectWorkBridge {
     const record = isRecord(params) ? (params as Record<string, unknown>) : {};
     const key = typeof record["idempotencyKey"] === "string" ? `${method}:${record["idempotencyKey"]}` : undefined;
     if (key && this.replay.has(key)) return this.replay.get(key) as ClientRequests[M]["result"];
-    const answer = this.route(method, record);
+    let answer: unknown;
+    try {
+      answer = this.route(method, record);
+    } catch (error) {
+      // The refusal a tool meets is the one the real bridge produces from the
+      // host's error, so a fixture recovers from exactly what it would
+      // recover from in the product.
+      throw projectWorkFailure(error, method);
+    }
     if (key) this.replay.set(key, answer);
     return answer as ClientRequests[M]["result"];
   }
