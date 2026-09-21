@@ -178,6 +178,12 @@ export const METHOD_POLICY = {
   "pi/project/git/hosts": { scope: "read", reach: "any" },
   "pi/project/git/commit": { scope: "execution", reach: "any" },
   "pi/project/git/push": { scope: "execution", reach: "any" },
+  // A verification run executes the Task's declared commands in the checkout,
+  // which is an execution however it was started; reading where a run has got
+  // to is a read, and stopping one is the same authority that started it.
+  "pi/project/verify/start": { scope: "execution", reach: "any" },
+  "pi/project/verify/state": { scope: "read", reach: "any" },
+  "pi/project/verify/stop": { scope: "execution", reach: "any" },
   "pi/project/git/branch": { scope: "execution", reach: "any" },
   // session_write even though this does not write a session: it spends the
   // session's current model. `read` would let a read-only paired device burn

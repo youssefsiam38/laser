@@ -87,7 +87,13 @@ import { ProjectResearch } from "./research/bridge.js";
 import { enabledResearchAdapters, type ResearchAdapterId } from "@lasercode/protocol";
 import type { ResearchBridge } from "./research/tools.js";
 import { createProcessRunner } from "./git-actions/index.js";
-import { HostProjectWorkBridge, ProjectWorkSession, type ProjectWorkBridge, type ProjectWorkExecutionShape } from "./project-work/index.js";
+import {
+  HostProjectWorkBridge,
+  ProjectWorkSession,
+  VerificationService,
+  type ProjectWorkBridge,
+  type ProjectWorkExecutionShape,
+} from "./project-work/index.js";
 import { bridgeResearchStore } from "./project-work/research-store.js";
 import { projectInstructions } from "./project-work/instructions.js";
 import { migrateModelProfiles } from "./profiles/migrate.js";
@@ -367,6 +373,8 @@ export class WorkerServer {
   /** Requests this worker has asked the host and not yet had answered (M21-T17). */
   private readonly hostPending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private hostRequestSeq = 0;
+  /** The verification runs this worker holds, once one has been started. */
+  private verificationRuns: VerificationService | undefined;
   /** This project's design index (M21-T10), built once and read on demand. */
   private projectHostGrounding: ProjectHostGrounding | undefined;
   private projectDesignIndex: ProjectDesignIndex | undefined;
@@ -1143,6 +1151,30 @@ export class WorkerServer {
       case "pi/project/pr/merge":
       case "pi/project/pr/viewed":
         return await this.dispatchGitAction(req);
+
+      // ------------------------------------- M21-T19 verification runs ---
+      // Run control only: a verification run executes the Task's own declared
+      // commands, which needs the checkout this worker owns. Which criteria
+      // exist and what each one came out as is the host's, over the bridge.
+      case "pi/project/verify/start": {
+        this.assertCwd(req.params.cwd);
+        try {
+          return { run: this.verification().start(req.params) } satisfies Result<"pi/project/verify/start">;
+        } catch (error) {
+          throw new ProtocolError(
+            ErrorCodes.InvalidParams,
+            error instanceof Error ? error.message : "That task could not be verified from here.",
+          );
+        }
+      }
+      case "pi/project/verify/state": {
+        this.assertCwd(req.params.cwd);
+        return { runs: this.verification().state(req.params) } satisfies Result<"pi/project/verify/state">;
+      }
+      case "pi/project/verify/stop": {
+        this.assertCwd(req.params.cwd);
+        return this.verification().stop(req.params) satisfies Result<"pi/project/verify/stop">;
+      }
 
       // ------------------------------------------- M16-T17 project env ---
       case "pi/project/env/status": {
@@ -2119,6 +2151,27 @@ export class WorkerServer {
    * whether it has a design index, which research adapters the person left
    * on, and whether it was opened to work on a Task.
    */
+  /**
+   * This worker's verification runs (M21-T19).
+   *
+   * One registry for the whole worker, so a run a person started from the
+   * Task detail and a run a model started with `verify_project_task` are the
+   * same run: watchable and stoppable from either side. Each run reaches the
+   * host authority over a bridge for its own checkout, with no session behind
+   * it — a person verifying a Task is not a conversation.
+   */
+  private verification(): VerificationService {
+    this.verificationRuns ??= new VerificationService({
+      bridgeFor: (cwd) =>
+        new HostProjectWorkBridge({
+          link: (method, params) => this.hostRequest(method, params),
+          identity: () => ({ label: "Verification" }),
+          execution: () => this.executionShape(cwd),
+        }),
+    });
+    return this.verificationRuns;
+  }
+
   private projectWorkSession(live: Live, openOptions: Parameters<SessionDriver["open"]>[0]): ProjectWorkSession | undefined {
     if (this.options.projectWork !== true) return undefined;
     const agent = openOptions.agent;
@@ -2145,6 +2198,9 @@ export class WorkerServer {
       ...(this.researchRun(bridge, openOptions.cwd) ? { research: this.researchRun(bridge, openOptions.cwd) } : {}),
       projectInstructions: () => projectInstructions(this.options.cwd),
       reviewActor: { kind: "agent", label },
+      // The same registry the person's own verify surface uses, so one run is
+      // one run whoever started it (M21-T19).
+      verification: this.verification(),
     });
   }
 

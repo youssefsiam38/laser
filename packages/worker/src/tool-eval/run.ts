@@ -15,6 +15,7 @@
  * arguments and its result, the tokens the turn cost, whether it settled.
  * `measures.ts` turns that into pass or fail.
  */
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +33,7 @@ import { ScriptedResearchWorld } from "./research-world.js";
 import { ScriptedProjectWorkWorld } from "./project-work-world.js";
 import { ProjectWorkSession } from "../project-work/session.js";
 import type { ProjectWorkBridge } from "../project-work/bridge.js";
+import { VerificationService, type VerificationCommandRunner } from "../project-work/verification/index.js";
 
 /** One profile of the matrix, as a run needs it. */
 export interface ToolEvalProfile {
@@ -286,11 +288,52 @@ function projectWorkSession(
     : undefined;
   return new ProjectWorkSession({
     ...(bridge ? { bridge } : {}),
+    // A verification run needs a checkout to run the Task's commands in. The
+    // evaluation gives it one and scripts the runner, so a fixture exercises
+    // the real tool, the real refusals and the real report without spawning a
+    // process (M21-T19).
+    ...(lifecycle
+      ? {
+          cwd: EVAL_CHECKOUT,
+          verification: new VerificationService({
+            bridgeFor: () => lifecycle,
+            runner: scriptedVerificationRunner(fixture.world.projectWork?.failingCommands ?? []),
+          }),
+        }
+      : {}),
     ...(design ? { design, hostGrounding: new ProjectHostGrounding({ projectCwd: design.projectCwd, index: () => design.index() }) } : {}),
     ...(research ? { research: { bridge: research, adapters: research.adapters() } } : {}),
     ...(task ? { task: { entityId: task.entity.entityId, key: task.entity.key } } : {}),
     reviewActor: { kind: "agent", label: "Evaluation run" },
   });
+}
+
+/** The directory a lifecycle fixture's session claims to be working in. */
+const EVAL_CHECKOUT = "<checkout>";
+
+/**
+ * A verification command runner with no process behind it.
+ *
+ * Exit codes are what a verification run reports, so this is the whole of what
+ * has to be scripted: a command the world named fails, everything else passes,
+ * and the bytes and the digest are the real ones for the text it produced.
+ */
+function scriptedVerificationRunner(failing: readonly string[]): VerificationCommandRunner {
+  return async ({ command }) => {
+    const failed = failing.includes(command);
+    const text = failed ? `${command}: 1 failing\n` : `${command}: all passed\n`;
+    const at = "2026-03-01T09:00:00.000Z";
+    return {
+      command,
+      status: failed ? "failed" : "passed",
+      exitCode: failed ? 1 : 0,
+      startedAt: at,
+      endedAt: at,
+      outputBytes: Buffer.byteLength(text, "utf8"),
+      outputDigest: createHash("sha256").update(text).digest("hex"),
+      tail: text,
+    };
+  };
 }
 
 /** What the session runs as: an agent at the top, or one agent's own run. */

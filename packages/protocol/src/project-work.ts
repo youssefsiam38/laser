@@ -190,7 +190,16 @@ export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 export const COMMENT_STATES = ["open", "addressed", "resolved"] as const;
 export type CommentState = (typeof COMMENT_STATES)[number];
 
-/** What an evidence record is. `person_acceptance` is the person's own word. */
+/**
+ * What an evidence record is. `person_acceptance` is the person's own word.
+ *
+ * `verification` is a whole verification run's report (M21-T19): the four
+ * authorities it compared against, every criterion's outcome and the
+ * deviations it proposed, stored canonically in the blob the record names. It
+ * is its own kind because it is not a test, a diff or a command's output — it
+ * is the reasoning over all of them, and a surface that shows it shows a
+ * report rather than a line.
+ */
 export const EVIDENCE_KINDS = [
   "test",
   "diff",
@@ -200,6 +209,7 @@ export const EVIDENCE_KINDS = [
   "review",
   "person_acceptance",
   "command_output",
+  "verification",
 ] as const;
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
 

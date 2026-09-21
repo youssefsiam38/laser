@@ -66,6 +66,9 @@ import {
   type ProjectWorkWrongProject,
   type ProjectTaskLinkExecutionResult,
   PROJECT_WORK_READ_METHODS,
+  type VerificationBridgeResult,
+  type VerificationDeviation,
+  type VerificationEnvelope,
 } from "@lasercode/protocol";
 import { projectRootOf } from "../paths.js";
 import { canonical } from "../trust.js";
@@ -80,6 +83,7 @@ import {
   type IdentifiedRepository,
 } from "./delivery.js";
 import { buildCapture, captureReadable, evidenceUnreviewable, storeCapture, type StoredCapture } from "./captures.js";
+import { convergeTask, evaluate, gatherAuthorities, planFrom, readerOf, storeReport } from "./verification/index.js";
 import {
   ProjectWorkConflictError,
   ProjectWorkNotFoundError,
@@ -218,6 +222,7 @@ export class ProjectWorkMethods {
     };
     const request = this.attemptSession(this.fenceProject(params.request, projectId), params);
     try {
+      if (params.verify) return await this.verifyStep(params, request, projectId, bridgeCaller);
       if (params.research) return await this.researchWrite(params, request, projectId, bridgeCaller);
       const result = await this.handle(request, bridgeCaller);
       if (request.method === "project/task/link-execution" && params.attempt) {
@@ -999,6 +1004,129 @@ export class ProjectWorkMethods {
         ...(applied.attention ? { attention: applied.attention } : {}),
         staleRefs: applied.staleRefs,
       },
+    };
+  }
+
+  /**
+   * One step of a verification run (M21-T19).
+   *
+   * Two steps, and the host owns both ends of each:
+   *
+   * - **plan** derives every criterion from this store, at the exact revisions
+   *   the Task's own links name, and hands back the commands the Task
+   *   declared. A verifier cannot add a criterion, remove one, or change which
+   *   revision it was taken from.
+   * - **report** takes the command runs — exit codes and bounded output, the
+   *   one thing only the process that ran them can know — evaluates every
+   *   criterion here, stores the canonical report as `verification` evidence
+   *   at the exact revision, and moves the Task to `needs_review` only when
+   *   everything it could decide came out satisfied and nothing blocks.
+   *
+   * The carrier request is the real call each step is: a read for the plan, a
+   * link for the report. Its result is answered as usual, and the verification
+   * answer rides beside it, the way a research write's does.
+   */
+  private async verifyStep(
+    params: ProjectWorkBridgeParams,
+    request: ProjectWorkRequest,
+    projectId: string,
+    caller: ProjectWorkCaller,
+  ): Promise<ProjectWorkBridgeResult> {
+    const verify = params.verify!;
+    if (verify.action === "plan") {
+      if (request.method !== "project/work/get") {
+        throw new ProtocolError(ErrorCodes.InvalidParams, "A verification plan is read with the task it is for.");
+      }
+      const result = await this.handle(request, caller);
+      const entityId = (result as ProjectWorkGetResult).entity.entityId;
+      const gathered = gatherAuthorities(readerOf(this.store), projectId, entityId);
+      return { method: request.method, result, projectId, verifyResult: { plan: planFrom(gathered) } };
+    }
+    if (request.method !== "project/work/link") {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "A verification report is stored as evidence on the task it is about.");
+    }
+    return this.verifyReport(request.params, verify, projectId, caller);
+  }
+
+  /**
+   * Evaluate and store one run's report.
+   *
+   * The caller's link payload supplies the fence and the idempotency key and
+   * nothing else: the record's kind, role, summary, detail and outcome are
+   * assembled here from the host's own evaluation, so an agent can report what
+   * a command did and never what it meant.
+   */
+  private async verifyReport(
+    linkParams: ProjectWorkLinkParams,
+    verify: Extract<VerificationEnvelope, { action: "report" }>,
+    projectId: string,
+    caller: ProjectWorkCaller,
+  ): Promise<ProjectWorkBridgeResult> {
+    this.requireWritable(projectId);
+    const payload = linkParams.link;
+    if (payload.type !== "evidence") {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "A verification report is stored as evidence on the task it is about.");
+    }
+    const entityId = payload.entityId;
+    const gathered = gatherAuthorities(readerOf(this.store), projectId, entityId);
+    const plan = planFrom(gathered);
+    const repositoryLinks = [
+      ...this.store.repositoryLinksOf(projectId, entityId),
+      ...(gathered.design ? this.store.repositoryLinksOf(projectId, gathered.design.detail.entity.entityId) : []),
+    ];
+    const evaluation = evaluate({
+      plan,
+      gathered,
+      commands: verify.commands,
+      repositoryLinks,
+      ...(verify.stopped ? { stopped: true } : {}),
+    });
+    // A deviation is a proposal a person accepts; a run never records one as
+    // accepted, whatever it sends.
+    const deviations: VerificationDeviation[] = (verify.deviations ?? []).map((deviation) => ({
+      ...deviation,
+      state: "proposed",
+    }));
+    const origin = this.originFor(linkParams.origin, caller);
+    const stored = storeReport({
+      store: this.store,
+      projectId,
+      entityId,
+      expectedRevisionId: plan.task.revisionId,
+      plan,
+      evaluation,
+      commands: verify.commands,
+      deviations,
+      runId: verify.runId,
+      startedAt: verify.startedAt,
+      endedAt: verify.endedAt,
+      ...(verify.stopped ? { stopped: verify.stopped } : {}),
+      origin,
+      idempotencyKey: linkParams.idempotencyKey,
+    });
+    const moved = convergeTask({
+      store: this.store,
+      projectId,
+      entityId,
+      expectedRevisionId: plan.task.revisionId,
+      evidenceId: stored.evidence.evidenceId,
+      report: stored.report,
+      origin,
+      idempotencyKey: linkParams.idempotencyKey,
+    });
+    const state = moved?.state ?? this.store.get({ projectId, entityId, body: { mode: "none" } }).entity.state;
+    const verifyResult: VerificationBridgeResult = {
+      report: stored.report,
+      evidenceId: stored.evidence.evidenceId,
+      blobId: stored.blobId,
+      taskState: state,
+      ...(moved ? { transition: { from: moved.from, to: moved.to } } : {}),
+    };
+    return {
+      method: "project/work/link",
+      result: { link: { type: "evidence", evidence: stored.evidence }, seq: stored.seq },
+      projectId,
+      verifyResult,
     };
   }
 

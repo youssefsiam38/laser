@@ -25,6 +25,7 @@ export * from "./project-work-methods.js";
 export * from "./project-work-mentions.js";
 export * from "./design-tree.js";
 export * from "./project-work-bridge.js";
+export * from "./project-work-verification.js";
 export * from "./host-page.js";
 export * from "./research.js";
 export * from "./environment.js";

@@ -24,6 +24,8 @@ import {
   type ProjectWorkMethod,
   type ResearchOperation,
   type ToolError,
+  type VerificationBridgeResult,
+  type VerificationEnvelope,
 } from "@lasercode/protocol";
 
 /** The link a worker has to its host. One method; the host answers it. */
@@ -94,10 +96,31 @@ export interface ProjectWorkBridge {
   call<M extends ProjectWorkMethod>(
     method: M,
     params: ClientRequests[M]["params"],
-    extras?: { research?: ResearchOperation; attempt?: ProjectWorkBridgeAttempt },
+    extras?: { research?: ResearchOperation; attempt?: ProjectWorkBridgeAttempt; verify?: VerificationEnvelope },
   ): Promise<ClientRequests[M]["result"]>;
   /** The last research write's after-effects, when the last call was one. */
   lastResearchResult(): ProjectWorkBridgeResult["researchResult"] | undefined;
+  /**
+   * Ask the host what a Task has to satisfy (M21-T19).
+   *
+   * A read of the Task, carrying the verification envelope: the criteria come
+   * back derived from the host's own store at exact revisions, so a verifier
+   * cannot choose what it is judged against.
+   */
+  verify(
+    params: ClientRequests["project/work/get"]["params"],
+    envelope: Extract<VerificationEnvelope, { action: "plan" }>,
+  ): Promise<{ result: ClientRequests["project/work/get"]["result"]; verify: VerificationBridgeResult }>;
+  /**
+   * Hand the command runs back and take the stored report.
+   *
+   * The link params supply the fence and the idempotency key; the record's
+   * content is the host's own, built from its own evaluation.
+   */
+  verifyReport(
+    params: ClientRequests["project/work/link"]["params"],
+    envelope: Extract<VerificationEnvelope, { action: "report" }>,
+  ): Promise<{ result: ClientRequests["project/work/link"]["result"]; verify: VerificationBridgeResult }>;
 }
 
 /** What an attempt envelope carries. The host stores it; a model never sees it. */
@@ -157,13 +180,38 @@ export class HostProjectWorkBridge implements ProjectWorkBridge {
   async call<M extends ProjectWorkMethod>(
     method: M,
     params: ClientRequests[M]["params"],
-    extras?: { research?: ResearchOperation; attempt?: ProjectWorkBridgeAttempt },
+    extras?: { research?: ResearchOperation; attempt?: ProjectWorkBridgeAttempt; verify?: VerificationEnvelope },
   ): Promise<ClientRequests[M]["result"]> {
+    return (await this.send(method, params, extras)).result as ClientRequests[M]["result"];
+  }
+
+  async verify(
+    params: ClientRequests["project/work/get"]["params"],
+    envelope: Extract<VerificationEnvelope, { action: "plan" }>,
+  ): Promise<{ result: ClientRequests["project/work/get"]["result"]; verify: VerificationBridgeResult }> {
+    const answer = await this.send("project/work/get", params, { verify: envelope });
+    return { result: answer.result as ClientRequests["project/work/get"]["result"], verify: answer.verifyResult ?? {} };
+  }
+
+  async verifyReport(
+    params: ClientRequests["project/work/link"]["params"],
+    envelope: Extract<VerificationEnvelope, { action: "report" }>,
+  ): Promise<{ result: ClientRequests["project/work/link"]["result"]; verify: VerificationBridgeResult }> {
+    const answer = await this.send("project/work/link", params, { verify: envelope });
+    return { result: answer.result as ClientRequests["project/work/link"]["result"], verify: answer.verifyResult ?? {} };
+  }
+
+  private async send<M extends ProjectWorkMethod>(
+    method: M,
+    params: ClientRequests[M]["params"],
+    extras?: { research?: ResearchOperation; attempt?: ProjectWorkBridgeAttempt; verify?: VerificationEnvelope },
+  ): Promise<ProjectWorkBridgeResult> {
     const envelope: ProjectWorkBridgeParams = {
       agent: this.options.identity(),
       request: { method, params } as ProjectWorkBridgeParams["request"],
       ...(extras?.research ? { research: extras.research } : {}),
       ...(extras?.attempt ? { attempt: extras.attempt } : {}),
+      ...(extras?.verify ? { verify: extras.verify } : {}),
     };
     let answer: ProjectWorkBridgeResult;
     try {
@@ -176,7 +224,7 @@ export class HostProjectWorkBridge implements ProjectWorkBridge {
     // it says so on every answer: a session that started without one learns
     // it from its first call rather than guessing from its directory.
     if (answer.projectId) this.resolvedProjectId = answer.projectId;
-    return answer.result as ClientRequests[M]["result"];
+    return answer;
   }
 }
 

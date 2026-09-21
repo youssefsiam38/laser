@@ -240,6 +240,8 @@ export const LASER_TOOL_NAMES: readonly string[] = [
   "write_project_artifact",
   "request_project_review",
   "report_project_task",
+  // M21-T19 · verification and convergence.
+  "verify_project_task",
   "inspect_design_index",
   "build_design_index",
   "review_design_index",

@@ -327,3 +327,146 @@ outcome, and per repository "N files changed across M checkpoints", with
 (1172; `project-work/delivery.test.ts` 14) · `pnpm -F @lasercode/worker test`
 (1499) · `pnpm -r build` · `pnpm -r typecheck` · `pnpm identity:check` ·
 `pnpm verify`.
+
+---
+
+# M21-T19 · Verification and convergence
+
+Binding text: [`../project-lifecycle-leap.md`](../project-lifecycle-leap.md)
+("Execution and convergence", "Lifecycle and gates", "Design contract → Native
+evidence"), [`../design-phase.md`](../design-phase.md) (D-353),
+[`../../AGENTS.md`](../../AGENTS.md) and D-342 (an agent never drives a
+browser), [`../agents.md`](../agents.md) §6 (bounded, stoppable Commands).
+Base: the M21 spine (T1–T4, T15), T8's gates, T17's bridge and T18's attempts,
+captures and `verified_at` links.
+
+## What this task is, in one paragraph
+
+A verification run compares one implementation against **four authorities read
+at exact revisions** — the Spec's acceptance criteria, the Design's states,
+tokens, components and native visual evidence, the Plan's boundaries, security,
+accessibility and migration requirements, and the Task's own commands, diffs
+and reviews — runs the Task's declared verification commands in its own
+checkout as a bounded stoppable Command, and writes one canonical report as
+`verification` evidence at the exact revision it checked. It may move a Task to
+`needs_review` and it can never reach `done`; it lists a declared browser
+matrix as the person's walk and never opens a browser.
+
+## Decisions
+
+- **D-358.a — the verifier reports facts; the host decides.** The run crosses
+  the existing `project/work/bridge` as one more envelope extra, `verify`,
+  beside `research` and `attempt`. `action: "plan"` rides a
+  `project/work/get` of the Task and comes back with the criteria **the host
+  derived from its own store**; `action: "report"` rides the
+  `project/work/link` that stores the report and carries only the command runs
+  — command, status, exit code, exact byte count, digest and bounded tail. The
+  host re-derives the plan, evaluates every criterion itself, assembles the
+  record's kind, role, summary and outcome, and decides convergence. A tool
+  that skipped the worker's rules, or lied about what an exit code meant,
+  changes nothing. No new `project/work/*` method was added: the inventory
+  stays sixteen, and the bridge reaches the new authority the day it exists.
+- **D-358.b — run control is `pi/project/verify/{start,state,stop}`.** A run
+  executes a project's own commands, which only the worker that owns the
+  checkout can do, so the three run-control methods are `cwd`-routed to that
+  worker exactly as `pi/project/git/*` are. They carry no authority: they start
+  a Command, say where it has got to, and stop it. A person's run and a model's
+  `verify_project_task` share one registry in the worker, so one run is one run
+  whoever started it, watchable and stoppable from either side. Progress is
+  polled rather than pushed: the state answer already carries the whole run,
+  and a new notification family would have bought nothing a poll does not give.
+- **D-358.c — `machineDecidable` is narrower than `machineVerifiable`.**
+  Declaring a criterion checkable is not binding a command to it. Only a
+  criterion with a command, or a `review` criterion the store's own comment and
+  approval records settle, is decided by a run; `visual` and `browser_matrix`
+  are never decidable here whatever they declare. Convergence counts exactly
+  the required decidable ones, so an item only a person can judge does not
+  stand in the way of `needs_review` — that state *is* handing it to them —
+  while a failure or a blocker does.
+- **D-358.d — Native visual evidence is an accepted checkpoint preview, and
+  three things at once.** A `visual` criterion is satisfied only by a
+  `verified_at` repository link whose state names a **checkpoint**, made by a
+  **person** (D-353, D-357.i). Until there is one it is `needs_person` with the
+  exact step — open the preview, accept it — and accepting is what records the
+  link. Nothing an agent can write satisfies it.
+- **D-358.e — a browser matrix is declared, listed and never run.** The axes
+  come from a Plan line of the form
+  `browser matrix: themes=…; widths=…; pointers=…`, and from the `theme` and
+  `viewport` a Design's screens already declare. Each cell becomes a
+  `needs_person` criterion carrying `browserMatrixSteps()` — the walk written
+  out. An agent opening a browser to check one is exactly what `AGENTS.md` and
+  D-342 forbid, so the report hands over the steps instead of a claim.
+- **D-358.f — a deviation is a proposal, and accepting it is the ordinary
+  revise.** A run may record a deviation naming the criterion, the reason, the
+  proposal and the **exact upstream revision** it was written against, with an
+  optional whole proposed body. The host stores every deviation as `proposed`,
+  whatever the caller sent. Accepting is a person sending that body through
+  `project/work/revise` on that revision — no new method, no special path —
+  which is why only the graph reachable from the change goes stale and only the
+  Tasks that implement it are paused.
+- **D-358.g — the report is evidence, at an exact revision, with a canonical
+  blob.** `EVIDENCE_KINDS` gained `verification`; the record carries the
+  summary, a bounded detail line naming the authorities, and the blob id of the
+  whole report (`application/vnd.lasercode.verification-report+json`). `role`
+  is `acceptance` only for a converged run — a failed or blocked one is
+  `supporting`, because a failed run is evidence, not a failed task (M21-T15).
+- **D-358.h — a Plan's boundary is filed by its own scope.** A boundary whose
+  `scope` names security or accessibility becomes a `security` or
+  `accessibility` criterion. That is a declaration its author wrote; no
+  heuristic reads the rule's prose to guess what it is about.
+
+## What landed
+
+| File | What it owns |
+| --- | --- |
+| `packages/protocol/src/project-work-verification.ts` | the vocabulary, the criterion / command-run / finding / deviation / blocker / report records and their schemas, the bounds, `machineDecidable`, `convergenceOf`, `verificationSummary`, `browserMatrixSteps`, the run state and its line, the bridge envelope, the three run-control method shapes |
+| `packages/protocol/src/project-work.ts` | `EVIDENCE_KINDS` gains `verification` |
+| `packages/protocol/src/project-work-bridge.ts` | `verify` on the envelope, `verifyResult` on the answer |
+| `packages/protocol/src/{messages,schemas,method-policy,tool-contract}.ts` | the three `pi/project/verify/*` rows and `verify_project_task` |
+| `packages/host/src/project-work/verification/authorities.ts` | gathering the four authorities at exact revisions, and turning each into criteria; the declared browser matrix; the blockers that exist before anything runs |
+| `packages/host/src/project-work/verification/evaluate.ts` | deciding each criterion from commands, the store's own records and an accepted preview |
+| `packages/host/src/project-work/verification/report.ts` | the canonical report, its blob, its evidence record, and the one move it may make |
+| `packages/host/src/project-work/methods.ts` | `verifyStep` / `verifyReport` on the bridge |
+| `packages/worker/src/project-work/verification/commands.ts` | the bounded, stoppable command runner: exact bytes, digest, tail, process-tree kill |
+| `packages/worker/src/project-work/verification/run.ts` | one run: plan, commands, report, progress, stop |
+| `packages/worker/src/project-work/verification/service.ts` | the worker's run registry, shared by the person's surface and the model's tool |
+| `packages/worker/src/project-work/verification/tools.ts` | `verify_project_task` under the contract |
+| `packages/worker/src/server.ts` | the three run-control cases and the worker-wide registry |
+| `packages/ui/src/components/project-work/Verification*.tsx` | the panel, the report, and the reading model; mounted in the Task detail |
+| `packages/ui/src/project-work/store.ts` | `readBlob`, for a surface that has to read a stored document |
+
+## Shared-file edits, and why each one
+
+- `packages/host/src/router.ts` — the three `pi/project/verify/*` rows in the
+  cwd-routed set, and a **pre-existing build break fixed**: `readMention` still
+  called `ProjectWorkMethods.handle` synchronously after D-357.b made it async,
+  so `packages/host` did not compile at this task's base. Both mention helpers
+  are now `async` and await the authority; nothing else changed.
+- `packages/worker/src/project-work/{bridge,session,index}.ts` — the `verify`
+  extra on the bridge's `call`, the two verification methods on the interface,
+  and the tool's registration beside the four lifecycle tools.
+- `packages/worker/src/tool-eval/{fixture,run,project-work-world}.ts` — the
+  fixture's `failingCommands`, a scripted command runner (an evaluation spawns
+  no process), and the scripted world answering the two verification steps.
+- `packages/ui/src/project-work/task-model.ts` — the label for the new evidence
+  kind.
+- The two lifecycle fixtures' `inputTokens` budgets moved 60 000 → 70 000: the
+  registered surface grew by one tool, and the budget measure is the cost of
+  the surface.
+
+## Not done here, and where it belongs
+
+- **The fleet row.** `VerificationRun` exposes the title, phase, counted
+  progress and `stop()` a fleet row needs, the same way `ResearchCommand` does;
+  wiring either into the fleet surface is M21-T13's.
+- **A deviation that proposes a body.** The model tool proposes in words today;
+  the UI accepts a body when one is there. A tool input that carries a whole
+  proposed body is a natural follow-up, and the storage for it already exists.
+
+## Evidence
+
+`pnpm -F @lasercode/protocol test` · `env -i … pnpm -F @lasercode/host test`
+(`project-work/verification.test.ts` 10) · `pnpm -F @lasercode/worker test`
+(incl. the tool-eval matrix, 23 fixtures × 2 profiles) ·
+`pnpm -F @lasercode/ui typecheck && test` · `pnpm identity:check` ·
+`pnpm -r build` · `pnpm -r typecheck`.
