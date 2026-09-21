@@ -249,6 +249,11 @@ const VOCABULARY_EXEMPT_LINES = new Set([
   "packages/cli/src/pi.ts:Searched the node_modules chain",
 ]);
 const FORBIDDEN_VOCABULARY = [
+  // Beam and the Namer stopped being agents (docs/plain-chat.md, D-347): a
+  // person-facing sentence must not name either. The startup drawing keeps
+  // its "beams" (plural, the light) — the word alone, singular, is the agent.
+  { pattern: /\bBeam\b/, say: "nothing — Beam is gone; Chat is the plain conversation" },
+  { pattern: /\bNamer\b/, say: "naming (a one-shot request on the naming profile)" },
   { pattern: /\bfallback chains?\b/i, say: "profile" },
   { pattern: /\b(model|models|fallback|default|active|current|session|selected)\s+chains?\b/i, say: "profile" },
   { pattern: /\bchains?\s+(of|for)\s+models?\b/i, say: "profile" },
