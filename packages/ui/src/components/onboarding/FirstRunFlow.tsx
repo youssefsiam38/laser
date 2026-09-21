@@ -1,15 +1,16 @@
 "use client";
 /**
- * First run (M10-T6): a person opens the app for the first time and, without
- * leaving the window, connects a provider, signs in, picks a model, opens a
- * project and lands in a session. Five steps in the thread column where the
- * conversation will be, resumable after a quit, skippable at every step.
+ * First run (M10-T6, M22-T7): a person opens the app for the first time and,
+ * without leaving the window, connects a provider, signs in, looks over the
+ * profiles Laser filled in from it, opens a project and lands in a session.
+ * Five steps in the thread column where the conversation will be, resumable
+ * after a quit, skippable at every step.
  *
  * What is remembered where:
  *   - whether setup finished: the host (`pi/setup/state`), so it is the same
  *     on every device and survives a cleared browser;
  *   - the step the person was on: this device, so Back works after a reload;
- *   - the facts (a provider signed in, a default model, a project): read from
+ *   - the facts (a provider signed in, a profile to run on, a project): read from
  *     the host on every open and never assumed, so a step done elsewhere is
  *     not asked again and a credential removed since is asked for again.
  *
@@ -33,7 +34,7 @@ import { modKey, shortCwd } from "@/format";
 import { useLaserStable, useLaserState } from "@/runtime";
 import type { SetupState } from "@lasercode/protocol";
 
-import { ModelStep } from "./ModelStep.js";
+import { ProfilesStep } from "./ProfilesStep.js";
 import { ProjectStep } from "./ProjectStep.js";
 import { ProviderStep } from "./ProviderStep.js";
 import { SetupCard } from "./SetupCard.js";
@@ -115,7 +116,7 @@ export interface FirstRunFlowProps {
  * "1 of 5"). The dots and the counter track the three things a person actually
  * does; `stepIndex` still owns navigation across all five.
  */
-const COUNTED_STEPS: readonly SetupStep[] = ["provider", "model", "project"];
+const COUNTED_STEPS: readonly SetupStep[] = ["provider", "profiles", "project"];
 const TITLES = COUNTED_STEPS.map((step) => STEP_TITLES[step]);
 const countedIndex = (step: SetupStep): number => COUNTED_STEPS.indexOf(step);
 
@@ -123,8 +124,7 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
   const { actions, client, projects, currentProject } = useLaserStable();
   const [step, setStep] = useState<SetupStep>();
   const [providersConfigured, setProvidersConfigured] = useState<number>();
-  const [defaultModel, setDefaultModel] = useState<string>();
-  const [modelKnown, setModelKnown] = useState(false);
+  const [profilesReady, setProfilesReady] = useState(false);
   const [projectCwd, setProjectCwd] = useState<string>();
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string>();
@@ -141,19 +141,19 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
     let cancelled = false;
     const remembered = readRememberedStep();
     void (async () => {
-      let facts = { providersConfigured: undefined as number | undefined, hasDefaultModel: undefined as boolean | undefined, projects: projects.length };
+      let facts = { providersConfigured: undefined as number | undefined, hasProfiles: undefined as boolean | undefined, projects: projects.length };
       try {
-        const [providerResult, catalog] = await Promise.all([
+        const [providerResult, profileResult] = await Promise.all([
           client.request("pi/providers/list", { cwd }),
-          client.request("pi/models/catalog", { cwd, settingsView: "global" }),
+          client.request("models/profiles/list", { cwd }),
         ]);
         const configured = providerResult.providers.filter((p) => p.configured).length;
-        const ref = catalog.defaultProvider && catalog.defaultModel ? `${catalog.defaultProvider}/${catalog.defaultModel}` : undefined;
-        facts = { providersConfigured: configured, hasDefaultModel: ref !== undefined, projects: projects.length };
+        const settled = (profileResult.profiles ?? []).length > 0
+          && (profileResult.assignments?.defaultProfileId ?? null) !== null;
+        facts = { providersConfigured: configured, hasProfiles: settled, projects: projects.length };
         if (!cancelled) {
           setProvidersConfigured(configured);
-          setDefaultModel(ref);
-          setModelKnown(true);
+          setProfilesReady(settled);
         }
       } catch {
         // The worker for the setup directory did not answer; the steps ask again themselves.
@@ -198,10 +198,6 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
   }, [actions, currentProject, finish, projectCwd, projects]);
 
   const onConfigured = useCallback((count: number) => setProvidersConfigured(count), []);
-  const onChosen = useCallback((ref: string | undefined) => {
-    setDefaultModel(ref);
-    setModelKnown(true);
-  }, []);
 
   if (!cwd || step === undefined) {
     return (
@@ -283,7 +279,7 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
               <span className="font-medium text-ink">Connect a provider.</span> Sign in with an account you already have, or paste an API key.
             </li>
             <li>
-              <span className="font-medium text-ink">Choose a model.</span> The one new sessions start with; you can change it any time.
+              <span className="font-medium text-ink">Look over your profiles.</span> Ready-made sets of models to work with; keep them or change them.
             </li>
             <li>
               <span className="font-medium text-ink">Open a project.</span> A folder on this computer the agent will work in.
@@ -303,14 +299,14 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
           </>,
         )}
 
-      {step === "model" &&
+      {step === "profiles" &&
         card(
-          STEP_TITLES.model,
-          "What a new session starts with. Each session can switch models as it goes; this is only the starting point.",
-          <ModelStep cwd={cwd} onChosen={onChosen} />,
+          STEP_TITLES.profiles,
+          "A profile is a name for how you want something answered, and the models that answer it — the first one it reaches for, then what steps in if that one cannot. We filled these in from the provider you just connected.",
+          <ProfilesStep cwd={cwd} onReady={setProfilesReady} />,
           <>
             {back}
-            {next(defaultModel !== undefined)}
+            {next(profilesReady, profilesReady ? "Looks good" : "Continue")}
           </>,
         )}
 
@@ -336,7 +332,7 @@ export function FirstRunFlow({ setup, onFinished }: FirstRunFlowProps) {
           total={COUNTED_STEPS.length}
           titles={TITLES}
           title={STEP_TITLES.ready}
-          description={`A provider is connected, a model is chosen, and the folder ${shortCwd(projectCwd ?? currentProject ?? projects[0] ?? "")} is open. Everything else is in the app: features, more providers, keyboard shortcuts and how it looks.`}
+          description={`A provider is connected, your profiles are ready, and the folder ${shortCwd(projectCwd ?? currentProject ?? projects[0] ?? "")} is open. Everything else is in the app: features, more providers, keyboard shortcuts and how it looks.`}
           actions={
             <>
               {back}

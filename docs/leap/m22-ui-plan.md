@@ -38,9 +38,15 @@ implemented it.
 
 ## For the docs/gates owner
 
-- `scripts/packaging/clean-machine.mjs` (packaged onboarding gate) must expect
-  the onboarding step id `profiles` instead of `model`, and the review copy
-  "Review your profiles" instead of the model-step copy.
+- `packages/desktop/scripts/clean-machine.mjs:414-420` writes a scratch global
+  settings file with `defaultProvider` / `defaultModel` / `enabledModels`. It
+  drives the host head-less, not the onboarding UI, so nothing there breaks
+  with this branch — but once the worker migration lands it should either rely
+  on that migration or write `modelProfiles` + `defaultProfileId` directly, so
+  the gate proves a packaged app starts a session on a profile.
+- The onboarding step id a device remembers changed from `model` to `profiles`
+  (`setup-model.ts`); a remembered `model` simply falls back to the welcome,
+  which is the existing behaviour for an unknown value.
 - `pnpm identity:check` copy guard for "chain"/"tier" on person surfaces: the
   UI no longer writes either word on a person surface after T8.
 
@@ -75,12 +81,25 @@ models; the whole-package typecheck and build stay red until T9.
 
 ## M22-T7 · Onboarding profile review
 
-Status: planned.
+Status: done.
 
-Changed: `onboarding/ProfilesStep.tsx` (new) replaces `ModelStep.tsx`;
-`FirstRunFlow.tsx` steps are provider → profiles → project; `setup-model.ts`
-tracks profile readiness instead of a default model.
-Tests: `test/onboarding/profiles-step.test.tsx`, `setup-model.test.ts`.
+Changed: `onboarding/ProfilesStep.tsx` (new) replaces `ModelStep.tsx` (deleted);
+`FirstRunFlow.tsx` steps are welcome → provider → profiles → project → ready and
+its facts come from `models/profiles/list`; `setup-model.ts` renames the step
+and the fact (`hasDefaultModel` → `hasProfiles`); `onboarding/index.ts`.
+`useModelProfiles` now also listens for `models/profiles/seeded` and re-reads,
+so a seed that lands while the step is open appears without a reload.
+
+The step edits two things and no more: which profile new conversations use
+(`defaultProfileId` at global scope) and which model a profile reaches for
+first (`models/profiles/save`, the chosen model moved to the front). Renaming
+and adding models stay in Settings, and the step says so. Arriving and leaving
+writes nothing, which is what "skip leaves the seeds" means.
+
+Tests: `test/onboarding/profiles-step.test.tsx` (six cases incl. the pending
+state, the seeded notification and the error state), `setup-model.test.ts`
+updated.
+Validation: `npx vitest run` in packages/ui — 323 files, 3005 passed.
 
 ## M22-T8 · Composer, status line, fleet, logs
 

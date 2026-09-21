@@ -182,6 +182,17 @@ export function useModelProfiles(cwd: string | undefined, enabled = true): Model
 
   const reload = useCallback(() => setGeneration((value) => value + 1), []);
 
+  // Laser fills the seeded profiles in the moment a first provider is
+  // connected, which can happen while this screen is open (onboarding does
+  // exactly that). The notification says they exist; the list is read again
+  // rather than trusted piecemeal, so assignments and profiles stay one answer.
+  useEffect(() => {
+    if (!enabled) return;
+    return client.subscribe((method) => {
+      if (method === "models/profiles/seeded") reload();
+    });
+  }, [client, enabled, reload]);
+
   return useMemo(
     () => ({ ...state, reload, save, remove }),
     [state, reload, save, remove],

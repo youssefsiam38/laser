@@ -2,18 +2,22 @@ import { PRODUCT_DISPLAY_NAME, storageKey } from "@lasercode/protocol";
 /**
  * Pure logic behind the first-run flow (M10-T6): the steps, and where to
  * resume from. The host remembers whether setup finished; the facts that
- * decide which step is next (a provider signed in, a default model, a project)
- * are read fresh from the host on every open, so quitting halfway loses
- * nothing and a step that was completed elsewhere is not asked again.
+ * decide which step is next (a provider signed in, profiles to run on, a
+ * project) are read fresh from the host on every open, so quitting halfway
+ * loses nothing and a step that was completed elsewhere is not asked again.
+ *
+ * M22: the middle step is no longer "pick a model" but "review your profiles"
+ * — the app fills them in from what just connected and the person keeps them
+ * or changes them (`docs/model-profiles.md` "What a person sees").
  */
-export type SetupStep = "welcome" | "provider" | "model" | "project" | "ready";
+export type SetupStep = "welcome" | "provider" | "profiles" | "project" | "ready";
 
-export const SETUP_STEPS: readonly SetupStep[] = ["welcome", "provider", "model", "project", "ready"];
+export const SETUP_STEPS: readonly SetupStep[] = ["welcome", "provider", "profiles", "project", "ready"];
 
 export const STEP_TITLES: Record<SetupStep, string> = {
   welcome: `Welcome to ${PRODUCT_DISPLAY_NAME}`,
   provider: "Connect a model provider",
-  model: "Choose a default model",
+  profiles: "Review your profiles",
   project: "Open a project",
   ready: "You are set",
 };
@@ -21,8 +25,12 @@ export const STEP_TITLES: Record<SetupStep, string> = {
 export interface SetupFacts {
   /** Providers with a credential right now; undefined while unknown. */
   providersConfigured: number | undefined;
-  /** A default model is written in settings; undefined while unknown. */
-  hasDefaultModel: boolean | undefined;
+  /**
+   * A profile exists and new conversations are pointed at one; undefined
+   * while unknown. Laser seeds three as soon as a provider is connected, so
+   * this is normally true the moment the person arrives at the step.
+   */
+  hasProfiles: boolean | undefined;
   /** Projects the host knows. Always known once sessions have loaded. */
   projects: number;
 }
@@ -33,9 +41,9 @@ export function stepIndex(step: SetupStep): number {
 
 /** The first step whose fact is missing, after the welcome; `ready` when none is. */
 export function firstIncomplete(facts: SetupFacts): SetupStep | undefined {
-  if (facts.providersConfigured === undefined || facts.hasDefaultModel === undefined) return undefined;
+  if (facts.providersConfigured === undefined || facts.hasProfiles === undefined) return undefined;
   if (facts.providersConfigured === 0) return "provider";
-  if (!facts.hasDefaultModel) return "model";
+  if (!facts.hasProfiles) return "profiles";
   if (facts.projects === 0) return "project";
   return "ready";
 }
