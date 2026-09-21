@@ -884,6 +884,16 @@ export interface PlanBody {
   document?: string;
 }
 
+/**
+ * The Plan body's shape.
+ *
+ * The *graph* rules — no cycle, no key this project never minted, no
+ * dependency on a Task the Plan does not list — are `validatePlanGraph`'s,
+ * which the host runs before it stores anything (M21-T15). They live there
+ * rather than here because the same pass has to check the graph against the
+ * project's own keys, and because the refusal must name the keys the cycle
+ * goes round: a shape refusal at the wire can only say the params were bad.
+ */
 export const planBodySchema = z
   .object({
     brief: z.string().min(1).max(PROJECT_WORK_TEXT_MAX),
@@ -898,33 +908,7 @@ export const planBodySchema = z
     rollback: paragraph.optional(),
     document: markdown.optional(),
   })
-  .strict()
-  .superRefine((body, ctx) => {
-    // A plan with a cycle is not a dependency-ordered plan. Refused here so
-    // nothing downstream has to decide what a cyclic DAG means.
-    const outgoing = new Map<string, string[]>();
-    for (const edge of body.dependencies) {
-      const list = outgoing.get(edge.from);
-      if (list) list.push(edge.to);
-      else outgoing.set(edge.from, [edge.to]);
-    }
-    const state = new Map<string, 0 | 1 | 2>();
-    const visit = (node: string): boolean => {
-      const seen = state.get(node);
-      if (seen === 1) return false;
-      if (seen === 2) return true;
-      state.set(node, 1);
-      for (const next of outgoing.get(node) ?? []) if (!visit(next)) return false;
-      state.set(node, 2);
-      return true;
-    };
-    for (const node of outgoing.keys()) {
-      if (!visit(node)) {
-        ctx.addIssue({ code: "custom", path: ["dependencies"], message: "the plan's dependencies contain a cycle" });
-        return;
-      }
-    }
-  });
+  .strict();
 
 // ---------------------------------------------------------------------------
 // Project Task
@@ -964,7 +948,16 @@ export interface ProjectTaskBody {
   nonGoals: string[];
   /** Dependencies by key. Readiness is derived from their states, never stored. */
   dependencies: string[];
-  scope: { packages: string[]; repositories: string[]; paths: string[]; capabilities: string[] };
+  /**
+   * Where this Task writes, and which overlapping Tasks a person has decided
+   * to run anyway.
+   *
+   * `sharedWith` is the explicit acceptance of shared-checkout risk the leap's
+   * "Plan and Project Task contract" allows: naming another Task's key here
+   * keeps the conflict visible and marks it accepted. Only a person may add
+   * one — the host refuses an agent's revision that does (M21-T15).
+   */
+  scope: { packages: string[]; repositories: string[]; paths: string[]; capabilities: string[]; sharedWith?: string[] };
   acceptance: Array<{ id: string; text: string; machineVerifiable: boolean; command?: string }>;
   verificationCommands: string[];
   /** True when the Task cannot be accepted without visual evidence. */
@@ -986,6 +979,7 @@ export const projectTaskBodySchema = z
         repositories: z.array(z.string().min(1).max(200)).max(32),
         paths: z.array(z.string().min(1).max(1024)).max(200),
         capabilities: z.array(z.string().min(1).max(60)).max(32),
+        sharedWith: z.array(projectWorkKeySchema).max(64).optional(),
       })
       .strict(),
     acceptance: z

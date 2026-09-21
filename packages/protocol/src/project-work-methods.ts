@@ -54,6 +54,7 @@ import {
   projectWorkStateSchema,
   repositoryChangeRefSchema,
   repositoryStateRefSchema,
+  PLAN_GRAPH_PROBLEMS,
   type ApprovalDecision,
   type ApprovalGate,
   type ApprovalMode,
@@ -78,10 +79,13 @@ import {
   type ProjectWorkRef,
   type ProjectWorkRevision,
   type ProjectWorkState,
+  type PlanGraphReport,
   type RepositoryChangeRef,
   type RepositoryLink,
   type RepositoryLinkRelation,
   type RepositoryStateRef,
+  type TaskConflict,
+  type TaskReadiness,
 } from "./project-work.js";
 import { projectWorkBodySchema, type ProjectWorkBody } from "./project-work-bodies.js";
 
@@ -292,6 +296,19 @@ export interface ProjectWorkGetResult {
   decisions: ProjectWorkDecision[];
   /** Revision history, newest first, when asked for. Metadata only. */
   history?: ProjectWorkRevision[];
+  /**
+   * Tasks only: why this Task can or cannot be worked on right now, derived
+   * from its dependencies and its upstream artifacts on every read (M21-T15).
+   */
+  readiness?: TaskReadiness;
+  /**
+   * Tasks only: the other active Tasks that write where this one does. A
+   * conflict is always on the answer — never a silent overlap — and each row
+   * says whether a person accepted the shared-checkout risk.
+   */
+  conflicts?: TaskConflict[];
+  /** Plans only: the state of the Plan's Task graph, including its orphans. */
+  planGraph?: PlanGraphReport;
   /** Which related lists were cut at `PROJECT_WORK_RELATED_MAX`. */
   truncated: string[];
 }
@@ -346,6 +363,11 @@ export interface ProjectWorkWriteResult {
   seq: number;
   /** True when this answer replayed an earlier call with the same key. */
   replayed?: boolean;
+  /**
+   * Plans only: the accepted Task graph, and the Tasks this revision stopped
+   * listing. A graph that could not be accepted is a refusal, not a result.
+   */
+  planGraph?: PlanGraphReport;
 }
 
 export interface ProjectWorkReviseParams {
@@ -577,6 +599,14 @@ export interface ProjectTaskActionResult {
   transition: { from: ProjectTaskState; to: ProjectTaskState };
   seq: number;
   replayed?: boolean;
+  /** Where the Task stands after the move, derived the same way a read is. */
+  readiness?: TaskReadiness;
+  /**
+   * Tasks this move changed as a consequence: a dependent that became ready
+   * because this one is done, or one that went back to blocked. Never a state
+   * a person asked for, always one the graph implies.
+   */
+  cascaded?: Array<{ entityId: string; key: string; from: ProjectTaskState; to: ProjectTaskState }>;
 }
 
 export interface ProjectTaskLinkExecutionParams {
@@ -604,6 +634,14 @@ export interface ProjectTaskLinkExecutionResult {
   entity: ProjectWorkEntity;
   seq: number;
   replayed?: boolean;
+  /**
+   * The evidence record an ended attempt wrote. A run ending is evidence and
+   * nothing else: it never moves the Task (leap, "Plan and Project Task
+   * contract").
+   */
+  attemptEvidence?: ProjectWorkEvidence;
+  /** The active Tasks this attempt would be writing over, before it writes. */
+  conflicts?: TaskConflict[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1100,6 +1138,70 @@ export const projectWorkAttentionSchema = z
   })
   .strict();
 
+export const planGraphReportSchema = z
+  .object({
+    ok: z.boolean(),
+    problems: z
+      .array(
+        z
+          .object({
+            problem: z.enum(PLAN_GRAPH_PROBLEMS),
+            keys: z.array(projectWorkKeySchema).max(200),
+            message: z.string().min(1).max(PROJECT_WORK_TEXT_MAX),
+          })
+          .strict(),
+      )
+      .max(200),
+    orphans: z
+      .array(
+        z
+          .object({
+            key: projectWorkKeySchema,
+            entityId: projectWorkIdSchema,
+            title: z.string().max(200),
+            state: projectWorkStateSchema,
+            reason: z.literal("removed_from_plan"),
+          })
+          .strict(),
+      )
+      .max(500),
+    order: z.array(projectWorkKeySchema).max(500),
+  })
+  .strict();
+
+export const taskReadinessSchema = z
+  .object({
+    ready: z.boolean(),
+    unmetDependencies: z.array(projectWorkKeySchema).max(200),
+    stalePausedBy: z
+      .object({
+        entityId: projectWorkIdSchema,
+        kind: projectWorkKindSchema,
+        key: projectWorkKeySchema,
+        revisionId: projectWorkRevisionIdSchema,
+      })
+      .strict()
+      .optional(),
+    hasAcceptanceEvidence: z.boolean(),
+    hasPassingVerification: z.boolean(),
+    blockingComments: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const taskConflictSchema = z
+  .object({
+    entityId: projectWorkIdSchema,
+    key: projectWorkKeySchema,
+    title: z.string().max(200),
+    state: z.enum(PROJECT_TASK_STATES),
+    overlap: z
+      .object({ packages: z.array(z.string().min(1).max(200)).max(64), paths: z.array(z.string().min(1).max(1024)).max(200) })
+      .strict(),
+    observed: z.boolean(),
+    accepted: z.boolean(),
+  })
+  .strict();
+
 /** Entity, revision and supporting-record schemas, re-exported for result validation. */
 export const projectWorkResultSchemas = {
   entity: projectWorkEntitySchema,
@@ -1113,4 +1215,7 @@ export const projectWorkResultSchemas = {
   listItem: projectWorkListItemSchema,
   updated: projectWorkUpdatedSchema,
   attention: projectWorkAttentionSchema,
+  planGraph: planGraphReportSchema,
+  readiness: taskReadinessSchema,
+  conflict: taskConflictSchema,
 } as const;

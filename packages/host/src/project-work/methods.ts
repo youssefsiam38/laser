@@ -603,7 +603,14 @@ export function toProtocolError(error: unknown): unknown {
       limitBytes: error.limitBytes,
     } satisfies ProjectWorkQuotaRefusal);
   }
-  if (error instanceof ProjectWorkNotFoundError || error instanceof ProjectWorkRefusedError) {
+  if (error instanceof ProjectWorkRefusedError) {
+    // A refusal is a sentence first; the data is what the sentence names, for
+    // a client that wants to offer the fix without reading the graph again.
+    return error.data
+      ? new ProtocolError(ErrorCodes.InvalidParams, error.message, error.data)
+      : new ProtocolError(ErrorCodes.InvalidParams, error.message);
+  }
+  if (error instanceof ProjectWorkNotFoundError) {
     return new ProtocolError(ErrorCodes.InvalidParams, error.message);
   }
   if (error instanceof ProjectWorkUnavailableError) {

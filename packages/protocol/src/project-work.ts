@@ -985,6 +985,18 @@ const TASK_EDGES: Readonly<Record<ProjectTaskState, readonly ProjectTaskState[]>
   cancelled: ["draft", "ready"],
 };
 
+/**
+ * The exact upstream revision that went stale, so a refusal can name it
+ * rather than say "something changed" (D-355).
+ */
+export interface StaleUpstreamRef {
+  entityId: string;
+  kind: ProjectWorkKind;
+  key: string;
+  /** The upstream's current revision — what reconciliation has to catch up to. */
+  revisionId: string;
+}
+
 export interface TaskTransitionInput {
   from: ProjectTaskState;
   to: ProjectTaskState;
@@ -993,10 +1005,17 @@ export interface TaskTransitionInput {
   unmetDependencies?: readonly string[];
   /** True when the Task has at least one passing acceptance evidence record. */
   hasAcceptanceEvidence?: boolean;
+  /**
+   * True when at least one verification of this Task passed. An agent reports
+   * evidence before it asks for review; a person never has to.
+   */
+  hasPassingVerification?: boolean;
   /** A stale Plan prevents a not-yet-started Task from starting. */
   planStale?: boolean;
   /** A stale Design pauses new dependent implementation. */
   designStale?: boolean;
+  /** Which upstream went stale, named in the refusal when there is one. */
+  staleUpstream?: StaleUpstreamRef;
   /** Open blocking comments on the Task. */
   blockingComments?: number;
   /**
@@ -1036,11 +1055,14 @@ export function taskTransition(input: TaskTransitionInput): TransitionOutcome {
   if (input.to === "in_progress" && input.from !== "needs_review") {
     if (unmet.length > 0) return refuse(`${unmet.join(", ")} must be done first.`);
     if (input.planStale === true) {
-      return refuse("The plan this task came from changed. Reconcile the plan before starting this task.");
+      return refuse(`${staleSubject(input, "plan")} changed after this task was planned. Reconcile it before starting this task.`);
     }
     if (input.designStale === true) {
-      return refuse("The design this task implements changed. Reconcile the design before starting this task.");
+      return refuse(`${staleSubject(input, "design")} changed after this task was planned. Reconcile it before starting this task.`);
     }
+  }
+  if (input.to === "needs_review" && input.trigger === "agent" && input.hasPassingVerification !== true) {
+    return refuse("Report the evidence for this task before sending it for review.");
   }
   if (input.to === "done") {
     if (input.trigger === "run_ended") {
@@ -1059,7 +1081,10 @@ export function taskTransition(input: TaskTransitionInput): TransitionOutcome {
       return refuse("Add the acceptance evidence for this task before marking it done.");
     }
     if (input.planStale === true || input.designStale === true) {
-      return refuse("An input this task depends on changed. Reconcile it before marking the task done.");
+      return refuse(
+        `${staleSubject(input, input.planStale === true ? "plan" : "design")} changed after this task was planned. ` +
+          "Reconcile it before marking the task done.",
+      );
     }
     if ((input.blockingComments ?? 0) > 0) {
       const count = input.blockingComments ?? 0;
@@ -1067,6 +1092,15 @@ export function taskTransition(input: TaskTransitionInput): TransitionOutcome {
     }
   }
   return allow;
+}
+
+/**
+ * How a refusal names the upstream that moved: its key when the caller knows
+ * it, and the kind's own words when it does not.
+ */
+function staleSubject(input: Pick<TaskTransitionInput, "staleUpstream">, kind: "plan" | "design"): string {
+  if (input.staleUpstream) return input.staleUpstream.key;
+  return kind === "plan" ? "The plan this task came from" : "The design this task implements";
 }
 
 /** The transition an action asks for, refused with the same sentences. */
@@ -1219,4 +1253,333 @@ export function unmetTaskDependencies(
     if (!satisfied) unmet.push(key);
   }
   return unmet;
+}
+
+// ---------------------------------------------------------------------------
+// The Plan graph (M21-T15)
+// ---------------------------------------------------------------------------
+
+/**
+ * What can be wrong with a Plan's Task graph.
+ *
+ * All five are refusals: a Plan that names work this project does not have,
+ * or that cannot be ordered, is not a plan anybody can execute. The orphan
+ * case — a Task this Plan used to list and no longer does — is deliberately
+ * *not* here: it is recorded, not refused (see {@link PlanGraphOrphan}).
+ */
+export const PLAN_GRAPH_PROBLEMS = [
+  "cycle",
+  "unknown_task",
+  "not_a_task",
+  "self_dependency",
+  "dependency_outside_plan",
+] as const;
+export type PlanGraphProblemKind = (typeof PLAN_GRAPH_PROBLEMS)[number];
+
+export interface PlanGraphProblem {
+  problem: PlanGraphProblemKind;
+  /** Every key the problem is about, in the order it reads (D-355). */
+  keys: string[];
+  /** The refusal, in one sentence a person can act on. */
+  message: string;
+}
+
+/**
+ * A Task that says it belongs to this Plan, which this revision of the Plan
+ * no longer lists in any phase.
+ *
+ * Recorded rather than refused: a person revising a Plan is allowed to drop a
+ * Task from it, and the Task keeps existing with its own state and its own
+ * links. What is not allowed is losing sight of it, so the write answers with
+ * the orphan and the Plan reports it on every read until it is adopted again,
+ * cancelled or unlinked.
+ */
+export interface PlanGraphOrphan {
+  key: string;
+  entityId: string;
+  title: string;
+  state: ProjectWorkState;
+  reason: "removed_from_plan";
+}
+
+export interface PlanGraphReport {
+  ok: boolean;
+  problems: PlanGraphProblem[];
+  orphans: PlanGraphOrphan[];
+  /**
+   * The Plan's Tasks in dependency order, dependencies first. Empty when the
+   * graph has a cycle, because a cyclic graph has no order.
+   */
+  order: string[];
+}
+
+export interface PlanGraphInput {
+  /** The Plan's phases, which are what declares a Task to be part of it. */
+  phases: ReadonlyArray<{ readonly taskKeys: readonly string[] }>;
+  /** `from` depends on `to`: `to` must be done first. */
+  dependencies: ReadonlyArray<{ readonly from: string; readonly to: string }>;
+  /** Every key this project has, with its kind and state. */
+  known: ReadonlyMap<string, { kind: ProjectWorkKind; state: ProjectWorkState; entityId: string; title: string }>;
+  /** Keys of Tasks whose body names this Plan. The ones no phase lists are orphans. */
+  claimed?: readonly string[];
+}
+
+/**
+ * Validate a Plan's Task graph.
+ *
+ * A Plan is a dependency graph, not a schedule (leap, "Plan and Project Task
+ * contract"), so the rules are exactly the ones that make a graph executable:
+ *
+ * - every key a phase or a dependency names is a Task **this project has** —
+ *   keys are minted by the store, so one it never minted is a typo or a
+ *   hallucination, never a forward reference;
+ * - a dependency's two ends are both listed by the Plan, so removing a Task
+ *   from a phase and leaving a dependency pointing at it is refused rather
+ *   than silently dangling;
+ * - nothing depends on itself, and the graph has no cycle. A cycle is named by
+ *   its keys, in the order it goes round.
+ *
+ * Pure: it decides nothing about state, writes nothing and reads no clock.
+ */
+export function validatePlanGraph(input: PlanGraphInput): PlanGraphReport {
+  const problems: PlanGraphProblem[] = [];
+  const seen = new Set<string>();
+  const add = (problem: PlanGraphProblem): void => {
+    const fingerprint = `${problem.problem}:${problem.keys.join(">")}`;
+    if (seen.has(fingerprint)) return;
+    seen.add(fingerprint);
+    problems.push(problem);
+  };
+
+  const declared: string[] = [];
+  const declaredSet = new Set<string>();
+  for (const phase of input.phases) {
+    for (const key of phase.taskKeys) {
+      if (declaredSet.has(key)) continue;
+      declaredSet.add(key);
+      declared.push(key);
+    }
+  }
+
+  const checkExists = (key: string): boolean => {
+    const found = input.known.get(key);
+    if (!found) {
+      add({ problem: "unknown_task", keys: [key], message: `${key} is not in this project, so this plan cannot name it.` });
+      return false;
+    }
+    if (found.kind !== "task") {
+      add({ problem: "not_a_task", keys: [key], message: `${key} is not a task. A plan's phases and dependencies name tasks.` });
+      return false;
+    }
+    return true;
+  };
+
+  for (const key of declared) checkExists(key);
+
+  const outgoing = new Map<string, string[]>();
+  for (const edge of input.dependencies) {
+    if (edge.from === edge.to) {
+      add({ problem: "self_dependency", keys: [edge.from], message: `${edge.from} cannot depend on itself.` });
+      continue;
+    }
+    let usable = true;
+    for (const end of [edge.from, edge.to]) {
+      if (declaredSet.has(end)) continue;
+      if (checkExists(end)) {
+        add({
+          problem: "dependency_outside_plan",
+          keys: [end],
+          message: `${end} is named by a dependency, but this plan does not list it in any phase. Add it to a phase, or remove the dependency.`,
+        });
+      }
+      usable = false;
+    }
+    if (!usable) continue;
+    const list = outgoing.get(edge.from);
+    if (list) list.push(edge.to);
+    else outgoing.set(edge.from, [edge.to]);
+  }
+
+  const cycle = findDependencyCycle(declared, outgoing);
+  if (cycle) add({ problem: "cycle", keys: cycle, message: planCycleMessage(cycle) });
+
+  const orphans: PlanGraphOrphan[] = [];
+  for (const key of input.claimed ?? []) {
+    if (declaredSet.has(key)) continue;
+    const found = input.known.get(key);
+    if (!found) continue;
+    orphans.push({ key, entityId: found.entityId, title: found.title, state: found.state, reason: "removed_from_plan" });
+  }
+
+  return {
+    ok: problems.length === 0,
+    problems,
+    orphans,
+    order: cycle ? [] : dependencyOrder(declared, outgoing),
+  };
+}
+
+/**
+ * One cycle in a list of declared dependencies, by key, or `undefined`.
+ *
+ * The body schema and {@link validatePlanGraph} both refuse a cyclic plan, and
+ * both say the same sentence, because a person must not get two different
+ * answers depending on which layer noticed (D-355).
+ */
+export function planDependencyCycle(dependencies: ReadonlyArray<{ readonly from: string; readonly to: string }>): string[] | undefined {
+  const outgoing = new Map<string, string[]>();
+  const nodes: string[] = [];
+  for (const edge of dependencies) {
+    if (!nodes.includes(edge.from)) nodes.push(edge.from);
+    const list = outgoing.get(edge.from);
+    if (list) list.push(edge.to);
+    else outgoing.set(edge.from, [edge.to]);
+  }
+  return findDependencyCycle(nodes, outgoing);
+}
+
+/** How a cyclic plan is refused, wherever it is noticed. */
+export function planCycleMessage(cycle: readonly string[]): string {
+  return `This plan's dependencies go in a circle: ${cycle.join(" → ")}. A plan is dependency-ordered, so one of those dependencies has to go.`;
+}
+
+/** The keys of one cycle, in the order it goes round and back to its start. */
+function findDependencyCycle(nodes: readonly string[], outgoing: ReadonlyMap<string, string[]>): string[] | undefined {
+  const state = new Map<string, 0 | 1 | 2>();
+  const path: string[] = [];
+  const roots = new Set<string>([...nodes, ...outgoing.keys()]);
+  const visit = (node: string): string[] | undefined => {
+    const mark = state.get(node);
+    if (mark === 2) return undefined;
+    if (mark === 1) {
+      const at = path.indexOf(node);
+      return [...path.slice(at), node];
+    }
+    state.set(node, 1);
+    path.push(node);
+    for (const next of outgoing.get(node) ?? []) {
+      const found = visit(next);
+      if (found) return found;
+    }
+    path.pop();
+    state.set(node, 2);
+    return undefined;
+  };
+  for (const node of roots) {
+    const found = visit(node);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** Dependencies first, then what waits on them; ties keep the declared order. */
+function dependencyOrder(nodes: readonly string[], outgoing: ReadonlyMap<string, string[]>): string[] {
+  const order: string[] = [];
+  const done = new Set<string>();
+  const visiting = new Set<string>();
+  const visit = (node: string): void => {
+    if (done.has(node) || visiting.has(node)) return;
+    visiting.add(node);
+    for (const next of outgoing.get(node) ?? []) visit(next);
+    visiting.delete(node);
+    done.add(node);
+    order.push(node);
+  };
+  for (const node of nodes) visit(node);
+  return order;
+}
+
+// ---------------------------------------------------------------------------
+// Readiness and scope conflicts (M21-T15)
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a Task can or cannot be worked on right now, derived on every read.
+ *
+ * Nothing here is stored: readiness is a function of the dependencies' states
+ * and of the upstream artifacts, so it can never drift from them.
+ */
+export interface TaskReadiness {
+  /** True when every declared dependency is satisfied. */
+  ready: boolean;
+  /** The dependency keys still waiting, named for the board's refusals (D-355). */
+  unmetDependencies: string[];
+  /** The upstream Plan or Design that is stale, when one is. */
+  stalePausedBy?: StaleUpstreamRef;
+  /** True when a passing acceptance evidence record is linked to the Task. */
+  hasAcceptanceEvidence: boolean;
+  /** True when at least one verification of the Task passed. */
+  hasPassingVerification: boolean;
+  blockingComments: number;
+}
+
+/** The files and packages a Task says, or is observed, to write in. */
+export interface TaskScope {
+  packages: readonly string[];
+  paths: readonly string[];
+}
+
+/**
+ * Another active Task that writes where this one does.
+ *
+ * `observed` marks an overlap that came from a recorded repository change
+ * rather than from the declared scope: the Task did not say it would write
+ * there, and it did.
+ */
+export interface TaskConflict {
+  entityId: string;
+  key: string;
+  title: string;
+  state: ProjectTaskState;
+  overlap: { packages: string[]; paths: string[] };
+  observed: boolean;
+  /** True when a person recorded that they accept the shared-checkout risk. */
+  accepted: boolean;
+}
+
+/** Task states in which a Task may be about to write. */
+export const ACTIVE_TASK_STATES: readonly ProjectTaskState[] = ["ready", "in_progress", "needs_review"];
+
+export function isActiveTaskState(state: ProjectWorkState): boolean {
+  return (ACTIVE_TASK_STATES as readonly string[]).includes(state);
+}
+
+/** `./packages/ui/` and `packages/ui` are the same place. */
+export function normalizeScopePath(path: string): string {
+  let value = path.trim().replace(/\\/g, "/");
+  while (value.startsWith("./")) value = value.slice(2);
+  value = value.replace(/\/{2,}/g, "/");
+  while (value.endsWith("/")) value = value.slice(0, -1);
+  return value;
+}
+
+/** Two paths overlap when they are the same place, or one contains the other. */
+export function scopePathsOverlap(a: string, b: string): boolean {
+  const left = normalizeScopePath(a);
+  const right = normalizeScopePath(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  return left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
+/** What two scopes share: the packages in both, and the paths that contain each other. */
+export function overlappingScope(a: TaskScope, b: TaskScope): { packages: string[]; paths: string[] } {
+  const theirs = new Set(b.packages.map((name) => name.trim()).filter((name) => name.length > 0));
+  const packages: string[] = [];
+  for (const name of a.packages) {
+    const trimmed = name.trim();
+    if (trimmed && theirs.has(trimmed) && !packages.includes(trimmed)) packages.push(trimmed);
+  }
+  const paths: string[] = [];
+  for (const mine of a.paths) {
+    for (const other of b.paths) {
+      if (!scopePathsOverlap(mine, other)) continue;
+      // The narrower of the two is the place they actually meet.
+      const left = normalizeScopePath(mine);
+      const right = normalizeScopePath(other);
+      const meeting = left.length >= right.length ? left : right;
+      if (meeting && !paths.includes(meeting)) paths.push(meeting);
+    }
+  }
+  return { packages, paths };
 }
