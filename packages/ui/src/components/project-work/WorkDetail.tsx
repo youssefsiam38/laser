@@ -38,6 +38,8 @@ import {
 import { KIND_LABEL } from "@/project-work/vocabulary";
 
 import { ArchiveDialog, DeleteDialog } from "./ConfirmDialogs.js";
+import { PlanDetail } from "./PlanDetail.js";
+import { TaskDetail } from "./TaskDetail.js";
 import { WorkBody } from "./bodies/index.js";
 import { KeyTag, StatusChip, TypeBadge } from "./KindBadge.js";
 import { WorkLoading, WorkPlaceholder, WorkRefusal } from "./states.js";
@@ -249,7 +251,14 @@ export function WorkDetail({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {detail.body?.body ? (
+        {/* Plan and Task have detail surfaces of their own (M21-T16): the
+            plan's Document/Dependencies switch and the task's attempts,
+            evidence and checkpoints need the whole read, not just the body. */}
+        {detail.body?.body?.kind === "plan" ? (
+          <PlanDetail detail={detail} body={detail.body.body.plan} items={work.items} />
+        ) : detail.body?.body?.kind === "task" ? (
+          <TaskDetail store={store} detail={detail} body={detail.body.body.task} items={work.items} />
+        ) : detail.body?.body ? (
           <WorkBody
             body={detail.body.body}
             items={work.items}

@@ -128,7 +128,12 @@ const EMPTY: ProjectWorkSnapshot = {
 export type ProjectWorkFailure =
   | { kind: "conflict"; message: string; current: ProjectWorkRef | undefined }
   | { kind: "quota"; message: string; refusal: ProjectWorkQuotaRefusal | undefined }
-  | { kind: "refused"; message: string };
+  /**
+   * Everything else the host refused, with whatever typed detail it attached:
+   * `{ refused: "stale_upstream", upstream }` is the one that exists today
+   * (M21-T15), and the Task detail decodes it rather than re-reading the graph.
+   */
+  | { kind: "refused"; message: string; data?: unknown };
 
 export type ProjectWorkOutcome<T> = { ok: true; value: T } | { ok: false; failure: ProjectWorkFailure };
 
@@ -147,7 +152,7 @@ export function describeProjectWorkError(error: unknown): ProjectWorkFailure {
     const refusal = data as ProjectWorkQuotaRefusal | undefined;
     return { kind: "quota", message: messageOf(error), refusal };
   }
-  return { kind: "refused", message: messageOf(error) };
+  return { kind: "refused", message: messageOf(error), ...(data !== undefined ? { data } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -351,6 +356,28 @@ export class ProjectWorkStore {
       entityId: entity.entityId,
       expectedRevisionId: entity.expectedRevisionId,
       linkId,
+      idempotencyKey: this.#newKey(),
+    });
+  }
+
+  /**
+   * Join a Task to the session, run or checkpoint an attempt happens in.
+   *
+   * The link is made *before* any prompt is sent (leap, "Execution and
+   * convergence") and it moves nothing: the Task's state is never changed by
+   * it, and an ended attempt writes evidence instead (M21-T15).
+   */
+  async linkExecution(
+    entity: { entityId: string; expectedRevisionId: string },
+    execution: ClientRequests["project/task/link-execution"]["params"]["execution"],
+  ): Promise<ProjectWorkOutcome<ClientRequests["project/task/link-execution"]["result"]>> {
+    const projectId = this.#snapshot.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
+    return this.#write("project/task/link-execution", {
+      projectId,
+      entityId: entity.entityId,
+      expectedRevisionId: entity.expectedRevisionId,
+      execution,
       idempotencyKey: this.#newKey(),
     });
   }

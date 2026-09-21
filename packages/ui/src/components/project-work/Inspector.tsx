@@ -28,6 +28,7 @@ import { selectWork, useWorkspaceUi, type ProjectWorkSnapshot, type ProjectWorkS
 
 import { KeyTag } from "./KindBadge.js";
 import { LinkDialog, RELATION_SENTENCE } from "./LinkDialog.js";
+import { TaskInspectorSections } from "./TaskInspector.js";
 import { Section } from "./bodies/fields.js";
 
 type Detail = ClientRequests["project/work/get"]["result"];
@@ -48,6 +49,7 @@ export function Inspector({
   const canLink = useCapability("project/work/link", { presentation: "explained" });
   const entityId = ui.selection?.entityId;
   const revisionId = ui.selection?.revisionId;
+  const kind = ui.selection?.kind;
 
   const read = useCallback(async () => {
     if (!store || !entityId) {
@@ -57,11 +59,14 @@ export function Inspector({
     const outcome = await store.get({
       entityId,
       ...(revisionId ? { revisionId } : {}),
-      body: { mode: "none" },
+      // A Task's inspector draws its dependencies as key cards and the Plan it
+      // belongs to, both of which live in the body (M21-T16); every other kind
+      // needs nothing from it here.
+      body: { mode: kind === "task" ? "full" : "none" },
       include: { comments: true, approvals: true, evidence: true, links: true, history: true },
     });
     setDetail(outcome.ok ? outcome.value : undefined);
-  }, [entityId, revisionId, store]);
+  }, [entityId, kind, revisionId, store]);
 
   useEffect(() => {
     void read();
@@ -104,6 +109,10 @@ export function Inspector({
           { label: "Digest", value: revision.digest.slice(0, 12), typed: true },
         ]}
       />
+
+      {detail.body?.body?.kind === "task" ? (
+        <TaskInspectorSections body={detail.body.body.task} readiness={detail.readiness} items={work.items} />
+      ) : null}
 
       {entity.kind !== "task" ? (
         <Section title="Gate">

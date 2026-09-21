@@ -28,24 +28,32 @@ import { ClipboardCheck, GripVertical, MoreHorizontal } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { ProjectTaskState, ProjectWorkListItem } from "@lasercode/protocol";
 
+import { TodoList, type TodoItem } from "@/components/assistant-ui/elements/todo-list";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { relativeTime } from "@/format";
+import { useBreakpoint } from "@/hooks";
 import { cn } from "@/lib/utils";
 import { useLaserStable, useCapability } from "@/runtime";
 import { openWorkCreate, selectWork, type ProjectWorkSnapshot, type ProjectWorkStore } from "@/project-work";
-import { boardColumns, checkDrop } from "@/project-work/board";
-import { BOARD_COLUMNS, BOARD_EXTRA_COLUMN, boardColumnLabel, KIND_RULE } from "@/project-work/vocabulary";
+import { boardColumns, checkDrop, dropFor } from "@/project-work/board";
+import { BOARD_COLUMNS, BOARD_EXTRA_COLUMN, boardColumnLabel, KIND_RULE, stateLabel, taskMark } from "@/project-work/vocabulary";
 
 import { KeyTag, NeedsYouChip } from "./KindBadge.js";
+import { TaskCancelDialog } from "./TaskCancel.js";
 import { WorkPlaceholder, WorkRefusal } from "./states.js";
 
 export function Board({ store, work }: { store: ProjectWorkStore | undefined; work: ProjectWorkSnapshot }) {
   const [dragging, setDragging] = useState<string | undefined>(undefined);
   const [refusal, setRefusal] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState<string | undefined>(undefined);
+  const [cancelling, setCancelling] = useState<{ row: ProjectWorkListItem; error?: string } | undefined>(undefined);
   const { actions } = useLaserStable();
   const canAct = useCapability("project/task/action", { presentation: "explained" });
+  // On a phone the columns keep their identity and their transitions, and the
+  // cards become the adopted `todo-list`'s rows: the same facts in one line
+  // each, never the same card at a smaller size (D-355, "Widths and inputs").
+  const compact = useBreakpoint() === "mobile";
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -60,33 +68,53 @@ export function Board({ store, work }: { store: ProjectWorkStore | undefined; wo
     [cancelled, dragging, work.items],
   );
 
-  const move = async (row: ProjectWorkListItem, to: ProjectTaskState): Promise<void> => {
+  const move = async (row: ProjectWorkListItem, to: ProjectTaskState, note?: string): Promise<void> => {
     const check = checkDrop(row, to);
     if (!check.allowed) {
       setRefusal(check.reason);
       return;
     }
     if (!store) return;
+    // A cancellation has to say why, durably (M21-T15), so it is asked for
+    // here rather than sent and refused.
+    if (check.action === "cancel" && !note) {
+      setRefusal(undefined);
+      setCancelling({ row });
+      return;
+    }
     setRefusal(undefined);
     setBusy(row.ref.entityId);
-    const outcome = await store.taskAction({ entityId: row.ref.entityId, expectedRevisionId: row.ref.revisionId }, check.action);
+    const outcome = await store.taskAction(
+      { entityId: row.ref.entityId, expectedRevisionId: row.ref.revisionId },
+      check.action,
+      note ? { note } : {},
+    );
     setBusy(undefined);
     if (!outcome.ok) {
       // The engine refuses what this window could not know: acceptance
       // evidence, blocking comments, a stale plan. Its sentence is the answer.
-      setRefusal(outcome.failure.message);
+      if (cancelling) setCancelling({ ...cancelling, error: outcome.failure.message });
+      else setRefusal(outcome.failure.message);
       return;
     }
-    actions.toast("info", `${row.key} · ${boardColumnLabel(to).toLocaleLowerCase()}`);
+    setCancelling(undefined);
+    // A dependency reaching `done` moves what was waiting on it. Those moves
+    // are the graph's, not the person's, so they are said out loud (M21-T15).
+    const cascaded = outcome.value.cascaded ?? [];
+    actions.toast(
+      "info",
+      cascaded.length === 0
+        ? `${row.key} · ${boardColumnLabel(to).toLocaleLowerCase()}`
+        : `${row.key} · ${boardColumnLabel(to).toLocaleLowerCase()} — ${cascaded
+            .map((moved) => `${moved.key} is now ${boardColumnLabel(moved.to).toLocaleLowerCase()}`)
+            .join(", ")}`,
+    );
   };
 
   const onDragEnd = ({ active, over }: DragEndEvent): void => {
     setDragging(undefined);
-    if (!over) return;
-    const row = tasks.find((task) => task.ref.entityId === String(active.id));
-    const to = String(over.id) as ProjectTaskState;
-    if (!row || row.state === to) return;
-    void move(row, to);
+    const drop = dropFor(tasks, String(active.id), over ? String(over.id) : undefined);
+    if (drop) void move(drop.row, drop.to);
   };
 
   if (tasks.length === 0) {
@@ -123,12 +151,26 @@ export function Board({ store, work }: { store: ProjectWorkStore | undefined; wo
               state={column.state}
               rows={column.rows}
               busy={busy}
+              compact={compact}
               disabled={canAct.state !== "available"}
               onMove={(row, to) => void move(row, to)}
             />
           ))}
         </div>
       </DndContext>
+      <TaskCancelDialog
+        workKey={cancelling?.row.key}
+        title={cancelling?.row.title}
+        open={cancelling !== undefined}
+        busy={busy !== undefined}
+        error={cancelling?.error}
+        onOpenChange={(open) => {
+          if (!open) setCancelling(undefined);
+        }}
+        onCancelTask={(note) => {
+          if (cancelling) void move(cancelling.row, "cancelled", note);
+        }}
+      />
     </div>
   );
 }
@@ -137,12 +179,14 @@ function Column({
   state,
   rows,
   busy,
+  compact,
   disabled,
   onMove,
 }: {
   state: ProjectTaskState;
   rows: readonly ProjectWorkListItem[];
   busy: string | undefined;
+  compact: boolean;
   disabled: boolean;
   onMove: (row: ProjectWorkListItem, to: ProjectTaskState) => void;
 }) {
@@ -161,18 +205,89 @@ function Column({
         <span className="text-sm leading-5 font-medium text-ink">{boardColumnLabel(state)}</span>
         <span className="typed tnum text-ink-3">{rows.length}</span>
       </header>
-      <ul role="list" className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-1.5">
-        {rows.length === 0 ? (
-          <li className="px-1.5 py-2 text-xs leading-xs text-ink-3">Nothing here.</li>
-        ) : (
-          rows.map((row) => (
-            <li key={row.ref.entityId}>
-              <Card row={row} busy={busy === row.ref.entityId} disabled={disabled} onMove={onMove} />
-            </li>
-          ))
-        )}
-      </ul>
+      {compact ? (
+        <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+          <TodoList
+            header={false}
+            items={rows.map((row) => compactRow(row, busy === row.ref.entityId, disabled, onMove))}
+            empty="Nothing here."
+          />
+        </div>
+      ) : (
+        <ul role="list" className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-1.5">
+          {rows.length === 0 ? (
+            <li className="px-1.5 py-2 text-xs leading-xs text-ink-3">Nothing here.</li>
+          ) : (
+            rows.map((row) => (
+              <li key={row.ref.entityId}>
+                <Card row={row} busy={busy === row.ref.entityId} disabled={disabled} onMove={onMove} />
+              </li>
+            ))
+          )}
+        </ul>
+      )}
     </section>
+  );
+}
+
+/**
+ * One task as a `todo-list` row: the mark, the key, the title, the state in
+ * words — and the same "Move to" menu the card has, so a phone reaches every
+ * transition a mouse does without a drag.
+ */
+function compactRow(
+  row: ProjectWorkListItem,
+  busy: boolean,
+  disabled: boolean,
+  onMove: (row: ProjectWorkListItem, to: ProjectTaskState) => void,
+): TodoItem {
+  const state = row.state as ProjectTaskState;
+  return {
+    id: row.ref.entityId,
+    text: row.title,
+    status: stateLabel("task", row.state),
+    mark: taskMark(state),
+    done: state === "done",
+    tag: row.key,
+    ...(row.unmetDependencies && row.unmetDependencies.length > 0
+      ? { detail: `waiting on ${row.unmetDependencies.join(", ")}` }
+      : {}),
+    onOpen: () => selectWork({ entityId: row.ref.entityId, kind: row.kind }),
+    action: <MoveMenu row={row} from={state} disabled={disabled || busy} onMove={onMove} />,
+  };
+}
+
+function MoveMenu({
+  row,
+  from,
+  disabled,
+  className,
+  onMove,
+}: {
+  row: ProjectWorkListItem;
+  from: ProjectTaskState;
+  disabled: boolean;
+  className?: string;
+  onMove: (row: ProjectWorkListItem, to: ProjectTaskState) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="icon-xs" variant="ghost" aria-label={`Move ${row.key}`} disabled={disabled} className={className}>
+          <MoreHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuLabel>Move to</DropdownMenuLabel>
+        {[...BOARD_COLUMNS, BOARD_EXTRA_COLUMN]
+          .filter((to) => to !== from)
+          .map((to) => (
+            <DropdownMenuItem key={to} disabled={disabled} onSelect={() => onMove(row, to)}>
+              {boardColumnLabel(to)}
+            </DropdownMenuItem>
+          ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -189,7 +304,6 @@ function Card({
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: row.ref.entityId, disabled });
   const from = row.state as ProjectTaskState;
-  const moves = [...BOARD_COLUMNS, BOARD_EXTRA_COLUMN].filter((to) => to !== from);
 
   return (
     <div
@@ -220,21 +334,7 @@ function Card({
         </button>
         <KeyTag workKey={row.key} />
         {row.needsAttention ? <NeedsYouChip reason={undefined} className="ms-auto" /> : null}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="icon-xs" variant="ghost" className={cn(!row.needsAttention && "ms-auto")} aria-label={`Move ${row.key}`}>
-              <MoreHorizontal />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Move to</DropdownMenuLabel>
-            {moves.map((to) => (
-              <DropdownMenuItem key={to} disabled={disabled} onSelect={() => onMove(row, to)}>
-                {boardColumnLabel(to)}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <MoveMenu row={row} from={from} disabled={disabled} className={cn(!row.needsAttention && "ms-auto")} onMove={onMove} />
       </span>
       <button
         type="button"
