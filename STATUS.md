@@ -29,7 +29,7 @@
 | M20 Source-control leap | in-progress |
 | M21 Project lifecycle leap | in-progress |
 | M22 Model profiles | done |
-| M23 Plain Chat | in-progress |
+| M23 Plain Chat | done |
 | M24 Ask Oracle | in-progress |
 | M25 External work links | in-progress |
 | M26 Tool contract conformance | in-progress |
@@ -37,6 +37,6 @@
 
 **Blockers:** M19-T7 source work waits for M19-T6 to release shared `LaserPaths` and migration-storage ownership. M21 remains dependency-gated on the person's M20 sandbox acceptance; the leap goal (`docs/goal-project-lifecycle-leap.md`) proceeds M22 → M23 → M26 → M21 → M24 → M25.
 **In flight:** M23-T6 release of 0.13.0; M26-T1/T2 (worker). Browser acceptance of the Chat entry points, the Agents empty state and the profile surfaces is the person's (D-342).
-**Published:** v0.12.0 is Latest (`19cdd565` candidate; 12 verified assets).
+**Published:** v0.13.0 is Latest (`842bd911` candidate; 12 verified assets).
 **Next up:** M26-T3 evaluation harness and M26-T4 UI error/preview rendering; M21-T1 protocol domain for the lifecycle; M24-T1 after M26-T1.
 **Recently done:** M23-T1–T5 Plain Chat: protocol (`5aebaee4`), worker chat prompt + one-shot naming (`0051d591`), host without built-ins (`79404b7c`), UI without Beam (`72f0a3a1`), docs/guard (`c91eec1b`, `70d8f4ad`), review fixes (`3a27fe38`), naming kept on the person's choice (`40eabcee`); M22 released as v0.12.0 (`19cdd565`).
