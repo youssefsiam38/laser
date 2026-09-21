@@ -5982,8 +5982,8 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T2 | Stable project identity and canonical store | done | claude-2026-09-21-leap | `b8fb9454`; `env -i … pnpm -F @lasercode/host test` (1068 passed; `project-work/{store,migrations,crash,bounds}.test.ts`) | see notes |
 | M21-T3 | Host authority, methods, policy and event stream | done | claude-2026-09-21-leap | `34f011f4`; `env -i … pnpm -F @lasercode/host test` (1104 passed; `project-work/methods.test.ts` 20, every test asserts zero worker attempts) | see notes |
 | M21-T4 | Bounded bodies, search and derived projections | done | claude-2026-09-21-leap | `ed23525f`; `project-work/bodies.test.ts` 16 over the wire | see notes |
-| M21-T5 | UI client store, reconcile and deep links | in-progress | claude-2026-09-21-leap | — | see notes |
-| M21-T6 | Embedded workspace shell | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T5 | UI client store, reconcile and deep links | done | claude-2026-09-21-leap | `edac5b5c`; `pnpm -F @lasercode/ui test` (`test/project-work/*`) | see notes |
+| M21-T6 | Embedded workspace shell | done | claude-2026-09-21-leap | `83f454d3` (merged `f9e50378`); `pnpm -F @lasercode/ui test` (3055 passed, 50 new) | see notes |
 | M21-T7 | Specs and Research experience | todo | — | — | `PLAN.md` M21 |
 | M21-T8 | Comments, reviews and approval gates | todo | — | — | `PLAN.md` M21 |
 | M21-T9 | Cross-session and cross-project mentions | todo | — | — | `PLAN.md` M21 |
@@ -6006,6 +6006,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T26 | Research phase: adapters, tools and loop | in-progress | claude-2026-09-21-leap | — | see notes |
 
 #### M21-T5–T6 notes
+- 2026-09-21 done: T5 `packages/ui/src/project-work/{store,registry,deep-link,workspace-state,hooks,model}.ts` (one store per stable projectId; sequence rules; reconcile with removed/reset; `#/work/<projectId>/<kind>/<entityId>[/<revisionId>]`); T6 `components/project-work/**` — Project work control with live counts, Work backlog with filters/sorts/saved views (`pi/prefs`), Needs you, Recent (`timeline`), + Create with the next key, kind-aware detail with real read-only bodies for all five kinds, inspector, Tasks Board (dnd-kit → `project/task/action`, illegal moves named), Archive/Delete with typed confirmation (Enter never confirms), `/spec` `/research` `/design` `/plan` with the project picker in a projectless Chat, palette entries by key, kind tokens `--kind-*` editable in Appearance; conversation stays mounted. Deferred slots for T7/T8/T9/T13/T16 in `docs/leap/m21-workspace-plan.md`. Visual acceptance is the person's (D-342).
 - 2026-09-21 claimed by claude-2026-09-21-leap: one UI worker (client store → workspace shell) from the merged spine; plan in `docs/leap/m21-workspace-plan.md`.
 
 #### M21-T10 notes
