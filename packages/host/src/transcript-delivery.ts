@@ -12,7 +12,7 @@ import { parseClientRequest, type JsonRpcNotification, type JsonRpcResponse, typ
  *
  * It is now reference-counted by **connection and scope**. One connection can
  * be showing the same session in more than one place (the session's own view
- * and a Beam bubble over it), so each holder names itself with an owner label
+ * and a secondary surface over it), so each holder names itself with an owner label
  * and the session leaves this connection's delivery when the last of them lets
  * go. Reopening adds it again, and the reopen reconciles from `fromSeq` — the
  * worker replays what was missed, and `replayFrom` tells a client whose gap is

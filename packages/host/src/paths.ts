@@ -24,9 +24,9 @@
  * directory.
  */
 import { DATA_DIR_NAME, WORKTREES_DIR_NAME } from "@lasercode/protocol";
-import { mkdirSync, mkdtempSync, realpathSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { canonical } from "./trust.js";
 
 /** Directory containment, not a string prefix; existing aliases resolve to the same place. */
@@ -39,10 +39,19 @@ export function isWithinDirectory(cwd: string, root: string): boolean {
   return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
 }
 
-export function workspaceAgentFor(cwd: string, workspaces: { beam: string; chat: string }): "beam" | "chat" | undefined {
-  if (isWithinDirectory(cwd, workspaces.beam)) return "beam";
-  if (isWithinDirectory(cwd, workspaces.chat)) return "chat";
-  return undefined;
+/**
+ * True when `cwd` is inside the container plain Chat conversations run in.
+ *
+ * The retired sibling counts too. A conversation that ran under
+ * `workspaces/beam` before M23 still names that directory in its session
+ * header — the header is not rewritten, and the folder move at host start does
+ * not change what an existing transcript says — so a reader that only knew
+ * `workspaces/chat` would stop listing it and stop opening it. It is a chat,
+ * it stays a chat (`docs/plain-chat.md`, "Migration").
+ */
+export function isChatWorkspace(cwd: string, workspaces: { chat: string }): boolean {
+  if (isWithinDirectory(cwd, workspaces.chat)) return true;
+  return isWithinDirectory(cwd, retiredBeamWorkspaceDir(dirname(workspaces.chat)));
 }
 
 /** `$XDG_DATA_HOME/laser` and the platform equivalents. */
@@ -68,27 +77,76 @@ export function defaultStateDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * The directories the built-in projectless agents run in. They live under the
- * host's own state directory (`<stateDir>/workspaces/beam`, `…/chat`): the
- * host creates and owns that directory in every layout, so a workspace is
- * never derived from a path some other layer chose. They are not projects
- * (the registry never lists them), just containers for the persistent private
- * working directory allocated to each Beam and Chat session.
+ * The directory projectless Chat conversations run in. It lives under the
+ * host's own state directory (`<stateDir>/workspaces/chat`): the host creates
+ * and owns that directory in every layout, so a workspace is never derived
+ * from a path some other layer chose. It is not a project (the registry never
+ * lists it), just the container for the persistent private working directory
+ * allocated to each Chat conversation.
  */
 export function workspacesDir(stateDir: string): string {
   return join(stateDir, "workspaces");
-}
-
-export function beamWorkspaceDir(stateDir: string): string {
-  return join(workspacesDir(stateDir), "beam");
 }
 
 export function chatWorkspaceDir(stateDir: string): string {
   return join(workspacesDir(stateDir), "chat");
 }
 
+/** Where the removed Beam built-in's conversations were kept before M23. */
+export function retiredBeamWorkspaceDir(workspacesRoot: string): string {
+  return join(workspacesRoot, "beam");
+}
+
 /**
- * Give one Beam or Chat conversation a durable private working directory. `mkdtemp`
+ * Move every workspace folder left under `workspaces/beam` into
+ * `workspaces/chat`, so a conversation that ran there before M23 opens as the
+ * Chat it now is and is listed in the Chat tab (`docs/plain-chat.md`,
+ * "Migration").
+ *
+ * One move per folder, and each one is independent: a folder whose name is
+ * already taken, or which cannot be moved at all, is left exactly where it is
+ * rather than costing the person the rest. The empty `beam` directory is
+ * removed afterwards; a directory that still holds something is kept, because
+ * something is still in it. Idempotent — a second run finds nothing to do.
+ */
+export function rehomeRetiredWorkspaces(workspacesRoot: string): { moved: string[]; kept: string[] } {
+  const from = retiredBeamWorkspaceDir(workspacesRoot);
+  const moved: string[] = [];
+  const kept: string[] = [];
+  let entries: string[];
+  try {
+    entries = readdirSync(from);
+  } catch {
+    return { moved, kept }; // nothing was ever there, which is the usual case
+  }
+  const to = join(workspacesRoot, "chat");
+  if (entries.length > 0 && ensureWorkspace(to)) return { moved, kept: entries.map((entry) => join(from, entry)) };
+  for (const entry of entries) {
+    const source = join(from, entry);
+    const target = join(to, entry);
+    try {
+      if (statSync(target, { throwIfNoEntry: false })) {
+        kept.push(source);
+        continue;
+      }
+      renameSync(source, target);
+      moved.push(target);
+    } catch {
+      kept.push(source);
+    }
+  }
+  if (kept.length === 0) {
+    try {
+      rmdirSync(from);
+    } catch {
+      // An empty directory that will not go is harmless; nothing reads it.
+    }
+  }
+  return { moved, kept };
+}
+
+/**
+ * Give one Chat conversation a durable private working directory. `mkdtemp`
  * supplies collision-free naming, but the directory lives under the product
  * state and is deliberately not temporary or cleaned up when the process ends.
  */

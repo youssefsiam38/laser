@@ -92,10 +92,12 @@ function state(path: string, cwd: string): SessionState {
 // Real directories: `session/new` creates a workspace before spawning its
 // worker, and refuses the session when it cannot.
 const WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-workspaces-`));
-const WORKSPACES = { beam: join(WORKSPACE_ROOT, "beam"), chat: join(WORKSPACE_ROOT, "chat") };
+const WORKSPACES = { chat: join(WORKSPACE_ROOT, "chat") };
+/** Where conversations lived before M23; the host no longer treats it as one. */
+const RETIRED_BEAM_WORKSPACE = join(WORKSPACE_ROOT, "beam");
 
 /** A Router with fakes for everything but the piece under test. */
-function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; reserved?: string[]; agents?: boolean; agentStore?: AgentStore; features?: boolean; workspaces?: { beam: string; chat: string }; exclude?: string[]; now?: () => number; workerRequest?: (method: string, params: unknown) => Promise<unknown>; liveCwd?: string; admission?: PressureAdmission; activation?: RuntimeActivationGate } = {}) {
+function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string, string[]>; reserved?: string[]; agents?: boolean; agentStore?: AgentStore; features?: boolean; workspaces?: { chat: string }; exclude?: string[]; now?: () => number; workerRequest?: (method: string, params: unknown) => Promise<unknown>; liveCwd?: string; admission?: PressureAdmission; activation?: RuntimeActivationGate } = {}) {
   const dir = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-`));
   const catalogRows = options.catalogRows ?? [];
   const open = options.open ?? { [CWD_A]: [PATH_A] };
@@ -152,7 +154,7 @@ function harness(options: { catalogRows?: SessionSummary[]; open?: Record<string
 
   const attention = new AttentionTracker({});
   const workspaces = options.workspaces ?? WORKSPACES;
-  const projects = new ProjectRegistry({ catalog, agentDir: dir, exclude: [...(options.exclude ?? []), workspaces.beam, workspaces.chat] });
+  const projects = new ProjectRegistry({ catalog, agentDir: dir, exclude: [...(options.exclude ?? []), workspaces.chat] });
   const agents = options.agentStore ?? (options.agents ? new AgentStore({ agentDir: join(dir, "agent"), workspaces: options.workspaces ?? WORKSPACES }) : undefined);
   // Fixtures date from June; a fixed clock keeps retention from pruning them.
   const runs = options.agents ? new AgentRunRegistry({ now: () => new Date("2026-06-02T00:00:00.000Z") }) : undefined;
@@ -566,12 +568,11 @@ describe("Router · internal storage is never a project", () => {
     const internal = WORKSPACE_ROOT;
     const summary = (cwd: string, path: string): SessionSummary => ({ cwd, path, id: path, createdAt: "2026-09-10T00:00:00.000Z", modifiedAt: "2026-09-10T00:00:00.000Z", messageCount: 1 });
     const invalid = summary(internal, "/sessions/invalid.jsonl");
-    const beam = summary(join(WORKSPACES.beam, "session-private"), "/sessions/beam.jsonl");
     const chat = summary(join(WORKSPACES.chat, "session-private"), "/sessions/chat.jsonl");
     const project = summary(CWD_A, PATH_A);
-    const h = harness({ agents: true, exclude: [internal], catalogRows: [invalid, beam, chat, project] });
+    const h = harness({ agents: true, exclude: [internal], catalogRows: [invalid, chat, project] });
     try {
-      expect(h.router.sessions().map(s => s.path)).toEqual([beam.path, chat.path, project.path]);
+      expect(h.router.sessions().map(s => s.path)).toEqual([chat.path, project.path]);
       for (const [method, params] of [
         ["pi/project/add", { cwd: internal }],
         ["session/new", { cwd: internal }],
@@ -761,7 +762,7 @@ describe("Router · agents (docs/agents-leap)", () => {
     const h = harness({ agents: true });
     try {
       const listed = (await rpc(h.router, "agents/list")) as { result: { agents: Array<{ name: string }>; defaultAgent: string } };
-      expect(listed.result.agents.map((a) => a.name)).toEqual(["default", "beam", "chat", "namer"]);
+      expect(listed.result.agents.map((a) => a.name)).toEqual(["default"]);
       const input = { name: "reviewer", scope: "global" as const, description: "", instructions: "Review.", engineInstructions: false, excludeCoreInstructions: false, profileId: null, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] };
       expect(await rpc(h.router, "agents/validate", { agent: { ...input, scopedSkills: true }, originalName: null })).toMatchObject({ result: { issues: [{ field: "skills" }] } });
       const saved = await rpc(h.router, "agents/save", { agent: input, originalName: null });
@@ -770,22 +771,11 @@ describe("Router · agents (docs/agents-leap)", () => {
       expect(await rpc(h.router, "agents/set-default", { name: "reviewer" })).toMatchObject({ result: { snapshot: { defaultAgent: "reviewer" } } });
       expect(await rpc(h.router, "agents/delete", { name: "reviewer", location: { scope: "global" } })).toMatchObject({ error: { message: "This agent starts new sessions. Choose another default first." } });
       expect(await rpc(h.router, "agents/set-policy", { policy: { maxDepth: 2 } })).toMatchObject({ result: { snapshot: { policy: { maxDepth: 2 } } } });
-      // One method, three built-ins: each carries its profile to the agent of that name.
-      expect(await rpc(h.router, "agents/builtin/set-profile", { name: "beam", profileId: "mp_testbalanced000000000" })).toMatchObject({
-        result: { snapshot: { builtinProfiles: { beam: "mp_testbalanced000000000" } } },
-      });
-      const chatSet = (await rpc(h.router, "agents/builtin/set-profile", { name: "chat", profileId: "mp_testfast00000000000000" })) as {
-        result: { snapshot: { builtinProfiles: { chat: unknown }; agents: Array<{ name: string; profileId: unknown }> } };
-      };
-      expect(chatSet.result.snapshot.builtinProfiles.chat).toBe("mp_testfast00000000000000");
-      expect(chatSet.result.snapshot.agents.find((a) => a.name === "chat")?.profileId).toBe("mp_testfast00000000000000");
-      expect(await rpc(h.router, "agents/builtin/set-profile", { name: "chat", profileId: null })).toMatchObject({ result: { snapshot: { builtinProfiles: { chat: null } } } });
-      expect(await rpc(h.router, "agents/builtin/set-instructions", { name: "chat", instructions: "Answer as an editor." })).toMatchObject({
-        result: { snapshot: { builtinInstructions: { chat: "Answer as an editor." }, agents: expect.arrayContaining([expect.objectContaining({ name: "chat", instructions: "Answer as an editor." })]) } },
-      });
-      expect(await rpc(h.router, "agents/builtin/set-instructions", { name: "chat", instructions: null })).toMatchObject({
-        result: { snapshot: { builtinInstructions: { chat: null } } },
-      });
+      // The built-in methods are gone with the built-ins (D-347): an old
+      // client's call is an unknown method, not a refused one.
+      for (const method of ["agents/builtin/set-profile", "agents/builtin/set-instructions"]) {
+        expect(await rpc(h.router, method, { name: "chat", profileId: null })).toMatchObject({ error: { code: ErrorCodes.MethodNotFound } });
+      }
       expect(await rpc(h.router, "agents/runs/list", {})).toMatchObject({ result: { runs: [] } });
       expect(await rpc(h.router, "agents/sync", { snapshot: { revision: 1 } })).toMatchObject({ error: { message: "The app sends this to its own workers." } });
       expect(await rpc(h.router, "pi/worker/recover-agent-failures", { runs: [{
@@ -839,20 +829,21 @@ describe("Router · agents (docs/agents-leap)", () => {
     }
   });
 
-  it("refuses to delete a profile something still uses, and moves every reference with a replacement", async () => {
+  it("refuses to delete a profile a definition still uses, and moves it with a replacement", async () => {
     const h = harness({ agents: true });
     try {
       const BALANCED = "mp_testbalanced000000000";
       const FAST = "mp_testfast00000000000000";
-      await rpc(h.router, "agents/builtin/set-profile", { name: "namer", profileId: FAST });
+      const input = { name: "reviewer", scope: "global" as const, description: "", instructions: "Review.", engineInstructions: false, excludeCoreInstructions: false, profileId: FAST, thinkingLevel: null, supportsSubagents: false, allowedAgents: [], scopedSkills: false, skills: [] };
+      await rpc(h.router, "agents/save", { agent: input, originalName: null });
       const refused = await rpc(h.router, "models/profiles/delete", { cwd: CWD_A, id: FAST });
-      expect(refused).toMatchObject({ error: { message: expect.stringContaining("still used by Namer") } });
+      expect(refused).toMatchObject({ error: { message: expect.stringContaining("still used by reviewer") } });
       // Nothing was asked of the worker, so nothing was written.
       expect(h.workerRequests.some((r) => r.method === "models/profiles/delete")).toBe(false);
 
       const deleted = await rpc(h.router, "models/profiles/delete", { cwd: CWD_A, id: FAST, replacementId: BALANCED });
       expect(deleted).toMatchObject({ result: { ok: true } });
-      expect(h.agents!.snapshot().builtinProfiles.namer).toBe(BALANCED);
+      expect(h.agents!.get("reviewer")?.profileId).toBe(BALANCED);
     } finally {
       h.cleanup();
     }
@@ -967,52 +958,48 @@ describe("Router · agents (docs/agents-leap)", () => {
 
   it("lists an unwritten session with the agent the worker already knows it runs (M13-T47)", async () => {
     // Pi writes the file on the first message; until then the catalog cannot
-    // read a record, so the row the router synthesises must carry the agent
-    // from the worker's state — or an empty Beam chat lists as "no agent" and
-    // the launcher never recognises it as Beam's.
+    // read a record, so the row the router synthesises must carry what the
+    // worker's state says — or an empty chat lists as a project session.
     const h = harness({ agents: true });
-    const beamPath = "/sessions/beam-empty.jsonl";
-    h.open[WORKSPACES.beam] = [beamPath];
-    h.note({ ...state(beamPath, WORKSPACES.beam), agent: { agentName: "beam", kind: "beam" } });
-    const row = h.router.sessions().find((s) => s.path === beamPath);
-    expect(row?.agent).toEqual({ agentName: "beam", kind: "beam" });
+    const chatPath = "/sessions/chat-empty.jsonl";
+    h.open[WORKSPACES.chat] = [chatPath];
+    h.note({ ...state(chatPath, WORKSPACES.chat), agent: { kind: "chat", sessionKind: "chat" } });
+    const row = h.router.sessions().find((s) => s.path === chatPath);
+    expect(row?.agent).toEqual({ kind: "chat", sessionKind: "chat" });
     expect(row?.messageCount).toBe(0);
   });
 
-  it("session/new: a project starts the default agent, a workspace its own, and never Namer", async () => {
+  it("session/new: a project starts the default agent, the chat workspace starts no agent at all", async () => {
     const h = harness({ agents: true });
     try {
       await rpc(h.router, "session/new", { cwd: CWD_A });
       expect(h.workerRequests.at(-1)).toEqual({ cwd: CWD_A, method: "session/new", params: { cwd: CWD_A, agentName: "default" } });
       expect(h.projects.list().map((p) => p.cwd)).toContain(CWD_A);
 
-      await rpc(h.router, "session/new", { cwd: WORKSPACES.beam });
-      const beamRequest = h.workerRequests.at(-1)!;
-      expect(beamRequest.cwd.startsWith(`${WORKSPACES.beam}/session-`)).toBe(true);
-      expect(beamRequest).toMatchObject({ params: { agentName: "beam" } });
-      await rpc(h.router, "session/new", { cwd: WORKSPACES.beam });
-      const secondBeamRequest = h.workerRequests.at(-1)!;
-      expect(secondBeamRequest.cwd).not.toBe(beamRequest.cwd);
-      expect(secondBeamRequest.cwd.startsWith(`${WORKSPACES.beam}/session-`)).toBe(true);
-      await rpc(h.router, "session/new", { cwd: WORKSPACES.chat, agentName: "chat" });
+      // A chat asks for the plain conversation by kind; it names no agent,
+      // because it runs none (`docs/plain-chat.md`).
+      await rpc(h.router, "session/new", { cwd: WORKSPACES.chat });
       const chatRequest = h.workerRequests.at(-1)!;
-      expect(chatRequest).toMatchObject({ params: { agentName: "chat" } });
+      expect(chatRequest).toMatchObject({ params: { sessionKind: "chat" } });
+      expect(chatRequest.params).not.toHaveProperty("agentName");
       expect(chatRequest.cwd).not.toBe(WORKSPACES.chat);
       expect(chatRequest.cwd.startsWith(`${WORKSPACES.chat}/session-`)).toBe(true);
       expect((chatRequest.params as { cwd: string }).cwd).toBe(chatRequest.cwd);
       expect(existsSync(chatRequest.cwd)).toBe(true);
-      await rpc(h.router, "session/new", { cwd: WORKSPACES.chat, agentName: "chat" });
+      // Each chat gets its own persistent folder.
+      await rpc(h.router, "session/new", { cwd: WORKSPACES.chat });
       const secondChatRequest = h.workerRequests.at(-1)!;
       expect(secondChatRequest.cwd).not.toBe(chatRequest.cwd);
       expect(secondChatRequest.cwd.startsWith(`${WORKSPACES.chat}/session-`)).toBe(true);
-      expect(h.projects.list().map((p) => p.cwd)).not.toContain(WORKSPACES.beam);
       expect(h.projects.list().map((p) => p.cwd)).not.toContain(WORKSPACES.chat);
 
       const before = h.workerRequests.length;
-      expect(await rpc(h.router, "session/new", { cwd: CWD_A, agentName: "beam" })).toMatchObject({ error: { message: expect.stringContaining("Beam sessions start in") } });
-      expect(await rpc(h.router, "session/new", { cwd: WORKSPACES.beam, agentName: "default" })).toMatchObject({ error: { message: "Only Beam sessions start in the Beam workspace." } });
-      expect(await rpc(h.router, "session/new", { cwd: CWD_A, agentName: "namer" })).toMatchObject({ error: { message: expect.stringContaining("does not run a session") } });
-      expect(await rpc(h.router, "session/new", { cwd: CWD_A, agentName: "ghost" })).toMatchObject({ error: { data: { issues: [{ field: "agentName" }] } } });
+      // The three names that were built-in agents answer to nothing now.
+      for (const name of ["beam", "chat", "namer", "ghost"]) {
+        expect(await rpc(h.router, "session/new", { cwd: CWD_A, agentName: name })).toMatchObject({ error: { data: { issues: [{ field: "agentName" }] } } });
+      }
+      // And a chat cannot be asked to run one.
+      expect(await rpc(h.router, "session/new", { cwd: WORKSPACES.chat, agentName: "default" })).toMatchObject({ error: { message: "A chat runs no agent. Open a session in a project to start one." } });
       expect(h.workerRequests).toHaveLength(before);
     } finally {
       h.cleanup();
@@ -1023,17 +1010,19 @@ describe("Router · agents (docs/agents-leap)", () => {
     const root = mkdtempSync(join(tmpdir(), `${PRODUCT_NAME}-router-blocked-`));
     // A regular file where the workspaces root should be: nothing can be created beneath it.
     writeFileSync(join(root, "blocked"), "not a directory\n");
-    const h = harness({ agents: true, workspaces: { beam: join(root, "blocked", "beam"), chat: join(root, "chat") } });
+    const h = harness({ agents: true, workspaces: { chat: join(root, "chat") } });
     try {
       expect(existsSync(join(root, "chat"))).toBe(false);
-      await rpc(h.router, "session/new", { cwd: join(root, "chat"), agentName: "chat" });
+      await rpc(h.router, "session/new", { cwd: join(root, "chat") });
       expect(existsSync(join(root, "chat"))).toBe(true);
       expect(h.workerRequests.at(-1)?.cwd.startsWith(`${join(root, "chat")}/session-`)).toBe(true);
-      expect(h.workerRequests.at(-1)).toMatchObject({ params: { agentName: "chat" } });
+      expect(h.workerRequests.at(-1)).toMatchObject({ params: { sessionKind: "chat" } });
 
       const before = h.workerRequests.length;
-      const refused = await rpc(h.router, "session/new", { cwd: join(root, "blocked", "beam") });
-      expect(refused).toMatchObject({ error: { message: expect.stringMatching(/Beam could not create a private workspace: a parent of that path is a file/) } });
+      const blocked = harness({ agents: true, workspaces: { chat: join(root, "blocked", "chat") } });
+      const refused = await rpc(blocked.router, "session/new", { cwd: join(root, "blocked", "chat") });
+      blocked.cleanup();
+      expect(refused).toMatchObject({ error: { message: expect.stringMatching(/This chat's folder could not be created: a parent of that path is a file/) } });
       // No worker was started for a directory that does not exist.
       expect(h.workerRequests).toHaveLength(before);
     } finally {

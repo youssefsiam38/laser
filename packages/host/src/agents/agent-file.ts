@@ -4,6 +4,7 @@ import {
   AGENT_NAME_PATTERN,
   instructionTemplateIssue,
   isModelProfileId,
+  isRetiredAgentName,
   type AgentDefinition,
   type AgentSkillRef,
   type ModelIdentity,
@@ -19,9 +20,16 @@ export type AgentFileParseResult =
        * runs on the profile new conversations use.
        */
       legacyModel?: ModelIdentity;
+      /**
+       * Names in `allowedAgents` that were built-in agents before M23 and are
+       * not agents any more. They are dropped from the definition, which runs
+       * without them, and the caller raises a warning on that field
+       * (`docs/plain-chat.md`, "Migration").
+       */
+      retiredAllowedAgents?: string[];
       issues?: never;
     }
-  | { definition?: never; legacyModel?: never; issues: string[] };
+  | { definition?: never; legacyModel?: never; retiredAllowedAgents?: never; issues: string[] };
 
 const FRONTMATTER_KEYS = new Set([
   "name",
@@ -86,7 +94,9 @@ export function parseAgentFile(text: string, name: string, fallbackTimestamp = n
   const legacyModel = readLegacyModel(value.model);
   const thinkingLevel = readThinkingLevel(value.thinkingLevel, issues);
   const supportsSubagents = readBoolean(value, "supportsSubagents", issues);
-  const allowedAgents = readStringList(value.allowedAgents, "allowedAgents", issues);
+  const listedAgents = readStringList(value.allowedAgents, "allowedAgents", issues);
+  const retiredAllowedAgents = listedAgents.filter((agent) => isRetiredAgentName(agent));
+  const allowedAgents = listedAgents.filter((agent) => !isRetiredAgentName(agent));
   const scopedSkills = readBoolean(value, "scopedSkills", issues);
   const skills = readSkills(value.skills, issues);
   const engineInstructions = readBoolean(value, "engineInstructions", issues);
@@ -99,7 +109,7 @@ export function parseAgentFile(text: string, name: string, fallbackTimestamp = n
   } else if (!engineInstructions) {
     if (split.body.trim().length === 0) issues.push("Write instructions in the Markdown body, or set engineInstructions to true.");
     else {
-      const templateIssue = instructionTemplateIssue(split.body, "agent");
+      const templateIssue = instructionTemplateIssue(split.body);
       if (templateIssue) issues.push(templateIssue);
     }
   }
@@ -113,6 +123,7 @@ export function parseAgentFile(text: string, name: string, fallbackTimestamp = n
 
   return {
     ...(legacyModel ? { legacyModel } : {}),
+    ...(retiredAllowedAgents.length > 0 ? { retiredAllowedAgents } : {}),
     definition: {
       name,
       kind: "custom",

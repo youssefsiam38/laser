@@ -19,7 +19,7 @@
 import { closeSync, openSync, readSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { defaultAgentDir, projectRootOf } from "./paths.js";
-import type { ModelRef, SessionAgentInfo, SessionAgentRecord, SessionSummary } from "@lasercode/protocol";
+import { sessionKindOf, type ModelRef, type SessionAgentInfo, type SessionAgentRecord, type SessionSummary } from "@lasercode/protocol";
 import { SESSION_AGENT_ENTRY_TYPE, SESSION_FALLBACK_ENTRY_TYPE, goalPromptId, toolOutputText } from "@lasercode/protocol";
 
 export interface CatalogEntry extends SessionSummary {
@@ -379,17 +379,26 @@ function applyLine(line: string, scan: Scan): void {
  * The attribution a sidebar row needs, from the record the worker wrote. The
  * run id and status are the registry's business (the router adds them), so a
  * catalog that only reads files stays pure.
+ *
+ * A record written before M23 says `beam` or `chat` and names the built-in it
+ * ran as. It is read as the plain Chat it now is and never rewritten — the
+ * transcript is evidence (`docs/plain-chat.md`, "Migration") — and the name it
+ * carries is dropped, because nothing answers to it.
  */
 function agentInfoOf(record: SessionAgentRecord | undefined): SessionAgentInfo | undefined {
-  if (!record || typeof record.agentName !== "string") return undefined;
-  const kind = record.kind;
-  if (kind !== "root" && kind !== "child" && kind !== "beam" && kind !== "chat") return undefined;
+  const stored: string | undefined = record?.kind;
+  if (typeof stored !== "string") return undefined;
+  const sessionKind = sessionKindOf(stored);
+  if (sessionKind === "project" && stored !== "root" && stored !== "child") return undefined;
+  const agentName = sessionKind === "chat" ? undefined : record?.agentName;
+  if (sessionKind === "project" && typeof agentName !== "string") return undefined;
   return {
-    agentName: record.agentName,
-    kind,
-    ...(typeof record.subagentName === "string" ? { subagentName: record.subagentName } : {}),
-    ...(typeof record.parentPath === "string" ? { parentPath: record.parentPath } : {}),
-    ...(typeof record.rootPath === "string" ? { rootPath: record.rootPath } : {}),
+    ...(typeof agentName === "string" ? { agentName } : {}),
+    kind: sessionKind === "chat" ? "chat" : (stored as "root" | "child"),
+    sessionKind,
+    ...(typeof record?.subagentName === "string" ? { subagentName: record.subagentName } : {}),
+    ...(typeof record?.parentPath === "string" ? { parentPath: record.parentPath } : {}),
+    ...(typeof record?.rootPath === "string" ? { rootPath: record.rootPath } : {}),
   };
 }
 

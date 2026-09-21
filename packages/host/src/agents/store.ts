@@ -18,7 +18,7 @@ import {
   AGENT_MAX_DEPTH_LIMIT,
   AGENT_INSTRUCTIONS_MAX,
   AGENT_NAME_PATTERN,
-  BUILTIN_AGENT_NAMES,
+  RETIRED_AGENT_NAMES,
   DEFAULT_AGENT_NAME,
   ErrorCodes,
   FOREGROUND_COMMAND_SECONDS_DEFAULT,
@@ -29,7 +29,7 @@ import {
   ProtocolError,
   effectiveAgents,
   instructionTemplateIssue,
-  isBuiltinAgentName,
+  isRetiredAgentName,
   type AgentDefinition,
   type AgentDefinitionInput,
   type AgentIssue,
@@ -39,9 +39,6 @@ import {
   type AgentPolicy,
   type AgentWarning,
   type AgentsSnapshot,
-  type BuiltinAgentName,
-  type BuiltinInstructionOverrides,
-  type BuiltinProfiles,
   type LegacyModelChoice,
   type ModelIdentity,
 } from "@lasercode/protocol";
@@ -51,7 +48,7 @@ import {
   agentFileDigest,
   type AgentFileLocation,
 } from "./agent-files-watch.js";
-import { builtinAgents, seedDefaultAgent } from "./builtins.js";
+import { seedDefaultAgent } from "./seed.js";
 import { validateAgentInput } from "./validate.js";
 import { canonical } from "../trust.js";
 
@@ -60,7 +57,7 @@ export interface AgentStoreOptions {
   storePath?: string;
   agentDir: string;
   stateDir?: string;
-  workspaces: { beam: string; chat: string };
+  workspaces: { chat: string };
   /** Canonical roots currently listed as trusted by ProjectRegistry. */
   trustedProjects?: () => readonly string[];
   onChange?: (snapshot: AgentsSnapshot) => void;
@@ -72,14 +69,22 @@ export interface AgentStoreOptions {
   writeFile?: (path: string, text: string) => void;
 }
 
+/**
+ * The profile and instruction choices the built-ins held before M23 (D-347).
+ * Nothing runs on them any more: they are read once, so the person's naming
+ * choice can survive the removal, and written back untouched for one release
+ * (`docs/plain-chat.md`, "Migration").
+ */
+type RetiredChoices = Readonly<Record<string, string | null>>;
+
 interface StoredV1 {
   version: 1;
   revision: number;
   agents: unknown[];
   defaultAgent: string;
   policy: AgentPolicy;
-  builtinProfiles: BuiltinProfiles;
-  builtinInstructions: BuiltinInstructionOverrides;
+  builtinProfiles: RetiredChoices;
+  builtinInstructions: RetiredChoices;
   renamedAgents: Readonly<Record<string, string>>;
 }
 
@@ -88,14 +93,15 @@ interface StoredV2 extends Omit<StoredV1, "version" | "agents"> {
 }
 
 /**
- * The built-in model choices the previous generation wrote (`beam`, `chat`,
+ * The built-in model choices two generations ago wrote (`beam`, `chat`,
  * `namer`, each with a `model`). They are read by the one-way migration and
  * written back untouched for one release, so rolling the app back finds them
  * exactly as it left them (D-346).
  */
-type LegacyBuiltinState = Partial<Record<BuiltinAgentName, unknown>>;
+type LegacyBuiltinState = Partial<Record<string, unknown>>;
 
 type Stored = Partial<Omit<StoredV1, "version"> & { version: 1 | 2 }> & LegacyBuiltinState;
+type StoredOnDisk = StoredV2 & LegacyBuiltinState;
 type Location = AgentFileLocation;
 
 const DELETE_DEFAULT_MESSAGE = "This agent starts new sessions. Choose another default first.";
@@ -105,8 +111,9 @@ export class AgentStore {
   private readonly custom = new Map<string, AgentDefinition>();
   private defaultAgent = DEFAULT_AGENT_NAME;
   private policy: AgentPolicy = { maxDepth: AGENT_MAX_DEPTH_DEFAULT, foregroundCommandSeconds: FOREGROUND_COMMAND_SECONDS_DEFAULT };
-  private builtinProfiles: BuiltinProfiles = { beam: null, chat: null, namer: null };
-  private builtinInstructions: BuiltinInstructionOverrides = { beam: null, chat: null, namer: null };
+  /** Read once for the M22/M23 migration, then written back verbatim. */
+  private retiredProfiles: RetiredChoices = {};
+  private retiredInstructions: RetiredChoices = {};
   private renamedAgents: Readonly<Record<string, string>> = {};
   private skillWarnings: AgentWarning[] = [];
   private readonly fileWarnings = new Map<string, AgentWarning>();
@@ -158,12 +165,10 @@ export class AgentStore {
   snapshot(): AgentsSnapshot {
     return structuredClone({
       revision: this.revision,
-      agents: [...this.custom.values(), ...this.builtins()],
+      agents: [...this.custom.values()],
       defaultAgent: this.defaultAgent,
       warnings: [...this.skillWarnings, ...this.fileWarnings.values()],
       policy: this.policy,
-      builtinProfiles: this.builtinProfiles,
-      builtinInstructions: this.builtinInstructions,
       renamedAgents: this.renamedAgents,
       workspaces: this.options.workspaces,
     });
@@ -176,15 +181,14 @@ export class AgentStore {
       if (project) return structuredClone(project);
     }
     const global = this.custom.get(keyOf({ scope: "global" }, name));
-    if (global) return structuredClone(global);
-    return this.builtins().find((agent) => agent.name === name);
+    return global ? structuredClone(global) : undefined;
   }
 
   get defaultAgentName(): string {
     return this.defaultAgent;
   }
 
-  get workspaces(): { beam: string; chat: string } {
+  get workspaces(): { chat: string } {
     return { ...this.options.workspaces };
   }
 
@@ -196,7 +200,7 @@ export class AgentStore {
     const normalized = normalizeInput(input);
     const original = originalName === null ? undefined : this.custom.get(keyOf(locationOfInput(normalized), originalName));
     return validateAgentInput(normalized, {
-      existing: [...this.custom.values(), ...this.builtins()],
+      existing: [...this.custom.values()],
       ...(original ? { original } : {}),
       originalName,
       renamedAgents: this.renamedAgents,
@@ -207,16 +211,16 @@ export class AgentStore {
   save(input: AgentDefinitionInput, originalName: string | null = null): AgentDefinition {
     const normalized = normalizeInput(input);
     const location = locationOfInput(normalized);
-    if (originalName !== null && isBuiltinAgentName(originalName)) {
-      throw invalid([{ field: "name", message: `"${originalName}" is a built-in agent and cannot be changed.` }]);
+    if (originalName !== null && isRetiredAgentName(originalName)) {
+      throw invalid([{ field: "name", message: `"${originalName}" is a reserved name. Choose another name.` }]);
     }
     const originalKey = originalName === null ? undefined : keyOf(location, originalName);
     const existing = originalKey ? this.custom.get(originalKey) : undefined;
     if (originalName !== null && !existing) {
       throw invalid([{ field: "name", message: `There is no agent named "${originalName}" in this scope.` }]);
     }
-    if (isBuiltinAgentName(normalized.name)) {
-      throw invalid([{ field: "name", message: `"${normalized.name}" is a built-in agent and cannot be changed.` }]);
+    if (isRetiredAgentName(normalized.name)) {
+      throw invalid([{ field: "name", message: `"${normalized.name}" is a reserved name. Choose another name.` }]);
     }
     const renaming = originalName !== null && originalName !== normalized.name;
     if (renaming) {
@@ -276,7 +280,7 @@ export class AgentStore {
   }
 
   delete(name: string, requestedLocation: AgentLocation): void {
-    if (isBuiltinAgentName(name)) throw new ProtocolError(ErrorCodes.InvalidParams, `"${name}" is a built-in agent and cannot be deleted.`);
+    if (isRetiredAgentName(name)) throw new ProtocolError(ErrorCodes.InvalidParams, `There is no agent named "${name}".`);
     const location: Location = requestedLocation.scope === "project"
       ? { scope: "project", projectCwd: canonical(requestedLocation.projectCwd) }
       : { scope: "global" };
@@ -289,7 +293,7 @@ export class AgentStore {
   }
 
   setDefault(name: string): void {
-    if (isBuiltinAgentName(name)) throw new ProtocolError(ErrorCodes.InvalidParams, `"${name}" is a built-in agent and cannot start project sessions.`);
+    if (isRetiredAgentName(name)) throw new ProtocolError(ErrorCodes.InvalidParams, `There is no agent named "${name}".`);
     const global = this.custom.get(keyOf({ scope: "global" }, name));
     if (!global) {
       if ([...this.custom.values()].some((agent) => agent.name === name && agent.scope === "project")) {
@@ -324,21 +328,15 @@ export class AgentStore {
   }
 
   /**
-   * A person chooses which Model Profile a built-in runs on; `null` returns it
-   * to the profile assigned to new sessions (`docs/model-profiles.md`).
+   * The profile the removed session-naming built-in was on, if any.
+   *
+   * It is the person's own choice of which models may title a conversation,
+   * so it becomes `namingProfileId` when nothing is assigned to naming yet
+   * (`docs/plain-chat.md`, "Migration"). Read only; nothing writes it again.
    */
-  setBuiltinProfile(name: BuiltinAgentName, profileId: string | null): void {
-    if (profileId !== null && !isModelProfileId(profileId)) {
-      throw invalid([{ field: "profile", message: "Choose one of your model profiles." }]);
-    }
-    if (this.builtinProfiles[name] === profileId) return;
-    this.builtinProfiles = { ...this.builtinProfiles, [name]: profileId };
-    this.commit();
-  }
-
-  /** Which profile each built-in runs on, for the host's own reads. */
-  get builtinProfileIds(): BuiltinProfiles {
-    return { ...this.builtinProfiles };
+  get retiredNamingProfileId(): string | null {
+    const id = this.retiredProfiles["namer"];
+    return id && isModelProfileId(id) ? id : null;
   }
 
   /**
@@ -352,8 +350,8 @@ export class AgentStore {
    */
   legacyModelChoices(): LegacyModelChoice[] {
     const choices: LegacyModelChoice[] = [];
-    for (const name of BUILTIN_AGENT_NAMES) {
-      if (this.builtinProfiles[name] !== null) continue;
+    for (const name of RETIRED_AGENT_NAMES) {
+      if (this.retiredProfiles[name]) continue;
       const model = readLegacyBuiltinModel(this.legacyBuiltins[name]);
       if (model) choices.push({ key: builtinChoiceKey(name), label: builtinLabel(name), model });
     }
@@ -378,12 +376,12 @@ export class AgentStore {
     agentFiles: Array<{ path: string; from: string; to: string }>;
   } {
     const builtins: Array<{ name: string; from: string; to: string }> = [];
-    for (const name of BUILTIN_AGENT_NAMES) {
-      if (this.builtinProfiles[name] !== null) continue;
+    for (const name of RETIRED_AGENT_NAMES) {
+      if (this.retiredProfiles[name]) continue;
       const model = readLegacyBuiltinModel(this.legacyBuiltins[name]);
       const to = model ? resolved[builtinChoiceKey(name)] : undefined;
       if (!model || !to || !isModelProfileId(to)) continue;
-      this.builtinProfiles = { ...this.builtinProfiles, [name]: to };
+      this.retiredProfiles = { ...this.retiredProfiles, [name]: to };
       builtins.push({ name, from: modelText(model), to });
     }
     const agentFiles: Array<{ path: string; from: string; to: string }> = [];
@@ -434,34 +432,6 @@ export class AgentStore {
     return [...this.custom.values()].find((agent) => agent.path === path);
   }
 
-  /**
-   * Move every built-in that pointed at `from` to `to`. Part of deleting a
-   * profile: nothing is ever left pointing at one that is gone.
-   */
-  replaceBuiltinProfile(from: string, to: string | null): boolean {
-    const next: BuiltinProfiles = {
-      beam: this.builtinProfiles.beam === from ? to : this.builtinProfiles.beam,
-      chat: this.builtinProfiles.chat === from ? to : this.builtinProfiles.chat,
-      namer: this.builtinProfiles.namer === from ? to : this.builtinProfiles.namer,
-    };
-    if (JSON.stringify(next) === JSON.stringify(this.builtinProfiles)) return false;
-    this.builtinProfiles = next;
-    this.commit();
-    return true;
-  }
-
-  setBuiltinInstructions(name: BuiltinAgentName, instructions: string | null): void {
-    if (instructions !== null) {
-      if (instructions.length > AGENT_INSTRUCTIONS_MAX) throw invalid([{ field: "instructions", message: `Instructions are limited to ${Math.round(AGENT_INSTRUCTIONS_MAX / 1024)} KB.` }]);
-      if (instructions.trim().length === 0) throw invalid([{ field: "instructions", message: "Write instructions, or restore the built-in instructions." }]);
-      const issue = instructionTemplateIssue(instructions, name);
-      if (issue) throw invalid([{ field: "instructions", message: issue }]);
-    }
-    if (this.builtinInstructions[name] === instructions) return;
-    this.builtinInstructions = { ...this.builtinInstructions, [name]: instructions };
-    this.commit();
-  }
-
   /** SkillsCheck owns these warnings; file warnings are retained alongside them. */
   setWarnings(warnings: readonly AgentWarning[]): void {
     const next = structuredClone([...warnings]);
@@ -501,18 +471,6 @@ export class AgentStore {
     }
   }
 
-  private builtins(): AgentDefinition[] {
-    return builtinAgents({
-      agentDir: this.options.agentDir,
-      stateDir: this.stateDir(),
-      beamProfileId: this.builtinProfiles.beam,
-      chatProfileId: this.builtinProfiles.chat,
-      namerProfileId: this.builtinProfiles.namer,
-      instructions: this.builtinInstructions,
-      at: BUILTIN_STAMP,
-    });
-  }
-
   private commit(): void {
     this.revision += 1;
     this.schedulePersist();
@@ -529,7 +487,7 @@ export class AgentStore {
         parsed = JSON.parse(text) as Stored;
         if (parsed.version === 1 && Array.isArray(parsed.agents)) {
           const migrated = this.migrateV1(parsed);
-          if (migrated) parsed = migrated;
+          if (migrated) parsed = { ...parsed, ...migrated };
           else {
             this.migrationBlocked = true;
             legacyAgents = parsed.agents.map(readLegacyAgent).filter((agent): agent is AgentDefinition => Boolean(agent));
@@ -570,9 +528,8 @@ export class AgentStore {
       if (Number.isInteger(maxDepth) && maxDepth! >= 1 && maxDepth! <= AGENT_MAX_DEPTH_LIMIT) this.policy.maxDepth = maxDepth!;
       if (Number.isInteger(foregroundCommandSeconds) && foregroundCommandSeconds! >= FOREGROUND_COMMAND_SECONDS_MIN && foregroundCommandSeconds! <= FOREGROUND_COMMAND_SECONDS_MAX) this.policy.foregroundCommandSeconds = foregroundCommandSeconds!;
     }
-    const profiles = readBuiltinProfiles(parsed?.builtinProfiles);
-    if (profiles) this.builtinProfiles = profiles;
-    this.builtinInstructions = readBuiltinInstructions(parsed?.builtinInstructions);
+    this.retiredProfiles = readRetiredChoices(parsed?.builtinProfiles, isModelProfileId);
+    this.retiredInstructions = readRetiredChoices(parsed?.builtinInstructions, (value) => value.trim().length > 0 && value.length <= AGENT_INSTRUCTIONS_MAX);
     this.legacyBuiltins = readLegacyBuiltins(parsed);
   }
 
@@ -596,8 +553,8 @@ export class AgentStore {
         revision: typeof parsed.revision === "number" ? parsed.revision : 0,
         defaultAgent: typeof parsed.defaultAgent === "string" ? parsed.defaultAgent : DEFAULT_AGENT_NAME,
         policy: parsed.policy ?? this.policy,
-        builtinProfiles: parsed.builtinProfiles ?? this.builtinProfiles,
-        builtinInstructions: parsed.builtinInstructions ?? this.builtinInstructions,
+        builtinProfiles: parsed.builtinProfiles ?? this.retiredProfiles,
+        builtinInstructions: parsed.builtinInstructions ?? this.retiredInstructions,
         renamedAgents: parsed.renamedAgents ?? {},
       };
       this.writeFileAtomic(file, JSON.stringify(v2, null, 2));
@@ -702,14 +659,16 @@ export class AgentStore {
   private persist(): void {
     const file = this.options.storePath;
     if (!file || this.migrationBlocked) return;
-    const stored: StoredV2 & LegacyBuiltinState = {
+    const stored: StoredOnDisk = {
       ...this.legacyBuiltins,
       version: 2,
       revision: this.revision,
       defaultAgent: this.defaultAgent,
       policy: this.policy,
-      builtinProfiles: this.builtinProfiles,
-      builtinInstructions: this.builtinInstructions,
+      // Kept verbatim for one release (D-346, D-347): nothing runs on them,
+      // and a rollback of the app must find them exactly as it left them.
+      builtinProfiles: this.retiredProfiles,
+      builtinInstructions: this.retiredInstructions,
       renamedAgents: this.renamedAgents,
     };
     try {
@@ -732,7 +691,7 @@ export class AgentStore {
   }
 
   private stateDir(): string {
-    return resolve(this.options.stateDir ?? (this.options.storePath ? dirname(this.options.storePath) : dirname(this.options.workspaces.beam)));
+    return resolve(this.options.stateDir ?? (this.options.storePath ? dirname(this.options.storePath) : dirname(dirname(this.options.workspaces.chat))));
   }
 
   private globalAgent(name: string): AgentDefinition | undefined {
@@ -755,6 +714,9 @@ function invalid(issues: AgentIssue[]): ProtocolError {
 function normalizeInput(input: AgentDefinitionInput): AgentDefinitionInput {
   const copy = structuredClone(input);
   if (copy.scope === "project" && copy.projectCwd) copy.projectCwd = canonical(copy.projectCwd);
+  // A name that was a built-in agent before M23 answers to nothing; a save
+  // drops it rather than storing a reference nobody can follow.
+  copy.allowedAgents = copy.allowedAgents.filter((agent) => !isRetiredAgentName(agent));
   return copy;
 }
 
@@ -804,13 +766,13 @@ function messageOf(error: unknown): string {
 const isString = (value: unknown): value is string => typeof value === "string";
 const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(isString);
 
-/** How a built-in's pre-M22 model choice is keyed while the migration resolves it. */
-function builtinChoiceKey(name: BuiltinAgentName): string {
+/** How a retired built-in's pre-M22 model choice is keyed while the migration resolves it. */
+function builtinChoiceKey(name: string): string {
   return `builtin:${name}`;
 }
 
-/** What a profile created for a built-in is named after. */
-function builtinLabel(name: BuiltinAgentName): string {
+/** What a profile created for one of those choices is named after. */
+function builtinLabel(name: string): string {
   return `${name[0]!.toUpperCase()}${name.slice(1)}`;
 }
 
@@ -818,10 +780,10 @@ function modelText(model: ModelIdentity): string {
   return `${model.provider}/${model.id}`;
 }
 
-/** The `beam`/`chat`/`namer` blobs the previous generation wrote, verbatim (D-346). */
+/** The `beam`/`chat`/`namer` blobs an older generation wrote, verbatim (D-346). */
 function readLegacyBuiltins(parsed: Stored | undefined): LegacyBuiltinState {
   const state: LegacyBuiltinState = {};
-  for (const name of BUILTIN_AGENT_NAMES) {
+  for (const name of RETIRED_AGENT_NAMES) {
     const value = parsed?.[name];
     if (value && typeof value === "object" && !Array.isArray(value)) state[name] = value;
   }
@@ -844,33 +806,26 @@ function readStoredProfileId(value: Record<string, unknown>): string | null {
   return isString(raw) && isModelProfileId(raw) ? raw : null;
 }
 
-/** Which profile each built-in runs on, from the stored metadata. */
-function readBuiltinProfiles(raw: unknown): BuiltinProfiles | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
+/**
+ * The choices the retired built-ins held, kept byte-for-byte so persisting
+ * writes back exactly what was read (D-346, D-347). Nothing runs on them.
+ */
+function readRetiredChoices(raw: unknown, keep: (value: string) => boolean): RetiredChoices {
+  if (!raw || typeof raw !== "object") return {};
   const value = raw as Record<string, unknown>;
-  const read = (name: BuiltinAgentName): string | null =>
-    isString(value[name]) && isModelProfileId(value[name]) ? (value[name] as string) : null;
-  return { beam: read("beam"), chat: read("chat"), namer: read("namer") };
-}
-
-function readBuiltinInstructions(value: unknown): BuiltinInstructionOverrides {
-  const record = value && typeof value === "object" ? (value as Partial<Record<BuiltinAgentName, unknown>>) : {};
-  const read = (name: BuiltinAgentName): string | null => {
-    const instructions = record[name];
-    if (typeof instructions !== "string" || instructions.trim().length === 0 || instructions.length > AGENT_INSTRUCTIONS_MAX) return null;
-    // Keep old overrides byte-for-byte. The editor explains fields that this
-    // version removed and offers Restore; the worker safely falls back for a
-    // turn rather than deleting the person's text during load/persist.
-    return instructions;
-  };
-  return { beam: read("beam"), chat: read("chat"), namer: read("namer") };
+  const choices: Record<string, string | null> = {};
+  for (const name of RETIRED_AGENT_NAMES) {
+    const held = value[name];
+    choices[name] = isString(held) && keep(held) ? held : null;
+  }
+  return choices;
 }
 
 function readRenamedAgents(value: unknown, global: ReadonlyMap<string, AgentDefinition>): Readonly<Record<string, string>> {
   if (!value || typeof value !== "object") return {};
   const aliases: Record<string, string> = {};
   for (const [from, target] of Object.entries(value)) {
-    if (!AGENT_NAME_PATTERN.test(from) || isBuiltinAgentName(from) || global.has(from)) continue;
+    if (!AGENT_NAME_PATTERN.test(from) || isRetiredAgentName(from) || global.has(from)) continue;
     if (typeof target !== "string" || !global.has(target) || from === target) continue;
     aliases[from] = target;
   }
@@ -879,7 +834,7 @@ function readRenamedAgents(value: unknown, global: ReadonlyMap<string, AgentDefi
 
 function readLegacyAgent(raw: unknown): AgentDefinition | undefined {
   const value = raw as Partial<AgentDefinition> | null;
-  if (!value || !isString(value.name) || isBuiltinAgentName(value.name) || !AGENT_NAME_PATTERN.test(value.name)) return undefined;
+  if (!value || !isString(value.name) || isRetiredAgentName(value.name) || !AGENT_NAME_PATTERN.test(value.name)) return undefined;
   const skills = Array.isArray(value.skills)
     ? value.skills.filter((skill): skill is AgentDefinition["skills"][number] => {
         const item = skill as Partial<AgentDefinition["skills"][number]> | null;

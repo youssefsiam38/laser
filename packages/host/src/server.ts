@@ -34,12 +34,11 @@ import { totalmem } from "node:os";
 import { basename, dirname, extname, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { channelIdFor, type KeyPair } from "@lasercode/crypto";
-import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type AgentRun, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type BuiltinAgentName, type ModelProfileMigrationRecord, type ModelProfileMigrationReport, MODEL_PROFILE_MIGRATION_RECORD, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
+import { ENV, ErrorCodes, FRAME_MAX_BYTES, PRODUCT_NAME, WIRE_NAMESPACE, decisionPushPayload, isProviderCaptureMessage, isTerminalRunStatus, projectEnvWorkerConfig, type AgentRun, type ClientRequests, type DeviceGrants, type EnvironmentPolicyInput, type HostNotifications, type JsonRpcNotification, type LogEntry, type MemoryPressurePublish, type ModelProfileMigrationRecord, type ModelProfileMigrationReport, MODEL_PROFILE_MIGRATION_RECORD, NAMING_PROFILE_SETTING, type ProviderCaptureMeta, type ProviderCaptureOmission, type ResourceRetainedStores, type SessionAgentInfo, type SessionUpdateParams } from "@lasercode/protocol";
 import { AccessControl, isLoopbackAddress, localActor, pairedActor, type ActorIdentity } from "./access.js";
 import { AccessAudit } from "./access-audit.js";
 import { loadEnvironmentPolicy } from "./environment-policy.js";
 import { AgentFailureRecoveryQueue } from "./agents/failure-recovery.js";
-import { suggestBeamModel } from "./agents/models.js";
 import { AgentRunRegistry } from "./agents/runs.js";
 import { SkillsCheck } from "./agents/skills-check.js";
 import { AgentStore } from "./agents/store.js";
@@ -55,7 +54,7 @@ import { OutboundPressure, fenceReasonText } from "./transport-pressure.js";
 import { PackageService, SetupService } from "./packages.js";
 import { ResourceService } from "./resources/index.js";
 import { TaskRegister } from "./tasks/register.js";
-import { defaultAgentDir, defaultStateDir, ensureWorkspace, projectRootOf, workspaceAgentFor, workspacesDir } from "./paths.js";
+import { defaultAgentDir, defaultStateDir, ensureWorkspace, isChatWorkspace, projectRootOf, rehomeRetiredWorkspaces, workspacesDir } from "./paths.js";
 import { canonical } from "./trust.js";
 import { createHostPressureController, createHostPressureSampler, type HostPressureController, type HostPressureSample } from "./pressure/index.js";
 import { ProjectEnvStore, projectEnvTrustAllows } from "./project-env.js";
@@ -103,8 +102,8 @@ export interface HostServerOptions {
   /** Where laser keeps its own state (projects, attention). Default `~/.laser`. */
   stateDir?: string;
   /**
-   * Where the Beam and Chat workspace containers live (`<workspacesDir>/beam`,
-   * `<workspacesDir>/chat`). Defaults to `<stateDir>/workspaces`: the host
+   * Where the Chat workspace container lives (`<workspacesDir>/chat`).
+   * Defaults to `<stateDir>/workspaces`: the host
    * creates and owns its state directory in every layout, whereas a parent
    * of it may belong to someone else (a review container sets the state
    * directory to an XDG root whose parent is not writable).
@@ -414,13 +413,16 @@ export class HostServer {
       ...(options.policy !== undefined ? { configured: options.policy } : {}),
     });
     const workspacesRoot = options.workspacesDir ?? workspacesDir(stateDir);
-    const workspaces = { beam: join(workspacesRoot, "beam"), chat: join(workspacesRoot, "chat") };
+    const workspaces = { chat: join(workspacesRoot, "chat") };
     // Created here and again when a session asks for one (router.ts refuses
     // the session with the reason when it still cannot be created).
-    for (const dir of Object.values(workspaces)) {
-      const problem = ensureWorkspace(dir);
-      if (problem) this.log(`could not create the workspace ${dir}: ${problem}`);
-    }
+    const problem = ensureWorkspace(workspaces.chat);
+    if (problem) this.log(`could not create the workspace ${workspaces.chat}: ${problem}`);
+    // Conversations that ran in the removed Beam workspace are re-homed here,
+    // once, and are listed in the Chat tab afterwards (`docs/plain-chat.md`).
+    const rehomed = rehomeRetiredWorkspaces(workspacesRoot);
+    if (rehomed.moved.length > 0) this.log(`moved ${rehomed.moved.length} chat workspace folder(s) out of the retired layout`);
+    for (const left of rehomed.kept) this.log(`a retired workspace folder could not be moved and was left in place: ${left}`);
 
     // The log store is a nice-to-have: a host that cannot open SQLite still
     // runs sessions, and `pi/logs/*` explains itself instead of failing blank.
@@ -510,7 +512,7 @@ export class HostServer {
       storePath: join(stateDir, "projects.json"),
       // Internal storage is not a project, even if a broken resume once
       // recorded it in a transcript header. Include relocated workspaces.
-      exclude: [stateDir, agentDir, workspaces.beam, workspaces.chat],
+      exclude: [stateDir, agentDir, workspaces.chat],
       ...(options.trustTimeoutMs !== undefined ? { trustTimeoutMs: options.trustTimeoutMs } : {}),
       onChange: (projects) => {
         this.notify("pi/project/updated", { projects });
@@ -766,7 +768,7 @@ export class HostServer {
       agentIsolation: (cwd) => this.projects.agentIsolationOf(cwd),
       prepareTrust: (cwd) => {
         // Catalog membership is necessary, never sufficient intent. No mkdir,
-        // trust question, environment hook or Namer qualification on a hint.
+        // trust question and no environment hook on a hint.
         const project = this.projects.list().find((item) => item.cwd === cwd);
         if (!project || !existsSync(cwd)) return undefined;
         if (project.trust === "trusted") return { projectTrusted: true };
@@ -777,7 +779,7 @@ export class HostServer {
         // All spawn routes (including recovery and settings) pass here. The
         // projectless Settings worker is intentional too, but its folder must
         // still be refused by every project/session creation entry point.
-        if (workspaceAgentFor(cwd, workspaces) || canonical(cwd) === canonical(this.setup.cwd)) {
+        if (isChatWorkspace(cwd, workspaces) || canonical(cwd) === canonical(this.setup.cwd)) {
           const problem = ensureWorkspace(cwd);
           if (problem) throw new Error(`The conversation's workspace could not be created: ${problem}. Check the folder's permissions and try again.`);
         } else {
@@ -1042,6 +1044,7 @@ export class HostServer {
       return {
         agentName: run.agentName,
         kind: "child",
+        sessionKind: "project",
         subagentName: run.subagentName,
         ...(run.parent ? { parentPath: run.parent.sessionPath } : {}),
         rootPath: run.rootSessionPath,
@@ -1213,7 +1216,7 @@ export class HostServer {
       });
       this.knownProfileIds = new Set(report.profiles.map((profile) => profile.id));
       const migrated = this.agents.applyLegacyModelMigration(report.resolved ?? {});
-      this.adoptSeededBuiltinProfiles(report);
+      await this.carryNamingProfile(cwd, worker, report);
       if (report.ran || migrated.builtins.length > 0 || migrated.agentFiles.length > 0 || !this.profilesMigrated) {
         this.writeMigrationRecord(report, migrated);
       }
@@ -1234,24 +1237,32 @@ export class HostServer {
   }
 
   /**
-   * The built-ins' half of the migration: a built-in with no profile of its
-   * own takes the assignment that matches what it is for. Written once, and
-   * only over a built-in that has made no choice.
+   * The person's naming choice survives the built-in that held it (D-347).
+   *
+   * Before M23 the profile session naming ran on could live on the Namer
+   * built-in rather than in Settings. The built-in is gone, so that choice is
+   * written to `namingProfileId` — once, and only when nothing is assigned to
+   * naming yet, so it never overwrites a choice a person made in Settings.
+   * Without this, naming would silently stop for everyone who chose it there
+   * (`docs/plain-chat.md`, "Migration").
+   *
+   * The worker is the only writer of the global settings file, so this goes
+   * through the ordinary settings request rather than a method of its own.
    */
-  private adoptSeededBuiltinProfiles(report: ModelProfileMigrationReport): void {
-    const current = this.agents.builtinProfileIds;
-    const wanted: Array<[BuiltinAgentName, string | null]> = [
-      ["beam", report.assignments.defaultProfileId],
-      ["chat", report.assignments.defaultProfileId],
-      ["namer", report.assignments.namingProfileId],
-    ];
-    for (const [name, id] of wanted) {
-      if (current[name as "beam" | "chat" | "namer"] !== null || !id) continue;
-      try {
-        this.agents.setBuiltinProfile(name, id);
-      } catch (error) {
-        this.log(`agents: ${name} could not take a model profile: ${error instanceof Error ? error.message : String(error)}`);
-      }
+  private async carryNamingProfile(cwd: string, worker: WorkerClient, report: ModelProfileMigrationReport): Promise<void> {
+    if (report.assignments.namingProfileId) return;
+    const carried = this.agents.retiredNamingProfileId;
+    if (!carried || !report.profiles.some((profile) => profile.id === carried)) return;
+    try {
+      await worker.request("pi/settings/set", {
+        cwd,
+        scope: "global",
+        changes: [{ path: NAMING_PROFILE_SETTING, op: "set", value: carried }],
+      });
+      report.assignments = { ...report.assignments, namingProfileId: carried };
+      this.log(`agents: session naming kept the model profile it was already using`);
+    } catch (error) {
+      this.log(`agents: the naming model profile could not be carried over: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

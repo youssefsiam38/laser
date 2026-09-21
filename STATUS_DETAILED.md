@@ -6246,15 +6246,16 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M23-T0 | Binding contract | done | codex-2026-09-21-model-profiles | `docs/plain-chat.md`; `PLAN.md` M23; D-347 | see notes |
-| M23-T1 | Protocol removal and `sessionKind` | in-progress | claude-2026-09-21-leap | — | see notes |
-| M23-T2 | Worker: chat prompt and one-shot naming | in-progress | claude-2026-09-21-leap | — | see notes |
-| M23-T3 | Host: no built-ins, Beam re-home | in-progress | claude-2026-09-21-leap | — | see notes |
+| M23-T1 | Protocol removal and `sessionKind` | done | claude-2026-09-21-leap | `5aebaee4`; `pnpm -F @lasercode/protocol test` (466 passed) | see notes |
+| M23-T2 | Worker: chat prompt and one-shot naming | done | claude-2026-09-21-leap | `0051d591`; `pnpm -F @lasercode/worker test` (1223 passed; `test/agents/chat-prompt.test.ts` byte-for-byte) | see notes |
+| M23-T3 | Host: no built-ins, Beam re-home | done | claude-2026-09-21-leap | `79404b7c`; `env -i PATH=$PATH HOME=$HOME pnpm -F @lasercode/host test` (1027 passed; `test/agents/retired-builtins.test.ts`) | see notes |
 | M23-T4 | UI: remove Beam, plain Chat entry points | in-progress | claude-2026-09-21-leap | — | see notes |
 | M23-T5 | Docs, identity guard, gates | todo | — | — | `PLAN.md` M23 |
 | M23-T6 | Release | todo | — | — | `PLAN.md` M23 |
 
 #### M23-T1–T3 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap while 0.12.0 builds: one backend worker (protocol → worker → host) on a branch based on `13c1ce3b`, one commit per task, plan in `docs/leap/m23-backend-plan.md`. M22 real-migration observation carried in: `builtinProfiles.namer` must become `namingProfileId` when the Namer built-in goes.
+- 2026-09-21 done, merged at `07bf9571`. T1: `AgentKind` = `custom`; built-in names/states/methods gone; `SessionKind`/`sessionKindOf`/`SessionAgentInfo.sessionKind`, `agentName` optional; instruction-template catalogue without targets; `session/new` gains `sessionKind` (recorded). T2: a Chat runs no definition; `CHAT_INSTRUCTION_TEMPLATE` is the three fields, proved byte-for-byte from recorded provenance against a real engine turn; `agents/session-naming.ts` one-shot `nameSession` on the naming profile; Namer/pin/parked-prompt queue removed (D-s). T3: `builtins.ts` deleted; `rehomeRetiredWorkspaces` at host start; stored `beam`/`chat` records open as chat without rewrite; `allowedAgents` retired names warn and drop; Namer's profile → `namingProfileId` via `pi/settings/set` when unset (D-r); legacy keys kept one release. Decisions D-o–D-s in the plan file.
 
 #### M23-T4 notes
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI/CLI worker based on `92e5480e` (M23-T1/T2 merged; host T3 still in flight), write set packages/ui + packages/cli + scripts/browser-check Beam fixtures; plan in `docs/leap/m23-ui-plan.md`.
