@@ -1,6 +1,6 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** 2026-09-21T17:54:18+03:00 · leap integration · HEAD: 408366ae
+**Last updated:** 2026-09-21T18:02:00+03:00 · leap integration · HEAD: bc3e16df
 **Current focus:** M21 integration and acceptance gaps. T13/T14/T21 checkpoints merged, not yet accepted; T19 active. M26 implementation reviewed, publication still outstanding.
 
 | Milestone | State |
@@ -35,9 +35,9 @@
 | M26 Tool contract conformance | in-progress (publication pending) |
 | MX Cross-cutting | in-progress |
 
-**Active owners:** T14 foundation wiring/shared editor; T21 filesystem/publication corrections; T19 verification; independent T18 delivery review. Orchestrator: M26-T5 release transaction from reviewed tool-only source `08ebe228` (task `t-4bf75353`), not yet published. Exact paths/sessions in `STATUS_DETAILED.md`.
-**Gate:** merged build/typecheck pass. `pnpm verify` failed a CLI daemon-policy 5-second timeout; focused rerun passed 2/2. Full gate is not green yet. Browser acceptance remains the person's (D-342).
+**Active owners:** T14 foundation wiring/shared editor; T21 filesystem/publication corrections; T19 verification; independent T18 delivery review. Orchestrator: M26-T5 release transaction from reviewed tool-only source `08ebe228` (resume task `t-22636077`), not yet published. Exact paths/sessions in `STATUS_DETAILED.md`.
+**Gate:** merged build/typecheck, host lifecycle 179/179 and UI design 97/97 pass. Full verify failed CLI timeout (focused 2/2 pass); M26 release preparation failed MCP status test (focused 11/11 pass), now resumed without bypass. Browser acceptance remains the person's (D-342).
 **Published:** v0.13.0 Latest (M23), v0.12.0 (M22), confirmed through GitHub. Prior claim that M26 was published was incorrect. M26 release and final main-branch gates remain required.
-**Next dependency-ready work:** finish active corrections/review, publish reviewed M26 checkpoint, then T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
+**Next dependency-ready work:** finish active corrections/review, publish reviewed M26 checkpoint, close T9/T17 worker mention-context delivery gap (tasks reopened), then T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
 **Recent implementation checkpoints:** T18 `85ee5ea4` (review pending); T9 `222d86c0`; T17 `133d55cd`; T12 `92cc43c9` + `f15eb7d1`; T8 `98a01428`.
 **Other retained blocker:** M19-T7 waits for M19-T6 shared storage ownership. Person-owned M20/visual acceptance must not be inferred from unit tests.
