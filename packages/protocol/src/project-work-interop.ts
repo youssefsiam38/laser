@@ -236,6 +236,33 @@ export type WorkExportMode = (typeof WORK_EXPORT_MODES)[number];
 export const WORK_EXPORT_FILE_ROLES = ["manifest", "document", "body", "readme"] as const;
 export type WorkExportFileRole = (typeof WORK_EXPORT_FILE_ROLES)[number];
 
+/**
+ * Why a file a previous export listed is kept rather than deleted by a
+ * `replace`.
+ *
+ * - `changed` — the bytes on disk are no longer the ones that export wrote, so
+ *   whatever is there now is someone's own work, not this export's leftover.
+ * - `not_this_export` — the previous manifest names it, but not in the layout
+ *   an export of this product writes, so nothing proves this export put it
+ *   there.
+ * - `unproven` — the previous manifest records no digest for that document, so
+ *   there is nothing to compare its bytes against. An export written before
+ *   this product recorded one is **never assumed owned**.
+ *
+ * Whatever the reason the file stays exactly as it is. A `replace` deletes only
+ * the files it can prove a previous export of this project wrote, both halves
+ * of an item against their own recorded digest.
+ */
+export const WORK_EXPORT_PRESERVE_REASONS = ["changed", "not_this_export", "unproven"] as const;
+export type WorkExportPreserveReason = (typeof WORK_EXPORT_PRESERVE_REASONS)[number];
+
+/** One file a `replace` will not delete, and why. */
+export interface WorkExportPreserved {
+  /** Path under the export root, as the previous manifest named it. */
+  path: string;
+  reason: WorkExportPreserveReason;
+}
+
 /** One file of an export, by its path under the export root. */
 export interface WorkExportFile {
   path: string;
@@ -276,6 +303,16 @@ export interface WorkExportPreviewResult {
   existing?: WorkExportExisting;
   /** Files of a previous export this one would delete. `replace` only. */
   removes: string[];
+  /**
+   * Files the previous export listed that this one keeps instead of deleting,
+   * because their bytes changed or nothing proves this export wrote them.
+   */
+  preserved?: WorkExportPreserved[];
+  /**
+   * Why a `replace` will delete nothing at all: the folder holds no manifest
+   * this app wrote, or one that no longer validates. Written for a person.
+   */
+  removeRefusal?: string;
   /** Set when a decision is required: an export is already at the root. */
   decide?: { reason: "existing_export"; choices: readonly WorkExportMode[] };
   truncated?: boolean;
@@ -308,6 +345,52 @@ export interface WorkExportApplyResult {
 // ---------------------------------------------------------------------------
 // Publish
 // ---------------------------------------------------------------------------
+
+/**
+ * The two kinds of state a publication may be recorded against.
+ *
+ * Both are commit objects — an M20 checkpoint *is* a commit (leap, "Repository
+ * provenance") — so neither relaxes the proof: whichever is chosen, every
+ * exported file's blob is verified against that commit's tree before a
+ * `published_as` is written.
+ */
+export const WORK_PUBLISH_SOURCE_KINDS = ["commit", "checkpoint"] as const;
+export type WorkPublishSourceKind = (typeof WORK_PUBLISH_SOURCE_KINDS)[number];
+
+/** States one preview offers to publish against. Bounded discovery, newest first. */
+export const WORK_PUBLISH_SOURCES_MAX = 20;
+
+/**
+ * One state a publication could be recorded against, as the **host** resolved
+ * it.
+ *
+ * Every field is resolved identity, never a label a caller may invent: the
+ * commit object the state really is, the checkpoint's exact ref when it is one,
+ * and whether that state carries this export — proved blob by blob, not
+ * guessed. A client selects one of these; it never types one.
+ */
+export interface WorkPublishSource {
+  kind: WorkPublishSourceKind;
+  /** The commit object this state is. Identity, and what gets recorded. */
+  commitObjectId: string;
+  /** The checkpoint's exact ref, for a checkpoint. Absent for a commit. */
+  checkpointId?: string;
+  /** What to call it on screen. Never an id a client has to parse. */
+  label: string;
+  /** True when this state carries every one of this export's files. */
+  carriesExport: boolean;
+  /** Exported files this state does not carry, bounded to the first few. */
+  missing: string[];
+}
+
+/**
+ * Which state a preview should measure the export against.
+ *
+ * Omitted is the repository's current commit, which is what publication has
+ * always done. A checkpoint is named by its exact ref and resolved in the
+ * repository; nothing here accepts a free-text state of any other shape.
+ */
+export type WorkPublishSourceSelection = { kind: "commit"; commit?: string } | { kind: "checkpoint"; checkpointId: string };
 
 /** One exported file as the repository sees it. */
 export interface WorkPublishFile {
@@ -355,6 +438,8 @@ export interface WorkPublishCommitRequest {
 export interface WorkPublishPreviewParams {
   projectId: string;
   path?: string;
+  /** The state to measure this export against. Omitted is the current commit. */
+  source?: WorkPublishSourceSelection;
 }
 
 export interface WorkPublishPreviewResult {
@@ -367,6 +452,16 @@ export interface WorkPublishPreviewResult {
   entities: WorkPublishEntity[];
   /** Present while something is still uncommitted. */
   commit?: WorkPublishCommitRequest;
+  /**
+   * The state this preview measured the export against, resolved.
+   *
+   * An apply confirms **this** state: its `commitObjectId` and `checkpointId`
+   * are what a client sends back, and the preview digest binds them, so a
+   * confirmation can never land on a state the person did not see.
+   */
+  selected?: WorkPublishSource;
+  /** The states this repository offers, newest first. Bounded, host-resolved. */
+  sources?: WorkPublishSource[];
   /** True when a `published_as` could be recorded right now. */
   ready: boolean;
   /** Why it is not ready, written for a person. */
@@ -381,9 +476,12 @@ export interface WorkPublishApplyParams {
   /** The commit the export was written in, or `HEAD` for the current one. */
   commit: string;
   /**
-   * The checkpoint that names uncommitted bytes. Required when the export is
-   * not in the commit: a publication of work in progress still records an
-   * exact state, never "whatever is in the folder".
+   * The checkpoint that names uncommitted bytes. A publication of work in
+   * progress still records an exact state, never "whatever is in the folder".
+   *
+   * When it is given, `commit` must be **that checkpoint's own commit object
+   * id**: two identities that disagree are a refusal, not a choice the host
+   * makes on the caller's behalf.
    */
   checkpointId?: string;
   idempotencyKey: string;
@@ -438,6 +536,16 @@ export interface WorkManifestEntity {
   bodyBytes: number;
   /** Path of the human document, relative to the manifest. */
   document: string;
+  /**
+   * sha256 of the exact bytes of that document, as this export wrote them.
+   *
+   * The `digest` above fences the **body**; this fences the readable document
+   * beside it, so a re-export can tell a document it wrote from one a person
+   * edited in the folder and never deletes the second. Optional only because an
+   * export written before it existed does not carry it — and such a document is
+   * then kept rather than assumed to be this export's (`unproven`).
+   */
+  documentDigest?: string;
   /** Path of the exact canonical body, relative to the manifest. */
   body: string;
 }
@@ -526,6 +634,7 @@ export const projectWorkManifestSchema = z
             digest: projectWorkDigestSchema,
             bodyBytes: z.number().int().nonnegative(),
             document: exportRelativePath,
+            documentDigest: projectWorkDigestSchema.optional(),
             body: exportRelativePath,
           })
           .strict(),
@@ -643,7 +752,21 @@ export const projectWorkInteropParamsSchemas = {
     .strict(),
 
   "project/work/publish/preview": z
-    .object({ projectId: projectIdSchema, path: projectRelativePath.optional() })
+    .object({
+      projectId: projectIdSchema,
+      path: projectRelativePath.optional(),
+      source: z
+        .union([
+          z
+            .object({
+              kind: z.literal("commit"),
+              commit: z.union([z.literal("HEAD"), z.string().regex(/^[0-9a-f]{7,64}$/, "a git object id")]).optional(),
+            })
+            .strict(),
+          z.object({ kind: z.literal("checkpoint"), checkpointId: z.string().min(1).max(200) }).strict(),
+        ])
+        .optional(),
+    })
     .strict(),
   "project/work/publish/apply": z
     .object({

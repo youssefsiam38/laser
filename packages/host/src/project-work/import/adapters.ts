@@ -39,7 +39,7 @@ import {
 } from "@lasercode/protocol";
 
 import { bodyDigest, sha256 } from "../ids.js";
-import { insideProject, kindOf, normaliseRelative, readTextFile, walkFiles } from "../export/paths.js";
+import { insideProject, insideProjectAt, kindOf, normaliseRelative, readTextFile, walkFiles } from "../export/paths.js";
 import {
   bullets,
   checklist,
@@ -670,7 +670,7 @@ function workExport(input: AdapterInput): AdapterOutput {
   const skipped: Array<{ path: string; reason: string }> = [];
   const absolute = insideProject(input.projectRoot, root);
   const manifestPath = `${root}/manifest.json`;
-  const manifestText = readTextFile(insideProject(absolute, "manifest.json"), 8 * 1024 * 1024);
+  const manifestText = readTextFile(insideProjectAt(input.projectRoot, absolute, "manifest.json"), 8 * 1024 * 1024);
   if (manifestText === undefined) {
     return { root, items: [], relations: [], skipped: [{ path: manifestPath, reason: "there is no export manifest here" }], truncated: false };
   }
@@ -685,7 +685,15 @@ function workExport(input: AdapterInput): AdapterOutput {
   const written = new Set<string>();
   for (const entity of manifest.entities) {
     const bodyPath = `${root}/${entity.body}`;
-    const text = readTextFile(insideProject(absolute, entity.body), WORK_IMPORT_FILE_MAX_BYTES);
+    // A manifest is a file a person can edit: a body path that leaves the
+    // export, or reaches into somewhere this never reads, skips that item by
+    // name instead of failing the whole import.
+    let text: string | undefined;
+    try {
+      text = readTextFile(insideProjectAt(input.projectRoot, absolute, entity.body), WORK_IMPORT_FILE_MAX_BYTES);
+    } catch {
+      text = undefined;
+    }
     if (text === undefined) {
       skipped.push({ path: bodyPath, reason: "the exported content for this item is missing" });
       continue;

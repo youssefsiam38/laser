@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExportDialog, ImportDialog, PublishDialog } from "../../src/components/project-work/ImportExportDialogs.js";
 import { ProjectWorkStore, type ProjectWorkMethod, type ProjectWorkRequest } from "../../src/project-work/store.js";
 
-import { PROJECT_DIR_NAME, WORK_EXPORT_DIR } from "@lasercode/protocol";
+import { PROJECT_DIR_NAME, WORK_EXPORT_DIR, checkpointRef } from "@lasercode/protocol";
 
 import { fakeHost, item, type FakeProject } from "./fixture.js";
 
@@ -243,6 +243,45 @@ describe("Export…", () => {
     expect(apply.params["mode"]).toBe("replace");
     expect(apply.params["previewDigest"]).toBe(DIGEST);
   });
+
+  it("names every file a replace would remove, and every one it keeps instead", async () => {
+    const world = await fixture();
+    world.answers.set("project/work/export/preview", {
+      ...base,
+      existing: { root: ROOT, files: 6, manifestDigest: "c".repeat(64), unchanged: false },
+      removes: ["SPEC-9.md", "bodies/SPEC-9.json"],
+      preserved: [{ path: "bodies/SPEC-8.json", reason: "changed" }],
+    });
+
+    await act(async () => root.render(<ExportDialog store={world.store} open onOpenChange={() => {}} />));
+    await act(async () => {});
+
+    // The count is the honest total, and the paths themselves are on screen:
+    // a deletion a person confirms is one they were shown, file by file.
+    expect(text()).toContain("2 files of the export already there would be removed");
+    const removed = document.body.querySelector<HTMLElement>('[aria-label="Files this export would remove"]');
+    expect(removed?.textContent).toContain("SPEC-9.md");
+    expect(removed?.textContent).toContain("bodies/SPEC-9.json");
+    // And what is kept rather than removed says which file and why.
+    expect(text()).toContain("bodies/SPEC-8.json");
+    expect(text()).toContain("changed here");
+  });
+
+  it("says plainly when nothing in that folder can be removed", async () => {
+    const world = await fixture();
+    world.answers.set("project/work/export/preview", {
+      ...base,
+      existing: { root: ROOT, files: 3, unchanged: false },
+      removes: [],
+      removeRefusal: "There is no export manifest in that folder, so nothing already in it will be deleted.",
+    });
+
+    await act(async () => root.render(<ExportDialog store={world.store} open onOpenChange={() => {}} />));
+    await act(async () => {});
+
+    expect(text()).toContain("nothing already in it will be deleted");
+    expect(document.body.querySelector('[aria-label="Files this export would remove"]')).toBeNull();
+  });
 });
 
 describe("Publish…", () => {
@@ -286,6 +325,7 @@ describe("Publish…", () => {
       files: [{ path: `${ROOT}/SPEC-4.md`, digest: "b".repeat(64), committed: true }],
       uncommitted: [],
       entities: [entity],
+      selected: { kind: "commit", commitObjectId: "1".repeat(40), label: "Current commit on main", carriesExport: true, missing: [] },
       ready: true,
     });
     world.answers.set("project/work/publish/apply", {
@@ -309,6 +349,123 @@ describe("Publish…", () => {
     const apply = world.calls.find((call) => call.method === "project/work/publish/apply")!;
     expect(apply.params["confirm"]).toBe(true);
     expect(apply.params["previewDigest"]).toBe(DIGEST);
-    expect(apply.params["commit"]).toBe("HEAD");
+    // The state the preview resolved, by its own identity — never "HEAD".
+    expect(apply.params["commit"]).toBe("1".repeat(40));
+    expect(apply.params["checkpointId"]).toBeUndefined();
+  });
+
+  const COMMIT = "1".repeat(40);
+  const CHECKPOINT_COMMIT = "2".repeat(40);
+  const CHECKPOINT_REF = checkpointRef("a1b2c3", 4);
+  const commitSource = { kind: "commit", commitObjectId: COMMIT, label: "Current commit on main", carriesExport: false, missing: [`${ROOT}/SPEC-4.md`] };
+  const checkpointSource = {
+    kind: "checkpoint",
+    commitObjectId: CHECKPOINT_COMMIT,
+    checkpointId: CHECKPOINT_REF,
+    label: "Checkpoint from turn 4",
+    carriesExport: true,
+    missing: [],
+  };
+  const publishPreview = (selected: Record<string, unknown>, ready: boolean, previewDigest = DIGEST) => ({
+    root: ROOT,
+    previewDigest,
+    repository: { repositoryId: "repo_1", name: "app", objectFormat: "sha1", head: COMMIT, branch: "main" },
+    files: [{ path: `${ROOT}/SPEC-4.md`, digest: "b".repeat(64), committed: ready }],
+    uncommitted: ready ? [] : [`${ROOT}/SPEC-4.md`],
+    entities: [entity],
+    selected,
+    sources: [commitSource, checkpointSource],
+    ready,
+    ...(ready ? {} : { refusal: "1 exported file is not in current commit on main." }),
+  });
+
+  it("offers the states the host found and records the one whose preview is on screen", async () => {
+    const world = await fixture();
+    const checkpointDigest = "c".repeat(64);
+    world.answers.set("project/work/publish/preview", publishPreview(commitSource, false));
+    world.answers.set("project/work/publish/apply", {
+      root: ROOT,
+      repositoryId: "repo_1",
+      commitObjectId: CHECKPOINT_COMMIT,
+      objectFormat: "sha1",
+      state: { vcs: "git", objectFormat: "sha1", commitObjectId: CHECKPOINT_COMMIT, checkpointId: CHECKPOINT_REF },
+      published: [{ entityId: "e1", key: "SPEC-4", linkId: "lnk_1", publishedPath: `${ROOT}/SPEC-4.md` }],
+      seq: 9,
+    });
+
+    await act(async () => root.render(<PublishDialog store={world.store} open onOpenChange={() => {}} />));
+    await act(async () => {});
+
+    // The current commit does not carry the export, so nothing can be recorded
+    // yet — and the checkpoint that does is offered by name, not typed.
+    expect(button("Record it")?.disabled).toBe(true);
+    expect(text()).toContain("Checkpoint from turn 4");
+    expect(document.body.querySelector("input")).toBeNull();
+
+    // Choosing it asks the host to measure the export against that exact state.
+    world.answers.set("project/work/publish/preview", publishPreview(checkpointSource, true, checkpointDigest));
+    await act(async () => button("Checkpoint from turn 4")?.click());
+    const previews = world.calls.filter((call) => call.method === "project/work/publish/preview");
+    expect(previews).toHaveLength(2);
+    expect(previews[1]?.params["source"]).toEqual({ kind: "checkpoint", checkpointId: CHECKPOINT_REF });
+
+    // And the confirmation is that preview's own state and digest.
+    expect(button("Record it")?.disabled).toBe(false);
+    await act(async () => button("Record it")?.click());
+    const apply = world.calls.find((call) => call.method === "project/work/publish/apply")!;
+    expect(apply.params["previewDigest"]).toBe(checkpointDigest);
+    expect(apply.params["commit"]).toBe(CHECKPOINT_COMMIT);
+    expect(apply.params["checkpointId"]).toBe(CHECKPOINT_REF);
+  });
+
+  it("drops a late answer for a state that is no longer the one being checked", async () => {
+    // Two checks in flight at once, answering out of order: the checkpoint was
+    // asked for first and answers *last*. Its answer must neither replace the
+    // preview on screen nor enable a confirmation for a state nobody chose.
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const pending: Array<() => void> = [];
+    const host = fakeHost([world()]);
+    const request = (async (method: ProjectWorkMethod, params: unknown) => {
+      if (method === "project/work/publish/preview") {
+        const asked = params as { source?: { kind: string } };
+        calls.push({ method, params: params as Record<string, unknown> });
+        const answer =
+          asked.source?.kind === "checkpoint" ? publishPreview(checkpointSource, true, "c".repeat(64)) : publishPreview(commitSource, false);
+        return await new Promise((resolve) => pending.push(() => resolve(answer)));
+      }
+      if (method.startsWith("project/work/publish/")) {
+        calls.push({ method, params: params as Record<string, unknown> });
+        return { root: ROOT, repositoryId: "repo_1", commitObjectId: COMMIT, objectFormat: "sha1", state: { vcs: "git", objectFormat: "sha1", commitObjectId: COMMIT }, published: [], seq: 9 };
+      }
+      return host.request(method, params as never);
+    }) as ProjectWorkRequest;
+    const store = new ProjectWorkStore({ request, projectId: "p1" });
+    await store.open();
+
+    await act(async () => root.render(<PublishDialog store={store} open onOpenChange={() => {}} />));
+    await act(async () => {});
+    // The dialog's own opening check, answered so the chooser is on screen.
+    expect(pending).toHaveLength(1);
+    await act(async () => pending[0]!());
+    expect(text()).toContain("Checkpoint from turn 4");
+
+    // Choose the checkpoint, then change to the current commit before the first
+    // of the two answers.
+    await act(async () => button("Checkpoint from turn 4")?.click());
+    await act(async () => button("Current commit on main")?.click());
+    expect(pending).toHaveLength(3);
+    expect(calls[1]?.params["source"]).toEqual({ kind: "checkpoint", checkpointId: CHECKPOINT_REF });
+    expect(calls[2]?.params["source"]).toEqual({ kind: "commit", commit: COMMIT });
+
+    // The newest answer lands, then the stale one.
+    await act(async () => pending[2]!());
+    await act(async () => pending[1]!());
+
+    // The screen is still the commit the person ended on: the checkpoint's
+    // "ready" never enabled the button, and no publication was sent.
+    expect(button("Record it")?.disabled).toBe(true);
+    expect(text()).toContain("not committed yet");
+    await act(async () => button("Record it")?.click());
+    expect(calls.some((call) => call.method === "project/work/publish/apply")).toBe(false);
   });
 });

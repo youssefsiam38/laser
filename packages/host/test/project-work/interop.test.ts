@@ -18,6 +18,7 @@ import {
   ErrorCodes,
   PROJECT_DIR_NAME,
   WORK_EXPORT_DIR,
+  checkpointRef,
   projectWorkManifestSchema,
   type ProjectWorkGetResult,
   type ProjectWorkListResult,
@@ -96,12 +97,32 @@ async function create(harness: ProjectWorkHarness, kind: "spec" | "plan" | "task
   );
 }
 
-function git(cwd: string, args: string[]): string {
+function git(cwd: string, args: string[], env: Record<string, string> = {}): string {
   return execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-C", cwd, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
+    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", ...env },
   }).trim();
+}
+
+/**
+ * A checkpoint, the way the worker makes one: the whole working tree written
+ * to a temporary index, that tree committed, and the commit put under the
+ * checkpoint ref namespace. Nothing here is a product code path — it is the
+ * fixture that lets publication be tested against a checkpoint that really
+ * holds bytes, rather than against a string.
+ */
+function writeCheckpoint(harness: ProjectWorkHarness, sessionKey: string, turn: number): { ref: string; commit: string } {
+  const indexFile = join(harness.dir, `checkpoint-index-${sessionKey}-${String(turn)}`);
+  const environment = { GIT_INDEX_FILE: indexFile };
+  git(harness.projectRoot, ["read-tree", "HEAD"], environment);
+  git(harness.projectRoot, ["add", "-A"], environment);
+  const tree = git(harness.projectRoot, ["write-tree"], environment);
+  const parent = git(harness.projectRoot, ["rev-parse", "HEAD"]);
+  const commit = git(harness.projectRoot, ["commit-tree", tree, "-p", parent, "-m", `checkpoint ${String(turn)}`]);
+  const ref = checkpointRef(sessionKey, turn);
+  git(harness.projectRoot, ["update-ref", ref, commit]);
+  return { ref, commit };
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +274,64 @@ describe("import adapters", () => {
     expect(list.items).toHaveLength(5);
     const revisedSpec = list.items.find((item) => item.kind === "spec")!;
     expect(revisedSpec.revisionCount).toBe(2);
+  });
+
+  it("refuses an apply when the work a proposal would revise gained a revision after the preview", async () => {
+    h = harnessWithProjectFolder();
+    writeSpecKit(h.projectRoot);
+    await importApply(h, "spec_kit", await importPreview(h, "spec_kit"), { key: "i1" });
+
+    const second = await importPreview(h, "spec_kit");
+    const conflicted = second.proposals.find((proposal) => proposal.kind === "spec")!;
+    const decisions = second.proposals.map((proposal) => ({
+      sourceId: proposal.sourceId,
+      choice: proposal.sourceId === conflicted.sourceId ? "new_revision" : "skip",
+    }));
+
+    // The item that proposal would land on is revised in the app, in between.
+    // The files did not change; the work the person read did.
+    const existing = ok<ProjectWorkListResult>(await h.call("project/work/list", { projectId: h.projectId })).items.find(
+      (item) => item.ref.entityId === conflicted.match!.entityId,
+    )!;
+    ok(
+      await h.call("project/work/revise", {
+        projectId: h.projectId,
+        entityId: existing.ref.entityId,
+        expectedRevisionId: existing.ref.revisionId,
+        body: specBody("Someone else wrote this while that preview was open."),
+        idempotencyKey: "r1",
+      }),
+    );
+
+    const refusal = failed(
+      await h.call("project/work/import/apply", {
+        projectId: h.projectId,
+        adapter: "spec_kit",
+        previewDigest: second.previewDigest,
+        confirm: true,
+        decisions,
+        idempotencyKey: "i2",
+      }),
+    );
+    expect(refusal.message).toContain("Preview the import again");
+
+    // Nothing was written: the revised item still has exactly its two revisions.
+    const after = ok<ProjectWorkListResult>(await h.call("project/work/list", { projectId: h.projectId })).items.find(
+      (item) => item.ref.entityId === existing.ref.entityId,
+    )!;
+    expect(after.revisionCount).toBe(2);
+
+    // A fresh preview of the same files applies, against the revision that is
+    // there now.
+    const third = await importPreview(h, "spec_kit");
+    const applied = await importApply(h, "spec_kit", third, {
+      key: "i3",
+      decisions: third.proposals.map((proposal) => ({
+        sourceId: proposal.sourceId,
+        choice: proposal.match?.entityId === existing.ref.entityId ? "new_revision" : "skip",
+      })),
+    });
+    expect(applied.revised).toBe(1);
   });
 
   it("reads OpenSpec capabilities, proposals, designs and task lists", async () => {
@@ -444,6 +523,239 @@ describe("export", () => {
     const replaced = await exportOnce(h, { key: "e4", mode: "replace" });
     expect(replaced.removed).toEqual(["SPEC-1.md", "bodies/SPEC-1.json"]);
     expect(() => readFileSync(join(h.projectRoot, EXPORT_ROOT, "SPEC-1.md"), "utf8")).toThrow();
+  });
+
+  it("deletes only leftovers a valid manifest proves this export wrote, and keeps a changed body and its document", async () => {
+    h = harnessWithProjectFolder();
+    await create(h, "spec", "Phone review", "c1");
+    await create(h, "spec", "Sticky footer", "c2");
+    await exportOnce(h, { key: "e1" });
+
+    // Both items leave the project, so both exports' files are leftovers — and
+    // then a person edits one of the two bodies in the folder.
+    for (const item of ok<ProjectWorkListResult>(await h.call("project/work/list", { projectId: h.projectId })).items) {
+      ok(
+        await h.call("project/work/delete", {
+          projectId: h.projectId,
+          entityId: item.ref.entityId,
+          expectedRevisionId: item.ref.revisionId,
+          confirm: true,
+          idempotencyKey: `d-${item.key}`,
+        }),
+      );
+    }
+    const editedBody = join(h.projectRoot, EXPORT_ROOT, "bodies", "SPEC-2.json");
+    const edited = JSON.parse(readFileSync(editedBody, "utf8")) as { spec: { brief: string } };
+    edited.spec.brief = "I rewrote this in the folder myself.";
+    const mine = `${JSON.stringify(edited, null, 2)}\n`;
+    writeFileSync(editedBody, mine);
+
+    const preview = ok<WorkExportPreviewResult>(await h.call("project/work/export/preview", { projectId: h.projectId, mode: "replace" }));
+    expect(preview.removes).toEqual(["SPEC-1.md", "bodies/SPEC-1.json"]);
+    expect(preview.preserved).toEqual([
+      { path: "SPEC-2.md", reason: "changed" },
+      { path: "bodies/SPEC-2.json", reason: "changed" },
+    ]);
+
+    const applied = ok<WorkExportApplyResult>(
+      await h.call("project/work/export/apply", {
+        projectId: h.projectId,
+        mode: "replace",
+        previewDigest: preview.previewDigest,
+        confirm: true,
+        idempotencyKey: "e2",
+      }),
+    );
+    expect(applied.removed).toEqual(["SPEC-1.md", "bodies/SPEC-1.json"]);
+    expect(() => readFileSync(join(h.projectRoot, EXPORT_ROOT, "SPEC-1.md"), "utf8")).toThrow();
+    // The changed body, and the document beside it, are exactly as they were.
+    expect(readFileSync(editedBody, "utf8")).toBe(mine);
+    expect(readFileSync(join(h.projectRoot, EXPORT_ROOT, "SPEC-2.md"), "utf8")).toContain("Sticky footer");
+  });
+
+  it("keeps a document a person edited in the folder, and refuses an apply when one is edited after the preview", async () => {
+    h = harnessWithProjectFolder();
+    await create(h, "spec", "Phone review", "c1");
+    await create(h, "spec", "Sticky footer", "c2");
+    await exportOnce(h, { key: "e1" });
+    for (const item of ok<ProjectWorkListResult>(await h.call("project/work/list", { projectId: h.projectId })).items) {
+      ok(
+        await h.call("project/work/delete", {
+          projectId: h.projectId,
+          entityId: item.ref.entityId,
+          expectedRevisionId: item.ref.revisionId,
+          confirm: true,
+          idempotencyKey: `d-${item.key}`,
+        }),
+      );
+    }
+
+    // The body is untouched; only the readable document was edited. The body's
+    // digest alone would have called this pair a leftover.
+    const document = join(h.projectRoot, EXPORT_ROOT, "SPEC-2.md");
+    const mine = `${readFileSync(document, "utf8")}\nA note I typed into the copy.\n`;
+    writeFileSync(document, mine);
+
+    const preview = ok<WorkExportPreviewResult>(await h.call("project/work/export/preview", { projectId: h.projectId, mode: "replace" }));
+    expect(preview.removes).toEqual(["SPEC-1.md", "bodies/SPEC-1.json"]);
+    expect(preview.preserved).toEqual([
+      { path: "SPEC-2.md", reason: "changed" },
+      { path: "bodies/SPEC-2.json", reason: "changed" },
+    ]);
+
+    // A document edited between the preview and the press changes the proof, so
+    // the confirmation is spent rather than honoured.
+    const other = join(h.projectRoot, EXPORT_ROOT, "SPEC-1.md");
+    writeFileSync(other, `${readFileSync(other, "utf8")}\nEdited while the dialog was open.\n`);
+    const refusal = failed(
+      await h.call("project/work/export/apply", {
+        projectId: h.projectId,
+        mode: "replace",
+        previewDigest: preview.previewDigest,
+        confirm: true,
+        idempotencyKey: "e2",
+      }),
+    );
+    expect(refusal.message).toContain("Preview the export again");
+    expect(readFileSync(other, "utf8")).toContain("Edited while the dialog was open.");
+
+    // Previewing again keeps both edited documents and their bodies.
+    const again = ok<WorkExportPreviewResult>(await h.call("project/work/export/preview", { projectId: h.projectId, mode: "replace" }));
+    expect(again.removes).toEqual([]);
+    expect(again.preserved?.map((entry) => entry.path)).toEqual(["SPEC-1.md", "SPEC-2.md", "bodies/SPEC-1.json", "bodies/SPEC-2.json"]);
+    const applied = ok<WorkExportApplyResult>(
+      await h.call("project/work/export/apply", {
+        projectId: h.projectId,
+        mode: "replace",
+        previewDigest: again.previewDigest,
+        confirm: true,
+        idempotencyKey: "e3",
+      }),
+    );
+    expect(applied.removed).toEqual([]);
+    expect(readFileSync(document, "utf8")).toBe(mine);
+  });
+
+  it("keeps an export written before documents were proved, rather than assuming it wrote those files", async () => {
+    h = harnessWithProjectFolder();
+    const spec = await create(h, "spec", "Phone review", "c1");
+    await exportOnce(h, { key: "e1" });
+    ok(
+      await h.call("project/work/delete", {
+        projectId: h.projectId,
+        entityId: spec.entity.entityId,
+        expectedRevisionId: spec.revision.revisionId,
+        confirm: true,
+        idempotencyKey: "d1",
+      }),
+    );
+
+    // A manifest exactly as an earlier version of this product wrote one: every
+    // row valid, no document digest anywhere.
+    const manifestPath = join(h.projectRoot, EXPORT_ROOT, "manifest.json");
+    const manifest = projectWorkManifestSchema.parse(JSON.parse(readFileSync(manifestPath, "utf8")));
+    expect(manifest.entities[0]?.documentDigest).toMatch(/^[0-9a-f]{64}$/);
+    for (const entity of manifest.entities) delete entity.documentDigest;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const preview = ok<WorkExportPreviewResult>(await h.call("project/work/export/preview", { projectId: h.projectId, mode: "replace" }));
+    expect(preview.removes).toEqual([]);
+    expect(preview.preserved).toEqual([
+      { path: "SPEC-1.md", reason: "unproven" },
+      { path: "bodies/SPEC-1.json", reason: "unproven" },
+    ]);
+
+    const applied = ok<WorkExportApplyResult>(
+      await h.call("project/work/export/apply", {
+        projectId: h.projectId,
+        mode: "replace",
+        previewDigest: preview.previewDigest,
+        confirm: true,
+        idempotencyKey: "e2",
+      }),
+    );
+    expect(applied.removed).toEqual([]);
+    expect(readFileSync(join(h.projectRoot, EXPORT_ROOT, "SPEC-1.md"), "utf8")).toContain("Phone review");
+  });
+
+  it("deletes nothing when the manifest in that folder is not one this app wrote, and says so", async () => {
+    h = harnessWithProjectFolder();
+    const spec = await create(h, "spec", "Phone review", "c1");
+    await exportOnce(h, { key: "e1" });
+    ok(
+      await h.call("project/work/delete", {
+        projectId: h.projectId,
+        entityId: spec.entity.entityId,
+        expectedRevisionId: spec.revision.revisionId,
+        confirm: true,
+        idempotencyKey: "d1",
+      }),
+    );
+
+    // A manifest anyone could have written: valid JSON, not a manifest of ours.
+    const manifestPath = join(h.projectRoot, EXPORT_ROOT, "manifest.json");
+    writeFileSync(manifestPath, `${JSON.stringify({ format: "project-work", version: 1, entities: [{ document: "SPEC-1.md" }] }, null, 2)}\n`);
+
+    const preview = ok<WorkExportPreviewResult>(await h.call("project/work/export/preview", { projectId: h.projectId, mode: "replace" }));
+    expect(preview.removes).toEqual([]);
+    expect(preview.removeRefusal).toContain("not one this app wrote");
+
+    const applied = ok<WorkExportApplyResult>(
+      await h.call("project/work/export/apply", {
+        projectId: h.projectId,
+        mode: "replace",
+        previewDigest: preview.previewDigest,
+        confirm: true,
+        idempotencyKey: "e2",
+      }),
+    );
+    expect(applied.removed).toEqual([]);
+    expect(readFileSync(join(h.projectRoot, EXPORT_ROOT, "SPEC-1.md"), "utf8")).toContain("Phone review");
+    expect(readFileSync(join(h.projectRoot, EXPORT_ROOT, "bodies", "SPEC-1.json"), "utf8")).toContain("spec");
+  });
+
+  it("keeps a file a manifest names outside this export's own layout, rather than deleting what it points at", async () => {
+    h = harnessWithProjectFolder();
+    const spec = await create(h, "spec", "Phone review", "c1");
+    await exportOnce(h, { key: "e1" });
+    ok(
+      await h.call("project/work/delete", {
+        projectId: h.projectId,
+        entityId: spec.entity.entityId,
+        expectedRevisionId: spec.revision.revisionId,
+        confirm: true,
+        idempotencyKey: "d1",
+      }),
+    );
+
+    // A schema-valid manifest, edited to name a different file for that item.
+    // A path inside the export is not a licence to delete it: only the layout
+    // an export of this product writes for that identity is.
+    const manifestPath = join(h.projectRoot, EXPORT_ROOT, "manifest.json");
+    const manifest = projectWorkManifestSchema.parse(JSON.parse(readFileSync(manifestPath, "utf8")));
+    manifest.entities[0]!.document = "notes/keep-me.md";
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    mkdirSync(join(h.projectRoot, EXPORT_ROOT, "notes"), { recursive: true });
+    writeFileSync(join(h.projectRoot, EXPORT_ROOT, "notes", "keep-me.md"), "my own notes\n");
+
+    const preview = ok<WorkExportPreviewResult>(await h.call("project/work/export/preview", { projectId: h.projectId, mode: "replace" }));
+    expect(preview.removes).toEqual([]);
+    expect(preview.preserved).toEqual([
+      { path: "bodies/SPEC-1.json", reason: "not_this_export" },
+      { path: "notes/keep-me.md", reason: "not_this_export" },
+    ]);
+
+    const applied = ok<WorkExportApplyResult>(
+      await h.call("project/work/export/apply", {
+        projectId: h.projectId,
+        mode: "replace",
+        previewDigest: preview.previewDigest,
+        confirm: true,
+        idempotencyKey: "e2",
+      }),
+    );
+    expect(applied.removed).toEqual([]);
+    expect(readFileSync(join(h.projectRoot, EXPORT_ROOT, "notes", "keep-me.md"), "utf8")).toBe("my own notes\n");
   });
 
   it("refuses an apply whose preview is no longer what would be written", async () => {
@@ -703,32 +1015,168 @@ describe("publication", () => {
     expect(detail.repositoryLinks.filter((link) => link.relation === "published_as")).toHaveLength(2);
   });
 
-  it("records an uncommitted publication only when a checkpoint names the state", async () => {
+  it("records an uncommitted publication against the checkpoint commit that really holds the bytes", async () => {
+    h = await repositoryHarness();
+    await create(h, "spec", "Phone review", "c1");
+    await exportOnce(h, { key: "e1" });
+    // The export is on disk and uncommitted; the checkpoint is the commit
+    // object that carries it (leap: a checkpoint *is* a commit).
+    const checkpoint = writeCheckpoint(h, "a1b2c3", 4);
+    const preview = ok<WorkPublishPreviewResult>(await h.call("project/work/publish/preview", { projectId: h.projectId }));
+    expect(preview.ready).toBe(false);
+    expect(preview.refusal).toContain("choose a state that carries these exact files");
+    // The current commit does not carry it; the checkpoint that does is offered
+    // beside it, host-resolved and already proved.
+    expect(preview.selected?.kind).toBe("commit");
+    expect(preview.selected?.carriesExport).toBe(false);
+    const offered = preview.sources?.find((source) => source.checkpointId === checkpoint.ref);
+    expect(offered).toMatchObject({ kind: "checkpoint", commitObjectId: checkpoint.commit, carriesExport: true });
+    expect(offered?.label).toBe("Checkpoint from turn 4");
+
+    // Choosing it re-measures the export against that state, and only then is
+    // the publication ready.
+    const chosen = ok<WorkPublishPreviewResult>(
+      await h.call("project/work/publish/preview", {
+        projectId: h.projectId,
+        source: { kind: "checkpoint", checkpointId: checkpoint.ref },
+      }),
+    );
+    expect(chosen.ready).toBe(true);
+    expect(chosen.selected).toMatchObject({ kind: "checkpoint", checkpointId: checkpoint.ref, commitObjectId: checkpoint.commit, carriesExport: true });
+    expect(chosen.uncommitted).toEqual([]);
+    expect(chosen.previewDigest).not.toBe(preview.previewDigest);
+
+    // Two identities that disagree are refused rather than one being preferred.
+    const ambiguous = failed(
+      await h.call("project/work/publish/apply", {
+        projectId: h.projectId,
+        previewDigest: chosen.previewDigest,
+        confirm: true,
+        commit: "HEAD",
+        checkpointId: checkpoint.ref,
+        idempotencyKey: "pub-ambiguous",
+      }),
+    );
+    expect(ambiguous.message).toContain("published at its own commit");
+    const conflicting = failed(
+      await h.call("project/work/publish/apply", {
+        projectId: h.projectId,
+        previewDigest: chosen.previewDigest,
+        confirm: true,
+        commit: git(h.projectRoot, ["rev-parse", "HEAD"]),
+        checkpointId: checkpoint.ref,
+        idempotencyKey: "pub-conflict",
+      }),
+    );
+    expect(conflicting.message).toContain("two different states");
+    // A confirmation of the commit preview cannot be spent on the checkpoint one.
+    const stalePreview = failed(
+      await h.call("project/work/publish/apply", {
+        projectId: h.projectId,
+        previewDigest: preview.previewDigest,
+        confirm: true,
+        commit: checkpoint.commit,
+        checkpointId: checkpoint.ref,
+        idempotencyKey: "pub-stale",
+      }),
+    );
+    expect(stalePreview.message).toContain("Preview the publication again");
+    expect(ok<ProjectWorkListResult>(await h.call("project/work/list", { projectId: h.projectId })).items[0]?.linkCounts.repository).toBe(0);
+
+    const applied = ok<WorkPublishApplyResult>(
+      await h.call("project/work/publish/apply", {
+        projectId: h.projectId,
+        previewDigest: chosen.previewDigest,
+        confirm: true,
+        commit: checkpoint.commit,
+        checkpointId: checkpoint.ref,
+        idempotencyKey: "pub1",
+      }),
+    );
+    // The state recorded is the checkpoint's own commit, not the HEAD that was
+    // named beside it and does not carry these files.
+    expect(applied.state.checkpointId).toBe(checkpoint.ref);
+    expect(applied.commitObjectId).toBe(checkpoint.commit);
+    expect(applied.commitObjectId).not.toBe(git(h.projectRoot, ["rev-parse", "HEAD"]));
+
+    const detail = ok<ProjectWorkGetResult>(await h.call("project/work/get", { projectId: h.projectId, key: "SPEC-1" }));
+    const link = detail.repositoryLinks[0]!;
+    expect("state" in link.target).toBe(true);
+    if ("state" in link.target) {
+      expect(link.target.state.checkpointId).toBe(checkpoint.ref);
+      expect(link.target.state.commitObjectId).toBe(checkpoint.commit);
+      // The blob the checkpoint really holds at that path, proved and recorded.
+      expect(link.target.state.blobObjectId).toBe(git(h.projectRoot, ["rev-parse", `${checkpoint.commit}:${EXPORT_ROOT}/SPEC-1.md`]));
+      expect(link.target.state.contentDigest).toMatch(/^[0-9a-f]{64}$/);
+    }
+  });
+
+  it("refuses a checkpoint id that is not a checkpoint this repository has, and records nothing", async () => {
     h = await repositoryHarness();
     await create(h, "spec", "Phone review", "c1");
     await exportOnce(h, { key: "e1" });
     const preview = ok<WorkPublishPreviewResult>(await h.call("project/work/publish/preview", { projectId: h.projectId }));
 
-    const applied = ok<WorkPublishApplyResult>(
+    // An invented id, a ref outside the checkpoint namespace, and a checkpoint
+    // ref that this repository simply does not have.
+    for (const [index, checkpointId] of ["ckpt_17", "HEAD", "refs/heads/main", checkpointRef("a1b2c3", 4)].entries()) {
+      const refusal = failed(
+        await h.call("project/work/publish/apply", {
+          projectId: h.projectId,
+          previewDigest: preview.previewDigest,
+          confirm: true,
+          commit: "HEAD",
+          checkpointId,
+          idempotencyKey: `pub-${String(index)}`,
+        }),
+      );
+      expect(refusal.message).toContain("not a checkpoint this repository still has");
+      // And a preview cannot be talked into one either.
+      const previewRefusal = ok<WorkPublishPreviewResult>(
+        await h.call("project/work/publish/preview", { projectId: h.projectId, source: { kind: "checkpoint", checkpointId } }),
+      );
+      expect(previewRefusal.ready).toBe(false);
+      expect(previewRefusal.refusal).toContain("not a checkpoint this repository still has");
+      expect(previewRefusal.selected).toBeUndefined();
+    }
+    // Nothing in the namespace, so the only state offered is the commit itself.
+    expect(preview.sources?.every((source) => source.kind === "commit")).toBe(true);
+
+    const list = ok<ProjectWorkListResult>(await h.call("project/work/list", { projectId: h.projectId }));
+    expect(list.items[0]?.linkCounts.repository).toBe(0);
+  });
+
+  it("refuses a real checkpoint whose commit does not carry the export, and records nothing", async () => {
+    h = await repositoryHarness();
+    await create(h, "spec", "Phone review", "c1");
+    // A checkpoint taken before the export exists: a real ref, a real commit,
+    // and not this export's bytes.
+    const stale = writeCheckpoint(h, "a1b2c3", 1);
+    await exportOnce(h, { key: "e1" });
+    const preview = ok<WorkPublishPreviewResult>(
+      await h.call("project/work/publish/preview", { projectId: h.projectId, source: { kind: "checkpoint", checkpointId: stale.ref } }),
+    );
+    // The state resolves, and the preview says plainly that it does not carry
+    // this export: the readiness is the proof, not the id.
+    expect(preview.ready).toBe(false);
+    expect(preview.selected).toMatchObject({ kind: "checkpoint", checkpointId: stale.ref, carriesExport: false });
+    expect(preview.selected?.missing).toContain(`${EXPORT_ROOT}/SPEC-1.md`);
+
+    const refusal = failed(
       await h.call("project/work/publish/apply", {
         projectId: h.projectId,
         previewDigest: preview.previewDigest,
         confirm: true,
-        commit: "HEAD",
-        checkpointId: "ckpt_17",
+        commit: stale.commit,
+        checkpointId: stale.ref,
         idempotencyKey: "pub1",
       }),
     );
-    expect(applied.state.checkpointId).toBe("ckpt_17");
+    expect(refusal.message).toContain("That checkpoint does not carry");
+    expect(refusal.message).toContain(`${EXPORT_ROOT}/SPEC-1.md`);
 
-    const detail = ok<ProjectWorkGetResult>(await h.call("project/work/get", { projectId: h.projectId, key: "SPEC-1" }));
-    const link = detail.repositoryLinks[0]!;
-    if ("state" in link.target) {
-      expect(link.target.state.checkpointId).toBe("ckpt_17");
-      // Uncommitted bytes have no blob in that commit, and none is invented.
-      expect(link.target.state.blobObjectId).toBeUndefined();
-      expect(link.target.state.contentDigest).toMatch(/^[0-9a-f]{64}$/);
-    }
+    const list = ok<ProjectWorkListResult>(await h.call("project/work/list", { projectId: h.projectId }));
+    expect(list.items[0]?.linkCounts.repository).toBe(0);
   });
 
   it("refuses when there is no export, and when the export is out of date", async () => {
@@ -763,5 +1211,31 @@ describe("publication", () => {
     h = harnessWithProjectFolder();
     const refusal = failed(await h.call("project/work/export/preview", { projectId: h.projectId, path: "../outside" }));
     expect(refusal.code).toBe(ErrorCodes.InvalidParams);
+  });
+
+  it("refuses to export into a repository's storage or this project's settings, and leaves them alone", async () => {
+    h = harnessWithProjectFolder();
+    await create(h, "spec", "Phone review", "c1");
+    writeFile(h.projectRoot, `${PROJECT_DIR_NAME}/settings.json`, '{"kept":true}\n');
+    writeFile(h.projectRoot, `${PROJECT_DIR_NAME}/design/index.json`, '{"design":true}\n');
+
+    for (const path of [".git", ".git/hooks", PROJECT_DIR_NAME, `${PROJECT_DIR_NAME}/design`, `${PROJECT_DIR_NAME}/settings.json`]) {
+      const refusal = failed(await h.call("project/work/export/preview", { projectId: h.projectId, path }));
+      expect(refusal.message).toMatch(/repository's own storage|this project's own settings/);
+    }
+
+    // Nothing there moved, and the one folder exports do use still works.
+    expect(readFileSync(join(h.projectRoot, PROJECT_DIR_NAME, "settings.json"), "utf8")).toBe('{"kept":true}\n');
+    expect(readFileSync(join(h.projectRoot, PROJECT_DIR_NAME, "design", "index.json"), "utf8")).toBe('{"design":true}\n');
+    const exported = await exportOnce(h, { key: "e1" });
+    expect(exported.root).toBe(EXPORT_ROOT);
+  });
+
+  it("refuses to import from a repository's storage or this project's settings", async () => {
+    h = harnessWithProjectFolder();
+    for (const path of [".git", `${PROJECT_DIR_NAME}/design`]) {
+      const refusal = failed(await h.call("project/work/import/preview", { projectId: h.projectId, adapter: "markdown", path }));
+      expect(refusal.message).toMatch(/repository's own storage|this project's own settings/);
+    }
   });
 });
