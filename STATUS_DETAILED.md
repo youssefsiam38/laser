@@ -5985,7 +5985,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T5 | UI client store, reconcile and deep links | done | claude-2026-09-21-leap | `edac5b5c`; `pnpm -F @lasercode/ui test` (`test/project-work/*`) | see notes |
 | M21-T6 | Embedded workspace shell | done | claude-2026-09-21-leap | `83f454d3` (merged `f9e50378`); `pnpm -F @lasercode/ui test` (3055 passed, 50 new) | see notes |
 | M21-T7 | Specs and Research experience | done | claude-2026-09-21-leap | `ae5eac62` (merged `cfd92e9f`); `pnpm -F @lasercode/ui test` (3086 passed; 30 new in `test/project-work/`) | see notes |
-| M21-T8 | Comments, reviews and approval gates | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T8 | Comments, reviews and approval gates | done | claude-2026-09-21-leap | `98a01428` (merged with T16 conflicts resolved in `Inspector.tsx`); protocol 643 (`project-work-gates.test.ts` 12), host 1139 (`project-work/gates.test.ts` 18), ui (`test/project-work/{comments,gates,approval}*` 24) | see notes |
 | M21-T9 | Cross-session and cross-project mentions | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T10 | Design Index: static facts, synthesis, review, storage | done | claude-2026-09-21-leap | `9306d0fa`; `pnpm -F @lasercode/worker test` (1344 passed; `test/design/*` 70 incl. the parse-only module-graph and side-effect-marker proofs) | see notes |
 | M21-T11 | DesignTree, canvas, primitive kit, prototypes and Sketch | done | claude-2026-09-21-leap | `05e270d7` (merged `66348ae2`); protocol 652 (`design-tree.test.ts` 21), `pnpm -F @lasercode/ui test` 3176 (`test/design/*` 48) | see notes |
@@ -6028,6 +6028,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI worker over the T6 slots (Spec/Research create/edit/revise/archive, brief vs full spec, Research question tree + findings + source panel, provenance UI, cross-links, search, Markdown editing) — host stays as the spine provides; T8's UI pieces follow in the same session once T15's host changes are merged.
 
 #### M21-T8 notes
+- 2026-09-21 done (`98a01428`): host `gates.ts` `GateEngine` (Brief/Design/Build subjects and requirements, complete digest set, person-only, blocking comments named, invalidation on material revise via covers ∪ `propagateStale`), comments with semantic anchors re-decided orphaned per revision; protocol gate report/anchor helpers, `SpecBody.gated` opt-in (decision 1); UI `GateCard` (Approve disabled with the host's reason, typed key confirmation, Enter never approves), `CommentsPanel` (threads, anchors, blocking, batched one-revision request), `ApprovalRequestCard` above the composer opening the workspace at the exact revision.
 - 2026-09-21 claimed by claude-2026-09-21-leap: host gate rules (`project-work/gates.ts` + the store's comment/review/approve paths) and the UI comments/gate card/Approval Card; write set disjoint from T16 (plan/task/board files) and T17 (bridge/methods wiring).
 
 #### M21-T17 notes
