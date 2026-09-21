@@ -6308,6 +6308,11 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 #### M26-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/agent-tool-contract.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M26 tasks added; D-350 recorded. Implementation not started.
 
+### D-357 · 2026-09-21 · A plain Chat offers no harness tools
+Decision: a Chat session (`sessionKind: "chat"`) gets every engine tool and the background tools, but not `start_agent` and its siblings. `docs/plain-chat.md`'s Chat table is amended to say so.
+Why: an agent run needs a project checkout and a worktree to run in; a Chat has no project. The removed Chat built-in already had `supportsSubagents: false`, so this is the behaviour the person had. Offering a tool that can only refuse would break the tool contract's capability-gating rule (`docs/agent-tool-contract.md` §3).
+Consequences: "Move to a project" remains the way to delegate from a conversation that started as a Chat; `docs/agents.md` §7 is written to the code.
+
 ### D-356 · 2026-09-21 · Real-file migration acceptance runs on an exact copy
 Decision: M22-T11's "migration run on the person's real settings file" is satisfied by running the real host + real worker over a byte-exact copy of the person's global settings file, host agents state and a real pre-M22 session, and reviewing the preview it writes; the in-place rewrite happens on the person's first start of the released build.
 Why: the person's live Laser holds a worker on the real project and owns the real files while agents work (AGENTS.md invariants 5 and 8, and the sandbox rule); a second host over the same state directory would be exactly the two-writer situation the invariants forbid.

@@ -31,7 +31,7 @@ A Chat session is an ordinary session with `sessionKind: "chat"` instead of an
 | Project instructions | none — there is no project |
 | Profile | `defaultProfileId`, changeable per session like any session |
 | Workspace | one opaque persistent directory per session under `<state>/workspaces/chat` (M13-T79), unchanged |
-| Tools | every tool the engine offers, plus the harness and background tools; no product-guidance skill |
+| Tools | every tool the engine offers and the background tools; no product-guidance skill. The harness tools (`start_agent` and its siblings) need a project checkout to run an agent in, and a Chat has none, so they are absent — exactly as the Chat built-in was before (D-357) |
 | Skills | every discovered global skill (project skills need a project) |
 | Move to a project | unchanged (M13-T58); the moved session becomes an ordinary project session on the default agent |
 | Sidebar | the Chat tab, first before Code, unchanged |
