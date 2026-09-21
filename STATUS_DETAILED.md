@@ -5978,10 +5978,10 @@ live work holding its row when a snapshot thins — because both are real hazard
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M21-T0 | Binding product contract and dependency plan | done | codex-2026-09-20-git-revisions | `docs/project-lifecycle-leap.md`; `PLAN.md` M21 index; D-329–D-333, D-345; `git diff --check -- docs/project-lifecycle-leap.md PLAN.md STATUS_DETAILED.md` | see notes |
-| M21-T1 | Protocol domain, revisions and transition rules | todo | — | — | `PLAN.md` M21 |
-| M21-T2 | Stable project identity and canonical store | todo | — | — | `PLAN.md` M21 |
-| M21-T3 | Host authority, methods, policy and event stream | todo | — | — | `PLAN.md` M21 |
-| M21-T4 | Bounded bodies, search and derived projections | todo | — | — | `PLAN.md` M21 |
+| M21-T1 | Protocol domain, revisions and transition rules | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T2 | Stable project identity and canonical store | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T3 | Host authority, methods, policy and event stream | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T4 | Bounded bodies, search and derived projections | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T5 | UI client store, reconcile and deep links | todo | — | — | `PLAN.md` M21 |
 | M21-T6 | Embedded workspace shell | todo | — | — | `PLAN.md` M21 |
 | M21-T7 | Specs and Research experience | todo | — | — | `PLAN.md` M21 |
@@ -6004,6 +6004,9 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T24 | End-to-end project lifecycle acceptance | todo | — | — | `PLAN.md` M21 |
 | M21-T25 | Release the project lifecycle leap | todo | — | — | `PLAN.md` M21 |
 | M21-T26 | Research phase: adapters, tools and loop | todo | — | — | `PLAN.md` M21; `docs/research-phase.md` |
+
+#### M21-T1–T4 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap under D-358: one backend worker owns the canonical spine (protocol domain → store → host authority → bodies/search/projections) on a branch based on the 0.13.0 candidate; plan in `docs/leap/m21-spine-plan.md`. Store engine: `node:sqlite` as the log store already uses (D-358).
 
 #### M21-T0 notes
 - 2026-09-20 claimed: define the complete project-owned lifecycle for Specs, Research, Designs, Plans and Tasks; keep every entity independent of sessions and referenceable from any session; specify the embedded Laser workspace, framework-neutral design contract, storage, protocol, approvals, execution and verification before implementation starts.
@@ -6314,6 +6317,11 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 #### M26-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/agent-tool-contract.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M26 tasks added; D-350 recorded. Implementation not started.
+
+### D-358 · 2026-09-21 · The leap goal opens M21 implementation; the store uses node:sqlite
+Decision: `docs/goal-project-lifecycle-leap.md` is the person's instruction to deliver M21 now, so M21 implementation starts without a separate M20 sandbox acceptance step; the M20 acceptance stays an open item the person may still perform on 0.12–0.14. The `ProjectWorkStore` is a `node:sqlite` database under the product state root, the same engine the log store uses, with content-addressed blobs beside it.
+Why: the goal file orders M22 → M23 → M26 → M21 → M24 → M25 and says not to stop before every milestone is done; M20-T0–T7 are `done` with evidence. One embedded database engine keeps the host dependency-free and the migration/backup story single.
+Consequences: M21-T0's "M20 person acceptance for implementation" prerequisite is satisfied by the goal; the leap document's dependency sentence is read accordingly.
 
 ### D-357 · 2026-09-21 · A plain Chat offers no harness tools
 Decision: a Chat session (`sessionKind: "chat"`) gets every engine tool and the background tools, but not `start_agent` and its siblings. `docs/plain-chat.md`'s Chat table is amended to say so.
