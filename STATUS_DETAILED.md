@@ -5989,7 +5989,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T9 | Cross-session and cross-project mentions | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T10 | Design Index: static facts, synthesis, review, storage | done | claude-2026-09-21-leap | `9306d0fa`; `pnpm -F @lasercode/worker test` (1344 passed; `test/design/*` 70 incl. the parse-only module-graph and side-effect-marker proofs) | see notes |
 | M21-T11 | DesignTree, canvas, primitive kit, prototypes and Sketch | done | claude-2026-09-21-leap | `05e270d7` (merged `66348ae2`); protocol 652 (`design-tree.test.ts` 21), `pnpm -F @lasercode/ui test` 3176 (`test/design/*` 48) | see notes |
-| M21-T12 | Static host grounding and source selection | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T12 | Static host grounding and source selection | done | claude-2026-09-21-leap | `92cc43c9` + `f15eb7d1`; protocol 674 (`host-page.test.ts` 10), worker `test/design/*` 128 incl. parse-only for `design/host`; matrix 22 fixtures | see notes |
 | M21-T13 | Design workspace and anchored review | todo | — | — | `PLAN.md` M21 |
 | M21-T14 | Greenfield design foundation | todo | — | — | `PLAN.md` M21 |
 | M21-T15 | Plan DAG and Project Task engine | done | claude-2026-09-21-leap | `2d2b5778` (merged `aa33ffbf`); host 1121 passed (`project-work/task-engine.test.ts` 17 over the wire), protocol 631 (`project-work-plan-graph.test.ts` 12) | see notes |
@@ -6017,6 +6017,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap: UI mention adapter (`@spec:` … `@task:` and `@KEY`), typed pinned refs in the stored message, transcript chip, sidebar TASK chip, global search; host-side send-time validation rides on the spine's `get` fences.
 
 #### M21-T12 notes
+- 2026-09-21 done (`92cc43c9`): `packages/worker/src/design/host/` — route/template resolution for Next/Nuxt/SvelteKit/Remix/Rails/Blade/Jinja/HTML (parse-only, candidates + gap when unresolved), structural outline with stable paths and word-only text hashes, reference images (repo `mapped`, supplied `proposed`, bounded, no decoder/OCR), insertion regions that resolve/change/orphan and never move, Conform/Island proposal with reasons and trade-offs; protocol `host-page.ts`; `ground_host_page` tool. Orchestrator (`f15eb7d1`) registered it with the design tools in the companion module, the runner and the matrix (fixture re-measured as `retry`).
 - 2026-09-21 claimed by claude-2026-09-21-leap (row title aligned with `PLAN.md` as amended by D-353): worker-side static host grounding (`design/host/**`) — route/template → `HostPage` outline + file list, reference image, `InsertionRegion` with structural path + text hash and orphaning, Conform/Island strategy with reasons; no runner.
 
 #### M21-T10 notes
