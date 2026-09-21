@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import { AGENT_EVENTS_MAX, initialState, reduce, type AppState } from "../../src/store.js";
 import { event, run, sessionState, snapshot } from "./fixtures.js";
 
-const notify = (state: AppState, method: "agents/updated" | "agents/run" | "agents/event" | "agents/beam/choose-model", params: unknown): AppState =>
+const notify = (state: AppState, method: "agents/updated" | "agents/run" | "agents/event" | "models/profiles/seeded", params: unknown): AppState =>
   reduce(state, { type: "notification", method, params: params as never });
 
 describe("agents slice", () => {
   it("starts empty and loads the snapshot from agents/list", () => {
-    expect(initialState.agents).toEqual({ snapshot: null, loading: false, error: null, runs: {}, events: [], chooseBeamModel: null });
+    expect(initialState.agents).toEqual({ snapshot: null, loading: false, error: null, runs: {}, events: [], seededProfiles: null });
     const loading = reduce(initialState, { type: "agents/loading" });
     expect(loading.agents.loading).toBe(true);
     const loaded = reduce(loading, { type: "agents/loaded", snapshot: snapshot({ revision: 4 }) });
@@ -86,14 +86,15 @@ describe("agents slice", () => {
     expect(state.agents.events.at(-1)?.id).toBe(`e${AGENT_EVENTS_MAX + 10}`);
   });
 
-  it("holds the Beam model choice until the UI clears it", () => {
-    const asked = notify(initialState, "agents/beam/choose-model", { suggested: { provider: "openai", id: "gpt-5.6-luna" } });
-    expect(asked.agents.chooseBeamModel).toEqual({ suggested: { provider: "openai", id: "gpt-5.6-luna" } });
-    const nothing = notify(asked, "agents/beam/choose-model", { suggested: null });
-    expect(nothing.agents.chooseBeamModel).toEqual({ suggested: null });
-    const cleared = reduce(nothing, { type: "agents/choose-beam-model/clear" });
-    expect(cleared.agents.chooseBeamModel).toBeNull();
-    expect(reduce(cleared, { type: "agents/choose-beam-model/clear" })).toBe(cleared);
+  it("holds the profiles seeded on a first connection, for a surface that shows them for review", () => {
+    // Nothing is pending: the host has already written them (M22-T7, D-c).
+    const profiles = [
+      { id: "mp_balanced0000000000", name: "Balanced", models: [{ provider: "openai", id: "gpt-5.6-luna" }], origin: "seeded" as const, updatedAt: "2026-01-01T00:00:00.000Z" },
+    ];
+    const seeded = notify(initialState, "models/profiles/seeded", { profiles });
+    expect(seeded.agents.seededProfiles).toEqual(profiles);
+    // A later seeding replaces what was held; there is no choice to dismiss.
+    expect(notify(seeded, "models/profiles/seeded", { profiles: [] }).agents.seededProfiles).toEqual([]);
   });
 
 });

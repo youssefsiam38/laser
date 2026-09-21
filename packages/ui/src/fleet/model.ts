@@ -106,6 +106,15 @@ export interface FleetItem {
   sessionPath: string;
   /** Ending it: an agent run by `runId`, a task by `taskId` in its session. */
   stop: { kind: "agent"; runId: string } | { kind: "task"; path: string; id: string } | undefined;
+  /**
+   * The profile this run was started on: the intent
+   * (`docs/model-profiles.md`). An id, because a name lives in settings and
+   * this model is pure; the rows resolve it where they draw it.
+   */
+  profileId: string | undefined;
+  /** The definition named a profile that was not there, and this one stood in. */
+  substitutedProfile: { requested: string; used: string | null } | undefined;
+  /** The model that actually answered: the evidence beside `profile`. */
   model: string | undefined;
   /** Bytes the task has written; the liveness signal a follower reacts to. */
   outputBytes: number | undefined;
@@ -199,6 +208,8 @@ function taskItem(task: BackgroundTask, depth: number, now: number): FleetItem {
     terminal: task.status !== "running",
     sessionPath: task.sessionPath,
     stop: task.status === "running" ? { kind: "task", path: task.sessionPath, id: task.id } : undefined,
+    profileId: undefined,
+    substitutedProfile: undefined,
     model: undefined,
     outputBytes: task.outputBytes,
     run: undefined,
@@ -241,6 +252,8 @@ function agentItem(node: AgentTreeNode, tasksOf: (path: string) => BackgroundTas
     terminal: node.ended,
     sessionPath: node.sessionPath,
     stop: run && !isTerminalRunStatus(run.status) ? { kind: "agent", runId: run.runId } : undefined,
+    profileId: run?.profileId ?? undefined,
+    ...(run?.substitutedProfile ? { substitutedProfile: run.substitutedProfile } : { substitutedProfile: undefined }),
     model: run?.model ? `${run.model.provider}/${run.model.id}` : undefined,
     outputBytes: undefined,
     run,

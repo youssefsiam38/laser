@@ -11,7 +11,7 @@
  *     HostClient: (await import("./fake-host.js")).FakeHostClient,
  *   }));
  */
-import type { AgentsSnapshot, EnvironmentDescriptor, HostNotificationMethod, HostNotifications, ModelCatalogEntry, ProviderAuthInfo, SessionState, SessionSummary } from "@lasercode/protocol";
+import type { AgentsSnapshot, EnvironmentDescriptor, HostNotificationMethod, HostNotifications, ModelCatalogEntry, ModelProfile, ModelRef, ProfileAssignments, ProviderAuthInfo, SessionState, SessionSummary } from "@lasercode/protocol";
 import type { HostClientOptions } from "../../src/client.js";
 import { createTranscriptHoldLedger, type TranscriptHoldLedger } from "../../src/transcript-hold-ledger.js";
 import { sessionState, snapshot as agentsSnapshot, summary } from "../agents/fixtures.js";
@@ -25,6 +25,9 @@ export interface World {
   states: Record<string, SessionState>;
   snapshot: AgentsSnapshot;
   catalog: ModelCatalogEntry[];
+  /** The model profiles the host holds, and what points at them (M22). */
+  profiles: ModelProfile[];
+  assignments: ProfileAssignments;
   providers: ProviderAuthInfo[];
   /** Every request, in order, for assertions. */
   calls: Array<{ method: string; params: unknown }>;
@@ -39,6 +42,16 @@ export function createWorld(over: Partial<World> = {}): World {
     sessions: [],
     states: {},
     snapshot: agentsSnapshot({ workspaces: { beam: BEAM_CWD, chat: "/state/chat" } }),
+    profiles: [
+      { id: "mp_fast00000000000000", name: "Fast", models: [{ provider: "openai", id: "gpt-fast" }], origin: "seeded", updatedAt: "2026-09-01T00:00:00.000Z" },
+      { id: "mp_smart0000000000000", name: "Smart", models: [{ provider: "openai", id: "gpt-big" }, { provider: "openai", id: "gpt-fast" }], origin: "seeded", updatedAt: "2026-09-01T00:00:00.000Z" },
+    ],
+    assignments: {
+      defaultProfileId: "mp_fast00000000000000",
+      namingProfileId: "mp_fast00000000000000",
+      oracleProfileId: "mp_smart0000000000000",
+      designIndexProfileId: null,
+    },
     catalog: [
       { provider: "openai", id: "gpt-fast", name: "GPT Fast", enabled: true, thinkingLevels: ["off"] },
       { provider: "openai", id: "gpt-big", name: "GPT Big", enabled: true, thinkingLevels: ["off", "high"] },
@@ -258,13 +271,41 @@ function handle(world: World, method: string, params: Record<string, unknown>): 
     case "pi/commands/list":
       return { commands: [] };
     case "pi/models/catalog":
-      return { models: world.catalog, enabledModels: null, defaultProvider: "openai", defaultModel: "gpt-fast" };
+      return { models: world.catalog, enabledModels: null, profiles: world.profiles, assignments: world.assignments, errors: [] };
+    case "models/profiles/list":
+      return { profiles: world.profiles, assignments: world.assignments };
+    case "models/profiles/save": {
+      const profile = params.profile as ModelProfile;
+      world.profiles = world.profiles.some((entry) => entry.id === profile.id)
+        ? world.profiles.map((entry) => (entry.id === profile.id ? profile : entry))
+        : [...world.profiles, profile];
+      return { profiles: world.profiles, assignments: world.assignments };
+    }
+    case "session/profile/set": {
+      const path = params.path as string;
+      const profile = world.profiles.find((entry) => entry.id === params.profileId);
+      const first = profile?.models[0];
+      world.states[path] = {
+        ...world.states[path]!,
+        ...(profile ? { profile: { id: profile.id, name: profile.name } } : { profile: null }),
+        ...(first ? { model: { provider: first.provider, id: first.id } } : {}),
+      };
+      return { state: world.states[path] };
+    }
+    case "session/model/pin": {
+      const path = params.path as string;
+      world.states[path] = { ...world.states[path]!, profile: null, pinned: true, model: params.model as ModelRef };
+      return { state: world.states[path] };
+    }
     case "pi/providers/list":
       return { providers: world.providers };
-    case "agents/builtin/set-model": {
-      const model = params.model as AgentsSnapshot["beam"]["model"];
-      if (params.name !== "beam") throw new Error(`The Beam bubble only ever sets Beam's model, not ${String(params.name)}.`);
-      world.snapshot = { ...world.snapshot, revision: world.snapshot.revision + 1, beam: { ...world.snapshot.beam, model, needsChoice: false } };
+    case "agents/builtin/set-profile": {
+      const name = params.name as keyof AgentsSnapshot["builtinProfiles"];
+      world.snapshot = {
+        ...world.snapshot,
+        revision: world.snapshot.revision + 1,
+        builtinProfiles: { ...world.snapshot.builtinProfiles, [name]: params.profileId as string | null },
+      };
       return { snapshot: world.snapshot };
     }
     default:

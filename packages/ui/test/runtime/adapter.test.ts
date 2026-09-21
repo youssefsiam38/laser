@@ -56,6 +56,7 @@ const sessionState: SessionState = {
   id: "s",
   cwd: "/p",
   model: null,
+  profile: null,
   thinkingLevel: "medium",
   isStreaming: false,
   isCompacting: false,

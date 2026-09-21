@@ -10,14 +10,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ModelRef } from "@lasercode/protocol";
 
 const stable = vi.hoisted(() => ({
-  client: { request: vi.fn(async () => ({})) },
+  client: { request: vi.fn(async () => ({})), subscribe: () => () => {} },
   actions: { listModels: vi.fn(async (): Promise<ModelRef[]> => []), setModel: vi.fn(async () => undefined), toast: vi.fn() },
   currentProject: "/p",
 }));
 vi.mock("@/runtime", () => ({
   useLaserStable: () => stable,
   useLaserState: (selector: (s: unknown) => unknown) => selector({ workers: {}, connection: "connected", agents: { snapshot: null } }),
-  useSessionMeta: () => ({ model: { provider: "stub", id: "stub-1", name: "Stub One" }, session: { path: "/p/s.jsonl", cwd: "/p" } }),
+  useSessionMeta: () => ({ model: { provider: "stub", id: "stub-1", name: "Stub One" }, session: { path: "/p/s.jsonl", cwd: "/p", profile: null } }),
 }));
 
 import { SessionModelSelector } from "../../src/components/assistant-ui/elements/model-selector.js";
@@ -41,7 +41,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-const trigger = () => container.querySelector<HTMLButtonElement>('[data-slot="model-selector-trigger"]')!;
+const trigger = () => container.querySelector<HTMLButtonElement>('[data-slot="session-model-trigger"]')!;
 const items = () => [...document.querySelectorAll<HTMLElement>('[data-slot="model-selector-item"]')].map((item) => item.textContent ?? "");
 const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 

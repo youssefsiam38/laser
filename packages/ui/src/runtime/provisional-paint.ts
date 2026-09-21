@@ -161,6 +161,9 @@ export function placeholderStateFor(path: string, sessionId: string, summary: Se
     cwd: summary?.cwd ?? "",
     ...(summary?.name !== undefined ? { name: summary.name } : {}),
     model: null,
+    // Nothing is known about this conversation's intent until `session/load`
+    // answers; a profile guessed from a catalog row would be a claim.
+    profile: null,
     thinkingLevel: "off",
     isStreaming: false,
     isCompacting: false,

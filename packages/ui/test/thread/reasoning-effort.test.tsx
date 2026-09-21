@@ -50,18 +50,16 @@ const client = {
           { provider: "test", id: "reasoner", name: "Reasoner", thinkingLevels: ["off", "low", "high"], thinkingLevel: "high" },
           { provider: "test", id: "plain", name: "Plain", thinkingLevels: ["off"], thinkingLevel: "off" },
         ],
-        defaultProvider: "test",
-        defaultModel: mocks.catalogDefault,
-        defaultThinkingLevel: mocks.defaultThinkingLevel,
+        profiles: [{ id: "mp_default000000000000", name: "Default", models: [{ provider: "test", id: mocks.catalogDefault }], origin: "seeded", updatedAt: "" }],
+        assignments: { defaultProfileId: "mp_default000000000000", namingProfileId: null, oracleProfileId: null, designIndexProfileId: null },
       }
     : {
         models: [
           { provider: "test", id: "reasoner", name: "Reasoner", thinkingLevels: ["off", "low", "medium", "high", "xhigh"], thinkingLevel: "high" },
           { provider: "test", id: "plain", name: "Plain", thinkingLevels: ["off"], thinkingLevel: "off" },
         ],
-        defaultProvider: "test",
-        defaultModel: "reasoner",
-        defaultThinkingLevel: mocks.defaultThinkingLevel,
+        profiles: [{ id: "mp_default000000000000", name: "Default", models: [{ provider: "test", id: "reasoner" }], origin: "seeded", updatedAt: "" }],
+        assignments: { defaultProfileId: "mp_default000000000000", namingProfileId: null, oracleProfileId: null, designIndexProfileId: null },
       },
 };
 const actions = { setThinking: mocks.setThinking, newSession: mocks.newSession, toast: mocks.toast };
@@ -125,9 +123,9 @@ beforeEach(() => {
   mocks.defaultThinkingLevel = "low";
   mocks.applyThinking.mockClear();
   mocks.dispatch.mockClear();
-  mocks.snapshot.agents[0]!.model = { provider: "test", id: "reasoner" };
+  mocks.snapshot.agents[0]!.profileId = "mp_default000000000000";
   mocks.snapshot.agents[0]!.thinkingLevel = "low";
-  mocks.snapshot.agents[1]!.model = { provider: "test", id: "reasoner" };
+  mocks.snapshot.agents[1]!.profileId = "mp_default000000000000";
   mocks.snapshot.agents[1]!.thinkingLevel = "high";
   mocks.composerState = { text: "", attachments: [] };
   mocks.sourceComposerState = { text: "" };
@@ -238,7 +236,7 @@ it("refreshes pre-session capabilities after the project model default changes",
   mocks.view = undefined;
   mocks.model = null;
   mocks.currentProject = "/landing";
-  mocks.snapshot.agents[0]!.model = null;
+  mocks.snapshot.agents[0]!.profileId = null;
   mocks.snapshot.agents[0]!.thinkingLevel = null;
   mocks.catalogDefault = "reasoner";
   invalidateThinkingCatalog("/landing");

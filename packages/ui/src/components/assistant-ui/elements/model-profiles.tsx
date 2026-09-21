@@ -125,16 +125,19 @@ export function useModelProfiles(cwd: string | undefined, enabled = true): Model
     }
     let live = true;
     setState(({ profiles, assignments }) => ({ profiles, assignments, loading: true }));
-    client
-      .request("models/profiles/list", cwd ? { cwd } : {})
+    // `Promise.resolve` because a host that does not know the method at all
+    // must land in the catch, not throw inside the effect (invariant 10: the
+    // UI never teaches an old host a new schema, it says the screen is not
+    // available).
+    Promise.resolve(client.request("models/profiles/list", cwd ? { cwd } : {}))
       .then((result) => {
         if (!live) return;
         // A host that answers without the lists is a host with nothing to say
         // about profiles yet; an empty screen with its empty state is the
         // honest reading of that, not a crash.
         setState({
-          profiles: result.profiles ?? [],
-          assignments: result.assignments ?? EMPTY_PROFILE_ASSIGNMENTS,
+          profiles: result?.profiles ?? [],
+          assignments: result?.assignments ?? EMPTY_PROFILE_ASSIGNMENTS,
           loading: false,
         });
       })
@@ -150,9 +153,10 @@ export function useModelProfiles(cwd: string | undefined, enabled = true): Model
   const adopt = useCallback(
     (result: { profiles: ModelProfile[]; assignments: ProfileAssignments }, forCwd: string | undefined) => {
       if (settled.current !== forCwd) return;
+      forgetProfileNames();
       setState({
-        profiles: result.profiles ?? [],
-        assignments: result.assignments ?? EMPTY_PROFILE_ASSIGNMENTS,
+        profiles: result?.profiles ?? [],
+        assignments: result?.assignments ?? EMPTY_PROFILE_ASSIGNMENTS,
         loading: false,
       });
     },
@@ -189,7 +193,9 @@ export function useModelProfiles(cwd: string | undefined, enabled = true): Model
   useEffect(() => {
     if (!enabled) return;
     return client.subscribe((method) => {
-      if (method === "models/profiles/seeded") reload();
+      if (method !== "models/profiles/seeded") return;
+      forgetProfileNames();
+      reload();
     });
   }, [client, enabled, reload]);
 
@@ -197,6 +203,62 @@ export function useModelProfiles(cwd: string | undefined, enabled = true): Model
     () => ({ ...state, reload, save, remove }),
     [state, reload, save, remove],
   );
+}
+
+/**
+ * Profile names by id, for the surfaces that only hold an id and cannot ask
+ * for the list themselves without asking once per row — the fleet, the session
+ * list, a log entry.
+ *
+ * One request per directory, shared by every caller and dropped whenever a
+ * profile is written or seeded, so a rename shows up everywhere at once.
+ */
+const nameCache = new Map<string, Promise<ReadonlyMap<string, string>>>();
+const nameListeners = new Set<() => void>();
+const EMPTY_NAMES: ReadonlyMap<string, string> = new Map();
+
+function forgetProfileNames(): void {
+  nameCache.clear();
+  for (const listener of [...nameListeners]) listener();
+}
+
+export function useProfileNames(cwd: string | undefined): ReadonlyMap<string, string> {
+  const { client } = useLaserStable();
+  const [names, setNames] = useState<ReadonlyMap<string, string>>(EMPTY_NAMES);
+  const [generation, setGeneration] = useState(0);
+
+  useEffect(() => {
+    const listener = () => setGeneration((value) => value + 1);
+    nameListeners.add(listener);
+    return () => {
+      nameListeners.delete(listener);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!cwd) {
+      setNames(EMPTY_NAMES);
+      return;
+    }
+    let live = true;
+    let pending = nameCache.get(cwd);
+    if (!pending) {
+      pending = Promise.resolve(client.request("models/profiles/list", { cwd }))
+        .then((result) => new Map((result?.profiles ?? []).map((profile) => [profile.id, profile.name])));
+      // A failed read must not be cached: the next mount asks again.
+      void pending.catch(() => nameCache.delete(cwd));
+      nameCache.set(cwd, pending);
+    }
+    void pending.then(
+      (value) => live && setNames(value),
+      () => live && setNames(EMPTY_NAMES),
+    );
+    return () => {
+      live = false;
+    };
+  }, [client, cwd, generation]);
+
+  return names;
 }
 
 /** The sentinel a picker uses for "no profile of its own"; never a profile id. */

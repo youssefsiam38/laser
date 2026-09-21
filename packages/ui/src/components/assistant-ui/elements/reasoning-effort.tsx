@@ -23,7 +23,7 @@ import { useLogicalArrowKeys } from "@/hooks/use-direction";
  *     control is gone, with the reason in a tooltip where it would have been
  *     (docs/ux-fleet.md R4, capability honesty).
  */
-import type { ModelCatalogEntry, ThinkingLevel } from "@lasercode/protocol";
+import { profileById, type ModelCatalogEntry, type ModelProfile, type ProfileAssignments, type ThinkingLevel } from "@lasercode/protocol";
 import { Brain } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ComponentProps, type KeyboardEvent } from "react";
 
@@ -145,9 +145,9 @@ export const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low
  */
 interface ThinkingCatalog {
   models: readonly ModelCatalogEntry[];
-  defaultProvider?: string | undefined;
-  defaultModel?: string | undefined;
-  defaultThinkingLevel?: ThinkingLevel | undefined;
+  /** Every profile, so the level can follow the profile a surface runs on (M22-T8). */
+  profiles?: readonly ModelProfile[] | undefined;
+  assignments?: ProfileAssignments | undefined;
 }
 
 const catalogCache = new Map<string, Promise<ThinkingCatalog>>();
@@ -220,16 +220,26 @@ function useThinkingDefaults(): {
     const value = catalog.value;
     const agentName = firstTurn?.agentName ?? session?.agent?.agentName ?? snapshot?.defaultAgent;
     const selectedAgent = snapshot?.agents.find((agent) => agent.name === agentName);
-    const projectDefault = value.defaultProvider && value.defaultModel
-      ? { provider: value.defaultProvider, id: value.defaultModel }
-      : undefined;
-    const modelRef = effectiveFirstTurnModel(firstTurn, sessionModel, selectedAgent?.model, projectDefault);
+    // Intent is a profile now: the level follows the model that profile reaches
+    // for first, and the entry's own `thinking` when the profile names one.
+    const profiles = value.profiles ?? [];
+    const agentEntry = profileById(profiles, selectedAgent?.profileId)?.models[0];
+    const defaultEntry = profileById(profiles, value.assignments?.defaultProfileId)?.models[0];
+    const modelRef = effectiveFirstTurnModel(
+      firstTurn,
+      sessionModel,
+      agentEntry ? { provider: agentEntry.provider, id: agentEntry.id } : undefined,
+      defaultEntry ? { provider: defaultEntry.provider, id: defaultEntry.id } : undefined,
+    );
     const model = modelRef
       ? value.models.find((entry) => entry.provider === modelRef.provider && entry.id === modelRef.id)
       : undefined;
+    const profileThinking = [agentEntry, defaultEntry].find(
+      (entry) => entry && modelRef && entry.provider === modelRef.provider && entry.id === modelRef.id,
+    )?.thinking;
     const supported = model?.thinkingLevels;
     const requested = firstTurn?.thinkingLevel;
-    const fallback = [selectedAgent?.thinkingLevel, model?.thinkingLevel, value.defaultThinkingLevel, supported?.[0]]
+    const fallback = [selectedAgent?.thinkingLevel, profileThinking, model?.thinkingLevel, supported?.[0]]
       .find((level): level is ThinkingLevel => level !== null && level !== undefined && (!supported || supported.includes(level)));
     return {
       supported,

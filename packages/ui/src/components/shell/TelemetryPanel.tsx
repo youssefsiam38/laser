@@ -12,6 +12,7 @@ import { FilesSection } from "@/components/telemetry/files-section.js";
 import { scopeBarText } from "@/components/telemetry/format.js";
 import { HistorySection } from "@/components/telemetry/history-section.js";
 import { ModelSection } from "@/components/telemetry/model-section.js";
+import { useProfileNames } from "@/components/assistant-ui/elements/model-profiles";
 import { useSessionChanges, useSessionTelemetry } from "@/components/telemetry/queries.js";
 import { ScopeBar } from "@/components/telemetry/section.js";
 import { SpendSection } from "@/components/telemetry/spend-section.js";
@@ -43,6 +44,10 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
     wasRunning.current = running;
   }, [running]);
   const files = useSessionChanges(meta.path, meta.session?.cwd, filesRefresh);
+  // The model line carries an intent as well as a number: the profile the
+  // conversation runs on (`docs/model-profiles.md`, "Fleet, session list, logs
+  // and usage"). The id is what telemetry reports; the name lives in settings.
+  const profileNames = useProfileNames(meta.session?.cwd);
 
   const [contextOpen, setContextOpen] = useState(true);
   const [spendOpen, setSpendOpen] = useState(true);
@@ -100,7 +105,12 @@ export function TelemetryPanel({ variant }: TelemetryPanelProps) {
               onOpenChange={setSpendOpen}
               onOpenUsage={() => workbench.open("settings", "usage")}
             />
-            <ModelSection model={telemetry?.model} open={modelOpen} onOpenChange={setModelOpen} />
+            <ModelSection
+              model={telemetry?.model}
+              {...(telemetry?.model?.profileId ? { profileName: profileNames.get(telemetry.model.profileId) } : {})}
+              open={modelOpen}
+              onOpenChange={setModelOpen}
+            />
             <WorkSection work={telemetry?.work} open={workOpen} onOpenChange={setWorkOpen} />
             <FilesSection
               changes={files.changes}

@@ -49,13 +49,13 @@ describe("agent hooks", () => {
     const [first, second] = seen.slice(-2) as Array<ReturnType<typeof useAgentTree>>;
     expect(first?.nodes).toHaveLength(1);
     expect(second?.nodes.map((n) => n.id)).toEqual([ROOT, "/p/a.jsonl"]);
-    // Another tree's run, a toast, a Beam prompt: nothing this tree draws
+    // Another tree's run, a toast, a profile seeding: nothing this tree draws
     // moved, so the probe does not render again at all.
     const renders = seen.length;
     await dispatch(
       { type: "notification", method: "agents/run", params: { run: run({ runId: "z", sessionPath: "/q/z.jsonl", rootSessionPath: "/q/root.jsonl", parent: null }) } },
       { type: "toast", level: "info", text: "hi" },
-      { type: "agents/choose-beam-model", suggested: null },
+      { type: "models/profiles/seeded", profiles: [] },
     );
     expect(seen.length).toBe(renders);
     expect(seen.at(-1)).toBe(second);

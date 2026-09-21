@@ -34,7 +34,7 @@ import {
   type ReactNode,
 } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import type { ModelRef, SessionFallbackSummary, SettingChange } from "@lasercode/protocol";
+import { DEFAULT_PROFILE_SETTING, profileById, type ModelProfile, type ModelRef, type SessionFallbackSummary, type SettingChange } from "@lasercode/protocol";
 import { CheckIcon, ChevronDownIcon, ChevronsUpDown, Cpu } from "lucide-react";
 import { narrowToConnected } from "./connected-models.js";
 import { cn } from "@/lib/utils";
@@ -61,6 +61,7 @@ import { effectiveFirstTurnModel } from "@/runtime/first-turn";
 import { ErrorState } from "./error-state.js";
 import { GenerationLoader } from "./loading-state.js";
 import { ProviderLogo, providerDisplayName } from "./logos.js";
+import { useModelProfiles } from "./model-profiles.js";
 import { invalidateThinkingCatalog } from "./reasoning-effort.js";
 
 export type ModelOption = {
@@ -1023,105 +1024,107 @@ export function ProviderModelMultiPicker({ models, values, onValuesChange, disab
 }
 
 /**
- * The model a project's next session will start with, when no session is open.
+ * The composer's model control, on profiles (M22-T8,
+ * `docs/model-profiles.md` "Per-session override").
  *
- * Without this the chip read "No model" on the screen a person lands on the
- * moment they finish setup — directly after a step whose whole purpose was
- * choosing one. It was not wrong about the *session* (there is none yet) and it
- * was badly wrong about the person's situation.
+ * It says two things at once, because they are two different things: the
+ * **profile** this conversation runs on — the intent, which survives a model
+ * going down — and the **model answering right now**, which is the evidence.
+ * Choosing another profile re-anchors the conversation to that profile's first
+ * model. Choosing one specific model pins the conversation to it: no profile,
+ * nothing to move to, and the control says so.
  *
- * Cached per project, because the catalogue is over a thousand rows and this
- * runs on an idle screen.
+ * With no conversation open it edits what the next one in this project starts
+ * on, which is the point at which the choice is most useful; disabling the
+ * control until after the first prompt falsely looks like a provider failure.
  */
-const defaultModelCache = new Map<string, Promise<ModelRef | null>>();
 
-function useProjectDefaultModel(cwd: string | undefined, enabled: boolean): { model: ModelRef | null; loading: boolean } {
+/** What the trigger's accessible name says about the profile a conversation is on. */
+function profileSuffix(fallback: SessionFallbackSummary | undefined): string {
+  if (!fallback || fallback.models.length < 2) return "";
+  if (fallback.switching) return ", moving to another model in this profile";
+  return `, model ${fallback.position + 1} of ${fallback.models.length} in this profile`;
+}
+
+/**
+ * The model a profile reaches for first, or null for a profile with none.
+ *
+ * `names` is the catalogue's display names: a profile stores identities only,
+ * and "gpt-5-fast" where the person chose "GPT Fast" is the app calling a
+ * thing by a name they never used.
+ */
+function preferredModel(profile: ModelProfile | undefined, names: ReadonlyMap<string, string>): ModelRef | null {
+  const first = profile?.models[0];
+  if (!first) return null;
+  const name = names.get(modelOptionId(first).toLowerCase());
+  return { provider: first.provider, id: first.id, ...(name ? { name } : {}) };
+}
+
+/**
+ * Display names for the models a profile names, one catalogue read per
+ * project. The catalogue runs to a thousand rows, so it is cached here and
+ * shared by every composer, exactly as the project default used to be.
+ */
+const catalogueNames = new Map<string, Promise<ReadonlyMap<string, string>>>();
+
+function useModelDisplayNames(cwd: string | undefined): ReadonlyMap<string, string> {
   const { client } = useLaserStable();
-  // The catalogue answers "no default" while the project's worker is still
-  // starting, and that answer must not be the one this screen keeps. Re-asking
-  // when the worker's status changes is what turns "No model" back into the
-  // model, without a reload.
-  const workerStatus = useLaserState((s) => (cwd ? s.workers[cwd]?.status : undefined));
-  const [fallback, setFallback] = useState<ModelRef | null>(null);
-  // The catalogue is a thousand rows and the project's worker may still be
-  // starting, so the first answer can take seconds. Saying "No model" during
-  // those seconds is the same false claim this hook exists to remove, one state
-  // earlier — so the wait is its own state and says nothing at all.
-  const [loading, setLoading] = useState(false);
+  // A worker that is still starting answers with nothing; asking again when it
+  // reports a new status is what turns an id into a name without a reload.
+  const workerStatus = useLaserState((state) => (cwd ? state.workers[cwd]?.status : undefined));
+  const [names, setNames] = useState<ReadonlyMap<string, string>>(NO_NAMES);
 
   useEffect(() => {
-    if (!enabled || !cwd) {
-      setFallback(null);
-      setLoading(false);
+    if (!cwd) {
+      setNames(NO_NAMES);
       return;
     }
     let live = true;
-    setLoading(true);
-    let pending = defaultModelCache.get(cwd);
+    let pending = catalogueNames.get(cwd);
     if (!pending) {
-      pending = client.request("pi/models/catalog", { cwd, settingsView: "effective" }).then((catalog) => {
-        const { defaultProvider, defaultModel } = catalog;
-        if (!defaultProvider || !defaultModel) return null;
-        const entry = catalog.models.find((m) => m.provider === defaultProvider && m.id === defaultModel);
-        // Named even when the catalogue does not carry it: a default that
-        // resolves to nothing on this machine is still what settings say, and
-        // saying "No model" would hide that rather than explain it.
-        return { provider: defaultProvider, id: defaultModel, ...(entry?.name ? { name: entry.name } : {}) } as ModelRef;
-      });
-      // Neither a failed fetch nor an empty answer may poison the cache. A
-      // `null` is "the worker has not said yet" as often as it is "there is no
-      // default", and caching it for the life of the page is how the composer
-      // ends up reading "No model" for minutes on the landing screen.
-      void pending.then(
-        (ref) => {
-          if (ref === null) defaultModelCache.delete(cwd);
-        },
-        () => defaultModelCache.delete(cwd),
+      pending = Promise.resolve(client.request("pi/models/catalog", { cwd, settingsView: "effective" })).then(
+        (catalog) => new Map((catalog?.models ?? []).map((entry) => [modelOptionId(entry).toLowerCase(), entry.name ?? entry.id])),
       );
-      defaultModelCache.set(cwd, pending);
+      // An empty answer is "the worker has not said yet" as often as it is
+      // "there is nothing", and caching it would keep an id on screen for ever.
+      void pending.then(
+        (value) => value.size === 0 && catalogueNames.delete(cwd),
+        () => catalogueNames.delete(cwd),
+      );
+      catalogueNames.set(cwd, pending);
     }
     void pending.then(
-      (ref) => {
-        if (!live) return;
-        setFallback(ref);
-        setLoading(false);
-      },
-      () => {
-        if (!live) return;
-        setFallback(null);
-        setLoading(false);
-      },
+      (value) => live && setNames(value),
+      () => live && setNames(NO_NAMES),
     );
     return () => {
       live = false;
     };
-  }, [client, cwd, enabled, workerStatus]);
+  }, [client, cwd, workerStatus]);
 
-  return { model: fallback, loading };
+  return names;
 }
 
-/**
- * Model picker bound to the open session. The list arrives from
- * `pi/model/list` each time the popover opens (Pi's catalogue can run to a
- * thousand rows, so it is not fetched on every render, and it is forgotten on
- * close so a switch flipped in Settings → Providers and models shows on the
- * next open without a reload, M13-T49), grouped by provider; a pick calls
- * `pi/model/set`.
- *
- * With no session open it edits the default that the new session will inherit.
- * That is the point at which choosing a model is most useful; disabling the
- * control until after the first prompt falsely looks like a provider failure.
- */
-/**
- * What the model trigger says about a chain, for the label a screen reader
- * reads. Empty when this session has no chain — the common case, and the one
- * that must sound exactly as it did before.
- */
-function chainSuffix(fallback: SessionFallbackSummary | undefined): string {
-  if (!fallback || fallback.chain.length < 2) return "";
-  if (fallback.switching) return ", switching to another model in this chain";
-  return `, model ${fallback.position + 1} of ${fallback.chain.length} in this fallback chain`;
+const NO_NAMES: ReadonlyMap<string, string> = new Map();
+
+/** The same model, carrying the catalogue's name when it arrived without one. */
+function named(model: ModelRef | null, names: ReadonlyMap<string, string>): ModelRef | null {
+  if (!model || model.name) return model;
+  const name = names.get(modelOptionId(model).toLowerCase());
+  return name ? { ...model, name } : model;
 }
+
+/** "GPT Fast · then 2 more" — what a profile row says under its name. */
+function profileSummaryLine(profile: ModelProfile, names: ReadonlyMap<string, string>): string {
+  const first = profile.models[0];
+  if (!first) return "No model yet";
+  const name = names.get(modelOptionId(first).toLowerCase()) ?? first.id;
+  const rest = profile.models.length - 1;
+  return rest === 0 ? `${name} · nothing behind it` : `${name} · then ${rest} more`;
+}
+
+const PROFILE_OPTION = "profile:";
+const MODEL_OPTION = "model:";
 
 export function SessionModelSelector({ className }: { className?: string | undefined }) {
   const { actions, client, currentProject } = useLaserStable();
@@ -1131,16 +1134,28 @@ export function SessionModelSelector({ className }: { className?: string | undef
   const snapshot = useLaserState((state) => state.agents.snapshot);
   const sessionPath = session?.path;
   const cwd = session?.cwd ?? currentProject;
+  const { profiles, assignments, loading: profilesLoading, error: profilesError } = useModelProfiles(cwd);
+  const modelNames = useModelDisplayNames(cwd);
   const selectedAgent = snapshot?.agents.find((agent) => agent.name === firstTurn?.agentName);
-  const hasModelIntent = firstTurn !== undefined && Object.hasOwn(firstTurn, "model");
-  const followsAgentDefault = hasModelIntent && firstTurn.model === null;
-  const needsProjectDefault = !sessionPath || (followsAgentDefault && !selectedAgent?.model);
-  const { model: projectDefault, loading: defaultLoading } = useProjectDefaultModel(cwd, needsProjectDefault);
+
+  // Whose intent is on show: the conversation's own profile, else the agent's,
+  // else what new conversations in this project use.
+  const agentProfile = profileById(profiles, selectedAgent?.profileId);
+  const defaultProfile = profileById(profiles, assignments.defaultProfileId);
+  const sessionProfile = session?.profile ? profileById(profiles, session.profile.id) : undefined;
+  const intent = sessionPath
+    ? (sessionProfile ?? (session?.profile ? { ...session.profile, models: [], origin: "person" as const, updatedAt: "" } : undefined))
+    : (agentProfile ?? defaultProfile);
+  // A conversation with no profile runs on exactly one model: it was pinned, or
+  // it was written before profiles existed. Both read the same way here.
+  const pinned = sessionPath !== undefined && session?.profile == null;
+
   const [newSessionModel, setNewSessionModel] = useState<ModelRef | null>(null);
-  const currentModel = sessionModel ?? (sessionPath ? null : (newSessionModel ?? projectDefault));
-  const model = effectiveFirstTurnModel(firstTurn, currentModel, selectedAgent?.model, projectDefault);
-  /** The effective intent depends on a project default we do not know yet. */
-  const unknown = !model && defaultLoading && (!sessionPath || followsAgentDefault);
+  const projectPreferred = preferredModel(defaultProfile, modelNames);
+  const currentModel = named(sessionModel, modelNames) ?? (sessionPath ? null : (newSessionModel ?? projectPreferred));
+  const model = effectiveFirstTurnModel(firstTurn, currentModel, preferredModel(agentProfile, modelNames), projectPreferred);
+  /** Nothing has answered yet and the profiles are still on their way. */
+  const unknown = !model && profilesLoading;
   const [open, setOpen] = useState(false);
   const [models, setModels] = useState<ModelRef[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1182,19 +1197,58 @@ export function SessionModelSelector({ className }: { className?: string | undef
     };
   }, [open, models, actions, client, cwd, sessionPath]);
 
-  // A model the session already has but the list has not delivered yet still
-  // needs to be shown as the value, so it is an option of its own until then.
-  const options = useMemo(() => {
+  // A model the conversation already has but the list has not delivered yet
+  // still needs to be pickable, so it is an option of its own until then.
+  const modelOptions = useMemo(() => {
     const list = models ?? (model ? [model] : []);
     if (model && !list.some((m) => modelOptionId(m) === modelOptionId(model))) list.unshift(model);
-    return list.map(modelOption);
+    return list.map((entry) => {
+      const option = modelOption(entry);
+      return { ...option, id: `${MODEL_OPTION}${option.id}` };
+    });
   }, [models, model]);
 
-  const value = model ? modelOptionId(model) : undefined;
-  const pick = (id: string) => {
-    const next = (models ?? []).find((m) => modelOptionId(m) === id);
+  const profileOptions = useMemo<ModelOption[]>(
+    () =>
+      profiles.map((profile) => ({
+        id: `${PROFILE_OPTION}${profile.id}`,
+        name: profile.name,
+        description: profileSummaryLine(profile, modelNames),
+        keywords: [profile.name, ...profile.models.map((entry) => entry.id)],
+        ...(profile.models[0] ? { icon: <ProviderLogo provider={profile.models[0].provider} className="size-3.5" /> } : {}),
+      })),
+    [modelNames, profiles],
+  );
+
+  const options = useMemo(() => [...profileOptions, ...modelOptions], [modelOptions, profileOptions]);
+  const value = pinned || !intent
+    ? (model ? `${MODEL_OPTION}${modelOptionId(model)}` : undefined)
+    : `${PROFILE_OPTION}${intent.id}`;
+
+  const pickProfile = (profileId: string) => {
+    if (sessionPath) {
+      void actions.setProfile(profileId);
+      return;
+    }
+    if (!cwd) return;
+    setSaving(true);
+    void client
+      .request("pi/settings/set", { cwd, scope: "project", changes: [{ path: DEFAULT_PROFILE_SETTING, op: "set", value: profileId }] })
+      .then(
+        () => {
+          const chosen = profileById(profiles, profileId);
+          invalidateThinkingCatalog(cwd);
+          setNewSessionModel(preferredModel(chosen, modelNames));
+        },
+        (saveError: unknown) => actions.toast("error", saveError instanceof Error ? saveError.message : String(saveError)),
+      )
+      .finally(() => setSaving(false));
+  };
+
+  const pickModel = (id: string) => {
+    const next = (models ?? []).find((m) => modelOptionId(m) === id) ?? (model && modelOptionId(model) === id ? model : undefined);
     if (!next) return;
-    if (hasModelIntent) {
+    if (firstTurn !== undefined && Object.hasOwn(firstTurn, "model")) {
       chooseModel(next);
       return;
     }
@@ -1203,20 +1257,26 @@ export function SessionModelSelector({ className }: { className?: string | undef
       return;
     }
     if (!cwd) return;
-    setSaving(true);
-    void client.request("pi/settings/set", {
-      cwd,
-      scope: "project",
-      changes: defaultModelChanges(next),
-    }).then(
-      () => {
-        defaultModelCache.set(cwd, Promise.resolve(next));
-        invalidateThinkingCatalog(cwd);
-        setNewSessionModel(next);
-      },
-      (saveError: unknown) => actions.toast("error", saveError instanceof Error ? saveError.message : String(saveError)),
-    ).finally(() => setSaving(false));
+    // Without a conversation there is nothing to pin, so this is the model the
+    // next one starts on: it is remembered here until that conversation exists.
+    setNewSessionModel(next);
   };
+
+  const pick = (id: string) => {
+    if (id.startsWith(PROFILE_OPTION)) pickProfile(id.slice(PROFILE_OPTION.length));
+    else if (id.startsWith(MODEL_OPTION)) pickModel(id.slice(MODEL_OPTION.length));
+  };
+
+  const modelName = model ? (model.name ?? model.id) : undefined;
+  const label = sessionPath
+    ? pinned
+      ? `Pinned to ${modelName ?? "no model"}, no other model steps in`
+      : `Profile: ${intent?.name ?? "none"}, running on ${modelName ?? "no model"}${profileSuffix(fallback)}`
+    : unknown
+      ? "Checking what a new conversation starts on"
+      : intent
+        ? `New conversations start on ${intent.name}, ${modelName ?? "no model"}`
+        : "No profile chosen";
 
   return (
     <ModelSelectorRoot models={options} {...(value !== undefined ? { value } : {})} onValueChange={pick} open={open} onOpenChange={setOpen}>
@@ -1224,69 +1284,93 @@ export function SessionModelSelector({ className }: { className?: string | undef
         variant="ghost"
         size="sm"
         disabled={!cwd || saving || preparingSession}
-        aria-label={
-          sessionPath || hasModelIntent
-            ? `Model: ${model ? (model.name ?? model.id) : "none"}${chainSuffix(fallback)}`
-            : unknown
-              ? "Checking which model a new session starts with"
-              : model
-                ? `New sessions start with ${model.name ?? model.id}`
-                : "No model chosen"
-        }
-        title={hasModelIntent
-          ? "Choose the model for this agent’s first request"
-          : sessionPath ? undefined : "Choose what new sessions in this project start with"}
-        className={cn("min-w-0 max-w-56 shrink gap-1.5 text-ink-2", className)}
+        aria-label={label}
+        title={sessionPath ? undefined : "Choose what new conversations in this project start on"}
+        data-slot="session-model-trigger"
+        data-pinned={pinned ? "true" : undefined}
+        className={cn("h-auto min-w-0 max-w-56 shrink flex-col items-start gap-0 py-1 text-ink-2", className)}
       >
-        {model ? (
-          <span className="flex min-w-0 items-center gap-1.5">
-            <ProviderLogo provider={model.provider} className="size-3.5 shrink-0 text-ink-3" />
-            <span className="truncate typed" title={model.name ?? model.id}>
-              {model.name ?? model.id}
-            </span>
-            {/* The chain, when one is running this session: which model of it is
-                live, or that a switch is happening right now. The trigger's own
-                aria-label already says it in words, so this stays decorative
-                rather than a second thing to read (M15-T3). */}
-            {fallback && fallback.chain.length > 1 && (
-              <span
-                data-slot="fallback-chain-badge"
-                data-switching={fallback.switching ? "true" : undefined}
-                aria-hidden="true"
-                className={cn(
-                  "shrink-0 rounded-sm px-1 text-xs leading-4 tabular-nums",
-                  fallback.switching ? "bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live" : "bg-surface-2 text-ink-3",
-                )}
-              >
-                {fallback.switching ? "switching" : `chain ${fallback.position + 1}/${fallback.chain.length}`}
+        {model || intent ? (
+          <>
+            <span className="flex min-w-0 items-center gap-1.5">
+              {model && <ProviderLogo provider={model.provider} className="size-3.5 shrink-0 text-ink-3" />}
+              <span className="truncate font-medium text-ink" title={pinned ? modelName : intent?.name}>
+                {pinned ? (modelName ?? "Pinned") : (intent?.name ?? modelName)}
               </span>
-            )}
-          </span>
+              {/* Which model of the profile is live, or that a move is happening
+                  right now. The trigger's own aria-label already says it in
+                  words, so this stays decorative (M15-T3, M22-T8). */}
+              {fallback && fallback.models.length > 1 && (
+                <span
+                  data-slot="profile-position-badge"
+                  data-switching={fallback.switching ? "true" : undefined}
+                  aria-hidden="true"
+                  className={cn(
+                    "shrink-0 rounded-sm px-1 text-xs leading-4 tabular-nums",
+                    fallback.switching ? "bg-[color-mix(in_oklab,var(--live)_12%,transparent)] text-live" : "bg-surface-2 text-ink-3",
+                  )}
+                >
+                  {fallback.switching ? "moving" : `${fallback.position + 1}/${fallback.models.length}`}
+                </span>
+              )}
+            </span>
+            <span data-slot="session-model-secondary" className="w-full truncate text-start text-xs leading-4 text-ink-3">
+              {pinned ? "Pinned · no fallback" : (modelName ?? "no model yet")}
+            </span>
+          </>
         ) : (
           <span className="flex items-center gap-1.5 text-ink-3">
             <Cpu aria-hidden="true" className="size-3.5" />
-            {unknown ? null : <span className="typed">No model</span>}
+            {unknown ? null : <span className="typed">No profile</span>}
           </span>
         )}
       </ModelSelectorTrigger>
-      <ProviderModelMenu
-        side="top"
-        align="start"
-        loading={models === null}
-        error={error}
-        onRetry={() => {
-          setError(null);
-          setModels(null);
-        }}
-      />
+      <ModelSelectorContent side="top" align="start" searchable className="w-88">
+        <ModelSelectorSearch placeholder="Search profiles and models" />
+        <ModelSelectorList>
+          {profilesError ? (
+            <ErrorState className="m-2" title="Couldn’t load your profiles" detail={profilesError} />
+          ) : null}
+          <ModelSelectorEmpty>No profile or model matches.</ModelSelectorEmpty>
+          <ModelSelectorGroup heading="Profiles">
+            {profileOptions.length === 0 && !profilesLoading ? (
+              <p className="px-3 py-2 text-xs leading-5 text-ink-3">
+                No profiles yet. Make one in Settings → Providers and models → Model profiles.
+              </p>
+            ) : (
+              profileOptions.map((option) => <ModelSelectorItem key={option.id} model={option} data-option="profile" />)
+            )}
+          </ModelSelectorGroup>
+          <ModelSelectorSeparator />
+          <ModelSelectorGroup heading={sessionPath ? "Pin one model" : "Start on one model"}>
+            <p className="px-3 pb-1 text-xs leading-4 text-ink-3">
+              {sessionPath
+                ? "This conversation runs on exactly that model, with nothing to move to if it stops answering."
+                : "The next conversation starts on exactly that model."}
+            </p>
+            {error ? (
+              <ErrorState
+                className="m-2"
+                title="Couldn’t load the model list"
+                detail={error}
+                onRetry={() => {
+                  setError(null);
+                  setModels(null);
+                }}
+              />
+            ) : models === null ? (
+              <div className="px-3 py-3"><GenerationLoader label="Loading models" layout="inline" /></div>
+            ) : (
+              modelOptions.map((option) => <ModelSelectorItem key={option.id} model={option} data-option="model" />)
+            )}
+          </ModelSelectorGroup>
+        </ModelSelectorList>
+      </ModelSelectorContent>
     </ModelSelectorRoot>
   );
 }
 
-/** The atomic settings write behind a model choice made before a session exists. */
-export function defaultModelChanges(model: Pick<ModelRef, "provider" | "id">): SettingChange[] {
-  return [
-    { path: "defaultProvider", op: "set", value: model.provider },
-    { path: "defaultModel", op: "set", value: model.id },
-  ];
+/** The settings write behind choosing a profile before a conversation exists. */
+export function defaultProfileChanges(profileId: string): SettingChange[] {
+  return [{ path: DEFAULT_PROFILE_SETTING, op: "set", value: profileId }];
 }

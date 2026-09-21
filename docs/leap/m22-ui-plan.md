@@ -103,14 +103,66 @@ Validation: `npx vitest run` in packages/ui — 323 files, 3005 passed.
 
 ## M22-T8 · Composer, status line, fleet, logs
 
-Status: planned.
+Status: done.
 
-Changed: `model-selector.tsx` (profile list + effective model + pin),
-`reasoning-effort.tsx`, `thread/StatusLine.tsx`, `store.ts` (profile state,
-"moved to" copy, seeded notification), `runtime/LaserProvider.tsx` (setProfile /
-pinModel actions), `fleet/model.ts` + `row.ts` + `FleetPanel.tsx`
-(profile column, substituted profile), `runtime/threadList.ts`,
-`mobile/MobileSurfaces.tsx`, `logs/ApiRequestDialog.tsx`.
+Changed:
+- `elements/model-selector.tsx`: `SessionModelSelector` is now a profile
+  control. The trigger names the profile and, beneath it, the model answering;
+  a pinned conversation reads "Pinned · no fallback". The menu has two groups —
+  Profiles (`session/profile/set`, or `defaultProfileId` at project scope with
+  no conversation open) and "Pin one model" (`session/model/pin`, or the
+  composer's first-turn model intent on a pristine conversation). Rows carry
+  `data-option="profile" | "model"`. `defaultModelChanges` →
+  `defaultProfileChanges`. Catalogue display names for profile entries come
+  from one cached `pi/models/catalog` read per project, as the old project
+  default did.
+- `elements/reasoning-effort.tsx`: the level follows the profile's first model
+  and that entry's `thinking`, then the model default.
+- `elements/model-profiles.tsx`: `useProfileNames` (one shared read per
+  directory, dropped on a save or a seeding).
+- `thread/StatusLine.tsx`: "moving to <model>" while a profile moves.
+- `store.ts`: `AgentsSlice.seededProfiles` replaces `chooseBeamModel`, the
+  `models/profiles/seeded` notification replaces `agents/beam/choose-model`,
+  `modelNamesOf` reads `fallback.models`, and the transcript record says
+  "Moved to X" / "No other model in this profile could take over".
+- `runtime/LaserProvider.tsx`: `setModel` is the pin path (`session/model/pin`)
+  and `setProfile` is new; `runtime/provisional-paint.ts` paints `profile: null`.
+- `agents/{actions,hooks}.ts`: `setBuiltinProfile` replaces `setBuiltinModel`;
+  `qualifyNamer` and `dismissBeamChoice` are gone; `useSeededProfiles`.
+- Fleet: `fleet/model.ts` items carry `profileId` and `substitutedProfile`,
+  `fleet/row.ts` has `profileLabel` and a strip that reads
+  `agent · profile · model · turns · worktree`, `FleetWorkRow` marks a
+  substitution in the attention colour, `FleetPanel` has a Profile field with
+  the substitution sentence, and `components/fleet/profile-names.tsx` reads the
+  names once for the column.
+- Session list: `thread-list.aui.tsx` rows carry `runningOn` ("Balanced ·
+  Sonnet 4.5" or "Pinned · <model>") in the row tooltip; the visible row keeps
+  its title and activity mark (DESIGN.md forbids status words there).
+- Usage: `telemetry/model-section.tsx` names the profile beside the model, or
+  says the conversation is pinned; `shell/TelemetryPanel.tsx` resolves the name.
+- The phone uses the same `SessionModelSelector` through `MobileComposer`, so
+  the picker moved with it; no second control was written.
+
+Tests: `test/thread/profile-selector.test.tsx` (replaces
+`fallback-chain-badge.test.tsx`), `test/thread/profile-status-line.test.tsx`
+and `profile-move-record.test.ts` (renamed), plus updates to
+`test/agents/{fixtures,store,actions,hooks}`, `test/beam/fake-host.tsx`
+(profiles, `session/profile/set`, `session/model/pin`,
+`agents/builtin/set-profile`), `test/thread/{first-turn-refusal,message-queue,
+model-selector,reasoning-effort}`, `test/settings/picker-refresh.test.tsx`,
+`test/beam/scope-isolation.test.tsx` and four `SessionState` fixtures.
+
+Open item for the protocol owner (M22-T10 reconciliation):
+`ProviderRequestContext` (`protocol/src/pi-extension.ts`) carries no
+`profileId`, so the logs inspector cannot attribute a **captured** request to
+the profile that was in force when it ran. Rather than print the conversation's
+current profile beside an older capture — which would be a claim the record
+does not support — the inspector is left naming provider, model and API only.
+Add `profileId` to the capture context and the inspector gains a row.
+
+Validation: `npx vitest run` in packages/ui — 320 of 323 files green; the three
+red ones (`test/agents/page/{screen,phone}`, `test/beam/model-dialog`) are
+M22-T9's.
 
 ## M22-T9 · Agents page and CLI
 

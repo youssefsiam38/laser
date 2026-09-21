@@ -34,6 +34,7 @@ const sessionState = (over: Partial<SessionState> = {}): SessionState => ({
   id: "aaaaaaaa-1",
   cwd: "/p/one",
   model: null,
+  profile: null,
   thinkingLevel: "medium",
   isStreaming: false,
   isCompacting: false,

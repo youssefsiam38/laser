@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 /**
- * M15-T3: the words above the composer while a fallback chain is moving this
- * conversation. The engine is idle between its own runs during a failover, so
- * "idle" would be a lie; the line says what is happening and which model is
- * being tried.
+ * M15-T3, M22-T8: the words above the composer while a conversation's profile
+ * is moving it to another model. The engine is idle between its own runs while
+ * that happens, so "idle" would be a lie; the line says what is happening and
+ * which model is being tried, in the profile's own word for it: "moving to".
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -30,6 +30,7 @@ const session = (fallback?: SessionState["fallback"], model?: { provider: string
   id: "s",
   cwd: "/p",
   model: model ?? null,
+  profile: { id: "mp_balanced0000000000", name: "Balanced" },
   thinkingLevel: "medium",
   isStreaming: false,
   isCompacting: false,
@@ -93,28 +94,30 @@ it("says idle when nothing is happening, as it always has", async () => {
   expect(words()).toBe("idle");
 });
 
-it("names the model a chain is switching to, ahead of working", async () => {
-  const chain = [
+const profile = "mp_balanced0000000000";
+
+it("names the model a profile is moving to, ahead of working", async () => {
+  const models = [
     { provider: "anthropic", id: "claude-sonnet-4-5", name: "Sonnet 4.5" },
     { provider: "deepseek", id: "deepseek-chat", name: "DeepSeek V3" },
   ];
-  setSession(session({ chain, position: 0, switching: true }, chain[1]));
+  setSession(session({ profileId: profile, models, position: 0, switching: true }, models[1]));
   await render();
-  expect(words()).toBe("switching to DeepSeek V3");
+  expect(words()).toBe("moving to DeepSeek V3");
 });
 
 it("falls back to plain words when no model is selected yet", async () => {
-  setSession(session({ chain: [{ provider: "a", id: "one" }, { provider: "b", id: "two" }], position: 0, switching: true }));
+  setSession(session({ profileId: profile, models: [{ provider: "a", id: "one" }, { provider: "b", id: "two" }], position: 0, switching: true }));
   await render();
-  expect(words()).toBe("switching models");
+  expect(words()).toBe("moving to another model");
 });
 
-it("goes back to working, then idle, once the chain has settled", async () => {
-  const chain = [{ provider: "a", id: "one", name: "One" }, { provider: "b", id: "two", name: "Two" }];
-  setSession(session({ chain, position: 1 }, chain[1]), true);
+it("goes back to working, then idle, once the move has settled", async () => {
+  const models = [{ provider: "a", id: "one", name: "One" }, { provider: "b", id: "two", name: "Two" }];
+  setSession(session({ profileId: profile, models, position: 1 }, models[1]), true);
   await render();
   expect(words()).toBe("working");
-  setSession(session({ chain, position: 1 }, chain[1]));
+  setSession(session({ profileId: profile, models, position: 1 }, models[1]));
   await render();
   expect(words()).toBe("idle");
 });

@@ -422,7 +422,7 @@ describe("the pending tray", () => {
     world.snapshot = {
       ...world.snapshot,
       agents: world.snapshot.agents.map((agent) => agent.name === "reviewer"
-        ? { ...agent, model: { provider: "openai", id: "gpt-big" }, thinkingLevel: "high" }
+        ? { ...agent, profileId: "mp_smart0000000000000", thinkingLevel: "high" }
         : agent),
     };
     let accepted = false;

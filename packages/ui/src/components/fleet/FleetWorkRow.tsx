@@ -36,6 +36,7 @@ import {
   FLEET_TEXT_INDENT,
   agentTintIndex,
   headlineText,
+  profileLabel,
   stripText,
   worktreeLabel,
   type FleetHeadline,
@@ -44,6 +45,7 @@ import {
   type FleetStrip,
   type FleetWorktreeChip,
 } from "@/fleet";
+import { useFleetProfileNames } from "./profile-names.js";
 import { BRANCH_BUDGET, COMMAND_BUDGET, PATH_BUDGET, isPathShaped, middleTruncate, suffixTruncate } from "@/fleet/truncate.js";
 import { formatBytes, formatElapsed } from "@/format";
 import { cn } from "@/lib/utils";
@@ -204,11 +206,26 @@ function headlineHint(headline: FleetHeadline): string | undefined {
 }
 
 export function FleetStripLine({ strip }: { strip: FleetStrip }) {
-  const full = stripText(strip);
+  const profileNames = useFleetProfileNames();
+  const full = stripText(strip, profileNames);
   if (strip.kind === "agent") {
+    const profile = profileLabel(strip, profileNames);
     return (
       <span data-slot="fleet-strip" data-kind="agent" className="flex min-w-0 items-baseline gap-1 text-ink-3" aria-label={full}>
         <span className="typed min-w-0 truncate">{strip.agentName}</span>
+        {profile ? (
+          <>
+            <span aria-hidden="true" className="shrink-0">·</span>
+            <span
+              data-slot="fleet-profile"
+              data-substituted={strip.substituted ? "true" : undefined}
+              className={cn("min-w-0 truncate", strip.substituted && "text-attention")}
+              title={strip.substituted ? `${profile} stood in for the profile this agent names` : profile}
+            >
+              {profile}
+            </span>
+          </>
+        ) : null}
         {strip.model ? (
           <>
             <span aria-hidden="true" className="shrink-0">·</span>
@@ -277,13 +294,14 @@ export function FleetWorkRow({
     if (expanded) ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [expanded]);
 
+  const profileNames = useFleetProfileNames();
   const source = item.item;
   const label = FLEET_STATE_LABEL[source.state];
   const rolledUp = item.contextOnly || item.attention !== source.own;
   const dotLabel = rolledUp ? `${STATUS_LABEL[item.attention]} below` : label;
   const headline = item.contextOnly ? undefined : source.headline;
   const elapsed = !item.contextOnly && source.elapsedMs !== undefined ? formatElapsed(source.elapsedMs) : undefined;
-  const stripFull = !item.contextOnly ? stripText(source.strip) : undefined;
+  const stripFull = !item.contextOnly ? stripText(source.strip, profileNames) : undefined;
   const accessible = [
     dotLabel,
     source.title,

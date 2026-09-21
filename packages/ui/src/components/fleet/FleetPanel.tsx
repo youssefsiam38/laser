@@ -42,6 +42,7 @@ import { clearFinishedFleet, clearFleetReveal, setFleetFilter, useFleetClearedBe
 import { useFleet, type FleetView } from "@/fleet/hooks";
 import { useTaskOutput } from "@/fleet/output";
 import { projectFleetSections, type FleetItem, type FleetProjectedItem, type FleetSections } from "@/fleet/model";
+import { FleetProfileNamesProvider, useFleetProfileNames } from "./profile-names.js";
 import { formatBytes, formatElapsed } from "@/format";
 import { cn } from "@/lib/utils";
 import { useCapability, useLaserStable, useLaserState } from "@/runtime";
@@ -113,7 +114,16 @@ function reconcileDisclosure(
   return projected?.contextOnly ? current : undefined;
 }
 
-export function FleetPanel({ variant, onClose }: FleetPanelProps) {
+export function FleetPanel(props: FleetPanelProps) {
+  // One read of the profile names for the whole column (`profile-names.tsx`).
+  return (
+    <FleetProfileNamesProvider>
+      <FleetColumn {...props} />
+    </FleetProfileNamesProvider>
+  );
+}
+
+function FleetColumn({ variant, onClose }: FleetPanelProps) {
   const fleet = useFleet();
   const clearedBefore = useFleetClearedBefore();
   const treeSections = useMemo(() => projectFleetSections(fleet.tree ? [fleet.tree] : [], { clearedBefore }), [fleet.tree, clearedBefore]);
@@ -439,6 +449,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function AgentDetail({ item, contextOnly }: { item: FleetItem; contextOnly: boolean }) {
   const run = item.run;
+  const profileNames = useFleetProfileNames();
   const stopCapability = useCapability("agents/runs/stop");
   const removeCapability = useCapability("agents/worktree/remove");
   // Ending an agent is the one confirmation in the app (`EndAgentDialog`), so
@@ -458,6 +469,19 @@ function AgentDetail({ item, contextOnly }: { item: FleetItem; contextOnly: bool
         {item.subtitle && (
           <Field label="Task">
             <span className="line-clamp-4 whitespace-pre-wrap break-words">{item.subtitle}</span>
+          </Field>
+        )}
+        {item.profileId && (
+          <Field label="Profile">
+            <span className="break-words">{profileNames.get(item.profileId) ?? "A profile that is gone"}</span>
+            {item.substitutedProfile && (
+              // The definition named a profile nothing answers to. The run is
+              // not wrong — it stood in — but the row must not let that pass
+              // silently, or a person edits an agent that is not the one running.
+              <span className="mt-0.5 block text-attention">
+                {`This agent names ${profileNames.get(item.substitutedProfile.requested) ?? "a profile"}, which is not there. It ran on ${item.substitutedProfile.used ? profileNames.get(item.substitutedProfile.used) ?? "another profile" : "the profile new conversations use"}.`}
+              </span>
+            )}
           </Field>
         )}
         {item.model && <Field label="Model">{item.model}</Field>}

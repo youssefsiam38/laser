@@ -28,6 +28,11 @@ export type FleetWorktreeChip =
 export interface FleetAgentStrip {
   kind: "agent";
   agentName: string;
+  /** The profile the run was started on — the intent (`docs/model-profiles.md`). */
+  profileId: string | undefined;
+  /** The named profile was not there and another stood in; the row says so. */
+  substituted: boolean;
+  /** The model that answered — the evidence. */
   model: string | undefined;
   turns: number | undefined;
   worktree: FleetWorktreeChip;
@@ -60,9 +65,11 @@ export function worktreeLabel(chip: FleetWorktreeChip): string {
   return chip.kind === "branch" ? chip.branch : "shared checkout";
 }
 
-export function stripText(strip: FleetStrip): string {
+export function stripText(strip: FleetStrip, profileNames: ReadonlyMap<string, string> = new Map()): string {
   if (strip.kind === "agent") {
     const parts: string[] = [strip.agentName];
+    const profile = profileLabel(strip, profileNames);
+    if (profile) parts.push(strip.substituted ? `${profile} (stood in)` : profile);
     if (strip.model) parts.push(strip.model);
     if (strip.turns !== undefined) parts.push(`${strip.turns}t`);
     parts.push(worktreeLabel(strip.worktree));
@@ -132,6 +139,19 @@ function isolationReason(run: AgentRun | undefined): string | undefined {
   return reason || undefined;
 }
 
+/**
+ * What a row calls the profile a run was started on. A profile the settings no
+ * longer hold is not printed as an id: "a profile that is gone" is the fact,
+ * and the expanded row says which one it was.
+ */
+export function profileLabel(
+  strip: Pick<FleetAgentStrip, "profileId">,
+  profileNames: ReadonlyMap<string, string>,
+): string | undefined {
+  if (!strip.profileId) return undefined;
+  return profileNames.get(strip.profileId) ?? "profile since deleted";
+}
+
 export function agentStrip(run: AgentRun | undefined, agentName: string): FleetAgentStrip {
   const model = run?.model;
   const reason = isolationReason(run);
@@ -141,6 +161,8 @@ export function agentStrip(run: AgentRun | undefined, agentName: string): FleetA
   return {
     kind: "agent",
     agentName,
+    profileId: run?.profileId ?? undefined,
+    substituted: run?.substitutedProfile !== undefined,
     model: model ? shortModelName(model.id, model.name) : undefined,
     turns: run?.activity?.turns,
     worktree,
