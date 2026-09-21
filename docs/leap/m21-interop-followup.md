@@ -150,7 +150,7 @@ ancestor replacement inside a folder the person trusted.
 ## Evidence
 
 Commands run in this worktree (`env -i PATH="$PATH" HOME="$HOME"` throughout),
-at the revision this document is committed in:
+at commit `fda60db4`:
 
 | Command | Result |
 | --- | --- |
