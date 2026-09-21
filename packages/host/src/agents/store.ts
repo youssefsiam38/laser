@@ -33,15 +33,13 @@ import {
   type AgentDefinitionInput,
   type AgentIssue,
   type AgentLocation,
-  type AgentModelChoice,
+  isModelProfileId,
   type AgentPolicy,
   type AgentWarning,
   type AgentsSnapshot,
-  type BeamState,
   type BuiltinAgentName,
   type BuiltinInstructionOverrides,
-  type ChatState,
-  type NamerState,
+  type BuiltinProfiles,
 } from "@lasercode/protocol";
 import { serializeAgentFile } from "./agent-file.js";
 import {
@@ -76,9 +74,7 @@ interface StoredV1 {
   agents: unknown[];
   defaultAgent: string;
   policy: AgentPolicy;
-  namer: NamerState;
-  beam: BeamState;
-  chat: ChatState;
+  builtinProfiles: BuiltinProfiles;
   builtinInstructions: BuiltinInstructionOverrides;
   renamedAgents: Readonly<Record<string, string>>;
 }
@@ -97,9 +93,7 @@ export class AgentStore {
   private readonly custom = new Map<string, AgentDefinition>();
   private defaultAgent = DEFAULT_AGENT_NAME;
   private policy: AgentPolicy = { maxDepth: AGENT_MAX_DEPTH_DEFAULT, foregroundCommandSeconds: FOREGROUND_COMMAND_SECONDS_DEFAULT };
-  private namer: NamerState = { status: "unqualified", model: null, candidates: [] };
-  private beam: BeamState = { model: null, suggested: null, needsChoice: true };
-  private chat: ChatState = { model: null };
+  private builtinProfiles: BuiltinProfiles = { beam: null, chat: null, namer: null };
   private builtinInstructions: BuiltinInstructionOverrides = { beam: null, chat: null, namer: null };
   private renamedAgents: Readonly<Record<string, string>> = {};
   private skillWarnings: AgentWarning[] = [];
@@ -151,9 +145,7 @@ export class AgentStore {
       defaultAgent: this.defaultAgent,
       warnings: [...this.skillWarnings, ...this.fileWarnings.values()],
       policy: this.policy,
-      namer: this.namer,
-      beam: this.beam,
-      chat: this.chat,
+      builtinProfiles: this.builtinProfiles,
       builtinInstructions: this.builtinInstructions,
       renamedAgents: this.renamedAgents,
       workspaces: this.options.workspaces,
@@ -314,10 +306,38 @@ export class AgentStore {
     return { ...this.policy };
   }
 
-  setBuiltinModel(name: BuiltinAgentName, model: AgentModelChoice | null): void {
-    if (name === "beam") this.setBeamModel(model);
-    else if (name === "chat") this.setChatModel(model);
-    else this.setNamerModel(model);
+  /**
+   * A person chooses which Model Profile a built-in runs on; `null` returns it
+   * to the profile assigned to new sessions (`docs/model-profiles.md`).
+   */
+  setBuiltinProfile(name: BuiltinAgentName, profileId: string | null): void {
+    if (profileId !== null && !isModelProfileId(profileId)) {
+      throw invalid([{ field: "profile", message: "Choose one of your model profiles." }]);
+    }
+    if (this.builtinProfiles[name] === profileId) return;
+    this.builtinProfiles = { ...this.builtinProfiles, [name]: profileId };
+    this.commit();
+  }
+
+  /** Which profile each built-in runs on, for the host's own reads. */
+  get builtinProfileIds(): BuiltinProfiles {
+    return { ...this.builtinProfiles };
+  }
+
+  /**
+   * Move every built-in that pointed at `from` to `to`. Part of deleting a
+   * profile: nothing is ever left pointing at one that is gone.
+   */
+  replaceBuiltinProfile(from: string, to: string | null): boolean {
+    const next: BuiltinProfiles = {
+      beam: this.builtinProfiles.beam === from ? to : this.builtinProfiles.beam,
+      chat: this.builtinProfiles.chat === from ? to : this.builtinProfiles.chat,
+      namer: this.builtinProfiles.namer === from ? to : this.builtinProfiles.namer,
+    };
+    if (JSON.stringify(next) === JSON.stringify(this.builtinProfiles)) return false;
+    this.builtinProfiles = next;
+    this.commit();
+    return true;
   }
 
   setBuiltinInstructions(name: BuiltinAgentName, instructions: string | null): void {
@@ -329,32 +349,6 @@ export class AgentStore {
     }
     if (this.builtinInstructions[name] === instructions) return;
     this.builtinInstructions = { ...this.builtinInstructions, [name]: instructions };
-    this.commit();
-  }
-
-  setBeamModel(model: AgentModelChoice | null): void {
-    this.beam = { ...this.beam, model: model ? { ...model } : null, needsChoice: false };
-    this.commit();
-  }
-
-  setChatModel(model: AgentModelChoice | null): void {
-    this.chat = { model: model ? { ...model } : null };
-    this.commit();
-  }
-
-  setBeamSuggestion(model: AgentModelChoice | null): void {
-    this.beam = { ...this.beam, suggested: model ? { ...model } : null };
-    this.commit();
-  }
-
-  setNamerState(state: NamerState): void {
-    this.namer = structuredClone(state);
-    this.commit();
-  }
-
-  setNamerModel(model: AgentModelChoice | null): void {
-    this.namer = { ...this.namer, model: model ? { ...model } : null, status: model ? "ready" : "unqualified", ...(model ? { qualifiedAt: this.now().toISOString() } : {}) };
-    if (!model) delete this.namer.qualifiedAt;
     this.commit();
   }
 
@@ -401,9 +395,9 @@ export class AgentStore {
     return builtinAgents({
       agentDir: this.options.agentDir,
       stateDir: this.stateDir(),
-      beamModel: this.beam.model,
-      chatModel: this.chat.model,
-      namerModel: this.namer.model,
+      beamProfileId: this.builtinProfiles.beam,
+      chatProfileId: this.builtinProfiles.chat,
+      namerProfileId: this.builtinProfiles.namer,
       instructions: this.builtinInstructions,
       at: BUILTIN_STAMP,
     });
@@ -466,12 +460,8 @@ export class AgentStore {
       if (Number.isInteger(maxDepth) && maxDepth! >= 1 && maxDepth! <= AGENT_MAX_DEPTH_LIMIT) this.policy.maxDepth = maxDepth!;
       if (Number.isInteger(foregroundCommandSeconds) && foregroundCommandSeconds! >= FOREGROUND_COMMAND_SECONDS_MIN && foregroundCommandSeconds! <= FOREGROUND_COMMAND_SECONDS_MAX) this.policy.foregroundCommandSeconds = foregroundCommandSeconds!;
     }
-    const namer = readNamer(parsed?.namer);
-    if (namer) this.namer = namer;
-    const beam = readBeam(parsed?.beam);
-    if (beam) this.beam = beam;
-    const chat = readChat(parsed?.chat);
-    if (chat) this.chat = chat;
+    const profiles = readBuiltinProfiles(parsed?.builtinProfiles);
+    if (profiles) this.builtinProfiles = profiles;
     this.builtinInstructions = readBuiltinInstructions(parsed?.builtinInstructions);
   }
 
@@ -492,9 +482,7 @@ export class AgentStore {
         revision: typeof parsed.revision === "number" ? parsed.revision : 0,
         defaultAgent: typeof parsed.defaultAgent === "string" ? parsed.defaultAgent : DEFAULT_AGENT_NAME,
         policy: parsed.policy ?? this.policy,
-        namer: parsed.namer ?? this.namer,
-        beam: parsed.beam ?? this.beam,
-        chat: parsed.chat ?? this.chat,
+        builtinProfiles: parsed.builtinProfiles ?? this.builtinProfiles,
         builtinInstructions: parsed.builtinInstructions ?? this.builtinInstructions,
         renamedAgents: parsed.renamedAgents ?? {},
       };
@@ -604,9 +592,7 @@ export class AgentStore {
       revision: this.revision,
       defaultAgent: this.defaultAgent,
       policy: this.policy,
-      namer: this.namer,
-      beam: this.beam,
-      chat: this.chat,
+      builtinProfiles: this.builtinProfiles,
       builtinInstructions: this.builtinInstructions,
       renamedAgents: this.renamedAgents,
     };
@@ -702,9 +688,19 @@ function messageOf(error: unknown): string {
 const isString = (value: unknown): value is string => typeof value === "string";
 const isStringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(isString);
 
-function readModel(value: unknown): AgentModelChoice | null {
-  const model = value as Partial<AgentModelChoice> | null | undefined;
-  return model && isString(model.provider) && isString(model.id) && model.provider && model.id ? { provider: model.provider, id: model.id } : null;
+/** The profile a stored legacy definition named, when it names a real one. */
+function readStoredProfileId(value: Record<string, unknown>): string | null {
+  const raw = value["profile"];
+  return isString(raw) && isModelProfileId(raw) ? raw : null;
+}
+
+/** Which profile each built-in runs on, from the stored metadata. */
+function readBuiltinProfiles(raw: unknown): BuiltinProfiles | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, unknown>;
+  const read = (name: BuiltinAgentName): string | null =>
+    isString(value[name]) && isModelProfileId(value[name]) ? (value[name] as string) : null;
+  return { beam: read("beam"), chat: read("chat"), namer: read("namer") };
 }
 
 function readBuiltinInstructions(value: unknown): BuiltinInstructionOverrides {
@@ -751,7 +747,7 @@ function readLegacyAgent(raw: unknown): AgentDefinition | undefined {
     instructions: isString(value.instructions) ? value.instructions : "",
     engineInstructions: value.engineInstructions === true,
     excludeCoreInstructions: value.excludeCoreInstructions === true,
-    model: readModel(value.model),
+    profileId: readStoredProfileId(value),
     thinkingLevel,
     supportsSubagents: value.supportsSubagents === true,
     allowedAgents: isStringList(value.allowedAgents) ? [...value.allowedAgents] : [],
@@ -762,26 +758,3 @@ function readLegacyAgent(raw: unknown): AgentDefinition | undefined {
   };
 }
 
-function readNamer(raw: unknown): NamerState | undefined {
-  const value = raw as Partial<NamerState> | null | undefined;
-  if (!value || typeof value !== "object") return undefined;
-  const status = value.status;
-  if (status !== "unqualified" && status !== "qualifying" && status !== "ready" && status !== "unavailable") return undefined;
-  const model = readModel(value.model);
-  const candidates = Array.isArray(value.candidates) ? value.candidates.filter((candidate) => {
-    const item = candidate as Partial<NamerState["candidates"][number]> | null;
-    return !!item && readModel(item.model) !== null && typeof item.valid === "boolean";
-  }) : [];
-  return { status: status === "qualifying" ? "unqualified" : status, model, candidates: structuredClone(candidates), ...(isString(value.qualifiedAt) ? { qualifiedAt: value.qualifiedAt } : {}), ...(isString(value.reason) ? { reason: value.reason } : {}) };
-}
-
-function readChat(raw: unknown): ChatState | undefined {
-  const value = raw as Partial<ChatState> | null | undefined;
-  return value && typeof value === "object" ? { model: readModel(value.model) } : undefined;
-}
-
-function readBeam(raw: unknown): BeamState | undefined {
-  const value = raw as Partial<BeamState> | null | undefined;
-  if (!value || typeof value !== "object") return undefined;
-  return { model: readModel(value.model), suggested: readModel(value.suggested), needsChoice: value.needsChoice !== false };
-}

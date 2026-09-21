@@ -159,3 +159,34 @@ Re-run of the M15-T3/T8 verification list (`STATUS_DETAILED.md` M15-T3 notes,
 130 passed together with the seam, thinking-level and first-turn suites;
 whole worker suite 1211 passed / 4 skipped. Live browser verification belongs
 to the person (AGENTS.md) and is not claimed here.
+
+### M22-T4 checkpoint — done
+
+- Agent definition files carry `profile:` (an opaque profile id) instead of
+  `model:`; `model:` is now an unknown frontmatter field, which is how a person
+  learns the format changed.
+- `null` and an absent field both mean "inherit the profile new conversations
+  use". An id that is not one this app generated is a save-time issue on the
+  `profile` field; an id that *was* generated but no longer answers to anything
+  is a **warning** on the same field, raised by the periodic check, and the
+  agent keeps working on the default.
+- `start_agent` no longer refuses a child whose profile is gone: the run starts
+  on the default and carries `substitutedProfile` so the fleet row can say so.
+  `AgentRun` also carries `profileId` beside the model that answered.
+- Built-ins hold profile ids (`builtinProfiles` on the snapshot, persisted);
+  `replaceBuiltinProfile` moves every reference in one write.
+- Naming is a one-shot walk of the naming profile: one request per model, in
+  order, first usable title wins, no benchmark and no qualification. When the
+  whole profile is spent the words are parked, so the conversation is named the
+  moment naming becomes possible.
+
+Green (clean environment — see the note below):
+`pnpm -F @lasercode/host test` 1012 passed, `pnpm -F @lasercode/worker test`
+1211 passed / 4 skipped.
+
+**Environment note.** The host suite spawns child workers, and this agent
+session runs inside Laser, so `LASERCODE_FEATURE_GENERATION_ID` and
+`LASERCODE_RUNTIME_*` are in the environment; `WorkerClient` reads them and
+faults every spawn with "could not verify the project runtime". It is not a
+product defect and not caused by M22 — the host tests must be run with those
+variables unset (`env -i PATH=… HOME=… pnpm -F @lasercode/host test`).

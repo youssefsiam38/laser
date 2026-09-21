@@ -12,7 +12,7 @@ function definition(instructions = "Read first.\n\nThen {{productName}} acts.\n"
     instructions,
     engineInstructions: false,
     excludeCoreInstructions: true,
-    model: { provider: "anthropic", id: "claude/sonnet" },
+    profileId: "mp_testreviewer000000000",
     thinkingLevel: "high",
     supportsSubagents: true,
     allowedAgents: ["default", "reviewer"],
@@ -34,7 +34,7 @@ describe("agent definition Markdown files", () => {
       expect(parsed.definition).toEqual({ ...source, path: undefined });
       expect(parsed.definition?.instructions).toBe(instructions);
       expect(text).not.toContain("name: reviewer");
-      expect(text).toContain("model: anthropic/claude/sonnet");
+      expect(text).toContain("profile: mp_testreviewer000000000");
     },
   );
 
@@ -49,10 +49,10 @@ describe("agent definition Markdown files", () => {
     });
   });
 
-  it("defaults omitted booleans and lists, and absent or null model to the configured default", () => {
-    const base = `---\ndescription: Minimal\nmodel: null\ncreatedAt: 2026-01-01T00:00:00.000Z\nupdatedAt: 2026-01-01T00:00:00.000Z\n---\nDo it.\n`;
+  it("defaults omitted booleans and lists, and absent or null profile to the configured default", () => {
+    const base = `---\ndescription: Minimal\nprofile: null\ncreatedAt: 2026-01-01T00:00:00.000Z\nupdatedAt: 2026-01-01T00:00:00.000Z\n---\nDo it.\n`;
     expect(parseAgentFile(base, "minimal").definition).toMatchObject({
-      model: null,
+      profileId: null,
       supportsSubagents: false,
       allowedAgents: [],
       scopedSkills: false,
@@ -60,14 +60,15 @@ describe("agent definition Markdown files", () => {
       engineInstructions: false,
       excludeCoreInstructions: false,
     });
-    expect(parseAgentFile(base.replace("model: null\n", ""), "minimal").definition?.model).toBeNull();
+    expect(parseAgentFile(base.replace("profile: null\n", ""), "minimal").definition?.profileId).toBeNull();
   });
 
   it.each([
     ["missing frontmatter", "Do it.", "Add YAML frontmatter"],
     ["broken YAML", "---\n[broken\n---\nDo it.", "Fix the YAML frontmatter"],
     ["duplicate key", "---\ndescription: one\ndescription: two\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.", "Fix the YAML frontmatter"],
-    ["wrong model", "---\ndescription: x\nmodel: provider-only\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.", "provider/id"],
+    ["a profile that is not an id", "---\ndescription: x\nprofile: Balanced\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.", "the id of one of your model profiles"],
+    ["a model where a profile belongs", "---\ndescription: x\nmodel: anthropic/claude\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.", "unknown frontmatter field"],
     ["wrong scalar type", "---\ndescription: 3\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.", "description a string"],
     ["wrong list", "---\ndescription: x\nallowedAgents: nope\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.", "allowedAgents a list"],
     ["wrong skill", "---\ndescription: x\nskills:\n  - name: one\n    path: /x\n    scope: elsewhere\ncreatedAt: 2026-01-01T00:00:00Z\nupdatedAt: 2026-01-01T00:00:00Z\n---\nDo it.", "skills[0]"],

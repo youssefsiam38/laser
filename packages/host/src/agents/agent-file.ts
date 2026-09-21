@@ -3,8 +3,8 @@ import {
   AGENT_INSTRUCTIONS_MAX,
   AGENT_NAME_PATTERN,
   instructionTemplateIssue,
+  isModelProfileId,
   type AgentDefinition,
-  type AgentModelChoice,
   type AgentSkillRef,
 } from "@lasercode/protocol";
 import { parseDocument, stringify } from "yaml";
@@ -14,7 +14,7 @@ export type AgentFileParseResult = { definition: AgentDefinition; issues?: never
 const FRONTMATTER_KEYS = new Set([
   "name",
   "description",
-  "model",
+  "profile",
   "thinkingLevel",
   "supportsSubagents",
   "allowedAgents",
@@ -58,7 +58,7 @@ export function parseAgentFile(text: string, name: string, fallbackTimestamp = n
 
   const description = readString(value, "description", "description", issues, "");
   if (description.length > AGENT_DESCRIPTION_MAX) issues.push(`Shorten description to at most ${AGENT_DESCRIPTION_MAX} characters.`);
-  const model = readModel(value.model, issues);
+  const profileId = readProfile(value.profile, issues);
   const thinkingLevel = readThinkingLevel(value.thinkingLevel, issues);
   const supportsSubagents = readBoolean(value, "supportsSubagents", issues);
   const allowedAgents = readStringList(value.allowedAgents, "allowedAgents", issues);
@@ -95,7 +95,7 @@ export function parseAgentFile(text: string, name: string, fallbackTimestamp = n
       instructions: split.body,
       engineInstructions,
       excludeCoreInstructions,
-      model,
+      profileId,
       thinkingLevel,
       supportsSubagents,
       allowedAgents,
@@ -111,7 +111,7 @@ export function parseAgentFile(text: string, name: string, fallbackTimestamp = n
 export function serializeAgentFile(definition: AgentDefinition): string {
   const frontmatter = {
     description: definition.description,
-    model: definition.model ? `${definition.model.provider}/${definition.model.id}` : null,
+    profile: definition.profileId,
     thinkingLevel: definition.thinkingLevel,
     supportsSubagents: definition.supportsSubagents,
     allowedAgents: definition.allowedAgents,
@@ -163,18 +163,25 @@ function readBoolean(record: Record<string, unknown>, key: string, issues: strin
   return false;
 }
 
-function readModel(value: unknown, issues: string[]): AgentModelChoice | null {
+/**
+ * The Model Profile this agent runs on (`docs/model-profiles.md`).
+ *
+ * A profile is named by its opaque id, never by a model: the id survives a
+ * rename, and a raw model here would be a second way to say the same thing.
+ * A profile that is no longer there is not a parse error — it is a warning on
+ * the `profile` field, and the agent runs on the default (`validate.ts`).
+ */
+function readProfile(value: unknown, issues: string[]): string | null {
   if (value === undefined || value === null) return null;
-  if (typeof value !== "string") {
-    issues.push("Make model a provider/id string, or null to follow the default.");
+  if (typeof value !== "string" || value.trim() === "") {
+    issues.push("Write profile as the id of one of your model profiles, or null to follow the default.");
     return null;
   }
-  const slash = value.indexOf("/");
-  if (slash <= 0 || slash === value.length - 1) {
-    issues.push("Write model as provider/id, or use null to follow the default.");
+  if (!isModelProfileId(value.trim())) {
+    issues.push("Write profile as the id of one of your model profiles, or null to follow the default.");
     return null;
   }
-  return { provider: value.slice(0, slash), id: value.slice(slash + 1) };
+  return value.trim();
 }
 
 function readThinkingLevel(value: unknown, issues: string[]): AgentDefinition["thinkingLevel"] {

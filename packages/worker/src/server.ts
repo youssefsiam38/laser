@@ -1996,7 +1996,14 @@ export class WorkerServer {
       try {
         const name = await this.namer.nameSession(text);
         const current = this.namingPath(token) ?? path;
-        if (!name || !this.runtimes.has(current) || live.driver.state().name) return;
+        if (!name) {
+          // The whole profile was spent — no credential yet, every model
+          // failing. The words are parked rather than thrown away, so the
+          // conversation gets its title the moment naming can happen.
+          if (!live.driver.state().name) this.waitToName(current, text);
+          return;
+        }
+        if (!this.runtimes.has(current) || live.driver.state().name) return;
         await live.driver.rename(name).catch(() => undefined);
       } finally {
         this.forgetNaming(token);
@@ -2023,7 +2030,7 @@ export class WorkerServer {
     if (path !== undefined) this.namingInFlight.delete(path);
   }
 
-  /** Hold a first prompt until a Namer model exists, oldest dropped past the cap. */
+  /** Hold a first prompt until naming can happen, oldest dropped past the cap. */
   private waitToName(path: string, text: string): void {
     this.unnamed.delete(path);
     this.unnamed.set(path, text);
