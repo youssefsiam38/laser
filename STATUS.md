@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
 **Last updated:** resumed leap integration · code checkpoint: d408e8ea
-**Current focus:** M21 integration and acceptance gaps. T14 integrated/done; T10/T13 Fleet ownership correction and T19 evidence correction remain. T21 reviewed corrections integrated/done. M26 v0.14.0 is published and verified; M21 remains the next release gate.
+**Current focus:** M21 integration and acceptance gaps. T10/T13 and T14 integrated/done; T18/T19 durable evidence and verification lifetime remain. T21 reviewed corrections integrated/done. M26 v0.14.0 is published and verified; M21 remains the next release gate.
 
 | Milestone | State |
 | --- | --- |
@@ -36,11 +36,11 @@
 | MX Cross-cutting | in-progress |
 
 **Active owners:**
-- T10/T13: independent review approved (`21239e69`); whole source/review ancestry merged (`b4ed1003`), readability/evidence correction `d408e8ea`. Parent450 focused tests passed before merge; merged full verify/identity running (`t-37896cd3`).
-- T18/T19: checkpoint `a44248c2` preserved; final basis/decision-binding/legacy/paging corrections implementing under approved plan `9fa1ce26` (`run_9a5f943a`). First full T19 review remains pending.
+- T10/T13: done; reviewed source merged `b4ed1003` + correction `d408e8ea`. Parent450 focused tests and merged full verify/identity pass.
+- T18/T19: checkpoint `a44248c2` preserved; final basis/decision-binding/legacy/paging corrections implementing under approved plan `9fa1ce26` (`run_9a5f943a`). Verification runtime rekey/retention/settlement gaps have a read-only plan owner (`run_b7a4b290`); implementation will serialize. First full T19 review remains pending.
 - Integrated: T9/T17 mentions, T14 Foundation, T21 interop, image fixture and transcript continuity repairs. Exact ancestry/owners in `STATUS_DETAILED.md`.
 
-**Gate:** integrated mention/transcript **`pnpm verify && pnpm identity:check` pass** (`t-4d8fdf93`, 152.7s, source `abfe5f7c`; clean graphical environment). Current integration branch, **not final main**; excludes pending Command/capture work. Person-owned browser acceptance remains unclaimed (D-342).
+**Gate:** integrated Command/mention/transcript **`pnpm verify && pnpm identity:check` pass** (`t-37896cd3`, 141.7s, source `d408e8ea`; clean graphical environment). Current integration branch, **not final main**; excludes pending capture/verification work. Person-owned browser acceptance remains unclaimed (D-342).
 **Published:** v0.14.0 Latest (M26), v0.13.0 (M23), v0.12.0 (M22). Candidate `ac098597`; source CI `35616431166` and release `35616858358` attempt4 pass. Twelve assets/digests/source provenance verified; `docs/leap/m26-release-evidence.json`.
-**Next:** finish merged Command validation and capture corrections/review → T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
+**Next:** finish capture/verification corrections and full review → T20 continuity → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
 **Other retained blocker:** M19-T7 waits for M19-T6 shared storage ownership. Person-owned M20/visual acceptance must not be inferred from unit tests.
