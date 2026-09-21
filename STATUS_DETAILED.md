@@ -5988,7 +5988,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T8 | Comments, reviews and approval gates | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T9 | Cross-session and cross-project mentions | todo | — | — | `PLAN.md` M21 |
 | M21-T10 | Design Index: static facts, synthesis, review, storage | done | claude-2026-09-21-leap | `9306d0fa`; `pnpm -F @lasercode/worker test` (1344 passed; `test/design/*` 70 incl. the parse-only module-graph and side-effect-marker proofs) | see notes |
-| M21-T11 | Framework-neutral DesignTree and React composition engine | todo | — | — | `PLAN.md` M21 |
+| M21-T11 | DesignTree, canvas, primitive kit, prototypes and Sketch | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T12 | Native validation runner and source selection | todo | — | — | `PLAN.md` M21 |
 | M21-T13 | Design workspace and anchored review | todo | — | — | `PLAN.md` M21 |
 | M21-T14 | Greenfield design foundation | todo | — | — | `PLAN.md` M21 |
@@ -6008,6 +6008,9 @@ live work holding its row when a snapshot thins — because both are real hazard
 #### M21-T5–T6 notes
 - 2026-09-21 done: T5 `packages/ui/src/project-work/{store,registry,deep-link,workspace-state,hooks,model}.ts` (one store per stable projectId; sequence rules; reconcile with removed/reset; `#/work/<projectId>/<kind>/<entityId>[/<revisionId>]`); T6 `components/project-work/**` — Project work control with live counts, Work backlog with filters/sorts/saved views (`pi/prefs`), Needs you, Recent (`timeline`), + Create with the next key, kind-aware detail with real read-only bodies for all five kinds, inspector, Tasks Board (dnd-kit → `project/task/action`, illegal moves named), Archive/Delete with typed confirmation (Enter never confirms), `/spec` `/research` `/design` `/plan` with the project picker in a projectless Chat, palette entries by key, kind tokens `--kind-*` editable in Appearance; conversation stays mounted. Deferred slots for T7/T8/T9/T13/T16 in `docs/leap/m21-workspace-plan.md`. Visual acceptance is the person's (D-342).
 - 2026-09-21 claimed by claude-2026-09-21-leap: one UI worker (client store → workspace shell) from the merged spine; plan in `docs/leap/m21-workspace-plan.md`.
+
+#### M21-T11 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap (row title aligned with `PLAN.md` as amended by D-354): UI worker on `components/design/**` — validated DesignTree editing, DOM infinite canvas, Shadow DOM frames skinned by index tokens, primitive kit, Prototype mode, sandboxed Sketch frame, Sketch→Tree ladder; write set disjoint from T8 (comments/gates) and T17 (backend).
 
 #### M21-T10 notes
 - 2026-09-21 done (`9306d0fa`): `packages/worker/src/design/index/` L0 parsers (stack, styles incl. Tailwind config as text, DTCG tokens, components with typed props, templates/routes, assets/i18n), digest-keyed cache, eras with `useForNewWork`, L1 one-shot synthesis on `designIndexProfileId` with citation checks, review actions preserved by stable ids with "changed since review", `<project>/.laser/design/{index,review}.json` writer refusing machine paths, bounded stoppable Command with progress by files; three tools linted and fixture-replayed (engine registration is M21-T17's — deviation 1), no host change (index authority is M21-T13's — deviation 2); no new dependencies. Merge fix by the orchestrator: the strict fixture parser from the M26 batch dropped `world.designIndex`.
