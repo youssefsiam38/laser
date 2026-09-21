@@ -1175,3 +1175,65 @@ the read-only plan `b7a4b290`).
 | `env -i … pnpm -F @lasercode/ui exec vitest run test/project-work/{native-acceptance,verification}.test.tsx` | 39 passed |
 | `pnpm -r typecheck` | clean |
 | `pnpm identity:check` | passes |
+
+### The retained source, actually read (parent review of `36e163ed`)
+
+UI only: `ProofTrail.tsx`, `verification-model.ts` and the verification UI
+tests. No host or protocol change (`36e163ed` is the settled host/protocol
+proof checkpoint; D-364 runtime work belongs to the runtime owner).
+
+**A capture's bodies are what a person reads, so they are read.** The opened
+proof no longer stops at names and notes:
+
+- `proofSourceEntries` indexes the files whose **text** the capture holds
+  (path, side, size, characters, "first part only" when the capture truncated
+  it) and `proofOmissions` names the ones it did not keep, each with the reason
+  in a person's words — binary, too large, listed without its source, removed
+  with its before side kept. Both bounded by `PROOF_CAPTURE_FILES_SHOWN`, with
+  an honest count of what is not offered.
+- `Read it` on a file fetches the **same bound blob** (`row.proofId`, never the
+  link's current pointer), takes that one body out of it, and shows it
+  `PROOF_SOURCE_WINDOW_CHARS` (2 000) characters at a time with
+  `Previous part` / `Next part` and `Part n of m · characters a–b`.
+- Nothing indiscriminate is retained: the parsed capture is a local in
+  `fetchCapture` and goes out of scope, so what the surface holds is the
+  metadata projection plus **one** file's retained text (a capture file is at
+  most 128 KB) — never the four megabytes a capture may hold. Choosing another
+  file replaces the body that was held.
+- The text is rendered as text in a wrapping `<pre>`: React escapes it, so a
+  file full of `<script>` and `onerror=` is characters on the screen and
+  nothing else. It wraps rather than scrolling sideways, because evidence whose
+  right-hand side cannot be read is not evidence a person can check.
+- A body that cannot be read back (released, deleted, damaged, unparseable,
+  named but absent) gets its own refusal beside the proof, and the rest of the
+  proof stays on screen.
+
+**The scope fence is now structural.** `ProofTrail` computes a scope of
+store identity (a `WeakMap`-minted id, so two stores answering for one project
+id are two subjects), project id, entity id and current revision, and renders
+`<ProofTrailFor key={scope} …>`. A change replaces the surface in the same
+render rather than leaving the previous subject's rows on screen until a
+passive effect tidies them; in-flight reads are invalidated by that unmount
+(cleanup bumps the generation) and by every new request.
+
+New tests in `packages/ui/test/project-work/verification.test.tsx`: the
+retained text of a chosen file, in parts, out of the bound proof of a
+superseded capture (the link points elsewhere by then); a second file replacing
+the first; markup-heavy source proven to be text and not elements (escaped in
+the document, no `script`/`img` node); omitted files named with their reasons;
+a body that cannot be read back leaving the proof intact; and a held-open blob
+read dropped across both a subject change and a store change, with the rows and
+the opened proof gone before the late answer lands.
+
+| Command | Result |
+| --- | --- |
+| `pnpm -r build` | clean |
+| `env -i … pnpm -F @lasercode/ui exec vitest run test/project-work/{native-acceptance,verification}.test.tsx` | 44 passed (verification 23) |
+| `pnpm -r typecheck` | clean |
+| `pnpm identity:check` | passes |
+
+Host `test/project-work` (311) and protocol (752) were last run green at
+`36e163ed` and are untouched by this commit.
+
+**Still the person's (D-342):** how the source reader looks in both themes and
+at both widths, including a long line and a file of one enormous line.

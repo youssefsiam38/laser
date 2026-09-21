@@ -19,6 +19,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PROOF_SOURCE_WINDOW_CHARS } from "../../src/components/project-work/verification-model.js";
 import {
   REPOSITORY_CAPTURE_HISTORY_MAX,
   REPOSITORY_CAPTURE_MEDIA_TYPE,
@@ -179,6 +180,9 @@ let blobAnswers: Record<string, unknown>;
 /** Detail reads wait for the test to let them through while this is on. */
 let deferGets: boolean;
 let pendingGets: Array<() => void>;
+/** The same, for the blob reads an opened proof makes. */
+let deferBlobs: boolean;
+let pendingBlobs: Array<() => void>;
 
 const settle = (ms = 5): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -192,6 +196,13 @@ const makeStore = (): ProjectWorkStore => {
         const prepared = blobAnswers[wanted];
         if (prepared) {
           if (prepared instanceof Error) throw prepared;
+          // A blob read a test holds open on purpose: what a slow disk looks
+          // like while the person moves to another item.
+          if (deferBlobs) {
+            return new Promise((resolve, reject) =>
+              pendingBlobs.push(() => (prepared instanceof Error ? reject(prepared) : resolve(prepared))),
+            );
+          }
           return prepared;
         }
         if (!blob) throw new Error("no blob");
@@ -248,6 +259,8 @@ beforeEach(() => {
   blobAnswers = {};
   deferGets = false;
   pendingGets = [];
+  deferBlobs = false;
+  pendingBlobs = [];
   hostCalls = [];
   hostAnswers = {};
   sessions = [SESSION];
@@ -527,6 +540,16 @@ describe("what a decision rests on", () => {
   });
 
   /** The capture a decision bound, as the store holds it. */
+  const captureWith = (over: Partial<RepositoryCapture> = {}): RepositoryCapture => ({ ...capture(), ...over }) as RepositoryCapture;
+
+  const source = (path: string, text: string, side?: "before" | "after") => ({
+    path,
+    bytes: Buffer.byteLength(text, "utf8"),
+    contentDigest: "e".repeat(64),
+    text,
+    ...(side ? { side } : {}),
+  });
+
   const capture = (): RepositoryCapture => ({
     version: 1,
     createdAt: "2026-03-01T09:05:00.000Z",
@@ -690,6 +713,132 @@ describe("what a decision rests on", () => {
     expect(text()).toContain("Review it again if it matters");
   });
 
+  it("reads the retained source text of the file a decision rested on, in parts", async () => {
+    blob = report();
+    const long = "the line a person reads\n".repeat(120);
+    blobAnswers = {
+      blb_atthetime: blobPage(
+        captureWith({
+          files: [
+            { path: "src/a.ts", status: "modified", added: 2, removed: 1 },
+            { path: "src/b.ts", status: "added", added: 1, removed: 0 },
+          ],
+          sources: [source("src/a.ts", long), source("src/b.ts", "the other file\n")],
+          required: {
+            basis: "accepted_change",
+            from: { baseCommitObjectId: "1".repeat(40) },
+            entries: [
+              { path: "src/a.ts", status: "modified", side: "after", contentDigest: "e".repeat(64) },
+              { path: "src/b.ts", status: "added", side: "after", contentDigest: "e".repeat(64) },
+            ],
+            complete: true,
+          },
+        }),
+      ),
+    };
+    await mount(withLink(), makeStore());
+    getAnswers = [page({ of: "decisions", bindings: [binding()] })];
+    await click(button("What decisions here rest on"));
+    await click(button("Open this proof"));
+    expect(text(), "the bodies are not spilled onto the page unasked").not.toContain("the line a person reads");
+
+    // The file a person chooses, out of the proof the decision bound.
+    const files = [...document.body.querySelectorAll('[data-slot="proof-trail-sources"] li')];
+    expect(files.length, "both retained files are offered").toBe(2);
+    await click([...files[0]!.querySelectorAll("button")][0]);
+    const read = storeCalls.filter((call) => call.method === "project/work/blob/read").at(-1);
+    expect(read?.params["blobId"], "read out of the bound proof, not the record's current one").toBe("blb_atthetime");
+    const body = document.body.querySelector('[data-slot="proof-trail-source-text"]');
+    expect(body?.textContent, "the actual text it kept").toContain("the line a person reads");
+    expect((body?.textContent ?? "").length, "one bounded part of it, never the whole file at once").toBeLessThanOrEqual(
+      PROOF_SOURCE_WINDOW_CHARS,
+    );
+    expect(text()).toContain("Part 1 of 2");
+
+    await click(button("Next part"));
+    expect(text()).toContain("Part 2 of 2");
+    expect(button("Previous part"), "and back the way it came").toBeTruthy();
+    await click(button("Previous part"));
+    expect(text()).toContain("Part 1 of 2");
+
+    // A second file replaces the first: one body is held at a time.
+    await click([...[...document.body.querySelectorAll('[data-slot="proof-trail-sources"] li')][1]!.querySelectorAll("button")][0]);
+    const second = document.body.querySelector('[data-slot="proof-trail-source-text"]');
+    expect(second?.textContent).toBe("the other file\n");
+    expect(second?.textContent).not.toContain("the line a person reads");
+    expect(text()).toContain("The whole of what this proof kept of it");
+  });
+
+  it("shows source that is full of markup as the text it is", async () => {
+    blob = report();
+    const nasty = '<script>alert("not a script")</script><img src=x onerror="boom">';
+    blobAnswers = {
+      blb_atthetime: blobPage(
+        captureWith({
+          files: [{ path: "src/a.ts", status: "modified", added: 1, removed: 0 }],
+          sources: [source("src/a.ts", nasty)],
+          required: {
+            basis: "accepted_change",
+            from: { baseCommitObjectId: "1".repeat(40) },
+            entries: [{ path: "src/a.ts", status: "modified", side: "after", contentDigest: "e".repeat(64) }],
+            complete: true,
+          },
+        }),
+      ),
+    };
+    await mount(withLink(), makeStore());
+    getAnswers = [page({ of: "decisions", bindings: [binding()] })];
+    await click(button("What decisions here rest on"));
+    await click(button("Open this proof"));
+    await click(button("Read it"));
+
+    const body = document.body.querySelector('[data-slot="proof-trail-source-text"]');
+    expect(body?.textContent, "every character of it, as characters").toBe(nasty);
+    expect(container.querySelector("script"), "and nothing of it became an element").toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+    expect(body?.innerHTML, "the markup is escaped in the document").toContain("&lt;script&gt;");
+  });
+
+  it("names the files whose bytes a proof never kept, and why", async () => {
+    blob = report();
+    blobAnswers = {
+      blb_atthetime: blobPage(
+        captureWith({
+          files: [
+            { path: "src/a.ts", status: "modified", added: 1, removed: 0 },
+            { path: "assets/logo.png", status: "added", added: null, removed: null, omitted: "binary" },
+            { path: "src/huge.ts", status: "modified", added: 9, removed: 9, omitted: "budget" },
+          ],
+          sources: [source("src/a.ts", "kept\n")],
+        }),
+      ),
+    };
+    await mount(withLink(), makeStore());
+    getAnswers = [page({ of: "decisions", bindings: [binding()] })];
+    await click(button("What decisions here rest on"));
+    await click(button("Open this proof"));
+    expect(text()).toContain("assets/logo.png");
+    expect(text()).toContain("not text, so its bytes were never what a person would read");
+    expect(text()).toContain("listed without its source, to keep this proof bounded");
+    expect([...document.body.querySelectorAll('[data-slot="proof-trail-sources"] li')].length, "only the one it did keep is readable").toBe(1);
+  });
+
+  it("says when a body cannot be read back, and leaves the rest of the proof alone", async () => {
+    blob = report();
+    blobAnswers = { blb_atthetime: blobPage(capture()) };
+    await mount(withLink(), makeStore());
+    getAnswers = [page({ of: "decisions", bindings: [binding()] })];
+    await click(button("What decisions here rest on"));
+    await click(button("Open this proof"));
+
+    // The proof is gone between opening it and reading a file out of it.
+    blobAnswers = { blb_atthetime: new Error("That attachment is stored damaged and cannot be read.") };
+    await click(button("Read it"));
+    expect(text()).toContain("stored damaged");
+    expect(text()).toContain("The rest of this proof is unaffected.");
+    expect(text(), "and what was already read still says what it is").toContain("It keeps everything the accepted change touched.");
+  });
+
   it("drops an answer that arrives after the subject has changed, and clears what was on screen", async () => {
     blob = report();
     const store = makeStore();
@@ -726,5 +875,61 @@ describe("what a decision rests on", () => {
       "Kept while a decision was being prepared",
     );
     expect(document.querySelector('[data-slot="proof-trail-rows"]'), "nothing is listed until this item is asked about").toBeNull();
+  });
+
+  it("drops a body still being read when the subject or the store changes", async () => {
+    blob = report();
+    blobAnswers = { blb_atthetime: blobPage(capture()) };
+    const store = makeStore();
+    await mount(withLink(), store);
+    getAnswers = [page({ of: "decisions", bindings: [binding()] })];
+    await click(button("What decisions here rest on"));
+    expect(text()).toContain("Marked done");
+
+    // A proof read is held open, and the panel is pointed at another item
+    // while its bytes are still on the way.
+    deferBlobs = true;
+    await click(button("Open this proof"));
+    const other = detail({
+      entityId: "e-task-45",
+      kind: "task",
+      number: 45,
+      state: "in_progress",
+      body: taskBody({ verificationCommands: [] }) as unknown as ProjectWorkBody,
+      executionLinks: owned(),
+    });
+    await act(async () => {
+      root.render(<VerificationPanel store={store} detail={other} cwd="/work/app" pollMs={5} />);
+      await settle(10);
+    });
+    expect(text(), "the rows of the item we left go with it").not.toContain("Marked done");
+    expect(document.querySelector('[data-slot="proof-trail-capture"]'), "and so does the proof being opened").toBeNull();
+
+    await act(async () => {
+      for (const release of pendingBlobs.splice(0)) release();
+      await settle(10);
+    });
+    expect(document.querySelector('[data-slot="proof-trail-capture"]'), "a body that arrives late is not shown here").toBeNull();
+    expect(text()).not.toContain("It keeps everything the accepted change touched.");
+
+    // The same for a different store answering for the same item: an answer
+    // from the store we left is not an answer from this one.
+    await mount(withLink(), store);
+    getAnswers = [page({ of: "decisions", bindings: [binding()] })];
+    await click(button("What decisions here rest on"));
+    expect(text()).toContain("Marked done");
+    deferBlobs = true;
+    await click(button("Open this proof"));
+    const replacement = makeStore();
+    await act(async () => {
+      root.render(<VerificationPanel store={replacement} detail={withLink()} cwd="/work/app" pollMs={5} />);
+      await settle(10);
+    });
+    expect(text(), "a new store is a new question, even about the same item").not.toContain("Marked done");
+    await act(async () => {
+      for (const release of pendingBlobs.splice(0)) release();
+      await settle(10);
+    });
+    expect(document.querySelector('[data-slot="proof-trail-capture"]')).toBeNull();
   });
 });

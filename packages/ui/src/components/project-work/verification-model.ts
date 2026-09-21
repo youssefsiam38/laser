@@ -192,6 +192,15 @@ function short(id: string): string {
 /** Files one opened proof lists at a time. A capture holds at most a hundred. */
 export const PROOF_CAPTURE_FILES_SHOWN = 20;
 
+/**
+ * Characters of one retained file shown at a time (D-363).
+ *
+ * A capture may hold four megabytes of source; a person reads one file, in
+ * parts. Nothing here ever holds more than one file's retained text, and it
+ * shows one part of that.
+ */
+export const PROOF_SOURCE_WINDOW_CHARS = 2_000;
+
 /** What an opened proof says, bounded, in the words of the thing it proves. */
 export interface ProofCaptureSummary {
   repository: string;
@@ -199,11 +208,36 @@ export interface ProofCaptureSummary {
   at: string;
   /** Where the set it keeps whole was taken from, when it says. */
   from?: string;
-  files: Array<{ path: string; note: string }>;
-  /** Said only when there are more than are listed. */
-  more?: string;
   /** The capture's own sentence about what it left out. */
   truncated?: string;
+}
+
+/** One file whose **text** this proof retained, and can be read out of it. */
+export interface ProofSourceEntry {
+  path: string;
+  side: "before" | "after";
+  note: string;
+  bytes: number;
+  /** Characters of retained text, which is what the reader pages through. */
+  length: number;
+  /** True when the capture kept only the first bytes of the file. */
+  truncated?: boolean;
+}
+
+/** One file this proof names but did **not** keep the bytes of, and why. */
+export interface ProofOmission {
+  path: string;
+  note: string;
+}
+
+/** One part of one retained file, as it is shown. */
+export interface ProofSourceWindow {
+  text: string;
+  /** 1-based. */
+  part: number;
+  parts: number;
+  from: number;
+  to: number;
 }
 
 const BASIS_SENTENCE = {
@@ -218,6 +252,13 @@ const STATUS_NOTE = {
   modified: "changed",
   deleted: "removed",
   present: "kept whole",
+} as const;
+
+const OMISSION_NOTE = {
+  binary: "not text, so its bytes were never what a person would read",
+  too_large: "too large to keep whole, so none of it was kept",
+  budget: "listed without its source, to keep this proof bounded",
+  deleted: "removed here; what it said before is kept as its before side",
 } as const;
 
 /** One stored capture, read as the bounded record a person can check. */
@@ -239,11 +280,6 @@ export function proofCaptureFrom(text: string): RepositoryCapture | undefined {
  */
 export function proofCaptureSummary(capture: RepositoryCapture): ProofCaptureSummary {
   const required = capture.required;
-  const kept = required?.entries ?? [];
-  const files = kept.slice(0, PROOF_CAPTURE_FILES_SHOWN).map((entry) => ({
-    path: entry.path,
-    note: `${STATUS_NOTE[entry.status]}${entry.side === "before" ? ", as it was before" : ""}`,
-  }));
   return {
     // A capture written before the name was recorded says "a repository"
     // rather than inventing one.
@@ -254,12 +290,81 @@ export function proofCaptureSummary(capture: RepositoryCapture): ProofCaptureSum
         ? `the change from ${short(capture.change.base.commitObjectId)} to ${short(capture.change.head.commitObjectId)}`
         : "code this capture does not name",
     ...(required ? { from: BASIS_SENTENCE[required.basis] } : {}),
-    files,
-    ...(kept.length > files.length
-      ? { more: `${String(kept.length - files.length)} more files this proof keeps whole are not listed here.` }
-      : {}),
     ...(capture.truncated ? { truncated: capture.truncated } : {}),
   };
+}
+
+/**
+ * The files whose text this proof really holds — the ones a review of the
+ * decision reads (D-363).
+ *
+ * An index, never the bodies: what comes back is path, side, size and how much
+ * text there is, so a surface can offer a file without holding the whole
+ * capture. The note comes from the required block when there is one, because
+ * "changed" and "as it was before" are what a person needs to know about a
+ * body before reading it.
+ */
+export function proofSourceEntries(capture: RepositoryCapture): { entries: ProofSourceEntry[]; more?: string } {
+  const required = capture.required?.entries ?? [];
+  const all = capture.sources.map((source): ProofSourceEntry => {
+    const side = source.side ?? "after";
+    const named = required.find((entry) => entry.path === source.path && entry.side === side);
+    return {
+      path: source.path,
+      side,
+      note: `${named ? STATUS_NOTE[named.status] : "kept whole"}${side === "before" ? ", as it was before" : ""}${
+        source.truncated === true ? ", first part only" : ""
+      }`,
+      bytes: source.bytes,
+      length: source.text.length,
+      ...(source.truncated === true ? { truncated: true } : {}),
+    };
+  });
+  const entries = all.slice(0, PROOF_CAPTURE_FILES_SHOWN);
+  return {
+    entries,
+    ...(all.length > entries.length
+      ? { more: `${String(all.length - entries.length)} more files this proof holds are not offered here.` }
+      : {}),
+  };
+}
+
+/**
+ * The files this proof names but whose bytes it did not keep, each saying why.
+ *
+ * Not a gap to hide: a person reading a decision's evidence has to know that
+ * a binary file's bytes were never evidence and that a file listed without
+ * its source is listed without its source.
+ */
+export function proofOmissions(capture: RepositoryCapture): { omitted: ProofOmission[]; more?: string } {
+  const all = capture.files
+    .filter((file) => file.omitted !== undefined)
+    .map((file) => ({ path: file.path, note: OMISSION_NOTE[file.omitted as keyof typeof OMISSION_NOTE] }));
+  const omitted = all.slice(0, PROOF_CAPTURE_FILES_SHOWN);
+  return {
+    omitted,
+    ...(all.length > omitted.length ? { more: `${String(all.length - omitted.length)} more files are listed without their source.` } : {}),
+  };
+}
+
+/** One retained body, by path and side. Nothing else of the capture is kept. */
+export function proofSourceText(capture: RepositoryCapture, path: string, side: "before" | "after"): string | undefined {
+  return capture.sources.find((source) => source.path === path && (source.side ?? "after") === side)?.text;
+}
+
+/**
+ * One part of one retained body.
+ *
+ * Cut by characters rather than lines on purpose: a capture may hold a file
+ * with no newlines at all, and "the first two thousand characters" is a bound
+ * that holds whatever the bytes look like.
+ */
+export function proofSourceWindow(text: string, part: number): ProofSourceWindow {
+  const parts = Math.max(1, Math.ceil(text.length / PROOF_SOURCE_WINDOW_CHARS));
+  const at = Math.min(Math.max(1, part), parts);
+  const from = (at - 1) * PROOF_SOURCE_WINDOW_CHARS;
+  const to = Math.min(text.length, from + PROOF_SOURCE_WINDOW_CHARS);
+  return { text: text.slice(from, to), part: at, parts, from, to };
 }
 
 /**
