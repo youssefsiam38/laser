@@ -38,6 +38,7 @@ import {
 import { KIND_LABEL } from "@/project-work/vocabulary";
 
 import { ArchiveDialog, DeleteDialog } from "./ConfirmDialogs.js";
+import { DesignDetail } from "./bodies/DesignDetail.js";
 import { PlanDetail } from "./PlanDetail.js";
 import { TaskDetail } from "./TaskDetail.js";
 import { WorkBody } from "./bodies/index.js";
@@ -258,6 +259,27 @@ export function WorkDetail({
           <PlanDetail detail={detail} body={detail.body.body.plan} items={work.items} />
         ) : detail.body?.body?.kind === "task" ? (
           <TaskDetail store={store} detail={detail} body={detail.body.body.task} items={work.items} />
+        ) : detail.body?.body?.kind === "design" ? (
+          // The Design's canvas, inspector and prototype (M21-T11): the same
+          // fenced context as the other editable bodies.
+          <DesignDetail
+            body={detail.body.body.design}
+            context={{
+              store,
+              detail,
+              editable: !historical && canRevise.state === "available" && !entity.archivedAt,
+              readOnlyReason: historical
+                ? "Editing is disabled on an older revision."
+                : entity.archivedAt
+                  ? "This is archived. Restore it to make changes."
+                  : canRevise.state === "available"
+                    ? undefined
+                    : "This connection cannot write to this project's work.",
+              onChanged: () => void read(),
+              items: work.items,
+              compact,
+            }}
+          />
         ) : detail.body?.body ? (
           <WorkBody
             body={detail.body.body}

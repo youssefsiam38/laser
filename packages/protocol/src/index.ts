@@ -22,6 +22,7 @@ export * from "./source-control.js";
 export * from "./project-work.js";
 export * from "./project-work-bodies.js";
 export * from "./project-work-methods.js";
+export * from "./design-tree.js";
 export * from "./research.js";
 export * from "./environment.js";
 export * from "./method-policy.js";
