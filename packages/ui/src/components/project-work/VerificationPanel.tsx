@@ -23,6 +23,10 @@
  * - **A stored report is the one that is shown.** The panel reads the exact
  *   document the run wrote; it never re-derives a report from what it has on
  *   screen.
+ * - **Native evidence is a person's, and it is recorded here.** A visual
+ *   criterion is settled by a person who looked at the project's real build at
+ *   an exact checkpoint; "Record my review…" is the door to saying so, and the
+ *   host proves everything about it except the looking (D-353, D-361).
  */
 import { Play, RefreshCw, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -40,6 +44,8 @@ import { useLaserStable, useLaserState } from "@/runtime";
 import type { ProjectWorkStore } from "@/project-work";
 
 import { Section } from "./bodies/fields.js";
+import { NativeAcceptanceButton, NativeAcceptanceDialog } from "./NativeAcceptance.js";
+import { acceptanceCheckpoints, acceptanceObstacle, acceptanceSubjects } from "./native-acceptance.js";
 import { WorkRefusal } from "./states.js";
 import { VerificationReportView } from "./VerificationReport.js";
 import { latestVerification, reportFrom, verificationSessionFor } from "./verification-model.js";
@@ -69,6 +75,7 @@ export function VerificationPanel({
   const [report, setReport] = useState<VerificationReport | undefined>(undefined);
   const [problem, setProblem] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  const [accepting, setAccepting] = useState(false);
   const recorded = latestVerification(detail);
   const recordedBlob = recorded?.blobId;
   const live = useRef(true);
@@ -108,6 +115,16 @@ export function VerificationPanel({
   // says which act gets one instead of starting something nobody can see.
   const owner = useMemo(() => verificationSessionFor(detail, sessions), [detail, sessions]);
   const canRun = cwd !== undefined && request !== undefined && owner !== undefined;
+
+  // What a person's review of the build could be recorded against, and why it
+  // could not. The reason is shown rather than the action being hidden: an
+  // act that is missing says nothing about what to do to get it.
+  const subjects = useMemo(() => acceptanceSubjects(report), [report]);
+  const checkpoints = useMemo(() => acceptanceCheckpoints(detail, sessions), [detail, sessions]);
+  const acceptanceBlocked = useMemo(
+    () => acceptanceObstacle({ report, subjects, checkpoints }),
+    [checkpoints, report, subjects],
+  );
 
   const poll = useCallback(
     async (runId: string): Promise<void> => {
@@ -210,6 +227,12 @@ export function VerificationPanel({
             Stop
           </Button>
         ) : null}
+        <NativeAcceptanceButton disabled={acceptanceBlocked !== undefined || !store} onClick={() => setAccepting(true)} />
+        {acceptanceBlocked ? (
+          <span data-slot="verification-acceptance-blocked" className="max-w-(--measure-prose) text-xs leading-xs text-ink-3">
+            {acceptanceBlocked.detail}
+          </span>
+        ) : null}
         {canRun ? null : (
           <span data-slot="verification-needs-session" className="max-w-(--measure-prose) text-xs leading-xs text-ink-3">
             {cwd === undefined || request === undefined
@@ -231,6 +254,17 @@ export function VerificationPanel({
           {...(canRun ? { onRetry: () => void start() } : {})}
         />
       ) : null}
+
+      <NativeAcceptanceDialog
+        store={store}
+        detail={detail}
+        report={report}
+        sessions={sessions}
+        cwd={cwd}
+        request={request}
+        open={accepting}
+        onOpenChange={setAccepting}
+      />
 
       {report ? (
         <VerificationReportView report={report} onAcceptDeviation={(deviation) => void accept(deviation)} busy={busy} />

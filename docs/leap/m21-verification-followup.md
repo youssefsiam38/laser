@@ -180,17 +180,159 @@ convergence would fail exactly when retention has done its job.
 | **F6** | A supplied base git no longer has is kept as recorded identity and the record is marked `unavailable`; it never becomes `HEAD`, and no commit list is invented for it |
 | **F7** | `implemented_by` / `verified_at` are person-only to remove, and once evidence, an acceptance or an approved/completed subject names one, removal is refused: a correction supersedes, it never erases |
 | **F8** | **Deferred to M21-T22, explicitly.** The serialized reads are commented as such; no unbounded `Promise.all` was added beside a correctness fix |
-| **F9** | Capture decoding is strict: a blob whose decoded form does not weigh what git says it weighs (or carries a NUL) is recorded as `omitted: "binary"` with its **true** byte count and its blob id, and its bytes are not captured |
+| **F9** | Capture decoding is strict: a blob whose decoded form does not weigh what git says it weighs (or carries a NUL) is recorded as `omitted: "binary"` with its **true** byte count and its blob id, and its bytes are not captured. **Corrected below**: that comparison was made after a lossy decode and could not see the case it was written for |
 
-### Still open: the person's way in (N2 refinement 4)
+### F9, corrected: the comparison has to be made on bytes
 
-There is **no UI caller** of `verifiedAt` / `person_acceptance` anywhere in the
-merged app — the acceptance door is host-side only, so today a person cannot
-reach it. That is an honest gap, not a claim of completeness, and the seam plan
-for it is in the handoff report: a checkpoint-preview affordance in the
-source-control preview surface plus an accept action in the Task verification
-panel, showing the exact checkpoint and subject and confirming before the host
-is asked. No code for it was written pending approval of that seam.
+The first fix compared `Buffer.from(stdout, "utf8").byteLength` with the size
+git reports — but `runGit` has already decoded `stdout` leniently, and an
+invalid sequence becomes U+FFFD, which re-encodes to three bytes of its own.
+A file whose bytes are `f0 90 80` (a truncated four-byte sequence) therefore
+weighed exactly three bytes after the round trip and passed the test, and its
+mojibake was captured as if it were source. A file that genuinely contains
+U+FFFD passed it too — correctly, but for no reason.
+
+`source-control/read.ts` now reads the blob as **raw bytes** (`readBytes`, a
+bounded `execFile` with `encoding: "buffer"` over the same `gitEnv`, no shell,
+same timeout) and decodes with `TextDecoder("utf-8", { fatal: true })`. Invalid
+or truncated UTF-8 is a decode failure, a NUL is checked on the bytes, and a
+file that really contains U+FFFD is ordinary text and is kept — there is no
+blanket rejection of valid source. `bytes` stays git's own size, the blob id
+stays recorded identity, truncation still cuts on a character boundary, and a
+read that does not account for every byte git promised answers nothing rather
+than storing a partial file as a whole one.
+
+Proved in `packages/host/test/project-work/source-read.test.ts` over real
+repositories: the invalid-sequence file (with the byte-length coincidence
+asserted in the test, so the old check is shown to have passed it), a valid
+Unicode file including U+FFFD, a NUL-carrying file, and a long multi-byte file
+cut on a boundary.
+
+### Closed: the person's way in (N2 refinement 4)
+
+The acceptance door was host-side only; a person could not reach it. It is now
+reachable from the Task's verification panel — **Record my review…** — and the
+honesty of what it records is the whole design of it.
+
+**What it is.** Native evidence is the project's own build, rendered by that
+build, looked at by a person. Laser renders nothing: there is no preview runner
+in this codebase, `CheckpointTrail` is an identity list, and M20's overlay
+shows a diff, which is not a running app. So the dialog records exactly one
+thing a person can honestly assert — *I opened this project's build at this
+checkpoint and compared it with this exact revision* — behind an explicit
+attestation and a typed confirmation of the subject's key. No design code is
+run, no browser is opened, and nothing on this surface is labelled as a
+rendering.
+
+**The tuple is identity, never derivation.** The repository id, object format,
+checkpoint ref and commit all come from the `AttemptRepositoryRecord`s the host
+wrote from git when the attempt was recorded (`project-work.ts`
+`attemptRepositoryRecordSchema`). A workspace with two repositories offers two
+rows with **two different commits**; there is no workspace-wide "commit of this
+turn" and this surface cannot invent one. No new method was added: the identity
+is the Task's own attempt records, and `pi/project/checkpoint/list` answers
+whether that ref is still there, joined on ref **and** per-repository commit.
+
+**The subject is the criterion's authority**, mirroring
+`verification/evaluate.ts`: a `visual` criterion that came from a Design is
+recorded against that Design revision, anything else against the Task's. The
+link is written on that entity with its own `expectedRevisionId`, so a
+revision that has moved is the host's refusal, shown as written.
+
+**When it cannot be used it says so.** No run yet, no visual criterion, or no
+attempt with a checkpoint: the action stays visible and disabled with the
+sentence that names the next act (Verify…, or Start… for a conversation to work
+in). Cancelling, an untiked attestation, a mistyped key, a pruned or moved
+checkpoint and a host refusal all write nothing; Enter confirms nothing; the
+cancelling control takes focus; changing the checkpoint or the subject clears
+the confirmation, because it was about something else; and only the newest
+liveness answer is kept.
+
+**Where it sits.** `components/project-work/native-acceptance.ts` (pure model),
+`NativeAcceptance.tsx` (dialog + action), wired into `VerificationPanel.tsx`.
+After a successful write the Task is read again, so the next run's
+`acceptedPreview()` finds the stored `verified_at` + `person_acceptance` join.
+
+**What stays person-owned, stated rather than automated:** opening the build,
+looking at it, and judging it. The dialog offers *See the files that changed at
+it* (M20's overlay at that turn) as a help, labelled as a diff and never as the
+build. Laser will not grow a browser acceptance harness for this (D-342).
+
+## Short plan · authoritative required sources for a capture (review F1)
+
+**Not yet implemented — this is the plan, for approval before any code.**
+
+**The gap.** `requiredPaths` is helper-only: `buildStateCapture` accepts it and
+nothing supplies it (`gate.ts` `prepareVerifiedAt`, `keepEvidenceReviewable`).
+Even when supplied it is not sound: the tree is sliced to
+`REPOSITORY_CAPTURE_FILES_MAX` **before** required paths are prioritised, a
+required path that is absent from the tree is never noticed, a required path
+that is binary is silently listed rather than refused, and the **parented**
+branch delegates to `buildCapture`, which ignores required paths entirely. The
+result can be an accepted decision whose capture is the first N files of a tree
+plus a marker — not the sources a person would need to review that decision.
+
+**The contract this has to satisfy** (leap, "Repository provenance"): accepted
+evidence must stay *reviewable*; a full durable budget refuses the gate instead
+of accepting digest-only evidence.
+
+### 1 · Where the required set comes from — the host, never the caller
+
+| Case | Required sources |
+| --- | --- |
+| `verified_at` acceptance at a checkpoint that a Task attempt recorded | that attempt's `changedPaths` **for that repositoryId**, as the host wrote them from git (matched by `repositoryId` + the checkpoint's ref/commit) |
+| `verified_at` on a **parented** commit | the paths of its own `commit^ → commit` diff |
+| `implemented_by` delivery | the paths of the accepted change's diff (what `buildCapture` already walks) |
+| a parentless state with **no** attempt record | there is no authoritative change set. A plain `verified_at` write keeps today's behaviour (manifest + bounded sources, no required set); an **acceptance** is refused with what to do (record the attempt, or accept at a checkpoint this Task recorded) |
+
+A caller-supplied `requiredPaths` is removed from the surface: it is not on the
+protocol, and "the agent said these were the files" is exactly the guess the
+attempt record exists to replace (leap: tool calls never contribute paths).
+
+### 2 · Propagation
+
+- `gate.prepareVerifiedAt` derives the set (store lookup over the subject's
+  execution links → `AttemptRepositoryRecord`) and passes it to
+  `buildStateCapture`; the acceptance path and the plain write path both go
+  through it.
+- `gate.keepEvidenceReviewable` derives the same set per link when it backfills,
+  so a gate-time capture is not weaker than a write-time one.
+- `buildCapture` gains the identical `requiredPaths` handling, so the parented
+  branch cannot bypass completeness.
+
+### 3 · Completeness, checked in every variant
+
+One shared helper, used by both `buildCapture` and `buildStateCapture`:
+
+1. **Select before slicing.** Required entries are taken out of the full tree /
+   diff listing first; the file cap then fills from the remainder. A required
+   path beyond `REPOSITORY_CAPTURE_FILES_MAX` can no longer fall off the end.
+2. **Absent is a refusal.** A required path the state does not contain is named
+   and the decision refused — not omitted as "budget".
+3. **Binary is a refusal for a required path.** Its bytes are not reviewable, so
+   a decision resting on it cannot be called durable.
+4. **Truncated is a refusal** (today's rule, kept), as is a read that fails.
+5. **Bounded, or refused.** Required sources are counted inside the existing
+   `REPOSITORY_CAPTURE_BYTES_MAX` / `…SOURCES_MAX`; if the required set alone
+   does not fit, the gate is refused with what to do (accept a smaller change,
+   free space) — never a larger budget and never a repository backup. A
+   `REQUIRED_PATHS_MAX` (= `REPOSITORY_CAPTURE_SOURCES_MAX`) bounds the set
+   itself, and exceeding it is the same actionable refusal.
+
+### 4 · Ordering, idempotency and quota — unchanged
+
+Every refusal above happens **before** `storeCapture`, so a refused acceptance
+costs no quota and writes no blob; the accepted order stays build → store
+(`-32011` accepts nothing) → link transaction; gate-time backfill keeps the
+idempotent `attachCapture`. Nothing about the decision's transaction changes.
+
+### 5 · Tests to write with it
+
+Real git repositories, as the T18 suite does: required paths derived from the
+attempt record rather than from any caller; refusal when a required path is
+absent / binary / truncated / too large; the parented branch refusing on the
+same rule; an acceptance whose capture still reads back after the checkpoint is
+pruned and gc'd; and a refused acceptance leaving the blob count unchanged.
 
 ## Evidence
 
