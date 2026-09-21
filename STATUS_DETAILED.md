@@ -5982,12 +5982,12 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T2 | Stable project identity and canonical store | done | claude-2026-09-21-leap | `b8fb9454`; `env -i … pnpm -F @lasercode/host test` (1068 passed; `project-work/{store,migrations,crash,bounds}.test.ts`) | see notes |
 | M21-T3 | Host authority, methods, policy and event stream | done | claude-2026-09-21-leap | `34f011f4`; `env -i … pnpm -F @lasercode/host test` (1104 passed; `project-work/methods.test.ts` 20, every test asserts zero worker attempts) | see notes |
 | M21-T4 | Bounded bodies, search and derived projections | done | claude-2026-09-21-leap | `ed23525f`; `project-work/bodies.test.ts` 16 over the wire | see notes |
-| M21-T5 | UI client store, reconcile and deep links | todo | — | — | `PLAN.md` M21 |
-| M21-T6 | Embedded workspace shell | todo | — | — | `PLAN.md` M21 |
+| M21-T5 | UI client store, reconcile and deep links | in-progress | claude-2026-09-21-leap | — | see notes |
+| M21-T6 | Embedded workspace shell | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T7 | Specs and Research experience | todo | — | — | `PLAN.md` M21 |
 | M21-T8 | Comments, reviews and approval gates | todo | — | — | `PLAN.md` M21 |
 | M21-T9 | Cross-session and cross-project mentions | todo | — | — | `PLAN.md` M21 |
-| M21-T10 | Design-system manifest and adapter contract | todo | — | — | `PLAN.md` M21 |
+| M21-T10 | Design Index: static facts, synthesis, review, storage | in-progress | claude-2026-09-21-leap | — | see notes |
 | M21-T11 | Framework-neutral DesignTree and React composition engine | todo | — | — | `PLAN.md` M21 |
 | M21-T12 | Native validation runner and source selection | todo | — | — | `PLAN.md` M21 |
 | M21-T13 | Design workspace and anchored review | todo | — | — | `PLAN.md` M21 |
@@ -6004,6 +6004,12 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T24 | End-to-end project lifecycle acceptance | todo | — | — | `PLAN.md` M21 |
 | M21-T25 | Release the project lifecycle leap | todo | — | — | `PLAN.md` M21 |
 | M21-T26 | Research phase: adapters, tools and loop | todo | — | — | `PLAN.md` M21; `docs/research-phase.md` |
+
+#### M21-T5–T6 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap: one UI worker (client store → workspace shell) from the merged spine; plan in `docs/leap/m21-workspace-plan.md`.
+
+#### M21-T10 notes
+- 2026-09-21 claimed by claude-2026-09-21-leap (row title aligned with `PLAN.md` as amended by D-353): worker-side Design Index (L0 parsers, L1 synthesis on `designIndexProfileId`, storage, review, digest cache, bounded Command) in parallel with the UI; plan in `docs/leap/m21-design-index-plan.md`.
 
 #### M21-T1–T4 notes
 - 2026-09-21 T3/T4 done: `project-work/methods.ts` (16 methods, actor person/agent by source, `cwd` resolution on `list`, trust gates mutations only, conflict -32010 / quota -32011, audit rows without bodies), `notifier.ts` (updated always, attention on change), `project_write` scope replaces the `settings` stopgap; `search()` repairs stale projections before answering, `releaseDerived()` labelled release, ranged blob reads. UI capability map pinned by the orchestrator. Wire shapes for T5/T6 and T17/T26 in `docs/leap/m21-spine-plan.md`.
