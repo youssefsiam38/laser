@@ -401,6 +401,34 @@ export function researchHostAllowed(sources: ResearchSources, host: string): { a
 }
 
 // ---------------------------------------------------------------------------
+// The run, as the fleet sees it
+// ---------------------------------------------------------------------------
+
+/**
+ * The id a research run takes in the fleet.
+ *
+ * Namespaced so it can never be mistaken for a shell command's id, an index
+ * build's or a verification run's — the same rule those two already follow
+ * (M21-T13, M21-T19) — and readable in a log. `docs/research-phase.md` asks
+ * for the budget to be visible "in the fleet row and the Research header",
+ * which means a research loop is a Command with a row of its own and a Stop
+ * that reaches it.
+ */
+export function researchFleetTaskId(runId: string): string {
+  return `research-${runId}`;
+}
+
+/** True for a fleet task id a research run minted, so Stop finds it. */
+export function isResearchFleetTaskId(id: string): boolean {
+  return id.startsWith("research-");
+}
+
+/** The run id inside a research fleet task id. */
+export function researchRunIdOf(fleetTaskId: string): string {
+  return fleetTaskId.slice("research-".length);
+}
+
+// ---------------------------------------------------------------------------
 // The two write operations
 // ---------------------------------------------------------------------------
 

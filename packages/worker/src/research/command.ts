@@ -31,10 +31,17 @@ export interface ResearchCommandProgress {
 }
 
 export interface ResearchCommandOptions {
-  /** The research artifact this run writes to. */
-  researchRef: string;
-  /** The root question, for the row's title. */
-  question: string;
+  /** The research artifact this run writes to, when one is named yet. */
+  researchRef?: string;
+  /**
+   * The root question, when this run was opened from one.
+   *
+   * Absent for a loop that starts before any artifact is named — the model
+   * searching before it writes the question tree — and absent from the fleet
+   * row either way: a row says what a run is *doing* and what it is spending,
+   * never what it is looking for.
+   */
+  question?: string;
   ledger?: ResearchLedger;
   budget?: ResearchBudget;
   now?: () => number;
@@ -55,7 +62,7 @@ export class ResearchCommand {
   constructor(private readonly options: ResearchCommandOptions) {
     counter += 1;
     this.id = `res_${String(counter).padStart(4, "0")}`;
-    this.title = `Research · ${options.question.slice(0, 80)}`;
+    this.title = options.question ? `Research · ${options.question.slice(0, 80)}` : "Research";
     this.ledger =
       options.ledger ??
       new ResearchLedger({ budget: options.budget ?? RESEARCH_BUDGET_DEFAULTS, ...(options.now !== undefined ? { now: options.now } : {}) });
@@ -65,7 +72,7 @@ export class ResearchCommand {
     return this.phaseValue;
   }
 
-  get researchRef(): string {
+  get researchRef(): string | undefined {
     return this.options.researchRef;
   }
 
@@ -120,4 +127,41 @@ export class ResearchCommand {
 
 function capitalise(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/**
+ * What each phase is called in a row a person reads.
+ *
+ * Present tense, no percentage, no ETA, and nothing about *what* is being
+ * searched or read: the phase plus the counted spend is the whole line
+ * (`docs/research-phase.md`, "What a person sees": "Progress is the question
+ * tree's states and the budget spent; no percentages, no invented ETA").
+ */
+export const RESEARCH_PHASE_LINES: Record<ResearchPhase, string> = {
+  framing: "Framing the questions",
+  retrieving: "Searching sources",
+  reading: "Reading a source",
+  recording: "Recording a finding",
+  resolving: "Resolving a question",
+  done: "Finished",
+  stopped: "Stopped",
+};
+
+/**
+ * The one line the fleet row shows: the phase, then the budget.
+ *
+ * Content-free by construction: it is built from an enum and four counted
+ * numbers, so a question's text or a source's address cannot reach it. Cut to
+ * `RESEARCH_ROW_ACTIVITY_MAX` all the same, so the row's length is a
+ * guarantee and not an inference about how long four numbers can be.
+ */
+export const RESEARCH_ROW_ACTIVITY_MAX = 200;
+
+export function researchActivityLine(progress: ResearchCommandProgress, stopping = false): string {
+  // `stopping` is a stop that was accepted while a call was still in flight.
+  // The row is still running, so this is the sentence a person reads instead
+  // of the step that is no longer going to finish — and it never says the run
+  // has stopped, because it has not.
+  const phase = stopping ? "Stopping — keeping what this research found" : RESEARCH_PHASE_LINES[progress.phase];
+  return `${phase} · ${progress.line}`.slice(0, RESEARCH_ROW_ACTIVITY_MAX);
 }
