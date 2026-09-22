@@ -44,7 +44,7 @@ export const ROLE_LABELS: Readonly<Record<ResourceProcessRole, string>> = {
   desktop_utility: "Desktop utility",
   host: "Host",
   project_worker: "Project workers",
-  background_command: "Background commands",
+  background_command: "Commands",
   helper: "Helpers",
   unknown_descendant: "Unknown descendants",
 };
@@ -554,7 +554,7 @@ export function retainedStoreRows(input: RetainedStoreInputs): RetainedStoreRow[
     },
     {
       id: "associated-tasks",
-      label: "Associated background tasks",
+      label: "Associated commands",
       owner: "Host snapshot",
       count: association(tasks),
       bytes: unavailable("Associations do not allocate process memory"),
@@ -587,7 +587,7 @@ export function retainedStoreRows(input: RetainedStoreInputs): RetainedStoreRow[
     store("workerSessions", "Worker session runtimes", "Project workers", "T4", true),
     store("workerReplay", "Worker replay buffers", "Project workers", "T4", true),
     store("workerCaches", "Worker project and session caches", "Project workers", "T4", true),
-    store("taskRegistry", "Task records and retained tails", "Workers / host", "T6", true),
+    store("taskRegistry", "Command records and retained tails", "Workers / host", "T6", true),
     // Host-only, so it is exact whatever the workers did: membership lives in
     // this process and nothing was waited on to count it.
     store("deliveryRegistry", "Transcript delivery paths and queues", "Host", "T6"),
@@ -621,7 +621,7 @@ export function resolveRunAssociation(id: string, state: ResourceActionState): {
 
 export function resolveTaskAssociation(id: string, state: ResourceActionState): { path?: string; task?: BackgroundTask; reason?: string } {
   const task = state.tasks[id];
-  if (!task) return { reason: "This task is not currently known to the task registry" };
-  if (!reachable(task.sessionPath, state)) return { reason: "This task’s session is not currently reachable" };
+  if (!task) return { reason: "This command is not currently known to the command register" };
+  if (!reachable(task.sessionPath, state)) return { reason: "This command’s session is not currently reachable" };
   return { path: task.sessionPath, task };
 }

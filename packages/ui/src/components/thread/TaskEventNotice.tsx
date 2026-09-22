@@ -1,11 +1,17 @@
 "use client";
 /**
- * A background task ended (docs/agents.md §6): the `lasercode/task-event`
- * custom message, projected as {@link TASK_EVENT_DATA_PART}. One quiet line —
+ * A Command ended (docs/agents.md §6): the `lasercode/task-event` custom
+ * message, projected as {@link TASK_EVENT_DATA_PART}. One quiet line —
  * what ran, how it ended, how long it took — and the way to its output, which
- * is the task's own row in the fleet: expanded in place in the column, or in
- * the sheet where there is no column. It shares the notice row's grammar, not
- * a card's: a task exiting is bookkeeping, not a reply.
+ * is the Command's own row in the fleet: expanded in place in the column, or
+ * in the sheet where there is no column. It shares the notice row's grammar,
+ * not a card's: a Command exiting is bookkeeping, not a reply.
+ *
+ * **Command is the word a person reads** (M21-T23,
+ * `docs/project-lifecycle-leap.md` "Outside the workspace"): the identifiers,
+ * the protocol method names and the store stay `task`, and nothing a person
+ * reads says "background task" — `Task` is the project's own noun now
+ * (`TASK-44`), and two meanings for one word on one screen is one too many.
  */
 import { SquareTerminal } from "lucide-react";
 import { useCallback } from "react";
@@ -64,7 +70,7 @@ export function TaskEventNotice({ data }: { data: unknown }) {
     >
       <SquareTerminal aria-hidden="true" className="size-3.5 shrink-0" />
       <span className="min-w-0 flex-1 truncate">
-        Background task{" "}
+        Command{" "}
         <code dir="ltr" data-search-content="command" className="typed text-ink" title={task.command}>
           {oneLine(task.command, 60)}
         </code>{" "}
