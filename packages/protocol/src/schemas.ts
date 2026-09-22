@@ -42,6 +42,7 @@ import { memoryPressureParamsSchemas } from "./memory-pressure.js";
 import { environmentParamsSchemas } from "./environment-policy.js";
 import { projectWorkParamsSchemas } from "./project-work-methods.js";
 import { projectWorkInteropParamsSchemas } from "./project-work-interop.js";
+import { projectWorkContinuityParamsSchemas } from "./project-work-continuity.js";
 import { designWorkspaceParamsSchemas } from "./design-workspace.js";
 import { GIT_PR_MERGE_METHODS, GIT_PROSE_KINDS } from "./git-actions.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
@@ -1331,6 +1332,9 @@ export const clientParamsSchemas = {
 
   // --- M21-T21 import, export and publication. Shapes live in project-work-interop.ts ---
   ...projectWorkInteropParamsSchemas,
+
+  // --- M21-T20 project identity across relocation. Shapes live in project-work-continuity.ts ---
+  ...projectWorkContinuityParamsSchemas,
   // --- M21 the design workspace. Shapes live in design-workspace.ts ---
   ...designWorkspaceParamsSchemas,
 } satisfies Record<ClientMethod, z.ZodTypeAny>;

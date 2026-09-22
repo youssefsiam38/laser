@@ -70,7 +70,10 @@ export function commit(dir: string, message: string): string {
  * can see (`docs/source-control-leap.md` §E.1).
  */
 export function checkpoint(repo: string, sessionPath: string, turn: number): string {
-  const indexFile = join(repo, `.git/${PRODUCT_NAME}-test-index-${String(turn)}`);
+  // Asked of git rather than assumed: in a linked worktree `.git` is a file,
+  // and the private directory an isolated index has to live in is elsewhere.
+  const gitDir = git(repo, ["rev-parse", "--absolute-git-dir"]).trim();
+  const indexFile = join(gitDir, `${PRODUCT_NAME}-test-index-${String(turn)}`);
   const env = {
     ...process.env,
     GIT_INDEX_FILE: indexFile,

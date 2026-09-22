@@ -33,6 +33,7 @@ import {
 
 import { Board } from "./Board.js";
 import { CreateDialog } from "./CreateDialog.js";
+import { IdentityNotice } from "./IdentityNotice.js";
 import { ImportExportMenu } from "./ImportExportMenu.js";
 import { Inspector } from "./Inspector.js";
 import { NeedsYou } from "./NeedsYou.js";
@@ -63,6 +64,13 @@ export function ProjectWorkspace() {
   }, [projects, store]);
 
   const retry = useCallback(() => void store?.reconcile(), [store]);
+
+  // What the folder this project was opened at says about itself (M21-T20):
+  // whether it is a copy of another project's folder, and whether this
+  // project's work is being kept hidden after it was removed from the list.
+  useEffect(() => {
+    void store?.checkIdentity();
+  }, [store]);
 
   // Esc returns to the conversation, the same key that closes every overlay.
   useEffect(() => {
@@ -139,6 +147,7 @@ export function ProjectWorkspace() {
       </header>
 
       <BehindNotice offline={work.behind} error={work.error} onRetry={retry} />
+      <IdentityNotice store={store} work={work} />
 
       {work.phase === "loading" && work.items.length === 0 ? (
         <WorkLoading />

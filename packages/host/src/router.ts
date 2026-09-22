@@ -621,8 +621,23 @@ export class Router {
         // separate thing on disk, and it is kept unless this request asked for
         // it to go (M13-T42): a caller that omits the field never destroys work.
         const runs = this.deps.runs;
-        if (!runs) return {};
-        const owned = runs.byChildPath(path);
+        const owned = runs?.byChildPath(path) ?? [];
+        // Project work is never cascaded by a conversation going away (D-329):
+        // the attempts this session made keep their identity, their evidence
+        // and their commits, and the links that named it are marked so the
+        // workspace says the conversation is gone rather than implying the
+        // work was not done (M21-T20).
+        try {
+          this.deps.projectWork?.sessionDeleted({
+            cwd: entry.cwd,
+            sessionId: entry.id,
+            runIds: owned.map((run) => run.runId),
+          });
+        } catch {
+          // Marking is bookkeeping: a store that cannot take it must not turn
+          // deleting a conversation into a failure.
+        }
+        if (!runs) return before ? { worktree: before.status } : {};
         runs.forgetSession(path);
         if (wanted !== "delete") return before ? { worktree: before.status } : {};
         const worktrees = new Map<string, AgentRun>();
@@ -853,14 +868,21 @@ export class Router {
       case "pi/project/list":
         return { projects: this.deps.projects.list() };
 
-      case "pi/project/add":
-        return { project: this.deps.projects.add(req.params.cwd) };
+      case "pi/project/add": {
+        const project = this.deps.projects.add(req.params.cwd);
+        // Adding a project back stops hiding the work that was kept for it.
+        this.deps.projectWork?.projectRestored(project.cwd);
+        return { project };
+      }
 
       case "pi/project/reorder":
         return { projects: this.deps.projects.reorder(req.params.cwds) };
 
       case "pi/project/remove": {
         this.deps.projects.remove(req.params.cwd);
+        // Its project work is hidden, not deleted: it is kept until an
+        // explicit Delete project work (leap, "Relationship graph").
+        this.deps.projectWork?.projectRemoved(req.params.cwd);
         return {};
       }
 
@@ -1276,6 +1298,8 @@ export class Router {
       case "project/work/export/apply":
       case "project/work/publish/preview":
       case "project/work/publish/apply":
+      case "project/work/identity":
+      case "project/work/relink":
         // A client connection is always a person: only the worker bridge
         // (M21-T17) presents an agent, and it does not come through here.
         return this.projectWork().handle(req, { actor, source: "client" });

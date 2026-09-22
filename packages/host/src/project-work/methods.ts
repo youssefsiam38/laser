@@ -66,10 +66,14 @@ import {
   type ProjectWorkWrongProject,
   type ProjectTaskLinkExecutionResult,
   PROJECT_WORK_READ_METHODS,
+  PROJECT_WORK_WRITE_METHODS,
   type VerificationBridgeResult,
   type VerificationDeviation,
   type VerificationEnvelope,
   type ProjectWorkInteropMethod,
+  type ProjectWorkContinuityMethod,
+  type ProjectIdentityResult,
+  type ProjectRelinkResult,
 } from "@lasercode/protocol";
 import { projectRootOf } from "../paths.js";
 import { canonical } from "../trust.js";
@@ -101,6 +105,7 @@ import {
   ProjectWorkRefusedError,
   ProjectWorkUnavailableError,
 } from "./errors.js";
+import { ProjectIdentity, type ProjectMarkerIo } from "./identity.js";
 import { ProjectWorkExport } from "./export/index.js";
 import { ProjectWorkImport } from "./import/index.js";
 import { ProjectWorkPublish } from "./publish/index.js";
@@ -124,9 +129,13 @@ export type ProjectWorkInteropRequest = {
   [M in ProjectWorkInteropMethod]: { method: M; params: ClientRequests[M]["params"] };
 }[ProjectWorkInteropMethod];
 
-export type ProjectWorkRequest = ProjectWorkSpineRequest | ProjectWorkInteropRequest;
+export type ProjectWorkContinuityRequest = {
+  [M in ProjectWorkContinuityMethod]: { method: M; params: ClientRequests[M]["params"] };
+}[ProjectWorkContinuityMethod];
 
-export type ProjectWorkResult = ClientRequests[ProjectWorkMethod | ProjectWorkInteropMethod]["result"];
+export type ProjectWorkRequest = ProjectWorkSpineRequest | ProjectWorkInteropRequest | ProjectWorkContinuityRequest;
+
+export type ProjectWorkResult = ClientRequests[ProjectWorkMethod | ProjectWorkInteropMethod | ProjectWorkContinuityMethod]["result"];
 
 /**
  * Where the call came from.
@@ -166,6 +175,8 @@ export interface ProjectWorkMethodsOptions {
   trustOf?: ((projectRoot: string) => ProjectWorkTrust) | undefined;
   /** Where approve/delete/archive rows are written. Absent = no audit sink. */
   logs?: { record(input: LogInput): unknown } | undefined;
+  /** How the project marker is read and written. Absent = the real files. */
+  marker?: ProjectMarkerIo | undefined;
 }
 
 /** The label a person sees for their own writes when the client sends none. */
@@ -177,6 +188,7 @@ export class ProjectWorkMethods {
   private readonly store: ProjectWorkStore;
   private readonly trustOf: ((projectRoot: string) => ProjectWorkTrust) | undefined;
   private readonly logs: { record(input: LogInput): unknown } | undefined;
+  private readonly identity: ProjectIdentity;
   private imports: ProjectWorkImport | undefined;
   private exports: ProjectWorkExport | undefined;
   private publishes: ProjectWorkPublish | undefined;
@@ -185,6 +197,55 @@ export class ProjectWorkMethods {
     this.store = options.store;
     this.trustOf = options.trustOf;
     this.logs = options.logs;
+    this.identity = new ProjectIdentity({ store: options.store, ...(options.marker ? { marker: options.marker } : {}) });
+  }
+
+  // ------------------------------------------------- continuity (M21-T20)
+
+  /**
+   * The project one folder belongs to, minting an identity if this app has
+   * never seen it — the same answer a first `project/work/list { cwd }` gets.
+   *
+   * This is the only door that mints: a worktree resolves to its owner, a
+   * moved folder reconnects through its marker, and a folder that is only
+   * *remembered* at an old path never inherits another project's work.
+   */
+  projectFor(cwd: string): string {
+    return this.identity.projectIdFor(projectRootOf(canonical(cwd)));
+  }
+
+  /**
+   * A conversation was deleted from this machine.
+   *
+   * Project work is never cascaded by it (D-329): the execution links, the
+   * attempts, their evidence and their repository links all stay exactly as
+   * they are, and the links that pointed at that conversation are marked so
+   * every surface says the session is gone instead of implying the attempt
+   * was not made. Nothing is written when the folder is not a project this
+   * app keeps work for — a delete never mints an identity.
+   */
+  sessionDeleted(input: { cwd: string; sessionId?: string | undefined; runIds?: readonly string[] | undefined }): { links: number } {
+    const root = projectRootOf(canonical(input.cwd));
+    const projectId = this.store.projectIdFor(root, { create: false });
+    if (!projectId) return { links: 0 };
+    const targets = [...(input.sessionId ? [input.sessionId] : []), ...(input.runIds ?? [])];
+    return { links: this.store.markExecutionTargetsUnavailable(projectId, targets).links };
+  }
+
+  /**
+   * The person removed the project from their list. Its work is hidden and
+   * retained until an explicit **Delete project work** (leap, "Relationship
+   * graph"); nothing here deletes a row.
+   */
+  projectRemoved(cwd: string): void {
+    const projectId = this.store.projectIdFor(projectRootOf(canonical(cwd)), { create: false });
+    if (projectId) this.store.removeProject(projectId);
+  }
+
+  /** The project is back in the list: stop hiding what was kept for it. */
+  projectRestored(cwd: string): void {
+    const projectId = this.store.projectIdFor(projectRootOf(canonical(cwd)), { create: false });
+    if (projectId) this.store.restoreProject(projectId);
   }
 
   /**
@@ -197,10 +258,26 @@ export class ProjectWorkMethods {
    */
   async handle(request: ProjectWorkRequest, caller: ProjectWorkCaller): Promise<ProjectWorkResult> {
     try {
-      return await this.route(request, caller);
+      const result = await this.route(request, caller);
+      this.noteWork(request);
+      return result;
     } catch (error) {
       throw toProtocolError(error);
     }
+  }
+
+  /**
+   * A project that now holds work gets a marker in its folder (M21-T20).
+   *
+   * Deliberately after a write and never after a read: until a person has
+   * saved something there is nothing a move could lose, and Laser does not
+   * leave a file in somebody's repository preparing for one. Once there is
+   * work, the folder says which project it is, and moving it keeps it.
+   */
+  private noteWork(request: ProjectWorkRequest): void {
+    if (!(PROJECT_WORK_WRITE_METHODS as readonly string[]).includes(request.method)) return;
+    const projectId = (request.params as { projectId?: string }).projectId;
+    if (projectId !== undefined) this.identity.noteWork(projectId);
   }
 
   /**
@@ -702,7 +779,55 @@ export class ProjectWorkMethods {
         });
         return { ...result, seq: this.store.seq(params.projectId) };
       }
+
+      // ------------------------------- identity across relocation (T20) --
+
+      case "project/work/identity":
+        return this.projectIdentity(request.params.cwd);
+      case "project/work/relink":
+        return this.relinkProject(request.params, caller);
     }
+  }
+
+  /**
+   * What a folder's project is, and the choice it offers (M21-T20).
+   *
+   * A read: it answers with ids, folder names and counts, and it starts no
+   * worker and opens no project file beyond the folder's own marker.
+   */
+  private projectIdentity(cwd: string): ProjectIdentityResult {
+    return this.identity.identity(projectRootOf(canonical(cwd)));
+  }
+
+  /**
+   * Take one of those choices.
+   *
+   * Trust applies to the folder being relinked, because this moves which
+   * history a folder belongs to — the most consequential thing a person can
+   * do to project work short of deleting it.
+   */
+  private relinkProject(params: ClientRequests["project/work/relink"]["params"], caller: ProjectWorkCaller): ProjectRelinkResult {
+    const root = projectRootOf(canonical(params.cwd));
+    this.requireTrusted(root);
+    const result = this.identity.relink({
+      projectRoot: root,
+      choice: params.choice,
+      projectId: params.projectId,
+      previewDigest: params.previewDigest,
+    });
+    this.audit("project_work_relinked", {
+      origin: this.originFor(undefined, caller),
+      caller,
+      projectId: result.projectId,
+      summary: `${params.choice === "reconnect" ? "reconnected" : "kept separate"} ${basename(root) || root}`,
+      detail: {
+        choice: result.choice,
+        projectId: result.projectId,
+        ...(result.previousProjectId ? { previousProjectId: result.previousProjectId } : {}),
+        ...(result.discardedEmpty ? { discardedEmpty: true } : {}),
+      },
+    });
+    return result;
   }
 
   // ------------------------------------------------------- repository facts
@@ -829,10 +954,7 @@ export class ProjectWorkMethods {
     if (params.cwd === undefined) {
       throw new ProjectWorkRefusedError("Name the project by id, or the folder it is open at.");
     }
-    const root = projectRootOf(canonical(params.cwd));
-    const projectId = this.store.projectIdFor(root);
-    if (!projectId) throw new ProjectWorkNotFoundError("That folder is not a project this app keeps work for.");
-    return projectId;
+    return this.identity.projectIdFor(projectRootOf(canonical(params.cwd)));
   }
 
   // --------------------------------------------------------- worker bridge
@@ -844,10 +966,7 @@ export class ProjectWorkMethods {
    * allowed to decide it.
    */
   private projectOf(cwd: string): string {
-    const root = projectRootOf(canonical(cwd));
-    const projectId = this.store.projectIdFor(root);
-    if (!projectId) throw new ProjectWorkNotFoundError("That folder is not a project this app keeps work for.");
-    return projectId;
+    return this.identity.projectIdFor(projectRootOf(canonical(cwd)));
   }
 
   /**
@@ -1178,6 +1297,16 @@ export class ProjectWorkMethods {
    * included. Reads stay open: the store reads no project file, and hiding
    * work a person already wrote would be a worse answer than a refusal here.
    */
+  /** The same gate, for a call that names a folder rather than a project. */
+  private requireTrusted(projectRoot: string): void {
+    if (this.trustOf?.(projectRoot) === "declined") {
+      throw new ProtocolError(
+        ErrorCodes.ProjectUntrusted,
+        "This project's folder is not trusted, so its project work cannot be changed here. Trust the project in Projects to make changes.",
+      );
+    }
+  }
+
   private requireWritable(projectId: string): void {
     this.requireProject(projectId);
     const resolve = this.trustOf;

@@ -39,6 +39,9 @@ import {
   type ProjectWorkQuotaRefusal,
   type ProjectWorkRef,
   type ProjectWorkUpdatedNotification,
+  type ProjectIdentityResult,
+  type ProjectRelinkChoice,
+  type ProjectRelinkResult,
 } from "@lasercode/protocol";
 
 import { byRecency } from "./model.js";
@@ -97,6 +100,13 @@ export interface ProjectWorkSnapshot {
   resets: number;
   /** More rows exist than this window read. The backlog says so. */
   more: boolean;
+  /**
+   * What the folder this project was opened at says about itself (M21-T20):
+   * whether its work is hidden because the project was removed from the list,
+   * and whether the folder is a copy that has a choice waiting on a person.
+   * Undefined until the host has been asked.
+   */
+  identity: ProjectIdentityResult | undefined;
 }
 
 const EMPTY_COUNTS: ProjectWorkCounts = {
@@ -119,6 +129,7 @@ const EMPTY: ProjectWorkSnapshot = {
   loading: false,
   resets: 0,
   more: false,
+  identity: undefined,
 };
 
 // ---------------------------------------------------------------------------
@@ -238,6 +249,69 @@ export class ProjectWorkStore {
   async reconcile(target: { cwd?: string | undefined } = {}): Promise<void> {
     const mode = this.#snapshot.phase === "ready" && this.#snapshot.projectId ? "since" : "full";
     await this.#read({ mode, ...(target.cwd !== undefined ? { cwd: target.cwd } : {}) });
+  }
+
+  // -- identity (M21-T20) ----------------------------------------------------
+
+  /**
+   * Ask the host what the folder this project was opened at is.
+   *
+   * Cheap, and worth asking every time the workspace opens: it is how a
+   * person finds out that the folder they are in was copied from another one
+   * — which is the moment two histories would otherwise quietly merge — and
+   * that a removed project's work is being kept rather than lost.
+   *
+   * A host that does not answer changes nothing on screen: the work reads
+   * exactly as it did, and no notice is shown for a question nobody asked.
+   */
+  async checkIdentity(cwd?: string): Promise<void> {
+    const folder = cwd ?? [...this.#paths][0];
+    if (!folder) return;
+    try {
+      const identity = await this.#request("project/work/identity", { cwd: folder });
+      if (this.#disposed) return;
+      this.#patch({ identity });
+    } catch {
+      // Not knowing is not an error a person needs to read about here.
+    }
+  }
+
+  /**
+   * Take the choice a copied folder offers: continue the project it came
+   * from, or keep this folder's work separate.
+   *
+   * The digest of the preview the person read goes back with it, so a folder
+   * that changed underneath is refused by the host rather than relinked to
+   * something they never saw.
+   */
+  async relink(choice: ProjectRelinkChoice): Promise<ProjectWorkOutcome<ProjectRelinkResult>> {
+    const identity = this.#snapshot.identity;
+    if (!identity) return { ok: false, failure: { kind: "refused", message: "This folder has not been read yet." } };
+    const projectId = choice === "reconnect" ? identity.marked?.projectId : identity.projectId;
+    if (!projectId) return { ok: false, failure: { kind: "refused", message: "There is no other project to reconnect this folder to." } };
+    try {
+      const value = await this.#request("project/work/relink", {
+        cwd: identity.cwd,
+        choice,
+        projectId,
+        previewDigest: identity.previewDigest,
+        confirm: true,
+        idempotencyKey: this.#newKey(),
+      });
+      if (this.#disposed) return { ok: true, value };
+      this.#paths.add(identity.cwd);
+      // Reconnecting is a different project: nothing cached belongs to it, so
+      // the cache is replaced rather than merged into.
+      if (value.projectId !== this.#snapshot.projectId) {
+        this.#patch({ projectId: value.projectId, items: [], counts: EMPTY_COUNTS, seq: 0, eventSeq: 0, phase: "loading", recent: [] });
+      }
+      await this.refresh({ cwd: identity.cwd });
+      await this.checkIdentity(identity.cwd);
+      return { ok: true, value };
+    } catch (error) {
+      await this.checkIdentity(identity.cwd);
+      return { ok: false, failure: describeProjectWorkError(error) };
+    }
   }
 
   // -- live events -----------------------------------------------------------

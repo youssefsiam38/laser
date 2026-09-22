@@ -77,6 +77,12 @@ import type {
   WorkPublishPreviewResult,
 } from "./project-work-interop.js";
 import type {
+  ProjectIdentityParams,
+  ProjectIdentityResult,
+  ProjectRelinkParams,
+  ProjectRelinkResult,
+} from "./project-work-continuity.js";
+import type {
   DesignHostGroundParams,
   DesignHostGroundResult,
   DesignIndexBuildParams,
@@ -2136,6 +2142,17 @@ export interface ClientRequests {
   "project/work/publish/preview": { params: WorkPublishPreviewParams; result: WorkPublishPreviewResult };
   /** Record `published_as` against the exact committed or checkpoint state. */
   "project/work/publish/apply": { params: WorkPublishApplyParams; result: WorkPublishApplyResult };
+
+  // ------------------------------- M21-T20 · identity across relocation ---
+  // A project keeps its id when its folder moves. The host reads the marker
+  // in the folder's own configuration directory, reconnects what it can on
+  // its own, and asks when two live folders claim one history. Shapes live in
+  // `project-work-continuity.ts`.
+
+  /** What this folder's project is, what it holds, and any choice it offers. */
+  "project/work/identity": { params: ProjectIdentityParams; result: ProjectIdentityResult };
+  /** Take one of those choices: reconnect this folder, or start fresh. */
+  "project/work/relink": { params: ProjectRelinkParams; result: ProjectRelinkResult };
   // ------------------------------------------- M21 · the design workspace --
   // Answered by the project's own worker, not by the host: the index, the
   // review document and the templates behind them are files in the project
