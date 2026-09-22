@@ -43,6 +43,12 @@ export interface ProjectWorkHarnessOptions {
    * caller owns the directory; this harness only closes its own store.
    */
   dir?: string;
+  /**
+   * Conversations this host knows about, for the routes that read the
+   * catalog (`pi/session/delete`). Empty by default: most suites here never
+   * touch a session file.
+   */
+  sessions?: Array<{ path: string; id: string; cwd: string }>;
 }
 
 export interface ProjectWorkHarness {
@@ -111,13 +117,20 @@ export function projectWorkHarness(options: ProjectWorkHarnessOptions = {}): Pro
     broadcastRequest: async () => reachedForAWorker("broadcast"),
   } as unknown as WorkerPool;
 
+  const sessions = new Map((options.sessions ?? []).map((entry) => [entry.path, entry]));
   const catalog = {
-    list: () => [],
-    get: () => undefined,
-    getListed: () => undefined,
-    cwdOf: () => undefined,
-    cwdCounts: () => new Map<string, number>(),
-    invalidate: () => {},
+    list: () => [...sessions.values()],
+    get: (path: string) => sessions.get(path),
+    getListed: (path: string) => sessions.get(path),
+    cwdOf: (path: string) => sessions.get(path)?.cwd,
+    cwdCounts: () => {
+      const counts = new Map<string, number>();
+      for (const entry of sessions.values()) counts.set(entry.cwd, (counts.get(entry.cwd) ?? 0) + 1);
+      return counts;
+    },
+    invalidate: (path: string) => {
+      sessions.delete(path);
+    },
   } as unknown as SessionCatalog;
 
   const router = new Router(pool, catalog, {
@@ -130,7 +143,10 @@ export function projectWorkHarness(options: ProjectWorkHarnessOptions = {}): Pro
   });
 
   const projectRoot = join(dir, "alpha");
-  const projectId = store.projectIdFor(projectRoot)!;
+  // Through the authority, exactly as a first `project/work/list { cwd }`
+  // does: a folder that exists gets its marker, and nothing in the product
+  // mints an identity any other way (M21-T20).
+  const projectId = methods.projectFor(projectRoot);
   let id = 0;
 
   return {

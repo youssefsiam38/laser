@@ -419,6 +419,14 @@ export const METHOD_POLICY = {
   "project/work/export/apply": { scope: "project_write", reach: "any" },
   "project/work/publish/preview": { scope: "project_write", reach: "any" },
   "project/work/publish/apply": { scope: "project_write", reach: "any" },
+
+  // Identity across relocation (M21-T20). Reading what a folder's project is
+  // and what it holds is `read`: it answers with counts and ids, no body and
+  // no project file. Relinking moves a folder from one project's history to
+  // another's, which is authority over the project, so it is `project_write`
+  // and carries `confirm` plus the digest of the preview it was decided from.
+  "project/work/identity": { scope: "read", reach: "any" },
+  "project/work/relink": { scope: "project_write", reach: "any" },
   // ------------------------------------------ M21 · the design workspace ---
   // Reading a project's Design Index is reading derived product state, so it
   // is `read` and reaches every authenticated connection: a phone reviews the

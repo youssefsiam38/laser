@@ -554,14 +554,22 @@ export class ProjectWorkStore {
    * worktree session see the same Specs and Tasks. A path this store has never
    * seen mints a new id unless `create` says otherwise.
    */
-  projectIdFor(projectRoot: string, options: { create?: boolean } = {}): string | undefined {
+  projectIdFor(projectRoot: string, options: { create?: boolean; adopt?: string } = {}): string | undefined {
     const known = this.statement("SELECT project_id FROM project_paths WHERE path = ?").get(projectRoot) as { project_id: string } | undefined;
     if (known) return known.project_id;
     if (options.create === false) return undefined;
     return this.write(() => {
       const again = this.statement("SELECT project_id FROM project_paths WHERE path = ?").get(projectRoot) as { project_id: string } | undefined;
       if (again) return again.project_id;
-      const projectId = mintProjectId();
+      // `adopt` is the id a folder's own marker carries for a project this
+      // store has never seen — the same folder opened by a second install, or
+      // by one whose database was restored from before it existed (M21-T20).
+      // Taking that id keeps one folder to one identity across machines; the
+      // caller has already checked that nothing here holds it.
+      const projectId =
+        options.adopt !== undefined && this.statement("SELECT 1 AS present FROM projects WHERE project_id = ?").get(options.adopt) === undefined
+          ? options.adopt
+          : mintProjectId();
       const now = this.now();
       this.statement("INSERT INTO projects (project_id, created_at) VALUES (?,?)").run(projectId, now);
       this.statement("INSERT INTO project_paths (path, project_id, current, seen_at) VALUES (?,?,1,?)").run(projectRoot, projectId, now);
@@ -577,6 +585,21 @@ export class ProjectWorkStore {
   /** True when this id names a project the store knows. */
   hasProject(projectId: string): boolean {
     return this.statement("SELECT 1 AS present FROM projects WHERE project_id = ?").get(projectId) !== undefined;
+  }
+
+  /**
+   * What this store remembers about one folder: which project it belonged to
+   * and whether it is that project's current folder (M21-T20).
+   *
+   * A folder that is not the project's current one is *history* — the project
+   * has moved on — and history alone may not hand a new folder at the old
+   * path another project's work ("a path match alone never merges").
+   */
+  projectPathRow(projectRoot: string): { projectId: string; current: boolean } | undefined {
+    const row = this.statement("SELECT project_id, current FROM project_paths WHERE path = ?").get(projectRoot) as
+      | { project_id: string; current: number }
+      | undefined;
+    return row ? { projectId: row.project_id, current: row.current === 1 } : undefined;
   }
 
   /** Every path this project has been opened at, current first. */
@@ -616,6 +639,27 @@ export class ProjectWorkStore {
   }
 
   /**
+   * Forget one folder this project used to be open at (M21-T20).
+   *
+   * Used when a person reconnects a **copy** of a project folder: the folder
+   * the copy was made from is still on disk, and leaving its row would map two
+   * live folders to one history — the merge the contract forbids. History of
+   * folders that no longer exist is kept; this removes exactly one row, and
+   * credits what it was charged (D-365).
+   */
+  forgetProjectPath(projectId: string, projectRoot: string): boolean {
+    const row = this.statement("SELECT current FROM project_paths WHERE path = ? AND project_id = ?").get(projectRoot, projectId) as
+      | { current: number }
+      | undefined;
+    if (!row || row.current === 1) return false;
+    return this.write(() => {
+      this.creditRows("project_paths", projectId, "path = ? AND project_id = ?", [projectRoot, projectId]);
+      this.statement("DELETE FROM project_paths WHERE path = ? AND project_id = ?").run(projectRoot, projectId);
+      return true;
+    });
+  }
+
+  /**
    * The person removed the project from their list. Its work is retained, and
    * hidden, until an explicit delete (leap, "Relationship graph").
    */
@@ -623,6 +667,72 @@ export class ProjectWorkStore {
     this.write(() => {
       this.statement("UPDATE projects SET removed_at = ? WHERE project_id = ?").run(this.now(), projectId);
       this.chargeRow("projects", projectId, "project_id = ?", [projectId]);
+    });
+  }
+
+  /**
+   * The person put the project back in their list, or opened its folder
+   * again. Nothing was lost while it was hidden; this only stops hiding it.
+   */
+  restoreProject(projectId: string): void {
+    if (!this.isRemoved(projectId)) return;
+    this.write(() => {
+      this.statement("UPDATE projects SET removed_at = NULL WHERE project_id = ?").run(projectId);
+      this.chargeRow("projects", projectId, "project_id = ?", [projectId]);
+    });
+  }
+
+  /** How many entities this project holds, hidden or not. */
+  entityCount(projectId: string): number {
+    const row = this.statement("SELECT COUNT(*) AS n FROM entities WHERE project_id = ?").get(projectId) as { n: number } | undefined;
+    return Number(row?.n ?? 0);
+  }
+
+  /**
+   * The session or run these execution links point at is gone from this
+   * machine (M21-T20).
+   *
+   * Deleting a conversation never deletes project work: the leap keeps *"its
+   * references and execution history as unavailable links"*. So this marks,
+   * and marks only — the attempt keeps its number, its base commit, its
+   * checkpoints, its repository records and its evidence, and the surfaces
+   * that read it say the session is no longer here instead of pretending the
+   * attempt never happened.
+   *
+   * Every touched row is re-charged, because a marked row is a canonical row
+   * whose bytes changed (D-365).
+   */
+  markExecutionTargetsUnavailable(projectId: string, targetIds: readonly string[]): { links: number; entities: number } {
+    const wanted = [...new Set(targetIds.filter((id) => id.length > 0))];
+    if (wanted.length === 0 || !this.hasProject(projectId)) return { links: 0, entities: 0 };
+    const placeholders = wanted.map(() => "?").join(",");
+    const rows = this.statement(
+      `SELECT link_id, entity_id FROM execution_links WHERE project_id = ? AND target_unavailable = 0 AND target_id IN (${placeholders})`,
+    ).all(projectId, ...wanted) as Array<{ link_id: string; entity_id: string }>;
+    if (rows.length === 0) return { links: 0, entities: 0 };
+    return this.write(() => {
+      const now = this.now();
+      for (const row of rows) {
+        this.statement("UPDATE execution_links SET target_unavailable = 1 WHERE link_id = ?").run(row.link_id);
+        this.chargeRow("execution_links", projectId, "link_id = ?", [row.link_id]);
+      }
+      const entities = [...new Set(rows.map((row) => row.entity_id))];
+      for (const entityId of entities) {
+        const entity = this.statement("SELECT * FROM entities WHERE project_id = ? AND entity_id = ?").get(projectId, entityId) as
+          | Record<string, unknown>
+          | undefined;
+        if (!entity) continue;
+        this.raise(projectId, {
+          change: "execution",
+          entityId,
+          entityKind: entity["kind"] as ProjectWorkKind,
+          key: entity["key"] as string,
+          title: entity["title"] as string,
+          state: entity["state"] as ProjectWorkState,
+          at: now,
+        });
+      }
+      return { links: rows.length, entities: entities.length };
     });
   }
 

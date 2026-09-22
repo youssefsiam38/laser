@@ -31,6 +31,7 @@ import {
 } from "../src/index.js";
 import { sampleMethodParams as projectWorkSamples } from "./project-work-samples.js";
 import { sampleInteropMethodParams as projectWorkInteropSamples } from "./project-work-interop-samples.js";
+import { sampleContinuityMethodParams as projectWorkContinuitySamples } from "./project-work-continuity-samples.js";
 import { sampleDesignWorkspaceParams } from "./design-workspace-samples.js";
 
 /** One valid params sample per method. The compiler-checked `satisfies` in schemas.ts
@@ -349,6 +350,8 @@ const samples: Record<ClientMethod, unknown> = {
   ...projectWorkSamples,
   // M21-T21 import, export and publication.
   ...projectWorkInteropSamples,
+  // M21-T20 identity across relocation.
+  ...projectWorkContinuitySamples,
   ...sampleDesignWorkspaceParams,
 };
 
