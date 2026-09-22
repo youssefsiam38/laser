@@ -116,7 +116,7 @@ export function SpecBodyView({ body }: { body: SpecBody }) {
             {body.requirements.map((requirement) => (
               <li key={requirement.id} className="flex min-w-0 items-start gap-2">
                 <Badge variant={requirement.level === "must" ? "attention" : "outline"}>{requirement.level}</Badge>
-                <span className="min-w-0 text-sm leading-5 text-ink-2">{requirement.text}</span>
+                <span className="min-w-0 flex-1"><Prose text={requirement.text} /></span>
               </li>
             ))}
           </ul>
@@ -130,7 +130,7 @@ export function SpecBodyView({ body }: { body: SpecBody }) {
                 <Badge variant={criterion.machineVerifiable ? "live" : "outline"}>
                   {criterion.machineVerifiable ? "checkable" : "by a person"}
                 </Badge>
-                <span className="min-w-0 text-sm leading-5 text-ink-2">{criterion.text}</span>
+                <span className="min-w-0 flex-1"><Prose text={criterion.text} /></span>
               </li>
             ))}
           </ul>

@@ -8,13 +8,13 @@
  * keyboard, 44px under a coarse pointer, and made of tokens.
  */
 import { Plus, X } from "lucide-react";
-import { useId, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
-import { MarkdownDocument } from "@/components/assistant-ui/elements/markdown-document";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+
+import { MarkdownAuthoringField } from "../MarkdownAuthoringField.js";
 
 /** A labelled block inside an editor. The label is a real `<label>` where it can be. */
 export function Field({
@@ -54,26 +54,27 @@ export function TextField({
   value,
   onChange,
   placeholder,
-  className,
+  editorKey,
+  maxLength,
 }: {
   label: string;
   hint?: ReactNode;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
-  className?: string;
+  editorKey?: string;
+  maxLength?: number;
 }) {
-  const id = useId();
   return (
-    <Field label={label} hint={hint} htmlFor={id}>
-      <Textarea
-        id={id}
-        value={value}
-        placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
-        className={cn("max-h-64 text-sm leading-5", className)}
-      />
-    </Field>
+    <MarkdownAuthoringField
+      editorKey={editorKey ?? label}
+      label={label}
+      value={value}
+      onChange={onChange}
+      {...(typeof hint === "string" ? { hint } : {})}
+      {...(placeholder !== undefined ? { placeholder } : {})}
+      {...(maxLength !== undefined ? { maxLength } : {})}
+    />
   );
 }
 
@@ -115,6 +116,55 @@ export function LineListField({
               aria-label={`Remove ${label.toLocaleLowerCase()} ${index + 1}`}
               onClick={() => remove(index)}
             >
+              <X />
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <div>
+        <Button size="xs" variant="outline" onClick={() => onChange([...values, ""])}>
+          <Plus />
+          {addLabel}
+        </Button>
+      </div>
+    </Field>
+  );
+}
+
+/** An ordered prose list: every row gets the same highlighted Write/Preview path. */
+export function MarkdownListField({
+  label,
+  hint,
+  values,
+  onChange,
+  placeholder,
+  addLabel,
+  editorKey,
+}: {
+  label: string;
+  hint?: ReactNode;
+  values: readonly string[];
+  onChange: (values: string[]) => void;
+  placeholder: string;
+  addLabel: string;
+  editorKey: string;
+}) {
+  const set = (index: number, value: string): void => onChange(values.map((existing, at) => (at === index ? value : existing)));
+  return (
+    <Field label={label} hint={hint}>
+      <ul role="list" className="flex flex-col gap-2">
+        {values.map((value, index) => (
+          <li key={index} className="flex min-w-0 items-start gap-1.5 rounded-lg border border-line p-2">
+            <div className="min-w-0 flex-1">
+              <MarkdownAuthoringField
+                editorKey={`${editorKey}-${index}`}
+                label={`${label} ${index + 1}`}
+                value={value}
+                onChange={(next) => set(index, next)}
+                placeholder={placeholder}
+              />
+            </div>
+            <Button size="icon-sm" variant="ghost" aria-label={`Remove ${label.toLocaleLowerCase()} ${index + 1}`} onClick={() => onChange(values.filter((_, at) => at !== index))}>
               <X />
             </Button>
           </li>
@@ -182,50 +232,24 @@ export function MarkdownField({
   value,
   onChange,
   placeholder,
-  view,
-  onViewChange,
+  editorKey,
+  maxLength,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
-  view: "source" | "preview";
-  onViewChange: (view: "source" | "preview") => void;
+  editorKey?: string;
+  maxLength?: number;
 }) {
-  const id = useId();
   return (
-    <Field
+    <MarkdownAuthoringField
+      editorKey={editorKey ?? label}
       label={label}
-      htmlFor={view === "source" ? id : undefined}
-      action={
-        <Segmented
-          label={`${label} view`}
-          value={view}
-          onChange={onViewChange}
-          options={[
-            { value: "source", label: "Source" },
-            { value: "preview", label: "Preview" },
-          ]}
-        />
-      }
-    >
-      {view === "source" ? (
-        <Textarea
-          id={id}
-          value={value}
-          placeholder={placeholder}
-          onChange={(event) => onChange(event.target.value)}
-          className="typed max-h-[28rem] min-h-48 leading-5"
-        />
-      ) : value.trim() === "" ? (
-        <p className="rounded-lg border border-line bg-surface p-3 text-sm leading-5 text-ink-3">
-          Nothing written yet. Switch to Source and start the document.
-        </p>
-      ) : (
-        <div data-slot="markdown-preview" className="rounded-lg border border-line bg-surface p-3">
-          <MarkdownDocument text={value} measure="prose" />
-        </div>
-      )}
-    </Field>
+      value={value}
+      onChange={onChange}
+      {...(placeholder !== undefined ? { placeholder } : {})}
+      {...(maxLength !== undefined ? { maxLength } : {})}
+    />
   );
 }

@@ -21,7 +21,7 @@
  *   unanswerable or add one** — those are body writes through
  *   `project/work/revise`, fenced by the revision being read.
  */
-import { ExternalLink, FileText, HelpCircle, Quote as QuoteIcon } from "lucide-react";
+import { Check, ExternalLink, FileText, HelpCircle, Pencil, Quote as QuoteIcon, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { ResearchBody, ResearchFinding, ResearchQuestionState, SourceRef } from "@lasercode/protocol";
 
@@ -62,8 +62,10 @@ import { useLaserStable } from "@/runtime";
 import type { Status } from "@/components/status";
 
 import { KeyTag } from "../KindBadge.js";
+import { MarkdownAuthoringField, MarkdownEditorActivationProvider } from "../MarkdownAuthoringField.js";
 import { quoteIntoComposer } from "../quote.js";
 import type { WorkBodyContext } from "./context.js";
+import { Field, MarkdownListField } from "./editor-fields.js";
 import { ListSection, Prose, Section, Tags } from "./fields.js";
 
 const QUESTION_MARK: Readonly<Record<ResearchQuestionState, Status>> = {
@@ -84,6 +86,39 @@ export function ResearchDetail({ body, context }: { body: ResearchBody; context:
   const orphans = useMemo(() => uncitedFindings(body), [body]);
   const spend = retrievalSpend(body);
   const status = deriveResearchStatus(body);
+  const [framing, setFraming] = useState<{ title: string; question: string; in: string[]; out: string[]; constraints: string[] }>();
+  const [savingFraming, setSavingFraming] = useState(false);
+  const [framingError, setFramingError] = useState<string>();
+
+  const saveFraming = async (): Promise<void> => {
+    if (!framing || !context.store) return;
+    const root = body.questions.find((question) => question.parent === undefined && question.text === body.question)
+      ?? body.questions.find((question) => question.parent === undefined);
+    if (!root) {
+      setFramingError("This revision has no stable root question to revise. Add the root through the research loop first.");
+      return;
+    }
+    setSavingFraming(true);
+    setFramingError(undefined);
+    const next: ResearchBody = {
+      ...body,
+      question: framing.question,
+      scope: { in: framing.in, out: framing.out, constraints: framing.constraints },
+      questions: body.questions.map((question) => question.id === root.id ? { ...question, text: framing.question } : question),
+    };
+    const outcome = await context.store.revise(
+      { entityId: context.detail.entity.entityId, expectedRevisionId: context.detail.revision.revisionId },
+      { kind: "research", research: next },
+      framing.title.trim() !== context.detail.revision.title ? { title: framing.title.trim() } : {},
+    );
+    setSavingFraming(false);
+    if (!outcome.ok) {
+      setFramingError(outcome.failure.message);
+      return;
+    }
+    setFraming(undefined);
+    context.onChanged();
+  };
 
   // `supports` edges are what makes a Research part of a decision. With none
   // it is standalone — complete, not pending (D-352).
@@ -112,9 +147,23 @@ export function ResearchDetail({ body, context }: { body: ResearchBody; context:
             ))}
           </span>
         )}
+        {context.editable && !framing ? (
+          <Button
+            size="xs"
+            variant="outline"
+            className="ms-auto"
+            onClick={() => {
+              setFraming({ title: context.detail.revision.title, question: body.question, in: [...body.scope.in], out: [...body.scope.out], constraints: [...body.scope.constraints] });
+              setFramingError(undefined);
+            }}
+          >
+            <Pencil />
+            Edit framing
+          </Button>
+        ) : null}
         <Tooltip>
           <TooltipTrigger asChild>
-            <span tabIndex={0} className="typed ms-auto tnum text-ink-3 outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live">
+            <span tabIndex={0} className={cn("typed tnum text-ink-3 outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live", (!context.editable || framing) && "ms-auto")}>
               {spend.sources} sources · {spend.findings} findings · {spend.resolved}/{spend.questions} questions settled
             </span>
           </TooltipTrigger>
@@ -125,12 +174,45 @@ export function ResearchDetail({ body, context }: { body: ResearchBody; context:
         </Tooltip>
       </div>
 
-      <Section title="Question">
-        <Prose text={body.question} className="text-ink" />
-      </Section>
-      <ListSection title="In scope" items={body.scope.in} />
-      <ListSection title="Out of scope" items={body.scope.out} />
-      <ListSection title="Constraints" items={body.scope.constraints} />
+      {framing ? (
+        <div data-slot="research-framing-editor" className="flex flex-col gap-4 rounded-lg border border-line bg-surface p-3">
+          {framingError ? <p role="alert" className="text-sm leading-5 text-danger">{framingError} Your draft is still here.</p> : null}
+          <Field label="Title" htmlFor="research-title">
+            <Input id="research-title" value={framing.title} maxLength={200} onChange={(event) => setFraming({ ...framing, title: event.target.value })} />
+          </Field>
+          <MarkdownEditorActivationProvider active>
+            <MarkdownAuthoringField
+              editorKey="research-question"
+              label="Question"
+              value={framing.question}
+              onChange={(question) => setFraming({ ...framing, question })}
+              placeholder="What must this research settle?"
+            />
+            <MarkdownListField editorKey="research-in-scope" label="In scope" values={framing.in} onChange={(value) => setFraming({ ...framing, in: value })} placeholder="Included boundary" addLabel="Add in-scope boundary" />
+            <MarkdownListField editorKey="research-out-of-scope" label="Out of scope" values={framing.out} onChange={(value) => setFraming({ ...framing, out: value })} placeholder="Excluded boundary" addLabel="Add out-of-scope boundary" />
+            <MarkdownListField editorKey="research-constraint" label="Constraints" values={framing.constraints} onChange={(value) => setFraming({ ...framing, constraints: value })} placeholder="Constraint" addLabel="Add a constraint" />
+          </MarkdownEditorActivationProvider>
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            <Button size="sm" variant="ghost" disabled={savingFraming} onClick={() => { setFraming(undefined); setFramingError(undefined); }}>
+              <X />
+              Cancel
+            </Button>
+            <Button size="sm" disabled={savingFraming || framing.title.trim() === "" || framing.question.trim() === ""} onClick={() => void saveFraming()}>
+              <Check />
+              {savingFraming ? "Saving…" : "Save as a new revision"}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <Section title="Question">
+            <Prose text={body.question} className="text-ink" />
+          </Section>
+          <ListSection title="In scope" items={body.scope.in} />
+          <ListSection title="Out of scope" items={body.scope.out} />
+          <ListSection title="Constraints" items={body.scope.constraints} />
+        </>
+      )}
 
       <div className={cn("flex min-w-0 gap-4", wide ? "flex-row items-start" : "flex-col")}>
         <div className={cn("flex min-w-0 flex-col gap-3", wide && "w-[clamp(14rem,32%,22rem)] shrink-0")}>
@@ -279,10 +361,22 @@ function QuestionPanel({
       <div data-slot="question-findings" className="flex min-w-0 flex-col">
         <Section title="Findings">
           {findings.length === 0 ? (
-            <p className="max-w-(--measure-prose) text-sm leading-5 text-ink-2">
-              No findings yet — the research loop records them{" "}
-              <span className="text-ink-3">as it reads sources, one finding per claim, each with its excerpt and licence.</span>
-            </p>
+            <div className="flex flex-col items-start gap-2">
+              <p className="max-w-(--measure-prose) text-sm leading-5 text-ink-2">
+                No findings yet — the research loop records them{" "}
+                <span className="text-ink-3">as it reads sources, one finding per claim, each with its excerpt and licence.</span>
+              </p>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => {
+                  const request = `Continue ${context.detail.entity.key}: research “${question.text}” and record findings with sources.`;
+                  quoteIntoComposer({ text: request, workKey: context.detail.entity.key });
+                }}
+              >
+                Continue this research
+              </Button>
+            </div>
           ) : (
             <ul role="list" className="flex flex-col gap-2">
               {findings.map((finding) => (

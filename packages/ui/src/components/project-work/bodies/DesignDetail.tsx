@@ -19,13 +19,14 @@
  * The phone gets the same canvas, read-only: pan, zoom, tap to inspect, and a
  * full-screen prototype. Editing needs a wider window, and it says so.
  */
-import { Layers, Maximize2, Play, RefreshCw, Save, Undo2, X } from "lucide-react";
+import { Layers, Maximize2, Pencil, Play, RefreshCw, Save, Undo2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ClientRequests, DesignBody, DesignIndex, DesignIndexEntry, DesignTokenGroup, DesignTreeVocabulary } from "@lasercode/protocol";
 import { designAggregateFidelity, designIsSketchOnly, designTokenDocumentSchema, validateDesignBody } from "@lasercode/protocol";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { DesignCanvas } from "@/components/design/DesignCanvas";
 import { DesignIndexPanel, type DesignIndexAccess } from "@/components/design/DesignIndexPanel";
 import { FlowsPanel } from "@/components/design/FlowsPanel";
@@ -50,9 +51,11 @@ import { designPins, pinsForScreen } from "@/design/review";
 import { SKETCH_GATE_REFUSAL } from "@/design/sketch";
 import { frameTokens } from "@/design/tokens";
 import { designIsEmpty, nodeOf, nudgeNode, reorderChild, screenOf, screenOfNode, setNodeText } from "@/design/tree-model";
+import { MarkdownAuthoringField, MarkdownEditorActivationProvider } from "../MarkdownAuthoringField.js";
 import { quoteIntoComposer } from "../quote.js";
 
 import type { WorkBodyContext } from "./context.js";
+import { Field } from "./editor-fields.js";
 import { EmptyBody, Prose, Section } from "./fields.js";
 
 // The sections are their own modules (`components/design/*`); this file is
@@ -118,13 +121,16 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
 
   // -- the draft ------------------------------------------------------------
   const [draft, setDraft] = useState<DesignBody>(body);
+  const [title, setTitle] = useState(context.detail.revision.title);
   const [saving, setSaving] = useState(false);
+  const [briefEditing, setBriefEditing] = useState(false);
   const [conflict, setConflict] = useState<string | undefined>(undefined);
   useEffect(() => {
     setDraft(body);
+    setTitle(context.detail.revision.title);
     setConflict(undefined);
-  }, [body]);
-  const dirty = draft !== body;
+  }, [body, context.detail.revision.title]);
+  const dirty = draft !== body || title.trim() !== context.detail.revision.title;
   const editable = context.editable && !compact;
   const readOnlyReason = compact ? "Editing a design needs a wider window. Here you can read it, inspect any node and play it." : context.readOnlyReason;
 
@@ -139,11 +145,12 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
     const outcome = await context.store.revise(
       { entityId: context.detail.entity.entityId, expectedRevisionId: context.detail.revision.revisionId },
       { kind: "design", design: draft },
-      { note: "Edited on the canvas" },
+      { note: "Edited on the design surface", ...(title.trim() !== context.detail.revision.title ? { title: title.trim() } : {}) },
     );
     setSaving(false);
     if (outcome.ok) {
       actions.toast("info", `${context.detail.entity.key} · revision ${outcome.value.revision.index} saved`);
+      setBriefEditing(false);
       context.onChanged();
       return;
     }
@@ -152,7 +159,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
       return;
     }
     actions.toast("error", outcome.failure.message);
-  }, [actions, context, draft, vocabulary]);
+  }, [actions, context, draft, title, vocabulary]);
 
   // -- selection ------------------------------------------------------------
   const [selectedScreenId, setSelectedScreenId] = useState<string | undefined>(() => body.screens[0]?.id);
@@ -382,18 +389,60 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
   // foundation and screens can still be read as a design.
   const foundation = draft.foundation;
   const nothingDrawn = designIsEmpty(draft);
+  const briefBlock = briefEditing ? (
+    <div className="flex flex-col gap-4">
+      <Field label="Title" htmlFor="design-title">
+        <Input id="design-title" value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} />
+      </Field>
+      <MarkdownEditorActivationProvider active>
+      <MarkdownAuthoringField
+        editorKey="design-brief"
+        label="Brief"
+        value={draft.brief}
+        onChange={(brief) => setDraft((current) => ({ ...current, brief }))}
+        placeholder="What should this experience make possible?"
+      />
+      </MarkdownEditorActivationProvider>
+    </div>
+  ) : (
+    <Section title="Brief">
+      <Prose text={draft.brief} />
+    </Section>
+  );
 
   if (!foundation && nothingDrawn) {
     return (
       <div data-slot="design-detail" className="flex flex-col gap-5">
-        <Section title="Brief">
-          <Prose text={draft.brief} />
-        </Section>
+        <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
+          <Badge variant="live">Proposed</Badge>
+          <span className="text-xs leading-xs text-ink-3">0 screens · 0 flows · nothing drawn yet</span>
+          {editable ? (
+            <span className="ms-auto flex items-center gap-1.5">
+              {!briefEditing ? <Button size="sm" variant="outline" onClick={() => setBriefEditing(true)}><Pencil />Edit brief</Button> : null}
+              <Button size="sm" variant="ghost" disabled={!dirty || saving} onClick={() => { setDraft(body); setTitle(context.detail.revision.title); setBriefEditing(false); }}><Undo2 />Discard</Button>
+              <Button size="sm" disabled={!dirty || saving || title.trim() === ""} onClick={() => void save()}><Save />{saving ? "Saving…" : "Save revision"}</Button>
+            </span>
+          ) : null}
+        </div>
+        {conflict ? <p role="alert" data-slot="revision-conflict" className="rounded-lg border border-attention/40 p-3 text-sm text-ink-2">{conflict} Your edits are still here.</p> : null}
+        {briefBlock}
         <EmptyBody
           what="This design has a brief and nothing drawn yet."
           next="Screens arrive as the model composes them from this project's design index — or as a sketch, when the ask is exploratory. Ask for either in the chat with this design open."
         />
-        <FoundationStart access={access} editable={editable} onStart={startFoundation} />
+        <div className="flex flex-wrap items-center gap-2">
+          <FoundationStart access={access} editable={editable} onStart={startFoundation} />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              const request = `Compose screens for ${context.detail.entity.key} from its brief and this project's design index.`;
+              quoteIntoComposer({ text: request, workKey: context.detail.entity.key });
+            }}
+          >
+            Compose screens
+          </Button>
+        </div>
         {inContext ? (
           <HostContextPanel
             body={draft}
@@ -523,11 +572,17 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
           />
           {editable ? (
             <>
-              <Button size="sm" variant="ghost" disabled={!dirty || saving} onClick={() => setDraft(body)}>
+              {!briefEditing ? (
+                <Button size="sm" variant="outline" onClick={() => setBriefEditing(true)}>
+                  <Pencil />
+                  Edit brief
+                </Button>
+              ) : null}
+              <Button size="sm" variant="ghost" disabled={!dirty || saving} onClick={() => { setDraft(body); setTitle(context.detail.revision.title); setBriefEditing(false); }}>
                 <Undo2 />
                 Discard
               </Button>
-              <Button size="sm" disabled={!dirty || saving} onClick={() => void save()}>
+              <Button size="sm" disabled={!dirty || saving || title.trim() === ""} onClick={() => void save()}>
                 <Save />
                 {saving ? "Saving…" : "Save revision"}
               </Button>
@@ -535,6 +590,8 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
           ) : null}
         </span>
       </div>
+
+      {briefBlock}
 
       {conflict ? (
         <div role="alert" data-slot="revision-conflict" className="flex flex-wrap items-center gap-2 rounded-lg border border-attention/40 bg-[color-mix(in_oklab,var(--attention)_10%,transparent)] px-3 py-2">

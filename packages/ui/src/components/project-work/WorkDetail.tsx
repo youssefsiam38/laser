@@ -8,7 +8,7 @@
  * switcher never rewrites what an older revision said, and it says plainly
  * that this is not the current one.
  */
-import { ArrowLeft, Archive, ArchiveRestore, Copy, History, Link as LinkIcon, MoreHorizontal, Trash2 } from "lucide-react";
+import { ArrowLeft, Archive, ArchiveRestore, Copy, History, Link as LinkIcon, MoreHorizontal, PanelRight, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { ClientRequests } from "@lasercode/protocol";
 
@@ -39,6 +39,7 @@ import { KIND_LABEL } from "@/project-work/vocabulary";
 
 import { ArchiveDialog, DeleteDialog } from "./ConfirmDialogs.js";
 import { DesignDetail } from "./bodies/DesignDetail.js";
+import type { WorkBodyContext } from "./bodies/context.js";
 import { PlanDetail } from "./PlanDetail.js";
 import { TaskDetail } from "./TaskDetail.js";
 import { WorkBody } from "./bodies/index.js";
@@ -53,12 +54,14 @@ export function WorkDetail({
   className,
   compact = false,
   onBack,
+  onOpenInspector,
 }: {
   store: ProjectWorkStore | undefined;
   work: ProjectWorkSnapshot;
   className?: string;
   compact?: boolean;
   onBack?: () => void;
+  onOpenInspector?: () => void;
 }) {
   const ui = useWorkspaceUi();
   const selection = ui.selection;
@@ -132,6 +135,21 @@ export function WorkDetail({
   const { entity, revision, ref } = detail;
   const historical = revision.revisionId !== entity.currentRevisionId;
   const history = detail.history ?? [];
+  const bodyContext: WorkBodyContext = {
+    store,
+    detail,
+    editable: !historical && canRevise.state === "available" && !entity.archivedAt,
+    readOnlyReason: historical
+      ? "Editing is disabled on an older revision."
+      : entity.archivedAt
+        ? "This is archived. Restore it to make changes."
+        : canRevise.state === "available"
+          ? undefined
+          : "This connection cannot write to this project's work.",
+    onChanged: () => void read(),
+    items: work.items,
+    compact,
+  };
 
   return (
     <div data-slot="work-detail" className={cn("flex min-h-0 flex-col", className)}>
@@ -150,6 +168,11 @@ export function WorkDetail({
             </span>
             <h2 className="min-w-0 text-base leading-6 font-semibold text-ink">{revision.title}</h2>
           </span>
+          {onOpenInspector ? (
+            <Button size="icon-sm" variant="ghost" aria-label="Details and review" onClick={onOpenInspector}>
+              <PanelRight />
+            </Button>
+          ) : null}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="icon-sm" variant="ghost" aria-label={`Actions for ${entity.key}`}>
@@ -256,53 +279,15 @@ export function WorkDetail({
             plan's Document/Dependencies switch and the task's attempts,
             evidence and checkpoints need the whole read, not just the body. */}
         {detail.body?.body?.kind === "plan" ? (
-          <PlanDetail detail={detail} body={detail.body.body.plan} items={work.items} />
+          <PlanDetail detail={detail} body={detail.body.body.plan} items={work.items} context={bodyContext} />
         ) : detail.body?.body?.kind === "task" ? (
-          <TaskDetail store={store} detail={detail} body={detail.body.body.task} items={work.items} />
+          <TaskDetail store={store} detail={detail} body={detail.body.body.task} items={work.items} context={bodyContext} />
         ) : detail.body?.body?.kind === "design" ? (
           // The Design's canvas, inspector and prototype (M21-T11): the same
           // fenced context as the other editable bodies.
-          <DesignDetail
-            body={detail.body.body.design}
-            context={{
-              store,
-              detail,
-              editable: !historical && canRevise.state === "available" && !entity.archivedAt,
-              readOnlyReason: historical
-                ? "Editing is disabled on an older revision."
-                : entity.archivedAt
-                  ? "This is archived. Restore it to make changes."
-                  : canRevise.state === "available"
-                    ? undefined
-                    : "This connection cannot write to this project's work.",
-              onChanged: () => void read(),
-              items: work.items,
-              compact,
-            }}
-          />
+          <DesignDetail body={detail.body.body.design} context={bodyContext} />
         ) : detail.body?.body ? (
-          <WorkBody
-            body={detail.body.body}
-            items={work.items}
-            context={{
-              store,
-              detail,
-              // An older revision is read as it was written, and a window
-              // without the capability says so rather than offering a control
-              // that would fail (M21-T7).
-              editable: !historical && canRevise.state === "available" && !entity.archivedAt,
-              readOnlyReason: historical
-                ? "Editing is disabled on an older revision."
-                : entity.archivedAt
-                  ? "This is archived. Restore it to make changes."
-                  : canRevise.state === "available"
-                    ? undefined
-                    : "This connection cannot write to this project's work.",
-              onChanged: () => void read(),
-              items: work.items,
-              compact,
-            }}
-          />
+          <WorkBody body={detail.body.body} items={work.items} context={bodyContext} />
         ) : detail.body?.released ? (
           <WorkRefusal
             message="This revision's content is no longer stored on this machine."

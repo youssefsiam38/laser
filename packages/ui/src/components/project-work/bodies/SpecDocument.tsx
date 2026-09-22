@@ -42,8 +42,9 @@ import {
   SPEC_FORM_LABEL,
 } from "@/project-work/spec";
 
+import { MarkdownAuthoringField, MarkdownEditorActivationProvider } from "../MarkdownAuthoringField.js";
 import type { WorkBodyContext } from "./context.js";
-import { Field, LineListField, MarkdownField, Segmented, TextField } from "./editor-fields.js";
+import { Field, MarkdownField, MarkdownListField, Segmented, TextField } from "./editor-fields.js";
 import { SpecBodyView } from "./index.js";
 
 type Conflict = {
@@ -59,7 +60,6 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
   const { actions } = useLaserStable();
   const [draft, setDraft] = useState<SpecBody | undefined>(undefined);
   const [title, setTitle] = useState(context.detail.revision.title);
-  const [view, setView] = useState<"source" | "preview">("source");
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState<Conflict | undefined>(undefined);
   const [difference, setDifference] = useState(false);
@@ -116,7 +116,7 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
   if (!draft) {
     return (
       <div className="flex flex-col gap-4">
-        <SpecToolbar form={body.form} editable={context.editable} reason={context.readOnlyReason} onEdit={start} />
+        <SpecToolbar body={body} editable={context.editable} reason={context.readOnlyReason} onEdit={start} />
         <SpecBodyView body={body} />
       </div>
     );
@@ -179,7 +179,9 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
         <Input id="spec-title" value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} className="text-sm" />
       </Field>
 
+      <MarkdownEditorActivationProvider active>
       <TextField
+        editorKey="brief"
         label="Brief"
         hint={draft.form === "brief" ? "This is the whole of a brief. Everything below is optional until it becomes a full spec." : undefined}
         value={draft.brief}
@@ -195,19 +197,22 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
             </p>
           ) : null}
           <TextField
+            editorKey="problem"
             label="Problem"
             value={draft.problem ?? ""}
             onChange={(problem) => setDraft({ ...draft, problem })}
             placeholder="What is wrong today, for whom?"
           />
-          <LineListField
+          <MarkdownListField
+            editorKey="spec-outcome"
             label="Outcomes"
             values={draft.outcomes}
             onChange={(outcomes) => setDraft({ ...draft, outcomes })}
             placeholder="What is true once this is done"
             addLabel="Add an outcome"
           />
-          <LineListField
+          <MarkdownListField
+            editorKey="spec-non-goal"
             label="Non-goals"
             values={draft.nonGoals}
             onChange={(nonGoals) => setDraft({ ...draft, nonGoals })}
@@ -216,7 +221,8 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
           />
           <RequirementsField draft={draft} onChange={setDraft} />
           <AcceptanceField draft={draft} onChange={setDraft} />
-          <LineListField
+          <MarkdownListField
+            editorKey="spec-constraint"
             label="Constraints"
             values={draft.constraints}
             onChange={(constraints) => setDraft({ ...draft, constraints })}
@@ -227,13 +233,13 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
       ) : null}
 
       <MarkdownField
+        editorKey="document"
         label="Document"
         value={draft.document ?? ""}
         onChange={(document) => setDraft({ ...draft, document })}
         placeholder="The long form, in Markdown. Headings, lists, code — the same renderer the conversation uses."
-        view={view}
-        onViewChange={setView}
       />
+      </MarkdownEditorActivationProvider>
 
       {context.compact ? (
         <div
@@ -256,20 +262,25 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
 }
 
 function SpecToolbar({
-  form,
+  body,
   editable,
   reason,
   onEdit,
 }: {
-  form: SpecForm;
+  body: SpecBody;
   editable: boolean;
   reason: string | undefined;
   onEdit: () => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Badge variant={form === "full" ? "ok" : "outline"}>{SPEC_FORM_LABEL[form]}</Badge>
-      <span className="min-w-0 text-xs leading-xs text-ink-3">{SPEC_FORM_DETAIL[form]}</span>
+      <Badge variant={body.form === "full" ? "ok" : "outline"}>{SPEC_FORM_LABEL[body.form]}</Badge>
+      <span className="min-w-0 text-xs leading-xs text-ink-3">{SPEC_FORM_DETAIL[body.form]}</span>
+      {body.form === "full" ? (
+        <span className="text-xs leading-xs text-ink-2">
+          {body.requirements.length} requirements · {body.acceptance.length} acceptance criteria
+        </span>
+      ) : null}
       <span className="ms-auto flex items-center gap-2">
         {!editable && reason ? <span className="text-xs leading-xs text-ink-3">{reason}</span> : null}
         <Button size="sm" variant="outline" onClick={onEdit} disabled={!editable} data-slot="spec-edit">
@@ -359,7 +370,7 @@ function RequirementsField({ draft, onChange }: { draft: SpecBody; onChange: (bo
     <Field label="Requirements" hint="`must` blocks a gate; `should` and `may` do not.">
       <ul role="list" className="flex flex-col gap-1.5">
         {draft.requirements.map((requirement, index) => (
-          <li key={requirement.id} className="flex min-w-0 items-center gap-1.5">
+          <li key={requirement.id} className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-line p-2">
             <Segmented
               label={`Requirement ${index + 1} level`}
               value={requirement.level}
@@ -371,19 +382,19 @@ function RequirementsField({ draft, onChange }: { draft: SpecBody; onChange: (bo
               }
               options={REQUIREMENT_LEVELS.map((level) => ({ value: level, label: level }))}
             />
-            <Input
+            <MarkdownAuthoringField
+              editorKey={`spec-requirement-${requirement.id}`}
+              label={`Requirement ${index + 1}`}
               value={requirement.text}
-              aria-label={`Requirement ${index + 1}`}
               placeholder="The system does…"
-              onChange={(event) =>
+              onChange={(text) =>
                 onChange({
                   ...draft,
                   requirements: draft.requirements.map((existing) =>
-                    existing.id === requirement.id ? { ...existing, text: event.target.value } : existing,
+                    existing.id === requirement.id ? { ...existing, text } : existing,
                   ),
                 })
               }
-              className="h-8 text-sm"
             />
             <Button
               size="icon-sm"
@@ -410,7 +421,7 @@ function AcceptanceField({ draft, onChange }: { draft: SpecBody; onChange: (body
     <Field label="Acceptance" hint="Mark a criterion checkable when a command or a test can decide it without a person.">
       <ul role="list" className="flex flex-col gap-1.5">
         {draft.acceptance.map((criterion, index) => (
-          <li key={criterion.id} className="flex min-w-0 items-center gap-1.5">
+          <li key={criterion.id} className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-line p-2">
             <Segmented
               label={`Criterion ${index + 1} kind`}
               value={criterion.machineVerifiable ? "checkable" : "person"}
@@ -427,19 +438,19 @@ function AcceptanceField({ draft, onChange }: { draft: SpecBody; onChange: (body
                 { value: "person", label: "by a person" },
               ]}
             />
-            <Input
+            <MarkdownAuthoringField
+              editorKey={`spec-acceptance-${criterion.id}`}
+              label={`Acceptance criterion ${index + 1}`}
               value={criterion.text}
-              aria-label={`Acceptance criterion ${index + 1}`}
               placeholder="It is accepted when…"
-              onChange={(event) =>
+              onChange={(text) =>
                 onChange({
                   ...draft,
                   acceptance: draft.acceptance.map((existing) =>
-                    existing.id === criterion.id ? { ...existing, text: event.target.value } : existing,
+                    existing.id === criterion.id ? { ...existing, text } : existing,
                   ),
                 })
               }
-              className="h-8 text-sm"
             />
             <Button
               size="icon-sm"

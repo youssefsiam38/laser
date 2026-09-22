@@ -22,7 +22,7 @@
  *    risk is a **person's** act and is recorded in the body
  *    (`scope.sharedWith`), in a revision that says who wrote it.
  */
-import { CheckCircle2, ExternalLink, GitBranch, MoreHorizontal, Play, TriangleAlert, User } from "lucide-react";
+import { CheckCircle2, ExternalLink, GitBranch, MoreHorizontal, Pencil, Play, TriangleAlert, User } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   taskTransition,
@@ -62,6 +62,8 @@ import {
 import { BOARD_COLUMNS, BOARD_EXTRA_COLUMN, boardColumnLabel } from "@/project-work/vocabulary";
 
 import { KeyTag, TypeBadge } from "./KindBadge.js";
+import type { WorkBodyContext } from "./bodies/context.js";
+import { TaskBodyEditor } from "./TaskBodyEditor.js";
 import { TaskCancelDialog } from "./TaskCancel.js";
 import { TaskStartDialog } from "./TaskStart.js";
 import { VerificationPanel } from "./VerificationPanel.js";
@@ -75,21 +77,25 @@ export function TaskDetail({
   detail,
   body,
   items,
+  context,
 }: {
   store: ProjectWorkStore | undefined;
   detail: Detail;
   body: ProjectTaskBody;
   items: readonly ProjectWorkListItem[];
+  context?: WorkBodyContext;
 }) {
   const { actions } = useLaserStable();
   const canAct = useCapability("project/task/action", { presentation: "explained" });
   const agents = useLaserState((state) => state.agents.snapshot?.agents ?? EMPTY_AGENTS);
   const sessions = useLaserState((state) => state.sessions);
+  const editable = context?.editable ?? store !== undefined;
 
   const [refusal, setRefusal] = useState<{ message: string; upstream?: StaleUpstreamRef } | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState<{ open: boolean; error?: string }>({ open: false });
+  const [draft, setDraft] = useState<ProjectTaskBody>();
 
   const readiness = detail.readiness;
   const conflicts = detail.conflicts ?? [];
@@ -107,11 +113,15 @@ export function TaskDetail({
   const plan = body.planKey ? items.find((item) => item.key === body.planKey) : undefined;
   const acceptance = detail.evidence.filter((record) => record.role === "acceptance");
 
+  if (draft && context) {
+    return <TaskBodyEditor body={draft} original={body} context={context} items={items} agents={agents} onChange={setDraft} onClose={() => setDraft(undefined)} />;
+  }
+
   const fence = { entityId: detail.entity.entityId, expectedRevisionId: detail.entity.currentRevisionId };
 
   /** Move the Task, refusing here only what this window can already prove. */
   const move = async (to: ProjectTaskState, note?: string): Promise<void> => {
-    if (!store) return;
+    if (!store || !editable) return;
     const outcome = taskTransition({
       from: state,
       to,
@@ -155,7 +165,7 @@ export function TaskDetail({
   };
 
   const setAssignment = async (value: string): Promise<void> => {
-    if (!store) return;
+    if (!store || !editable) return;
     const assignment =
       value === "unassigned"
         ? ({ policy: "unassigned" } as const)
@@ -171,7 +181,7 @@ export function TaskDetail({
 
   /** The person accepting shared-checkout risk, recorded in the body (M21-T15). */
   const acceptSharedCheckout = async (conflict: TaskConflict): Promise<void> => {
-    if (!store) return;
+    if (!store || !editable) return;
     const sharedWith = [...new Set([...(body.scope.sharedWith ?? []), conflict.key])];
     setBusy(true);
     const outcome = await store.revise(fence, { kind: "task", task: { ...body, scope: { ...body.scope, sharedWith } } });
@@ -193,13 +203,18 @@ export function TaskDetail({
     <div className="flex flex-col gap-5">
       {/* --- the compact bar: Start…, attempts, assignment, the move menu --- */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={!store} onClick={() => setStarting(true)}>
+        <Button size="sm" disabled={!store || !editable} onClick={() => setStarting(true)}>
           <Play />
           Start…
         </Button>
         <Badge variant="outline">
           {attempts.length === 0 ? "no attempts yet" : `${attempts.length} attempt${attempts.length === 1 ? "" : "s"}`}
         </Badge>
+        <Badge variant="outline">{scope.length} scope entries</Badge>
+        <Badge variant={readiness ? (readiness.unmetDependencies.length > 0 ? "attention" : "ok") : "outline"}>
+          {readiness ? (readiness.unmetDependencies.length > 0 ? `${readiness.unmetDependencies.length} blocked dependencies` : "Ready by dependencies") : "Readiness not reported"}
+        </Badge>
+        <Badge variant={acceptance.length > 0 ? "ok" : "outline"}>{acceptance.length} acceptance evidence · {body.acceptance.length} criteria</Badge>
         {plan ? (
           <button
             type="button"
@@ -220,9 +235,15 @@ export function TaskDetail({
         ) : null}
 
         <div className="ms-auto flex items-center gap-1.5">
+          {context?.editable ? (
+            <Button size="xs" variant="outline" onClick={() => setDraft(structuredClone(body))}>
+              <Pencil />
+              Edit task
+            </Button>
+          ) : null}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button size="xs" variant="outline" disabled={busy || !store || canAct.state !== "available"}>
+              <Button size="xs" variant="outline" disabled={busy || !store || !editable || canAct.state !== "available"}>
                 <User />
                 {body.assignment.policy === "agent" ? body.assignment.agentName : body.assignment.policy === "person" ? "You" : "Nobody yet"}
               </Button>
@@ -244,7 +265,7 @@ export function TaskDetail({
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button size="icon-xs" variant="ghost" aria-label={`Move ${detail.entity.key}`} disabled={busy || !store || canAct.state !== "available"}>
+              <Button size="icon-xs" variant="ghost" aria-label={`Move ${detail.entity.key}`} disabled={busy || !store || !editable || canAct.state !== "available"}>
                 <MoreHorizontal />
               </Button>
             </DropdownMenuTrigger>
@@ -391,7 +412,7 @@ export function TaskDetail({
               <li key={criterion.id} className="flex min-w-0 flex-col gap-0.5">
                 <span className="flex items-start gap-2">
                   <Badge variant={criterion.machineVerifiable ? "live" : "outline"}>{criterion.machineVerifiable ? "checkable" : "by a person"}</Badge>
-                  <span className="min-w-0 text-sm leading-5 text-ink-2">{criterion.text}</span>
+                  <span className="min-w-0 flex-1"><Prose text={criterion.text} /></span>
                 </span>
                 {criterion.command ? <span className="typed break-all text-ink-3">{criterion.command}</span> : null}
               </li>

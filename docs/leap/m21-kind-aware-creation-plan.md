@@ -577,6 +577,33 @@ Outcome: opening any kind gives the hierarchy above, rendered Markdown by
 default, explicit edit/preview/save, real missing/blocking facts and a reachable
 next action at wide and narrow widths.
 
+Implementation checkpoint:
+
+- `WorkDetail` already computes the exact editable/current/archive/capability
+  fence. It will pass the same `WorkBodyContext` to Plan and Task instead of
+  adding another authority; the compact header will open the existing
+  `Inspector` in the same `Workspace` sheet used at constrained desktop width.
+- `SpecDocument` already owns conflict/keep-mine settlement. Its prose controls
+  move to `MarkdownAuthoringField`; read fields move through the shared safe
+  Markdown renderer without changing title/list literal handling.
+- `ResearchDetail` already owns question actions. A separate framing draft will
+  revise `{ ...body }`, update the existing root question by stable id, and
+  replace only question/scope; findings, sources, options, unresolved records,
+  child questions and confidence remain byte-for-byte from the loaded body.
+- `DesignDetail` already owns one `draft`, one validation gate and one fenced
+  `save()`. Brief authoring edits that draft only; canvas, flow, foundation,
+  index, sketch, host grounding, review and conflict paths stay in place.
+- `PlanDetail` and `TaskDetail` gain local typed drafts and use the existing
+  `store.revise` fence. Serializers preserve fields the form does not edit:
+  Plan migration notes and all closed-body fields; Task `scope.capabilities`,
+  `scope.sharedWith`, attempts/evidence/checkpoints (which are outside the
+  body), and assignment/link facts. Graph validation remains advisory before
+  the host-authoritative write.
+- Repeated Markdown rows share `MarkdownEditorActivationProvider`, so only one
+  CodeMirror view per editor is mounted. Cancel discards local state; refusal
+  or conflict keeps it. Commands, paths, source excerpts and provenance remain
+  literal text rather than Markdown.
+
 Write paths:
 
 - `packages/ui/src/components/project-work/{WorkDetail,Inspector,Workspace}.tsx`
