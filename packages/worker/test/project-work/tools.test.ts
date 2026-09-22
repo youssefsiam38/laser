@@ -14,6 +14,7 @@ import { toolContract, type ProjectWorkBody } from "@lasercode/protocol";
 import { ScriptedProjectWorkWorld } from "../../src/tool-eval/project-work-world.js";
 import { ProjectWorkSession } from "../../src/project-work/session.js";
 import { ProjectWorkToolFailure, projectWorkFailure } from "../../src/project-work/bridge.js";
+import { VerificationService } from "../../src/project-work/verification/index.js";
 import {
   PROJECT_WORK_TOOL_SPECS,
   inspectProjectWork,
@@ -120,6 +121,34 @@ describe("capability gating", () => {
   it("registers nothing at all without a bridge to the host", () => {
     const session = new ProjectWorkSession({});
     expect([...session.lifecycleTools(), ...session.designTools(), ...session.researchTools()]).toEqual([]);
+  });
+
+  /**
+   * A verification run is a Command a person watches and stops from the fleet
+   * (M21-T19). The registry that publishes those rows is the worker's own, so
+   * a session that was not given it has no way to make a run visible — and a
+   * run nobody can see is a run nobody can stop. The tool is therefore not
+   * offered at all rather than offered as an invisible one; an absent tool is
+   * absent (D-356.g).
+   */
+  it("does not offer verification to a session the worker never gave its run registry to", () => {
+    const session = new ProjectWorkSession({ bridge: world(), cwd: "/tmp/checkout", sessionPath: () => "/sessions/a.jsonl" });
+    expect(session.lifecycleTools().map((binding) => binding.spec.name)).not.toContain("verify_project_task");
+  });
+
+  it("offers it to the session the worker did give it to, which is the one whose runs are in the fleet", () => {
+    const session = new ProjectWorkSession({
+      bridge: world(),
+      cwd: "/tmp/checkout",
+      sessionPath: () => "/sessions/a.jsonl",
+      verification: new VerificationService({ bridgeFor: () => world() }),
+    });
+    expect(session.lifecycleTools().map((binding) => binding.spec.name)).toContain("verify_project_task");
+  });
+
+  it("and to an evaluation fixture, which is the one world that says so out loud", () => {
+    const session = new ProjectWorkSession({ bridge: world(), cwd: "/tmp/checkout", evaluation: true });
+    expect(session.lifecycleTools().map((binding) => binding.spec.name)).toContain("verify_project_task");
   });
 });
 

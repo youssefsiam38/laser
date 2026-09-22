@@ -29,6 +29,7 @@
 import { z } from "zod";
 import { projectWorkBodySchema, type ProjectWorkBody } from "./project-work-bodies.js";
 import {
+  ATTEMPT_REPOSITORIES_MAX,
   DIGEST_PATTERN,
   OPAQUE_ID_PATTERN,
   PROJECT_WORK_NOTE_MAX,
@@ -242,6 +243,16 @@ export interface VerificationFinding {
   commands?: string[];
   /** The repository link that proves it: a delivery, or an accepted preview. */
   repositoryLinkId?: string;
+  /**
+   * Every repository link that proves it, when the work touched more than one
+   * repository (D-367).
+   *
+   * Native visual evidence is per repository: two repositories are two
+   * accepted previews, two commits and two links, and one of them never
+   * speaks for the other. `repositoryLinkId` stays the first of these, so a
+   * reader that knows about one link still reads a true one.
+   */
+  repositoryLinkIds?: string[];
   /** What a person does next, for `needs_person`. */
   steps?: string[];
 }
@@ -254,6 +265,7 @@ export const verificationFindingSchema = z
     evidenceIds: z.array(opaqueId).max(32),
     commands: z.array(z.string().min(1).max(2000)).max(VERIFICATION_COMMANDS_MAX).optional(),
     repositoryLinkId: opaqueId.optional(),
+    repositoryLinkIds: z.array(opaqueId).max(ATTEMPT_REPOSITORIES_MAX).optional(),
     steps: z.array(line).max(12).optional(),
   })
   .strict();

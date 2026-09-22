@@ -180,6 +180,48 @@ describe("what a person reads", () => {
     expect(VERIFICATION_REPORT_MEDIA_TYPE).toContain("verification-report");
   });
 
+  /**
+   * Native visual evidence is per repository (D-367): a finding may rest on
+   * one accepted preview for each repository the work touched, and the report
+   * that carries it has to survive the round trip with all of them.
+   */
+  it("carries every repository link an accepted review rests on, not only the first", () => {
+    const perRepository: VerificationFinding = {
+      criterionId: "c1",
+      outcome: "satisfied",
+      detail: "You accepted a checkpoint preview in each of the 2 repositories this work touched.",
+      evidenceIds: ["evd_one", "evd_two"],
+      repositoryLinkId: "rpl_app",
+      repositoryLinkIds: ["rpl_app", "rpl_lib"],
+    };
+    const report: VerificationReport = {
+      version: 1,
+      runId: "ver_0002",
+      task: source,
+      startedAt: "2026-03-01T09:00:00.000Z",
+      endedAt: "2026-03-01T09:05:00.000Z",
+      authorities: [source],
+      criteria: [criterion({ id: "c1", kind: "visual", machineVerifiable: false })],
+      commands: [],
+      findings: [perRepository],
+      deviations: [],
+      blockers: [],
+      personDecisions: [],
+      converged: true,
+      outcome: "converged",
+      summary: "1 of 1 satisfied",
+      truncated: [],
+    };
+    const parsed = verificationReportSchema.safeParse(report);
+    expect(parsed.success, "two links, two evidence records, one finding").toBe(true);
+    expect(parsed.success && parsed.data.findings[0]?.repositoryLinkIds).toEqual(["rpl_app", "rpl_lib"]);
+    // The first is still there on its own, so a reader that knows only about
+    // one link reads a true one rather than nothing.
+    const { repositoryLinkIds: _ids, ...single } = perRepository;
+    void _ids;
+    expect(verificationReportSchema.safeParse({ ...report, findings: [single] }).success, "and one repository needs no list").toBe(true);
+  });
+
   it("says which command is running, and how many there are, with no estimate", () => {
     const line = verificationRunLine({
       runId: "ver_0001",

@@ -1212,6 +1212,40 @@ describe("ending a process tree this worker owns", () => {
     expect(problems, "already ended is not a failure to end it").toEqual([]);
   });
 
+  it("says nothing when taskkill itself reports the process is not there, which is how Windows says it", () => {
+    const problems: string[] = [];
+    let asked: string[] | undefined;
+    killVerificationTree(target(), (code) => problems.push(code), {
+      platform: "win32",
+      runTaskkill: (arguments_, done) => {
+        asked = arguments_;
+        // The real shape, not a synthetic one: `taskkill` is another process,
+        // so a refusal arrives as a non-zero **exit status**, which `execFile`
+        // puts in `error.code` as a number. 128 is the one it uses for a pid
+        // it cannot find — the ordinary outcome of stopping a run whose tree
+        // has already gone.
+        const error = new Error('ERROR: The process "4242" not found.') as Error & { code?: unknown };
+        error.code = 128;
+        done(error);
+      },
+    });
+    expect(asked, "the whole tree is what is ended, not the shell alone").toEqual(["/pid", "4242", "/T", "/F"]);
+    expect(problems, "a tree that is already gone is not a run this app could not stop").toEqual([]);
+  });
+
+  it("still reports a taskkill that refused for any other reason, with the status it refused by", () => {
+    const problems: string[] = [];
+    killVerificationTree(target(), (code) => problems.push(code), {
+      platform: "win32",
+      runTaskkill: (_arguments, done) => {
+        const error = new Error("taskkill: the process could not be terminated") as Error & { code?: unknown };
+        error.code = 1;
+        done(error);
+      },
+    });
+    expect(problems, "only 'not found' is benign; every other status is news").toEqual(["1"]);
+  });
+
   it("keeps a command unsettled when the platform refuses the kill later, and records nothing it did not see", async () => {
     const { child, as } = inert();
     const controller = new AbortController();
