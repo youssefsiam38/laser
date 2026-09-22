@@ -24,6 +24,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FOUNDATION_STEPS,
   foundationCanonicalJson,
+  foundationPlanSkeleton,
+  foundationPlanWithKeys,
   type ClientRequests,
   type DesignBody,
   type DesignFoundation,
@@ -449,13 +451,21 @@ describe("approval", () => {
     await click(button("Create the plan, foundation first"));
 
     const created = calls.filter((call) => call.method === "project/work/create");
-    expect(created[0]?.params["kind"]).toBe("task");
-    expect(String(created[0]?.params["title"])).toContain("foundation");
-    expect(created[1]?.params["kind"]).toBe("plan");
-    const planRevise = calls.filter((call) => call.method === "project/work/revise").at(-1);
-    const plan = (planRevise?.params["body"] as { plan: { phases: Array<{ id: string; taskKeys: string[] }> } }).plan;
-    expect(plan.phases[0]?.id).toBe("foundation");
-    expect(plan.phases[0]?.taskKeys).toEqual(["TASK-1"]);
+    const skeleton = foundationPlanSkeleton(foundation, { designKey: "DES-3" });
+    expect(created).toHaveLength(2);
+    expect(calls.filter((call) => call.method === "project/work/revise")).toHaveLength(0);
+    expect(created[0]?.params).toMatchObject({
+      kind: "task",
+      title: skeleton.tasks[0]?.title,
+      body: { kind: "task", task: skeleton.tasks[0]?.body },
+      note: "From the approved foundation",
+    });
+    expect(created[1]?.params).toMatchObject({
+      kind: "plan",
+      title: "Build on the foundation",
+      body: { kind: "plan", plan: foundationPlanWithKeys(skeleton, ["TASK-1"]) },
+      note: "From the approved foundation",
+    });
     expect(toast).toHaveBeenCalledWith("info", expect.stringContaining("TASK-1"));
   });
 });

@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { ErrorCodes } from "@lasercode/protocol";
+import { describe, expect, it, vi } from "vitest";
+import { ErrorCodes, type ProjectWorkBody } from "@lasercode/protocol";
 
-import { ProjectWorkStore, describeProjectWorkError } from "../../src/project-work/store.js";
+import { ProjectWorkStore, describeProjectWorkError, type ProjectWorkRequest } from "../../src/project-work/store.js";
 import { attentionQueue } from "../../src/project-work/model.js";
 
 import { change, countsOf, fakeHost, item, type FakeProject } from "./fixture.js";
@@ -38,6 +38,46 @@ describe("the project work store", () => {
     expect(snapshot.counts.total).toBe(2);
     // The first read named the folder; the id is what everything after uses.
     expect(host.calls[0]?.params).toMatchObject({ cwd: "/work/app" });
+  });
+
+  it("forwards one typed first-revision body unchanged at the host boundary", async () => {
+    const body: ProjectWorkBody = {
+      kind: "task",
+      task: {
+        outcome: "  **Keep exact Markdown**  ",
+        nonGoals: ["No migration"],
+        dependencies: [],
+        scope: { packages: ["@lasercode/ui"], repositories: [], paths: [], capabilities: [] },
+        acceptance: [{ id: "a1", text: "Works", machineVerifiable: false }],
+        verificationCommands: [],
+        visualEvidenceRequired: false,
+        assignment: { policy: "person" },
+      },
+    };
+    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "project/work/create") {
+        return {
+          entity: { projectId: "p1", entityId: "e3", kind: "task", key: "TASK-45", keyNumber: 45, title: "Typed", state: "draft", currentRevisionId: "r1", currentDigest: "a".repeat(64), revisionCount: 1, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" },
+          revision: { revisionId: "r1", index: 1, digest: "a".repeat(64), createdAt: "2026-01-01T00:00:00.000Z", origin: { actor: { kind: "person", label: "You" } } },
+          ref: { projectId: "p1", kind: "task", entityId: "e3", revisionId: "r1", digest: "a".repeat(64), key: "TASK-45", label: "Typed" },
+          seq: 11,
+        };
+      }
+      return { projectId: "p1", seq: 11, items: [], counts: { total: 0, needsAttention: 0, byKind: { spec: 0, research: 0, design: 0, plan: 0, task: 0 } } };
+    }) as unknown as ProjectWorkRequest;
+    const store = new ProjectWorkStore({ request, projectId: "p1", newIdempotencyKey: () => "create-1" });
+
+    const outcome = await store.create({ title: "Typed", body, note: "From the approved foundation" });
+
+    expect(outcome.ok).toBe(true);
+    expect(request).toHaveBeenCalledWith("project/work/create", {
+      projectId: "p1",
+      kind: "task",
+      title: "Typed",
+      body,
+      idempotencyKey: "create-1",
+      note: "From the approved foundation",
+    });
   });
 
   it("applies an in-order event and confirms it with a read at the cached sequence", async () => {

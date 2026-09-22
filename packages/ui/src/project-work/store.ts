@@ -36,6 +36,7 @@ import {
   type ProjectWorkListItem,
   type ProjectWorkListParams,
   type ProjectWorkOrigin,
+  type ProjectWorkBody,
   type ProjectWorkQuotaRefusal,
   type ProjectWorkRef,
   type ProjectWorkUpdatedNotification,
@@ -170,12 +171,11 @@ export function describeProjectWorkError(error: unknown): ProjectWorkFailure {
 // The store
 // ---------------------------------------------------------------------------
 
-/** How a new entity is created. The whole input is one field, by design (D-352). */
+/** One closed first-revision body. The discriminant is the kind; it cannot disagree. */
 export interface CreateWorkInput {
-  kind: ProjectWorkKind;
   title: string;
-  /** The brief, the question or the outcome — whichever this kind's body calls it. */
-  text: string;
+  body: ProjectWorkBody;
+  note?: string | undefined;
   sessionId?: string | undefined;
   actorLabel?: string | undefined;
 }
@@ -370,16 +370,17 @@ export class ProjectWorkStore {
 
   // -- writing ---------------------------------------------------------------
 
-  /** Create the first revision of a new entity from one field (D-352). */
+  /** Create exactly the typed first revision the caller prepared (D-352). */
   async create(input: CreateWorkInput): Promise<ProjectWorkOutcome<ClientRequests["project/work/create"]["result"]>> {
     const projectId = this.#snapshot.projectId;
     if (!projectId) return { ok: false, failure: { kind: "refused", message: "This project has not been read yet." } };
     return this.#write("project/work/create", {
       projectId,
-      kind: input.kind,
+      kind: input.body.kind,
       title: input.title,
-      body: firstBody(input.kind, input.text),
+      body: input.body,
       idempotencyKey: this.#newKey(),
+      ...(input.note !== undefined ? { note: input.note } : {}),
       ...origin(input),
     });
   }
