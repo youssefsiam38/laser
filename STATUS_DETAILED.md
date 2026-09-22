@@ -2,6 +2,9 @@
 
 ## Active leap ownership
 
+### Restart-safe session spend
+- M20-T3 owner `01a0c957-e3b8-7358-a82e-619f9dfff30e` (`run_457a0f92`, isolated `agents/fix-restart-spend-aggregation-457a0f92`), base `917f5840`: investigate host durable descendant membership vs worker transient runs and write authority/cache/test plan first. Permitted future paths backend telemetry/registry transport/protocol helpers and tests; no entity UI or live stores. Next handoff parent plan approval, implementation, independent review and next-release inclusion. User explicitly requests this fix in parallel and in the next release; not a resumption of Goal mode.
+
 ### Release authorization after current repairs
 - Person explicitly authorized: “ok I approve all your changes, lets release once it is done”. This authorizes publishing the discussed changes after completion/review/validation; no further generic publication approval is required. Do not publish the old `d19d0c4d` candidate: freeze a new reviewed SHA and updated notes including the index repair and requested kind-aware forms/detail/Markdown work, then dry-run and use the release orchestrator. Preserve milestone release ordering for M21, M24 and M25.
 - Authorization is not evidence that outstanding person-owned visual/live-service checks passed. Keep those results truthful and distinguish remaining acceptance work from permission to publish. Goal mode remains inactive; this is the person's direct implementation-and-release request.
@@ -5801,7 +5804,7 @@ expressed: a ResizeObserver reports a box, not where inside it grew.
 | M20-T0 | Diff-renderer spike | done | worker `01a0ba58-67b7-77ed-9b32-394e67141bdd` | `docs/source-control-spike-evidence.md`; adopt with five mitigations | see notes |
 | M20-T1 | Workspace shapes and the harness | done | orchestrator-2026-09-19-leap | `acc1b4a6`, review `run_2e726783`, corrections `009a49a2`, seam `96d1fd3a` | spec §6; see notes |
 | M20-T2 | Checkpoints, scopes, restore | done | orchestrator-2026-09-19-leap | `d7c6d62c`, review `run_fe28f15d` (rejected), corrections `85a74e4a` | spec §7; see notes |
-| M20-T3 | Telemetry query | done | orchestrator-2026-09-19-leap | `69a3fbea`, review `run_85817698` (rejected), corrections `6662afd2` | spec §5; see notes |
+| M20-T3 | Telemetry query | in-progress | telemetry restart repair | prior `69a3fbea`/`6662afd2` retained; user reports child spend disappears across worker restart | spec §5; see notes |
 | M20-T4 | The fleet and telemetry columns | done | orchestrator-2026-09-19-leap | fleet `9052cd45` + `175d2dfb`; telemetry `56f1614e` + `9d7b69cd`; reviews `run_796bd859`, `run_96997e49` | spec §3, §4; see notes |
 | M20-T5 | The overlay | done | orchestrator-2026-09-19-leap | `05daced9`, review `run_0802b2eb`, corrections `51b013e2`, fleet entry `6d2231bd` | spec §8; see notes |
 | M20-T6 | Git actions | done | orchestrator-2026-09-19-leap | engine `0c3b0ba4` + `bc00695b` (review `run_6a13e263`, rejected then corrected); toolbar `bb786d1c` | spec §9; see notes |
@@ -5815,6 +5818,7 @@ expressed: a ResizeObserver reports a box, not where inside it grew.
 - 2026-09-19 claimed by orchestrator-2026-09-19-leap: one worker in its own worktree (`agents/l1-workspace-shapes-and-harness-4615dcd3`) owns the resolver, `pi/project/workspace`, the harness adaptation, `worktree: "strict"`, the common-dir fix and the per-project isolation setting.
 
 #### M20-T3 notes
+- Reopened for next-release regression: user supplies September21 investigation showing live spend drops after worker restart. Parent source confirms `WorkerServer.sessionTelemetry` uses `harness.runs()` (process-local), while `SessionTelemetryReader.childSources` uses host durable AgentRunRegistry. User-provided dollar totals/timeline are context, not re-audited here; do not mutate/read whole private transcripts for fixtures. Acceptance: production restart/reopen preserves full descendant cost exactly once, old+new child records deduplicated by session identity, account-priced tokens separate from API cost, turn scopes and read fences preserved, cache bounded/incremental with truthful missing-child handling; no UI max-value clamp. Plan authority bridge/cache and production-level red regression before implementation. Separate worker permitted telemetry host/worker/protocol internals and tests only; active opened-detail UI owner excluded.
 - 2026-09-19 claimed: worker on `agents/l3-telemetry-query-224529b5` owns `pi/session/telemetry` in both authorities and the deletion of every client-side aggregation. The Files section of the result is left to T2, which owns the git-backed change model.
 
 #### M20-T4 notes
