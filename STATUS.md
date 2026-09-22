@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
 **Last updated:** Design index receiver repair merged · code checkpoint: c085f82a
-**Current focus:** Build index receiver crash fixed on main (`c085f82a`), independently reviewed; design123, test types, typecheck, identity and UI build pass. Person retry remains pending. M21-T6 creation/Markdown candidate `61dee709` is in independent review after pending-edit, editor accessibility and bounded-instance corrections. Parent reproduced385 focused tests, test types/typecheck/identity. Original branch `016557c9` is preserved; opened detail views remain the next sequential milestone, not yet implemented. Viewing will render Markdown by default; Preview never saves. Publication is explicitly authorized once the work is finished; review, validation and person-owned acceptance results remain pending. Goal mode is inactive.
+**Current focus:** Build index receiver crash fixed on main (`c085f82a`), independently reviewed; design123, test types, typecheck, identity and UI build pass. Person retry remains pending. M21-T6 creation/Markdown review `42d21567` requests two keyboard-focus fixes, preservation of the Foundation creation note, and person-written validation errors. Final correction owner is implementing the accepted batch over preserved `61dee709`; parent will verify before merge. Opened detail views remain the next sequential milestone, not yet implemented. Viewing will render Markdown by default; Preview never saves. Publication is explicitly authorized once the work is finished; review, validation and person-owned acceptance results remain pending. Goal mode is inactive.
 
 | Milestone | State |
 | --- | --- |
