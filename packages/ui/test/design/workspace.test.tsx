@@ -2,8 +2,8 @@
 /**
  * The design workspace, wired (M21-T13).
  *
- * Everything here goes through a mocked `HostClient` answering the six
- * `design/*` methods, because that is the seam the window really has: the
+ * Everything here goes through the real `HostClient.request` answering the six
+ * `design/*` methods over a fake socket, because that is the seam the window really has: the
  * index it reads, the review it writes, the Command it starts and stops, the
  * page it grounds and the sketch it rebuilds. What is asserted is what a
  * person would see — the entries and their chips, the progress *by files*, the
@@ -14,8 +14,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClientRequests, DesignBody, ProjectWorkComment, SessionSummary } from "@lasercode/protocol";
+import type { ClientRequests, DesignBody, EnvironmentDescriptor, ProjectWorkComment, SessionSummary } from "@lasercode/protocol";
 
+import { HostClient } from "../../src/client.js";
 import { DesignDetail } from "../../src/components/project-work/bodies/DesignDetail.js";
 import type { WorkBodyContext } from "../../src/components/project-work/bodies/context.js";
 import { emptyCodeDestination } from "../../src/runtime/main-destination.js";
@@ -26,6 +27,7 @@ import { WORK_QUOTE_EVENT, type WorkQuoteDetail } from "../../src/components/pro
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { ProjectWorkStore, type ProjectWorkMethod } from "../../src/project-work/store.js";
 
+import { testDescriptor } from "../runtime/environment-fixture.js";
 import { designDetail, designFixture, indexFixture } from "./fixture.js";
 
 const toast = vi.fn();
@@ -39,18 +41,9 @@ vi.mock("../../src/runtime", async (original) => {
   const actual = await original<typeof import("../../src/runtime/index.js")>();
   return {
     ...actual,
-    useLaserStable: () => ({
-      actions: { toast },
-      client: {
-        request: async (method: string, params: Record<string, unknown>) => {
-          requests.push({ method, params });
-          if (method === "project/work/blob/read") return { data: btoa(SKETCH_HTML), bytes: SKETCH_HTML.length };
-          const answer = answers[method];
-          if (!answer) throw new Error(`the fixture does not answer ${method}`);
-          return answer(params);
-        },
-      },
-    }),
+    // A fresh real client on every render also keeps the hook's latest-client
+    // replacement contract under test without making client identity an effect dependency.
+    useLaserStable: () => ({ actions: { toast }, client: requestClient() }),
     useCapability: () => ({ state: "available" }),
   };
 });
@@ -80,6 +73,44 @@ const STRATEGY: NonNullable<ClientRequests["design/host/ground"]["result"]["stra
 let root: Root;
 let container: HTMLDivElement;
 let store: StateStore;
+
+/**
+ * A real receiver-dependent client with transport reduced to one synchronous
+ * fake socket. Extracting `request` from this instance reproduces the reported
+ * `versionBlocked` crash before any fixture answer can run.
+ */
+function requestClient(): HostClient {
+  const hostClient = new HostClient({ onNotification: () => {} });
+  const internals = hostClient as unknown as {
+    state: "open";
+    acceptedEnvironment: EnvironmentDescriptor;
+    ws: WebSocket;
+    pending: Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>;
+  };
+  internals.state = "open";
+  internals.acceptedEnvironment = testDescriptor();
+  internals.ws = {
+    readyState: WebSocket.OPEN,
+    send(data: string) {
+      const frame = JSON.parse(data) as { id: number; method: string; params: Record<string, unknown> };
+      requests.push({ method: frame.method, params: frame.params });
+      const pending = internals.pending.get(frame.id);
+      if (!pending) throw new Error(`request ${frame.id} was not registered`);
+      try {
+        if (frame.method === "project/work/blob/read") {
+          pending.resolve({ data: btoa(SKETCH_HTML), bytes: SKETCH_HTML.length });
+          return;
+        }
+        const answer = answers[frame.method];
+        if (!answer) throw new Error(`the fixture does not answer ${frame.method}`);
+        pending.resolve(answer(frame.params));
+      } catch (error) {
+        pending.reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    },
+  } as unknown as WebSocket;
+  return hostClient;
+}
 
 /** The conversation this window is on, and the project it belongs to. */
 const SESSION = "/p/one.jsonl";
