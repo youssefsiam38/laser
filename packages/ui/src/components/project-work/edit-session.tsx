@@ -139,8 +139,10 @@ export function useWorkEditSession<Body>(context: WorkBodyContext) {
     } finally {
       const latest = ownerRef.current;
       const ownsSettlement = mounted.current && latest?.id === ownerId && sameOwner(latest, contextRef.current);
-      submitting.current = false;
-      if (ownsSettlement) setPending(false);
+      if (ownsSettlement) {
+        submitting.current = false;
+        setPending(false);
+      }
     }
     const latest = ownerRef.current;
     if (!mounted.current || latest?.id !== ownerId || !sameOwner(latest, contextRef.current)) return { kind: "ignored" };

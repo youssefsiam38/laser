@@ -47,8 +47,11 @@ const click = async (element: Element | null | undefined): Promise<void> => {
 };
 
 const editCode = async (label: string, value: string): Promise<void> => {
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
-  const editor = document.body.querySelector<HTMLElement>(`.cm-content[aria-label="${label}"]`);
+  let editor: HTMLElement | null = null;
+  for (let attempt = 0; attempt < 40 && !editor; attempt += 1) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
+    editor = document.body.querySelector<HTMLElement>(`.cm-content[aria-label="${label}"]`);
+  }
   expect(editor).not.toBeNull();
   await act(async () => {
     const view = EditorView.findFromDOM(editor!);

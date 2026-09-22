@@ -3,7 +3,7 @@ import { EditorView } from "@codemirror/view";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrorCodes, type ProjectWorkBody, type ProjectWorkKind } from "@lasercode/protocol";
+import { ErrorCodes, type ProjectWorkBody, type ProjectWorkKind, type SpecBody } from "@lasercode/protocol";
 
 let reviseCapability = true;
 vi.mock("../../src/runtime", async (original) => {
@@ -20,6 +20,8 @@ vi.mock("../../src/components/design/use-design-access.js", () => ({
 }));
 
 import { WorkDetail } from "../../src/components/project-work/WorkDetail.js";
+import { useWorkEditSession } from "../../src/components/project-work/edit-session.js";
+import type { WorkBodyContext } from "../../src/components/project-work/bodies/context.js";
 import { TooltipProvider } from "../../src/components/ui/tooltip.js";
 import { ProjectWorkStore, type ProjectWorkMethod } from "../../src/project-work/store.js";
 import { resetWorkspaceUi, selectWork } from "../../src/project-work/workspace-state.js";
@@ -270,4 +272,97 @@ it("admits one frozen save and ignores its completion after selection ownership 
   expect(document.body.textContent).toContain("Second spec");
   expect(document.body.textContent).not.toContain("First spec");
   expect(gets.at(-1)).toBe("e2");
+});
+
+type EditSession = ReturnType<typeof useWorkEditSession<SpecBody>>;
+let editSession!: EditSession;
+
+function EditSessionHarness({ context }: { context: WorkBodyContext }) {
+  editSession = useWorkEditSession<SpecBody>(context);
+  return <p data-slot="edit-session-state">{editSession.pending ? "pending" : "idle"}</p>;
+}
+
+function ownedContext(entityId: string, store: ProjectWorkStore): WorkBodyContext {
+  const value = answer("spec", { kind: "spec", spec: specFixture() }, `r-${entityId}`, `${entityId} spec`);
+  value.ref.entityId = entityId;
+  value.entity.entityId = entityId;
+  value.revision.entityId = entityId;
+  value.fence.entityId = entityId;
+  return { store, detail: value, editable: true, onChanged: () => {}, items: [] };
+}
+
+function deferredValue<Value>() {
+  let resolve!: (value: Value) => void;
+  const promise = new Promise<Value>((settlePromise) => { resolve = settlePromise; });
+  return { promise, resolve };
+}
+
+it("does not let owner A's late settlement clear owner B's pending submit lock", async () => {
+  const store = new ProjectWorkStore({ projectId: "p1", request: (async () => { throw new Error("not called"); }) as never });
+  const contextA = ownedContext("a", store);
+  const contextB = ownedContext("b", store);
+  const pendingA = deferredValue<string>();
+  const pendingB = deferredValue<string>();
+
+  await act(async () => root.render(<EditSessionHarness context={contextA} />));
+  await act(async () => { editSession.begin(specFixture()); });
+  let submitA!: Promise<unknown>;
+  await act(async () => { submitA = editSession.submit(() => pendingA.promise); await Promise.resolve(); });
+  await settle();
+  expect(editSession.pending).toBe(true);
+
+  await act(async () => root.render(<EditSessionHarness context={contextB} />));
+  await act(async () => { editSession.begin(specFixture({ brief: "Owner B" })); });
+  let submitB!: Promise<unknown>;
+  await act(async () => { submitB = editSession.submit(() => pendingB.promise); await Promise.resolve(); });
+  await settle();
+  expect(editSession.pending).toBe(true);
+
+  await act(async () => { pendingA.resolve("A finished"); await submitA; });
+  let duplicateRuns = 0;
+  let duplicate: unknown;
+  let cancelled = true;
+  await act(async () => {
+    duplicate = await editSession.submit(async () => { duplicateRuns += 1; return "duplicate"; });
+    cancelled = editSession.cancel();
+  });
+
+  await act(async () => { pendingB.resolve("B finished"); await submitB; });
+  expect(duplicate).toEqual({ kind: "blocked" });
+  expect(duplicateRuns).toBe(0);
+  expect(cancelled).toBe(false);
+});
+
+it("keeps a new mount's pending lock isolated from an unmounted owner's completion", async () => {
+  const store = new ProjectWorkStore({ projectId: "p1", request: (async () => { throw new Error("not called"); }) as never });
+  const contextA = ownedContext("a", store);
+  const contextB = ownedContext("b", store);
+  const pendingA = deferredValue<string>();
+  const pendingB = deferredValue<string>();
+
+  await act(async () => root.render(<EditSessionHarness key="mount-a" context={contextA} />));
+  await act(async () => { editSession.begin(specFixture()); });
+  let submitA!: Promise<unknown>;
+  await act(async () => { submitA = editSession.submit(() => pendingA.promise); await Promise.resolve(); });
+  await settle();
+
+  await act(async () => root.render(<EditSessionHarness key="mount-b" context={contextB} />));
+  await act(async () => { editSession.begin(specFixture({ brief: "New mount" })); });
+  let submitB!: Promise<unknown>;
+  await act(async () => { submitB = editSession.submit(() => pendingB.promise); await Promise.resolve(); });
+  await settle();
+
+  await act(async () => { pendingA.resolve("old mount finished"); await submitA; });
+  let duplicateRuns = 0;
+  let duplicate: unknown;
+  let cancelled = true;
+  await act(async () => {
+    duplicate = await editSession.submit(async () => { duplicateRuns += 1; return "duplicate"; });
+    cancelled = editSession.cancel();
+  });
+
+  await act(async () => { pendingB.resolve("new mount finished"); await submitB; });
+  expect(duplicate).toEqual({ kind: "blocked" });
+  expect(duplicateRuns).toBe(0);
+  expect(cancelled).toBe(false);
 });
