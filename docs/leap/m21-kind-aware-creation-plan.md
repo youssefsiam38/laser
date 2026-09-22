@@ -1,7 +1,7 @@
 # M21-T6 follow-up — kind-aware creation and authoring
 
-Status: **implementation plan only; approval required before code**. The
-binding contracts are [`project-lifecycle-leap.md`](../project-lifecycle-leap.md)
+Status: **Milestone 1 implemented; ready for review**. Milestone 2 remains out
+of scope until Milestone 1 review and integration. The binding contracts are [`project-lifecycle-leap.md`](../project-lifecycle-leap.md)
 ("Flexibility", "Embedded workspace" and "Detail, by kind"), D-352 and D-355,
 [`design-phase.md`](../design-phase.md), [`research-phase.md`](../research-phase.md),
 and the closed bodies in
@@ -23,6 +23,30 @@ developer questions consistently:
 This plan fixes that without changing the protocol, host authority, slash
 commands, optional-link rule, Design index receiver, gates, Commands, evidence,
 or proof surfaces.
+
+## Approval conditions recorded for Milestone 1
+
+- The five forms expose concise kind-specific structure immediately; they do
+  not hide every difference behind one identical collapsed disclosure. The
+  two required values still remain enough to create.
+- Markdown source is stored byte-for-byte, including leading and trailing
+  whitespace. `trim()` is only an emptiness check; the slash-command
+  `firstBody()` path retains its existing trimming behavior.
+- Kind switching preserves each draft and the mounted editor state needed for
+  selection/undo, with a bounded number of editor views rather than one hidden
+  view per possible schema row.
+- Only explicit Create writes. Enter in Title is inert, an IME composition
+  shortcut is inert, every other form action is `type="button"`, and a
+  synchronous pending/scope fence rejects duplicate and stale completions
+  across close, project or store changes.
+- Body-first caller fixtures exercise the realistic store/host boundary. Tests
+  distinguish exercised keyboard/IME/renderer behavior from visual, RTL and
+  assistive-technology checks that remain for the person.
+- The approved exact MIT editor pins are `@uiw/react-codemirror@4.25.11` and
+  `@codemirror/lang-markdown@6.5.2`. The resolved graph selected, and the
+  implementation directly imports, `@codemirror/language@6.12.4`,
+  `@codemirror/view@6.43.13`, and `@lezer/highlight@1.2.3`; they are therefore
+  exact direct pins too. No other editor framework or textarea overlay is used.
 
 ## Non-negotiable boundaries
 
@@ -49,9 +73,11 @@ or proof surfaces.
   components, Plan graph, Task start/transition/verification/attempt/evidence/
   checkpoint components, repository proof, archive/delete, import/export, and
   revision switcher are retained and recomposed rather than replaced.
-- No edit to `packages/ui/src/components/design/*`, especially
-  `use-design-access.ts`; the active index-receiver repair owns that seam. No
-  edit to `packages/ui/test/project-work/workspace.test.tsx`.
+- No Design implementation edit under `packages/ui/src/components/design/*`.
+  The sole Milestone 1 exception is the required body-first caller migration in
+  `FoundationWizard.tsx`; it changes no Design behavior or receiver seam.
+  `use-design-access.ts` remains owned by the index-receiver repair, and
+  `packages/ui/test/project-work/workspace.test.tsx` is not edited.
 - No browser functional or acceptance tests. The person performs the visual
   and interaction pass after implementation (D-342).
 
@@ -476,6 +502,9 @@ Write paths:
   only; `firstBody` retained.
 - `packages/ui/src/project-work/{index,vocabulary}.ts` — necessary exports and
   kind copy only.
+- `packages/ui/src/components/design/FoundationWizard.tsx` — focused caller
+  migration from create-then-revise to one typed first revision; no receiver
+  or Design workflow change.
 - New/focused tests under `packages/ui/test/project-work/` and
   `packages/ui/test/elements/`; existing lifecycle command tests remain the
   slash-command regression.
