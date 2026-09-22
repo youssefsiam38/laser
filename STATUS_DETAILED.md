@@ -6531,6 +6531,10 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 
 `project/work/link` with `verifiedAt.acceptance` keeps `reach: "any"`: pairing already grants prompts and approvals, the acceptance binds the capture, the revision digest and the checkpoint, and person-only authority is enforced by actor kind on the connection (`gate.ts`). No additional local-only requirement. Threat model: `docs/leap/m21-threat-model.md` §8.3. Follow-up outside M21: `packages/protocol/src/git-run.ts` registers no owned process (G10), owned by the source-control leap.
 
+### D-369 · Native acceptance reach stays "any paired device"
+
+`project/work/link` with `verifiedAt.acceptance` keeps `reach: "any"`: pairing already grants prompts and approvals, the acceptance binds the capture, the revision digest and the checkpoint, and person-only authority is enforced by actor kind on the connection (`gate.ts`). No additional local-only requirement. Threat model: `docs/leap/m21-threat-model.md` §8.3. Follow-up outside M21: `packages/protocol/src/git-run.ts` registers no owned process (G10), owned by the source-control leap.
+
 ### D-368 · Project identity travels with the folder, and a person settles a copy
 
 A project's stable `projectId` is carried by `<project>/.laser/project.json`, written only once the project holds work and never overwriting a marker that names another project. An unknown folder whose marker names a known project whose own folder is gone reconnects silently; if that folder still exists the two are a conflict resolved only by a previewed, confirmed `project/work/relink` choice (reconnect here or keep separate), never by a path match. A marker id this store has never seen is adopted (validated against the opaque-id pattern) so a folder keeps one identity across installs. Deleting a session marks the execution links it owned `targetUnavailable`; archiving a session (device-local) marks nothing. Removing a project hides its work until the explicit delete. Details: `docs/leap/m21-continuity-plan.md`.
