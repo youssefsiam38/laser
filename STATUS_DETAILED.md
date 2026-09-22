@@ -6139,6 +6139,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap: host gate rules (`project-work/gates.ts` + the store's comment/review/approve paths) and the UI comments/gate card/Approval Card; write set disjoint from T16 (plan/task/board files) and T17 (bridge/methods wiring).
 
 #### M21-T26 notes
+- Owner run_253a9729 (session 01a0c6cc-486b-7358-a82e-60b3d70d3cf6), branch agents/wire-research-run-into-fleet-253a9729, base 7f15b060.
 - Reopened: `docs/research-phase.md` requires the budget visible in the fleet row, and `ResearchCommand` (`worker/src/research/command.ts`) is fully defined but never constructed (found by M21-T23), so a Research run has no fleet row and no Stop. Owner wires it as a Command exactly like index build/verification: TaskIndex observe before notify, owning session, Stop via `pi/task/stop`, retention at settlement, canonical rekey, close/retire safety. Prior evidence for adapters/tools/loop stands.
 
 #### M21-T24 notes
