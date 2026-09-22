@@ -63,11 +63,16 @@ export function autoCompactThresholdUnknownText(): string {
   return THRESHOLD_UNKNOWN;
 }
 
-/** Spend header while collapsed: the API total, or Account, or None. */
+export function hasPartialSpend(spend: TelemetrySpend | undefined): boolean {
+  return (spend?.coverage?.unavailableChildren ?? 0) > 0;
+}
+
+/** Spend header while collapsed: exact totals stay compact; subtotals say partial. */
 export function spendHeader(spend: TelemetrySpend | undefined): string {
-  if (!spend || spend.billing === "none") return "None";
-  if (hasApiCost(spend)) return money(spend.api.totals.cost);
-  if (spend.billing === "account" || spend.billing === "mixed") return "Account";
+  const partial = hasPartialSpend(spend);
+  if (hasApiCost(spend)) return `${money(spend.api.totals.cost)}${partial ? " · partial" : ""}`;
+  if (spend?.billing === "account" || spend?.billing === "mixed") return partial ? "Account · partial" : "Account";
+  if (partial) return "Partial";
   return "None";
 }
 
@@ -82,8 +87,22 @@ export function hasApiCost(
   return spend?.api !== undefined && spend.api.totals.cost > 0;
 }
 
-/** The one line a session with no API cost gets. */
+function unavailableChildrenText(spend: TelemetrySpend): string {
+  const count = spend.coverage?.unavailableChildren ?? 0;
+  return `${count} child ${count === 1 ? "session" : "sessions"} unavailable`;
+}
+
+/** Expanded qualification for a nonzero known subtotal. */
+export function partialApiSubtotalText(spend: TelemetrySpend | undefined): string | undefined {
+  if (!spend || !hasPartialSpend(spend)) return undefined;
+  return `Partial · Known API subtotal · ${unavailableChildrenText(spend)}.`;
+}
+
+/** The one line a session with no known API cost gets. */
 export function noApiCostText(spend: TelemetrySpend | undefined): string {
+  if (spend && hasPartialSpend(spend)) {
+    return `Partial · API cost is incomplete · ${unavailableChildrenText(spend)}.`;
+  }
   if (spend?.billing === "account" || spend?.billing === "mixed") return "No API cost — account billed";
   return "No API cost";
 }

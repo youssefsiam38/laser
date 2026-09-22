@@ -100,7 +100,7 @@ import type {
 // cycle exists in the type graph and never in the emitted modules.
 import type { PendingMessage } from "./pending.js";
 import type { BodyComponent, BodyRegion, ElidedEntry, EntryRegionsResult, ImagePartReference, PersistedBodyIdentity } from "./body-range.js";
-import type { SessionTelemetry, SessionTelemetryParams } from "./telemetry.js";
+import type { SessionTelemetry, SessionTelemetryParams, TelemetryChildSpendSnapshot } from "./telemetry.js";
 import type { ModelProfile, ProfileAssignments } from "./fallback.js";
 import type {
   CheckpointList,
@@ -648,6 +648,8 @@ export interface SessionUpdateParams {
    * (text, thinking, tool-call streaming).
    */
   telemetry?: SessionTelemetry;
+  /** Private worker→host freshness marker; the host removes it before broadcast. */
+  telemetryGeneration?: number;
 }
 
 // ---------- Extension UI (host → client requests; mirrors Pi RPC extension_ui_request) ----------
@@ -1682,6 +1684,21 @@ export interface ClientRequests {
    * The changed-file summary is not this method — it comes from git (Part E).
    */
   "pi/session/telemetry": { params: SessionTelemetryParams; result: SessionTelemetry };
+  /** Host → worker only: one public read paired with its canonical child snapshot. */
+  "pi/session/telemetry/with-sources": {
+    params: SessionTelemetryParams & { snapshot: TelemetryChildSpendSnapshot; subscribe: boolean; publishIfWanted?: boolean };
+    result: { telemetry: SessionTelemetry; generation: number; applied: boolean; published: boolean };
+  };
+  /** Host → worker only: suppress stale streaming telemetry while a replacement is built. */
+  "pi/session/telemetry/invalidate": {
+    params: { path: string; generation: number };
+    result: { generation: number };
+  };
+  /** Host → worker only: validate a live parent fence before scanning descendants. */
+  "pi/session/telemetry/fence": {
+    params: Pick<SessionTelemetryParams, "path" | "environmentKey" | "revision">;
+    result: { revision: string; environmentKey: string };
+  };
   "pi/session/compact": { params: { path: string; instructions?: string }; result: {} };
   "pi/model/list": { params: { path: string }; result: { models: ModelRef[] } };
   /**

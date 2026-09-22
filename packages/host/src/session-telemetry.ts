@@ -9,12 +9,18 @@ import { closeSync, fstatSync, openSync, readSync, type Stats } from "node:fs";
 import {
   ErrorCodes,
   ProtocolError,
+  TELEMETRY_CHILD_MODEL_LINE_MAX,
+  TELEMETRY_CHILD_SNAPSHOT_MAX_BYTES,
+  TELEMETRY_CHILD_SOURCE_MAX,
   TelemetryFold,
+  childSpendFoldOf,
+  isTerminalRunStatus,
   runsBeneathSession,
   sessionTelemetryOf,
   turnEntryIndices,
   type ClientRequests,
-  type TelemetryChildSource,
+  type TelemetryChildSpendSnapshot,
+  type TelemetryChildSpendSource,
 } from "@lasercode/protocol";
 import type { AgentRunRegistry } from "./agents/runs.js";
 import type { FileIdentity, IndexedEntry, SessionIndex, SessionIndexCache, SessionIndexFailure } from "./session-index.js";
@@ -33,10 +39,20 @@ export interface SessionTelemetryOptions {
   runs?: AgentRunRegistry | undefined;
   /** Test seam: one callback per child session whose fold is merged. */
   onChildFold?: ((path: string) => void) | undefined;
+  /** Small injected bounds prove overflow behavior without giant fixtures. */
+  childLimits?: {
+    sources?: number;
+    modelLines?: number;
+    bytes?: number;
+  } | undefined;
 }
 
 export class SessionTelemetryReader {
   constructor(private readonly options: SessionTelemetryOptions) {}
+
+  get environmentKey(): string {
+    return this.options.revisions.environmentKey;
+  }
 
   async read(path: string, params: ClientRequests["pi/session/telemetry"]["params"]): Promise<TelemetryAnswer> {
     if (params.environmentKey !== undefined && params.environmentKey !== this.options.revisions.environmentKey) {
@@ -86,34 +102,77 @@ export class SessionTelemetryReader {
       };
     }
 
-    const children = await this.childSources(path);
+    const childSnapshot = include === undefined || include.includes("spend")
+      ? await this.childSnapshot(path, 0)
+      : undefined;
     return {
       kind: "answer",
       result: sessionTelemetryOf(index.telemetry, fence, {
         ...(include ? { include } : {}),
         scope: "session",
-        ...(children.length > 0 ? { children } : {}),
+        ...(childSnapshot ? { childSpend: childSnapshot.sources, coverage: childSnapshot.coverage } : {}),
       }),
     };
   }
 
-  private async childSources(sessionPath: string): Promise<TelemetryChildSource[]> {
+  /** One bounded, registry-known source snapshot for a live or durable projection. */
+  async childSnapshot(sessionPath: string, generation: number): Promise<TelemetryChildSpendSnapshot> {
     const runs = runsBeneathSession(sessionPath, this.options.runs?.list(sessionPath) ?? []);
-    const seen = new Set<string>();
-    const children: TelemetryChildSource[] = [];
-    for (const run of runs) {
-      if (seen.has(run.sessionPath)) continue;
-      seen.add(run.sessionPath);
+    const unique = new Map<string, (typeof runs)[number]>();
+    for (const run of runs) if (!unique.has(run.sessionPath)) unique.set(run.sessionPath, run);
+    const children = [...unique.values()].sort((left, right) =>
+      Number(isTerminalRunStatus(left.status)) - Number(isTerminalRunStatus(right.status)),
+    );
+    const knownChildren = children.length;
+    const sourceLimit = this.options.childLimits?.sources ?? TELEMETRY_CHILD_SOURCE_MAX;
+    const modelLineLimit = this.options.childLimits?.modelLines ?? TELEMETRY_CHILD_MODEL_LINE_MAX;
+    const byteLimit = this.options.childLimits?.bytes ?? TELEMETRY_CHILD_SNAPSHOT_MAX_BYTES;
+    const sources: TelemetryChildSpendSource[] = [];
+    let includedChildren = 0;
+    let attemptedChildren = 0;
+
+    for (const run of children) {
+      if (attemptedChildren >= sourceLimit) continue;
+      attemptedChildren += 1;
       const model = run.model ? `${run.model.provider}/${run.model.id}` : undefined;
       const indexed = await this.options.index.read(run.sessionPath);
-      if (!indexed.ok) {
-        children.push(model ? { model } : {});
-        continue;
+      let source: TelemetryChildSpendSource = { sessionPath: run.sessionPath, ...(model ? { model } : {}) };
+      if (indexed.ok) {
+        const spend = childSpendFoldOf(indexed.index.telemetry);
+        const models = new Set([...spend.byModelAll, ...spend.byModelApi].map((line) => line.model));
+        if (models.size <= modelLineLimit) {
+          source = { ...source, spend };
+        }
       }
-      this.options.onChildFold?.(run.sessionPath);
-      children.push({ ...(model ? { model } : {}), fold: indexed.index.telemetry });
+      const nextIncluded = includedChildren + (source.spend ? 1 : 0);
+      const candidate: TelemetryChildSpendSnapshot = {
+        scopeSessionPath: sessionPath,
+        generation,
+        sources: [...sources, source],
+        coverage: {
+          knownChildren,
+          includedChildren: nextIncluded,
+          unavailableChildren: knownChildren - nextIncluded,
+        },
+      };
+      if (new TextEncoder().encode(JSON.stringify(candidate)).byteLength > byteLimit) continue;
+      sources.push(source);
+      if (source.spend) {
+        includedChildren = nextIncluded;
+        this.options.onChildFold?.(run.sessionPath);
+      }
     }
-    return children;
+
+    return {
+      scopeSessionPath: sessionPath,
+      generation,
+      sources,
+      coverage: {
+        knownChildren,
+        includedChildren,
+        unavailableChildren: knownChildren - includedChildren,
+      },
+    };
   }
 }
 

@@ -64,6 +64,7 @@ import type { SessionProjection } from "./session-projection.js";
 import type { SessionBodyRange } from "./session-body-range.js";
 import type { SessionRevisions } from "./session-revision.js";
 import type { SessionTelemetryReader } from "./session-telemetry.js";
+import type { SessionTelemetryCoordinator } from "./session-telemetry-coordinator.js";
 import type { ViewCache } from "./views.js";
 import type { WorkerPool } from "./worker-pool.js";
 import { createWorkspaceResolver } from "./workspace.js";
@@ -124,6 +125,8 @@ export interface RouterDeps {
   projection?: SessionProjection | undefined;
   bodyRange?: SessionBodyRange | undefined;
   telemetry?: SessionTelemetryReader | undefined;
+  /** Live child-source authority; production wires it with the durable reader. */
+  telemetryCoordinator?: SessionTelemetryCoordinator | undefined;
   /**
    * Process inventory (RP-1). Absent = the `resource/*` methods are refused
    * rather than answered with an invented shape.
@@ -764,6 +767,11 @@ export class Router {
         return result;
       }
 
+      case "pi/session/telemetry/with-sources":
+      case "pi/session/telemetry/invalidate":
+      case "pi/session/telemetry/fence":
+        throw new ProtocolError(ErrorCodes.Unsupported, "This telemetry method is internal to the app.");
+
       case "pi/session/telemetry": {
         const { path } = req.params;
         const revisions = this.deps.revisions;
@@ -775,13 +783,18 @@ export class Router {
           );
         }
         this.assertDurableReadPath(path);
-        const live = await this.routeLive(path, (worker) => worker.request(req.method, req.params));
+        const needsChildSpend = req.params.scope !== "turn"
+          && (req.params.include === undefined || req.params.include.includes("spend"));
+        const send = (worker: WorkerClient) => this.deps.telemetryCoordinator && needsChildSpend
+          ? this.deps.telemetryCoordinator.read(worker, req.params)
+          : worker.request(req.method, req.params);
+        const live = await this.routeLive(path, send);
         if (live.answered) return live.result;
         if (!existsSync(path)) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation is no longer stored here.");
         const answer = await telemetry.read(path, req.params);
         if (answer.kind === "answer") return answer.result;
         if (answer.kind === "refuse") throw answer.error;
-        return await this.route(path, async () => (await this.workerFor(path)).request(req.method, req.params));
+        return await this.route(path, async () => send(await this.workerFor(path)));
       }
 
       case "session/new": {
@@ -1793,6 +1806,7 @@ export class Router {
           return { result: answer, cwd: owner, forked: moved };
         });
         // Presentation only from here: no authority over a runtime or a file.
+        if (loading) this.deps.telemetryCoordinator?.childChanged(path);
         if (loading && cwd && !this.isWorkspace(cwd) && !this.isWorkspaceSession(path)) this.deps.projects.touch(cwd);
         if (req.method === "pi/session/fork" || req.method === "pi/session/navigate" || req.method === "pi/session/compact") {
           this.deps.views.invalidate(path);
