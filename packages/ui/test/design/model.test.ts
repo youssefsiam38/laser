@@ -243,6 +243,40 @@ describe("the sketch document", () => {
     expect(fragment).toContain("<div>hi</div>");
   });
 
+  it("puts the policy in live markup, whatever a hostile sketch writes before its head", () => {
+    const meta = `<meta http-equiv="Content-Security-Policy"`;
+    // A `<head>` inside a comment used to swallow the policy: the meta was
+    // inserted between `<!--` and `-->`, so the document loaded with no policy
+    // at all (M21-T22, threat model §5).
+    const commented = sketchSrcDoc(
+      '<!doctype html><html><!-- <head> --><head><script>fetch("https://evil.example")</script></head><body>x</body></html>',
+    );
+    const at = commented.indexOf(meta);
+    expect(at).toBeGreaterThan(-1);
+    const before = commented.slice(0, at);
+    // Not inside an unclosed comment, and before anything that could load.
+    expect(before.lastIndexOf("<!--") <= before.lastIndexOf("-->")).toBe(true);
+    expect(at).toBeLessThan(commented.indexOf("<script"));
+    expect(commented).toContain('<script>fetch("https://evil.example")</script>');
+
+    // The same for a document whose only `<head>` is text, and for one that
+    // mentions `<html>` in a comment before the real root.
+    const textual = sketchSrcDoc("<!doctype html><html><body><p>a &lt;head&gt; tag, and a <!-- <html> --> comment</p></body></html>");
+    const textualAt = textual.indexOf(meta);
+    expect(textualAt).toBeGreaterThan(-1);
+    expect(textualAt).toBeLessThan(textual.indexOf("<body>"));
+    const commentedRoot = sketchSrcDoc("<!-- <html> --><html><body>hi</body></html>");
+    const rootAt = commentedRoot.indexOf(meta);
+    const beforeRoot = commentedRoot.slice(0, rootAt);
+    expect(beforeRoot.lastIndexOf("<!--") <= beforeRoot.lastIndexOf("-->")).toBe(true);
+    expect(rootAt).toBeLessThan(commentedRoot.indexOf("<body>"));
+
+    // And an unterminated comment: there is no safe place inside it, so the
+    // policy goes in front of the whole document.
+    const unterminated = sketchSrcDoc("<!-- <head> <body>never closed");
+    expect(unterminated.indexOf(meta)).toBeLessThan(unterminated.indexOf("<!--"));
+  });
+
   it("sanitises the title and bounds the size", () => {
     expect(sanitiseSketchTitle("Filter <b>demo</b>\u0000")).toBe("Filter demo");
     expect(sanitiseSketchTitle("   ")).toBe("Untitled sketch");

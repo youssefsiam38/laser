@@ -45,7 +45,10 @@ import {
   type RepositoryLinkAvailability,
   type AttemptRepositoryRecord,
   PROJECT_WORK_ATTENTION_ITEMS_MAX,
+  PROJECT_WORK_BODY_MAX_BYTES,
   PROJECT_WORK_CONFLICT_CODE,
+  PROJECT_WORK_INTEROP_METHOD_LIMITS,
+  PROJECT_WORK_METHOD_LIMITS,
   PROJECT_WORK_QUOTA_CODE,
   ProtocolError,
   type ActorClass,
@@ -252,12 +255,13 @@ export class ProjectWorkMethods {
    * Answer one request.
    *
    * Params have already been validated against the method's strict schema by
-   * the wire parser, so everything here is about authority and state, not
-   * shape. Every store refusal leaves through {@link toProtocolError}, so a
-   * caller sees one vocabulary of errors whichever method it called.
+   * the wire parser, so everything here is about authority, size and state,
+   * not shape. Every store refusal leaves through {@link toProtocolError}, so
+   * a caller sees one vocabulary of errors whichever method it called.
    */
   async handle(request: ProjectWorkRequest, caller: ProjectWorkCaller): Promise<ProjectWorkResult> {
     try {
+      refuseOversized(request);
       const result = await this.route(request, caller);
       this.noteWork(request);
       return result;
@@ -1378,6 +1382,69 @@ export class ProjectWorkMethods {
     });
   }
 }
+
+/**
+ * The size ceilings the protocol documents, enforced (M21-T22).
+ *
+ * `PROJECT_WORK_METHOD_LIMITS` and `PROJECT_WORK_BODY_MAX_BYTES` say what one
+ * request and one body may weigh, and until this function existed nothing read
+ * either of them: the only real ceiling was the 64 MB frame, so a single
+ * `project/work/create` could store a body sixteen times the documented
+ * maximum and spend a sixteenth of a project's whole budget in one call.
+ *
+ * Two measurements, in the order that gives the better sentence:
+ *
+ * - the **body**, which is the thing a person can do something about, and the
+ *   only part of any of these requests that is not small by construction;
+ * - the **request**, against its own row, which catches everything else a
+ *   schema allows in quantity (an approval's covered revisions, a comment's
+ *   text, a link's detail).
+ *
+ * It runs after the strict schema, so the value it measures is already a
+ * bounded, closed shape: `JSON.stringify` here can neither recurse without
+ * end nor meet a value it does not understand. Nothing is written, charged or
+ * even looked up before it answers.
+ */
+function refuseOversized(request: ProjectWorkRequest): void {
+  const { body, ...envelope } = request.params as { body?: unknown };
+  let bodyBytes = 0;
+  if (body !== undefined) {
+    bodyBytes = Buffer.byteLength(JSON.stringify(body) ?? "", "utf8");
+    if (bodyBytes > PROJECT_WORK_BODY_MAX_BYTES) {
+      throw new ProjectWorkRefusedError(
+        `That ${describeBody(body)} is ${megabytes(bodyBytes)} MB, larger than the ${megabytes(PROJECT_WORK_BODY_MAX_BYTES)} MB one item may be, so nothing was saved. ` +
+          `Split it into separate items, or move the long parts into attachments.`,
+      );
+    }
+  }
+  const limit = METHOD_BYTE_LIMITS[request.method];
+  if (limit === undefined) return;
+  // The body is measured once, not twice: a four-megabyte body is the largest
+  // thing this host is asked to hold, and stringifying it again to count the
+  // same bytes would double the cost of every write.
+  const bytes = bodyBytes + Buffer.byteLength(JSON.stringify(envelope) ?? "", "utf8");
+  if (bytes > limit) {
+    throw new ProjectWorkRefusedError(
+      `That request is ${kilobytes(bytes)} KB, larger than the ${kilobytes(limit)} KB this app accepts for one ${request.method.split("/").pop()!} request, so nothing was saved. ` +
+        `Make the same change in smaller steps.`,
+    );
+  }
+}
+
+/** Both ceiling tables as one lookup, so a new method cannot miss its row. */
+const METHOD_BYTE_LIMITS: Readonly<Record<string, number>> = {
+  ...PROJECT_WORK_METHOD_LIMITS,
+  ...PROJECT_WORK_INTEROP_METHOD_LIMITS,
+};
+
+/** What the oversized thing is, in the person's words. */
+function describeBody(body: unknown): string {
+  const kind = (body as { kind?: unknown } | null)?.kind;
+  return typeof kind === "string" ? `${kind} body` : "item";
+}
+
+const megabytes = (bytes: number): string => (bytes / (1024 * 1024)).toFixed(1);
+const kilobytes = (bytes: number): string => String(Math.ceil(bytes / 1024));
 
 /**
  * The part of a quota refusal that is about a **count** rather than bytes
