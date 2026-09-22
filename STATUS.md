@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
 **Last updated:** Design index receiver repair merged · code checkpoint: c085f82a
-**Current focus:** Build index receiver crash fixed on main (`c085f82a`), independently reviewed; design123, test types, typecheck, identity and UI build pass. Person retry remains pending. M21-T6 plan approved: kind-specific creation forms and highlighted Markdown Write/Preview control are implementing first; opened detail views follow as a separate reviewed milestone under the same owner. Viewing will render Markdown by default; Preview never saves. Browser acceptance and release remain pending; Goal mode is inactive.
+**Current focus:** Build index receiver crash fixed on main (`c085f82a`), independently reviewed; design123, test types, typecheck, identity and UI build pass. Person retry remains pending. M21-T6 plan approved: kind-specific creation forms and highlighted Markdown Write/Preview control are implementing first; opened detail views follow as a separate reviewed milestone under the same owner. Viewing will render Markdown by default; Preview never saves. Publication is explicitly authorized once the work is finished; review, validation and person-owned acceptance results remain pending. Goal mode is inactive.
 
 | Milestone | State |
 | --- | --- |
@@ -27,7 +27,7 @@
 | M18 Resource containment | done |
 | M19 Runtime recovery/update activation | in-progress |
 | M20 Source-control leap | in-progress |
-| M21 Project lifecycle leap | in-progress (T24 acceptance and T25 release are the person's) |
+| M21 Project lifecycle leap | in-progress (UI repairs/acceptance; publication authorized after completion) |
 | M22 Model profiles | done |
 | M23 Plain Chat | done |
 | M24 Ask Oracle | built, unmerged (awaiting M21 release) |
@@ -35,7 +35,7 @@
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
-**M21, task by task:** T6 is reopened for purpose-specific creation/forms and detail views; T13 receiver repair is merged and unit-verified; other T0–T23 and T26 rows retain their recorded evidence in `STATUS_DETAILED.md`. T24 is half done — the deterministic matrix (8 scenarios across host, worker and UI) is merged; **the browser matrix B1–B12 in `docs/leap/m21-acceptance.md` is the person's and is the one open acceptance item** (D-342). T25 is `todo` and needs the person's release authorization.
+**M21, task by task:** T6 is reopened for purpose-specific creation/forms and detail views; T13 receiver repair is merged and unit-verified; other T0–T23 and T26 rows retain their recorded evidence in `STATUS_DETAILED.md`. T24 is half done — the deterministic matrix (8 scenarios across host, worker and UI) is merged; **the browser matrix B1–B12 in `docs/leap/m21-acceptance.md` is the person's and is the one open acceptance item** (D-342). T25 publication is authorized after the requested UI work is completed and validated; the old prepared candidate must be replaced.
 
 **Gate:** **`pnpm verify && pnpm identity:check` pass on `main`** at `e7442ca2` (`t-da68933b`, verify 151.3s, `/tmp/laser-main-verify-1.log`), in a clean graphical environment. The same tree passed on the integration branch (`t-81817021`, 163.1s). Two suite defects were fixed on the way, not re-run away: three desktop real-host-spawn tests inherited the 5s default timeout under workspace concurrency (now declared 30s, like the other real-spawn suites), and one relay-client test counted retries that accrue after the moment it asserts.
 
@@ -45,7 +45,7 @@
 
 **Needs you:**
 1. After the index repair, `pnpm -r build && PORT=41442 pnpm sandbox` (http://127.0.0.1:41442), then work through B1–B12 in `docs/leap/m21-acceptance.md`. Port 41441 is occupied by the installed host with real data, not the sandbox.
-2. Authorize the M21 release (T25) when the matrix looks right.
+2. Release permission has been granted. Remaining person checks are acceptance evidence, not another generic authorization request.
 
 **M24 and M25** are being built on isolated branches while M21 waits for authorization (D-370); neither reaches `main` or a release until M21 is published.
 
