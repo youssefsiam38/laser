@@ -147,6 +147,9 @@ describe("+ Create", () => {
     const exactOutcome = "  **exact outcome**\n<script id=\"draft-script\">bad()</script>  ";
     await setInput(outcome, exactOutcome);
     outcome.setSelectionRange(4, 9);
+    await act(async () => button("Add affected area")?.click());
+    const affected = form!.querySelector<HTMLInputElement>('input[aria-label="Affected area 1"]')!;
+    await setInput(affected, "packages/ui");
 
     const writeTab = form!.querySelector<HTMLButtonElement>('button[role="tab"][aria-controls$="write"]')!;
     await act(async () => writeTab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })));
@@ -170,11 +173,29 @@ describe("+ Create", () => {
     await act(async () => button("Create task")?.click());
     await act(async () => button("Create task")?.click());
     expect(createSpy).toHaveBeenCalledTimes(1);
-    expect(createSpy.mock.calls[0]?.[0]).toMatchObject({ body: { kind: "task", task: { outcome: exactOutcome } } });
+    expect(createSpy.mock.calls[0]?.[0]).toMatchObject({
+      body: { kind: "task", task: { outcome: exactOutcome, scope: { paths: ["packages/ui"] } } },
+    });
+
+    expect(outcome.closest("fieldset")?.disabled).toBe(true);
+    expect(affected.closest("fieldset")?.disabled).toBe(true);
+    expect(button("Add affected area")?.closest("fieldset")?.disabled).toBe(true);
+    await setInput(outcome, "changed while pending");
+    await setInput(affected, "changed/while-pending");
+    await act(async () => button("Add non-goal")?.click());
+    expect(outcome.value).toBe(exactOutcome);
+    expect(affected.value).toBe("packages/ui");
+    expect(createSpy.mock.calls[0]?.[0]).toMatchObject({
+      body: { kind: "task", task: { outcome: exactOutcome, scope: { paths: ["packages/ui"] } } },
+    });
 
     await act(async () => settleCreate?.({ ok: false, failure: { kind: "refused", message: "Try again." } }));
     expect(text()).toContain("Try again.");
     expect(outcome.value).toBe(exactOutcome);
+    expect(outcome.closest("fieldset")?.disabled).toBe(false);
+    expect(affected.closest("fieldset")?.disabled).toBe(false);
+    await setInput(outcome, "editable after failure");
+    expect(outcome.value).toBe("editable after failure");
   });
 
   it("ignores a successful response after the dialog scope closes", async () => {

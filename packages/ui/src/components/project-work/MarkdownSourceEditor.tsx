@@ -2,6 +2,7 @@
 
 import { markdown } from "@codemirror/lang-markdown";
 import { syntaxHighlighting, HighlightStyle } from "@codemirror/language";
+import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
@@ -19,20 +20,21 @@ export interface MarkdownSourceEditorProps {
   describedBy?: string | undefined;
   placeholder?: string | undefined;
   maxLength?: number | undefined;
+  readOnly?: boolean | undefined;
   onCreateShortcut?(): void;
 }
 
 const theme = EditorView.theme({
   "&": {
     color: "var(--ink)",
-    backgroundColor: "var(--surface-1)",
+    backgroundColor: "var(--surface)",
     fontFamily: "var(--font-mono)",
     fontSize: "var(--text-sm)",
     lineHeight: "var(--text-sm--line-height)",
   },
   ".cm-content": { padding: "calc(var(--space-unit) * 2.5) calc(var(--space-unit) * 3)" },
   ".cm-scroller": { overflow: "auto", minHeight: "calc(var(--space-unit) * 24)", maxHeight: "calc(var(--space-unit) * 48)" },
-  ".cm-focused": { outline: "calc(var(--space-unit) * 0.5) solid var(--live)", outlineOffset: "calc(var(--space-unit) * -0.25)" },
+  "&.cm-focused": { outline: "calc(var(--space-unit) * 0.5) solid var(--live)", outlineOffset: "calc(var(--space-unit) * -0.25)" },
   ".cm-cursor": { borderLeftColor: "var(--ink)" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "color-mix(in oklab, var(--live) 24%, transparent)" },
   ".cm-placeholder": { color: "var(--ink-3)" },
@@ -41,7 +43,7 @@ const theme = EditorView.theme({
 
 const highlight = syntaxHighlighting(
   HighlightStyle.define([
-    { tag: tags.heading, color: "var(--live)", fontWeight: "var(--weight-semibold)" },
+    { tag: tags.heading, color: "var(--live)" },
     { tag: [tags.strong, tags.emphasis], color: "var(--ink)" },
     { tag: [tags.link, tags.url], color: "var(--live)" },
     { tag: [tags.monospace, tags.string], color: "var(--ok)" },
@@ -50,11 +52,30 @@ const highlight = syntaxHighlighting(
 );
 
 export const MarkdownSourceEditor = forwardRef<MarkdownSourceEditorHandle, MarkdownSourceEditorProps>(function MarkdownSourceEditor(
-  { value, onChange, label, describedBy, placeholder, maxLength, onCreateShortcut },
+  { value, onChange, label, describedBy, placeholder, maxLength, readOnly = false, onCreateShortcut },
   forwardedRef,
 ) {
   const editor = useRef<ReactCodeMirrorRef>(null);
-  const extensions = useMemo(() => [markdown(), EditorView.lineWrapping, theme, highlight], []);
+  const extensions = useMemo(
+    () => [
+      markdown(),
+      EditorView.lineWrapping,
+      EditorView.contentAttributes.of({
+        "aria-label": label,
+        ...(describedBy !== undefined ? { "aria-describedby": describedBy } : {}),
+      }),
+      ...(maxLength === undefined
+        ? []
+        : [
+            EditorState.transactionFilter.of((transaction) =>
+              !transaction.docChanged || transaction.newDoc.length <= maxLength ? transaction : [],
+            ),
+          ]),
+      theme,
+      highlight,
+    ],
+    [describedBy, label, maxLength],
+  );
 
   useImperativeHandle(
     forwardedRef,
@@ -67,9 +88,9 @@ export const MarkdownSourceEditor = forwardRef<MarkdownSourceEditorHandle, Markd
 
   return (
     <div
-      className="overflow-hidden rounded-md border border-line bg-surface-1"
+      className="overflow-hidden rounded-md border border-line bg-surface"
       onKeyDownCapture={(event) => {
-        if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) return;
+        if (readOnly || event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) return;
         if (event.nativeEvent.isComposing) return;
         event.preventDefault();
         onCreateShortcut?.();
@@ -78,16 +99,14 @@ export const MarkdownSourceEditor = forwardRef<MarkdownSourceEditorHandle, Markd
       <CodeMirror
         ref={editor}
         value={value}
-        onChange={(next) => {
-          if (maxLength !== undefined && next.length > maxLength) return;
-          onChange(next);
-        }}
+        onChange={onChange}
         extensions={extensions}
         basicSetup={{ lineNumbers: false, foldGutter: false, highlightActiveLine: false, highlightActiveLineGutter: false, indentOnInput: false }}
+        indentWithTab={false}
+        editable={!readOnly}
+        readOnly={readOnly}
         theme="none"
         {...(placeholder !== undefined ? { placeholder } : {})}
-        aria-label={label}
-        {...(describedBy !== undefined ? { "aria-describedby": describedBy } : {})}
       />
     </div>
   );

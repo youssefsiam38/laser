@@ -1,7 +1,7 @@
 # M21-T6 follow-up — kind-aware creation and authoring
 
-Status: **Milestone 1 implemented; ready for review**. Milestone 2 remains out
-of scope until Milestone 1 review and integration. The binding contracts are [`project-lifecycle-leap.md`](../project-lifecycle-leap.md)
+Status: **Milestone 1 corrected; ready for independent review**. Milestone 2
+remains out of scope until Milestone 1 review and integration. The binding contracts are [`project-lifecycle-leap.md`](../project-lifecycle-leap.md)
 ("Flexibility", "Embedded workspace" and "Detail, by kind"), D-352 and D-355,
 [`design-phase.md`](../design-phase.md), [`research-phase.md`](../research-phase.md),
 and the closed bodies in
@@ -47,6 +47,35 @@ or proof surfaces.
   implementation directly imports, `@codemirror/language@6.12.4`,
   `@codemirror/view@6.43.13`, and `@lezer/highlight@1.2.3`; they are therefore
   exact direct pins too. No other editor framework or textarea overlay is used.
+
+## Milestone 1 correction evidence
+
+The pre-review correction keeps the body-first and creation behavior above, and
+closes the editor/pending defects found by the parent inspection:
+
+- A red focused run reproduced four defects: CodeMirror's editable content had
+  no accessible label, an over-limit transaction changed the visible document
+  without changing the draft, a 64-row fixture mounted 64 editor views, and a
+  pending Create left its primary editor editable. The same focused command is
+  green after the correction.
+- A kind now retains one mounted editor view across kind switches; inactive
+  repeated prose rows use the safe Markdown renderer. The 256-row Spec schema
+  limit still mounts one view, while selection and browser undo survive hiding
+  and restoring the kind.
+- The real CodeMirror integration covers Tab escape, content labelling and
+  description, read-only mode, mixed RTL/LTR bytes, composition-safe and normal
+  create shortcuts, transaction-bounded input, and unsaved Preview coherence.
+- Pending Create disables native controls and CodeMirror, while a synchronous
+  mutation guard preserves the submitted/displayed snapshot; refusal unlocks
+  the same draft. The Foundation suite proves Task and Plan are each created
+  once with their full first body and no create-then-revise write.
+- Editor CSS-object variables were checked directly against `globals.css`; the
+  stale `--surface-1` and undefined `--weight-semibold` references are gone,
+  and the focus selector targets the editor root as `&.cm-focused`.
+
+Visual appearance, touch behavior, real assistive technology, browser IME and
+full RTL interaction remain person-owned checks under D-342; unit tests do not
+claim them.
 
 ## Non-negotiable boundaries
 

@@ -8,7 +8,15 @@
  */
 import { Plus } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { PROJECT_WORK_KEY_PREFIXES, PROJECT_WORK_KINDS, parseProjectWorkKey, type ProjectWorkKind } from "@lasercode/protocol";
+import {
+  PROJECT_WORK_KEY_PREFIXES,
+  PROJECT_WORK_KINDS,
+  PROJECT_WORK_TEXT_MAX,
+  PROJECT_WORK_TITLE_MAX,
+  RESEARCH_QUESTION_MAX,
+  parseProjectWorkKey,
+  type ProjectWorkKind,
+} from "@lasercode/protocol";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -91,6 +99,7 @@ export function CreateDialog({ store }: { store: ProjectWorkStore | undefined })
   const nextKey = useMemo(() => nextKeyFor(kind, work.items.map((item) => item.key)), [kind, work.items]);
 
   const updateDraft = (next: CreateDraft): void => {
+    if (busyRef.current) return;
     setDrafts((current) => ({ ...current, [next.kind]: next }) as CreateDrafts);
     setErrors({});
   };
@@ -191,10 +200,11 @@ export function CreateDialog({ store }: { store: ProjectWorkStore | undefined })
               <form
                 key={`${draftEpoch}:${candidate}`}
                 aria-hidden={!shown}
-                className={cn("flex flex-col gap-4", !shown && "hidden")}
+                className={cn(!shown && "hidden")}
                 onSubmit={(event) => event.preventDefault()}
               >
-                <MarkdownEditorActivationProvider active={shown}>
+                <fieldset disabled={busy} className="flex min-w-0 flex-col gap-4 border-0 p-0">
+                <MarkdownEditorActivationProvider active={shown} readOnly={busy}>
                 <div className="flex items-start gap-3 rounded-lg bg-surface-2 p-3">
                   {(() => { const Icon = KIND_ICON[candidate]; return <Icon aria-hidden="true" className={cn("mt-0.5 size-5 shrink-0", KIND_TEXT[candidate])} />; })()}
                   <div><p className="text-sm font-medium text-ink">{KIND_LABEL[candidate]}</p><p className="text-xs leading-xs text-ink-2">{KIND_PURPOSE[candidate]}</p></div>
@@ -209,6 +219,7 @@ export function CreateDialog({ store }: { store: ProjectWorkStore | undefined })
                     id={`${candidate}-create-title`}
                     autoFocus={shown}
                     value={draft.title}
+                    maxLength={PROJECT_WORK_TITLE_MAX}
                     aria-invalid={shown && errors.title ? true : undefined}
                     aria-describedby={shown && errors.title ? `${candidate}-title-error` : undefined}
                     onKeyDown={(event) => { if (event.key === "Enter") event.preventDefault(); }}
@@ -222,7 +233,9 @@ export function CreateDialog({ store }: { store: ProjectWorkStore | undefined })
                 <div id={`${candidate}-create-primary`} tabIndex={-1}>
                   <MarkdownAuthoringField
                     label={field.label}
+                    editorKey={`${candidate}:primary`}
                     value={draft.primary}
+                    maxLength={candidate === "research" ? RESEARCH_QUESTION_MAX : PROJECT_WORK_TEXT_MAX}
                     placeholder={field.placeholder}
                     error={shown ? errors.primary : undefined}
                     onChange={(primary) => updateDraft({ ...draft, primary })}
@@ -235,6 +248,7 @@ export function CreateDialog({ store }: { store: ProjectWorkStore | undefined })
                 </div>
                 {shown && errors.details ? <p role="alert" className="text-xs text-danger">{errors.details}</p> : null}
                 </MarkdownEditorActivationProvider>
+                </fieldset>
               </form>
             );
           })}
@@ -242,7 +256,7 @@ export function CreateDialog({ store }: { store: ProjectWorkStore | undefined })
           {hostError ? <div className="mt-3"><WorkRefusal message={hostError} /></div> : null}
         </div>
 
-        <DialogFooter className="shrink-0 border-t border-line bg-surface-1 p-3 [padding-bottom:max(calc(var(--space-unit)*3),env(safe-area-inset-bottom))]">
+        <DialogFooter className="shrink-0 border-t border-line bg-surface p-3 [padding-bottom:max(calc(var(--space-unit)*3),env(safe-area-inset-bottom))]">
           <Button type="button" variant="ghost" onClick={close} disabled={busy}>Cancel</Button>
           <Button
             type="button"
