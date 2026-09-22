@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
 **Last updated:** M21 integrated on main · code checkpoint: e7442ca2
-**Current focus:** M21-T13 reopened: person testing found Build index crashes reading `versionBlocked`. Repairing Design RPC receiver binding with behavioral regression coverage; earlier green gates did not catch it. Browser acceptance and release remain pending; Goal mode is inactive.
+**Current focus:** Person testing reopened M21-T13 (Build index loses the RPC receiver and crashes) and M21-T6 (all creation forms are the same two-field shell). Index repair is implementing regression coverage; kind-aware creation is in design planning with a separate owner. Browser acceptance and release remain pending; Goal mode is inactive.
 
 | Milestone | State |
 | --- | --- |
@@ -35,7 +35,7 @@
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
-**M21, task by task:** T13 is reopened for the index request-binding defect; other T0–T23 and T26 rows retain their recorded evidence in `STATUS_DETAILED.md`. T24 is half done — the deterministic matrix (8 scenarios across host, worker and UI) is merged; **the browser matrix B1–B12 in `docs/leap/m21-acceptance.md` is the person's and is the one open acceptance item** (D-342). T25 is `todo` and needs the person's release authorization.
+**M21, task by task:** T6 is reopened for purpose-specific creation forms and T13 for the index request-binding defect; other T0–T23 and T26 rows retain their recorded evidence in `STATUS_DETAILED.md`. T24 is half done — the deterministic matrix (8 scenarios across host, worker and UI) is merged; **the browser matrix B1–B12 in `docs/leap/m21-acceptance.md` is the person's and is the one open acceptance item** (D-342). T25 is `todo` and needs the person's release authorization.
 
 **Gate:** **`pnpm verify && pnpm identity:check` pass on `main`** at `e7442ca2` (`t-da68933b`, verify 151.3s, `/tmp/laser-main-verify-1.log`), in a clean graphical environment. The same tree passed on the integration branch (`t-81817021`, 163.1s). Two suite defects were fixed on the way, not re-run away: three desktop real-host-spawn tests inherited the 5s default timeout under workspace concurrency (now declared 30s, like the other real-spawn suites), and one relay-client test counted retries that accrue after the moment it asserts.
 
