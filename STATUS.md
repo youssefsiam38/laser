@@ -38,7 +38,8 @@
 **Active owners:**
 - T10/T13: done; reviewed source merged `b4ed1003` + correction `d408e8ea`. Parent450 focused tests and merged full verify/identity pass.
 - T2/T18/T19: done; final batch `c8d20389` merged (`f10501a0`).
-- T22: hardening owner active (`run_8fb1f38d`): threat model first, then gap fixes/tests.
+- T22: done, merged (D-369, `docs/leap/m21-threat-model.md`); host415 post-merge.
+- T24: deterministic acceptance owner active (`run_261766ac`); browser matrix stays person-owned.
 - T2: quota accounting reviewed (`472b1347`) and final batch `ad09bb38` integrated; host 374 tests.
 - T20: done, merged `c3c64337` (D-368); host453/protocol768/UI241.
 - T23: reconciliation owner active (`run_3230568d`): docs, Command wording, M17-T11 absorption, element audit.
@@ -47,5 +48,5 @@
 
 **Gate:** integrated verification/quota/forensics source `f846a90f`: **`pnpm verify && pnpm identity:check` pass** (`t-daeb8c05`, verify 171.6s, clean graphical environment, `/tmp/laser-integrated-verify-1.log`). Integration branch, **not final main**; excludes the in-flight T19 review batch and T20. Person-owned browser acceptance remains unclaimed (D-342).
 **Published:** v0.14.0 Latest (M26), v0.13.0 (M23), v0.12.0 (M22). Candidate `ac098597`; source CI `35616431166` and release `35616858358` attempt4 pass. Twelve assets/digests/source provenance verified; `docs/leap/m26-release-evidence.json`.
-**Next:** land T22 and T23 → T24 acceptance → T25 release → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
+**Next:** land T23 and T24 deterministic half → full gate → T25 release (person browser matrix listed as open) → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
 **Other retained blocker:** M19-T7 waits for M19-T6 shared storage ownership. Person-owned M20/visual acceptance must not be inferred from unit tests.

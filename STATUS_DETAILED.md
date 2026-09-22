@@ -6139,6 +6139,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap: host gate rules (`project-work/gates.ts` + the store's comment/review/approve paths) and the UI comments/gate card/Approval Card; write set disjoint from T16 (plan/task/board files) and T17 (bridge/methods wiring).
 
 #### M21-T24 notes
+- Owner run_261766ac (session 01a0c695-515f-7358-a82e-60ac4b228682), branch agents/prove-lifecycle-end-to-end-261766ac, base e3469faf.
 - Claimed. Deterministic half (owner): established React and non-React projects, greenfield, backend-only skip, design revision during Build, multiple sessions, cross-project mention — real host+worker+git fixtures, no browser. The browser matrix is the person's (D-342) and is listed as the open acceptance item with exact steps.
 
 #### M21-T23 notes
