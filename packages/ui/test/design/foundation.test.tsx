@@ -449,13 +449,18 @@ describe("approval", () => {
     await click(button("Create the plan, foundation first"));
 
     const created = calls.filter((call) => call.method === "project/work/create");
+    expect(created).toHaveLength(2);
+    expect(calls.filter((call) => call.method === "project/work/revise")).toHaveLength(0);
     expect(created[0]?.params["kind"]).toBe("task");
     expect(String(created[0]?.params["title"])).toContain("foundation");
+    const task = (created[0]?.params["body"] as { task: { outcome: string; acceptance: unknown[]; scope: unknown } }).task;
+    expect(task.outcome).toContain("foundation");
+    expect(task.scope).toBeDefined();
     expect(created[1]?.params["kind"]).toBe("plan");
-    const planRevise = calls.filter((call) => call.method === "project/work/revise").at(-1);
-    const plan = (planRevise?.params["body"] as { plan: { phases: Array<{ id: string; taskKeys: string[] }> } }).plan;
+    const plan = (created[1]?.params["body"] as { plan: { phases: Array<{ id: string; taskKeys: string[] }>; dependencies: unknown[] } }).plan;
     expect(plan.phases[0]?.id).toBe("foundation");
     expect(plan.phases[0]?.taskKeys).toEqual(["TASK-1"]);
+    expect(plan.dependencies).toBeDefined();
     expect(toast).toHaveBeenCalledWith("info", expect.stringContaining("TASK-1"));
   });
 });
