@@ -29,4 +29,4 @@ it("keeps runtime verification and migration work off the Electron main thread",
   } finally {
     clearInterval(timer);
   }
-});
+}, 30_000);

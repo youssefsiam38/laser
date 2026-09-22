@@ -48,7 +48,10 @@ it("adopts a same-version legacy host, refreshes its environment, and leaves it 
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
   }
-});
+// A real host is spawned here: alone it takes a couple of seconds, and the
+// workspace runs three packages at once, so the cost is declared rather than
+// left to the 5s default (M21 integration gate).
+}, 30_000);
 
 it("refuses a ready responder whose launch identity differs from the desktop spawn", async () => {
   const root = mkdtempSync(join(tmpdir(), "desktop-launch-mismatch-"));
@@ -146,4 +149,7 @@ it("routes a different-version legacy host through the replacement confirmation"
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
   }
-});
+// A real host is spawned here: alone it takes a couple of seconds, and the
+// workspace runs three packages at once, so the cost is declared rather than
+// left to the 5s default (M21 integration gate).
+}, 30_000);
