@@ -52,6 +52,24 @@ describe("the spec body a person edits", () => {
     expect(body.outcomes).toEqual(["kept"]);
   });
 
+  it("omits blank optional rows without normalizing authored Markdown bytes", () => {
+    const draft = specDraft(specFixture({
+      brief: "  brief with deliberate edges  \n",
+      problem: "\n problem stays indented  \n",
+      outcomes: ["  first outcome  \n", "   "],
+      requirements: [{ id: "r1", level: "must", text: "  **exact** requirement  \n" }],
+      acceptance: [{ id: "a1", machineVerifiable: false, text: "\n exact acceptance  " }],
+      document: "\n# Exact document  \n\n",
+    }));
+    const body = specBodyFrom(draft);
+    expect(body.brief).toBe("  brief with deliberate edges  \n");
+    expect(body.problem).toBe("\n problem stays indented  \n");
+    expect(body.outcomes).toEqual(["  first outcome  \n"]);
+    expect(body.requirements[0]?.text).toBe("  **exact** requirement  \n");
+    expect(body.acceptance[0]?.text).toBe("\n exact acceptance  ");
+    expect(body.document).toBe("\n# Exact document  \n\n");
+  });
+
   it("renders one body as stable text, so a difference is between revisions", () => {
     const body = specFixture();
     expect(specBodyText(body)).toBe(specBodyText(specDraft(body)));

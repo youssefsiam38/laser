@@ -13,19 +13,25 @@
  * and Project Task contract"). The only count on screen is how many of its
  * real Tasks are done, which is a fact the board would say the same way.
  */
-import { FileText, Network } from "lucide-react";
+import { Check, FileText, Network, Pencil, Plus, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { ClientRequests, PlanBody, ProjectTaskState, ProjectWorkListItem } from "@lasercode/protocol";
+import { projectWorkBodySchema, validatePlanGraph, type ClientRequests, type PlanBody, type ProjectTaskState, type ProjectWorkListItem } from "@lasercode/protocol";
 
 import { AgentPlan, type AgentPlanPhase } from "@/components/assistant-ui/elements/agent-plan";
 import { type TodoItem } from "@/components/assistant-ui/elements/todo-list";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { selectWork } from "@/project-work";
 import { stateLabel, taskMark } from "@/project-work/vocabulary";
 
 import { KeyTag, TypeBadge } from "./KindBadge.js";
+import { MarkdownAuthoringField } from "./MarkdownAuthoringField.js";
 import { PlanGraph } from "./PlanGraph.js";
+import { WorkEditFields, WorkEditFooter, WorkEditNewerNotice, useWorkEditSession } from "./edit-session.js";
+import type { WorkBodyContext } from "./bodies/context.js";
+import { Field, LineListField } from "./bodies/editor-fields.js";
 import { Document, EmptyBody, ListSection, Prose, Section } from "./bodies/fields.js";
 
 type Detail = ClientRequests["project/work/get"]["result"];
@@ -37,8 +43,11 @@ const VIEWS = [
 
 type PlanView = (typeof VIEWS)[number]["id"];
 
-export function PlanDetail({ detail, body, items }: { detail: Detail; body: PlanBody; items: readonly ProjectWorkListItem[] }) {
+export function PlanDetail({ detail, body, items, context }: { detail: Detail; body: PlanBody; items: readonly ProjectWorkListItem[]; context?: WorkBodyContext }) {
   const [view, setView] = useState<PlanView>("document");
+  const [draft, setDraft] = useState<PlanBody>();
+  const bodyContext: WorkBodyContext = context ?? { store: undefined, detail, editable: false, onChanged: () => {}, items };
+  const edit = useWorkEditSession<PlanBody>(bodyContext);
 
   // Where the Plan came from, if anywhere. A Plan is usable alone (D-352), so
   // "standalone" is a first-class answer and not a missing link.
@@ -68,6 +77,10 @@ export function PlanDetail({ detail, body, items }: { detail: Detail; body: Plan
     return planTasks(keys, items);
   }, [body.dependencies, body.phases, items]);
 
+  if (draft && context && edit.matches && edit.owner) {
+    return <PlanEditor body={draft} context={context} items={items} edit={edit} onChange={setDraft} onClose={() => { if (edit.cancel()) setDraft(undefined); }} />;
+  }
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-center gap-2">
@@ -90,7 +103,7 @@ export function PlanDetail({ detail, body, items }: { detail: Detail; body: Plan
           </span>
         )}
         <Badge variant="outline">
-          {body.phases.length} phase{body.phases.length === 1 ? "" : "s"}
+          {body.phases.length} phase{body.phases.length === 1 ? "" : "s"} · {new Set(body.phases.flatMap((phase) => phase.taskKeys)).size} tasks
         </Badge>
         {detail.planGraph && !detail.planGraph.ok ? <Badge variant="danger">the graph has a problem</Badge> : null}
         {detail.planGraph && detail.planGraph.orphans.length > 0 ? (
@@ -99,7 +112,16 @@ export function PlanDetail({ detail, body, items }: { detail: Detail; body: Plan
           </Badge>
         ) : null}
 
-        <div role="tablist" aria-label="How to read this plan" className="ms-auto flex items-center gap-0.5 rounded-md bg-surface-2 p-0.5">
+        {detail.planGraph?.ok && detail.planGraph.order.length > 0 ? (
+          <span className="text-xs leading-xs text-ink-3">Order: {detail.planGraph.order.join(" → ")}</span>
+        ) : null}
+        {context?.editable ? (
+          <Button size="sm" variant="outline" className="ms-auto" onClick={() => { const owner = edit.begin(body); if (owner) setDraft(structuredClone(owner.baseBody)); }}>
+            <Pencil />
+            Edit plan
+          </Button>
+        ) : null}
+        <div role="tablist" aria-label="How to read this plan" className={cn("flex items-center gap-0.5 rounded-md bg-surface-2 p-0.5", !context?.editable && "ms-auto")}>
           {VIEWS.map((candidate) => (
             <button
               key={candidate.id}
@@ -151,7 +173,7 @@ export function PlanDetail({ detail, body, items }: { detail: Detail; body: Plan
                 {body.boundaries.map((boundary) => (
                   <li key={boundary.scope} className="flex flex-col">
                     <span className="typed text-ink-2">{boundary.scope}</span>
-                    <span className="text-sm leading-5 text-ink-2">{boundary.rule}</span>
+                    <Prose text={boundary.rule} />
                   </li>
                 ))}
               </ul>
@@ -164,9 +186,9 @@ export function PlanDetail({ detail, body, items }: { detail: Detail; body: Plan
                 {body.migrations.map((migration) => (
                   <li key={migration.summary} className="flex items-start gap-2">
                     <Badge variant={migration.reversible ? "outline" : "attention"}>{migration.reversible ? "reversible" : "one way"}</Badge>
-                    <span className="min-w-0 text-sm leading-5 text-ink-2">
-                      {migration.summary}
-                      {migration.note ? <span className="block text-xs leading-xs text-ink-3">{migration.note}</span> : null}
+                    <span className="min-w-0 flex-1">
+                      <Prose text={migration.summary} />
+                      {migration.note ? <Prose text={migration.note} className="text-xs leading-xs text-ink-3" /> : null}
                     </span>
                   </li>
                 ))}
@@ -180,9 +202,9 @@ export function PlanDetail({ detail, body, items }: { detail: Detail; body: Plan
                 {body.risks.map((risk) => (
                   <li key={risk.summary} className="flex items-start gap-2">
                     <Badge variant={risk.severity === "high" ? "danger" : risk.severity === "medium" ? "attention" : "outline"}>{risk.severity}</Badge>
-                    <span className="min-w-0 text-sm leading-5 text-ink-2">
-                      {risk.summary}
-                      <span className="block text-xs leading-xs text-ink-3">{risk.control}</span>
+                    <span className="min-w-0 flex-1">
+                      <Prose text={risk.summary} />
+                      <Prose text={risk.control} className="text-xs leading-xs text-ink-3" />
                     </span>
                   </li>
                 ))}
@@ -214,6 +236,153 @@ export function PlanDetail({ detail, body, items }: { detail: Detail; body: Plan
       )}
     </div>
   );
+}
+
+function PlanEditor({
+  body,
+  context,
+  items,
+  edit,
+  onChange,
+  onClose,
+}: {
+  body: PlanBody;
+  context: WorkBodyContext;
+  items: readonly ProjectWorkListItem[];
+  edit: ReturnType<typeof useWorkEditSession<PlanBody>>;
+  onChange: (body: PlanBody) => void;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState(edit.owner?.baseTitle ?? context.detail.revision.title);
+  const [error, setError] = useState<string>();
+  const taskKeys = items.filter((item) => item.kind === "task").map((item) => item.key);
+  const original = edit.owner?.baseBody ?? body;
+  const changed = JSON.stringify(body) !== JSON.stringify(original) || title.trim() !== edit.owner?.baseTitle;
+
+  const save = async (): Promise<void> => {
+    const submitted = structuredClone(body);
+    const submittedTitle = title.trim();
+    const parsed = projectWorkBodySchema.safeParse({ kind: "plan", plan: submitted });
+    if (!parsed.success) {
+      setError("Some plan fields are incomplete. Finish or remove the incomplete row before saving.");
+      return;
+    }
+    const known = new Map(items.map((item) => [item.key, { kind: item.kind, state: item.state, entityId: item.ref.entityId, title: item.title }]));
+    const report = validatePlanGraph({ phases: submitted.phases, dependencies: submitted.dependencies, known });
+    if (!report.ok) {
+      setError(report.problems[0]?.message ?? "The dependency graph has a problem that must be fixed before saving.");
+      return;
+    }
+    setError(undefined);
+    const settled = await edit.submit((base) => base.store.revise(
+      { entityId: base.entityId, expectedRevisionId: base.baseRevisionId },
+      { kind: "plan", plan: submitted },
+      submittedTitle !== base.baseTitle ? { title: submittedTitle } : {},
+    ));
+    if (settled.kind === "blocked") {
+      setError(`${context.readOnlyReason ?? "This draft can no longer be saved from here."} Your draft is still here.`);
+      return;
+    }
+    if (settled.kind === "ignored") return;
+    if (!settled.value.ok) {
+      setError(`${settled.value.failure.message} Your draft is still here.`);
+      return;
+    }
+    onClose();
+    context.onChanged();
+  };
+
+  return (
+    <div data-slot="plan-editor" className="flex flex-col gap-5">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
+        <Badge variant="outline">{body.phases.length} phases · {taskKeys.length} available tasks</Badge>
+        <span className="text-xs leading-xs text-ink-3">Plan structure and prose become one fenced child revision.</span>
+        {!context.compact ? (
+          <span className="ms-auto flex items-center gap-1.5">
+            <Button size="sm" variant="ghost" disabled={edit.pending} onClick={onClose}><X />Cancel</Button>
+            <Button size="sm" disabled={!edit.canSubmit || !changed || title.trim() === ""} onClick={() => void save()}><Check />{edit.pending ? "Saving…" : "Save as a new revision"}</Button>
+          </span>
+        ) : null}
+      </div>
+      <WorkEditNewerNotice show={edit.newerRevision} />
+      {error ? <p role="alert" className="rounded-lg border border-danger/40 p-3 text-sm leading-5 text-danger">{error}</p> : null}
+      <WorkEditFields locked={edit.locked}>
+      <Field label="Title" htmlFor="plan-title">
+        <Input id="plan-title" value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} />
+      </Field>
+        <MarkdownAuthoringField editorKey="plan-brief" label="Brief" value={body.brief} onChange={(brief) => onChange({ ...body, brief })} placeholder="What does this plan deliver?" />
+
+        <Field label="Phases" hint="A task can appear in one phase. Dependency order remains a separate fact.">
+          <ul role="list" className="flex flex-col gap-3">
+            {body.phases.map((phase, index) => (
+              <li key={phase.id} className="flex flex-col gap-2 rounded-lg border border-line p-3">
+                <div className="flex items-center gap-2">
+                  <Input aria-label={`Phase ${index + 1} name`} value={phase.name} onChange={(event) => onChange({ ...body, phases: replaceAt(body.phases, index, { ...phase, name: event.target.value }) })} placeholder="Phase name" />
+                  <Button size="icon-sm" variant="ghost" aria-label={`Remove phase ${index + 1}`} onClick={() => onChange({ ...body, phases: body.phases.filter((_, at) => at !== index) })}><X /></Button>
+                </div>
+                <MarkdownAuthoringField editorKey={`plan-phase-${phase.id}`} label={`Phase ${index + 1} summary`} value={phase.summary ?? ""} onChange={(summary) => onChange({ ...body, phases: replaceAt(body.phases, index, { ...phase, summary }) })} placeholder="What changes in this phase?" />
+                <div className="flex flex-wrap gap-2">
+                  {taskKeys.map((key) => (
+                    <label key={key} className="flex min-h-8 items-center gap-1.5 text-xs text-ink-2">
+                      <input type="checkbox" checked={phase.taskKeys.includes(key)} onChange={(event) => onChange({ ...body, phases: replaceAt(body.phases, index, { ...phase, taskKeys: event.target.checked ? [...phase.taskKeys, key] : phase.taskKeys.filter((existing) => existing !== key) }) })} />
+                      {key}
+                    </label>
+                  ))}
+                </div>
+              </li>
+            ))}
+          </ul>
+          <div><Button size="xs" variant="outline" onClick={() => onChange({ ...body, phases: [...body.phases, { id: crypto.randomUUID(), name: "", taskKeys: [] }] })}><Plus />Add a phase</Button></div>
+        </Field>
+
+        <Field label="Dependencies" hint="Each arrow reads: from waits on to.">
+          <ul role="list" className="flex flex-col gap-2">
+            {body.dependencies.map((dependency, index) => (
+              <li key={`${dependency.from}-${dependency.to}-${index}`} className="grid min-w-0 grid-cols-[1fr_auto_1fr_auto] items-center gap-2">
+                <select aria-label={`Dependency ${index + 1} from`} value={dependency.from} onChange={(event) => onChange({ ...body, dependencies: replaceAt(body.dependencies, index, { ...dependency, from: event.target.value }) })} className="h-8 min-w-0 rounded-md border border-line bg-surface px-2 text-sm text-ink">{taskKeys.map((key) => <option key={key}>{key}</option>)}</select>
+                <span className="text-xs text-ink-3">waits on</span>
+                <select aria-label={`Dependency ${index + 1} to`} value={dependency.to} onChange={(event) => onChange({ ...body, dependencies: replaceAt(body.dependencies, index, { ...dependency, to: event.target.value }) })} className="h-8 min-w-0 rounded-md border border-line bg-surface px-2 text-sm text-ink">{taskKeys.map((key) => <option key={key}>{key}</option>)}</select>
+                <Button size="icon-sm" variant="ghost" aria-label={`Remove dependency ${index + 1}`} onClick={() => onChange({ ...body, dependencies: body.dependencies.filter((_, at) => at !== index) })}><X /></Button>
+                <div className="col-span-full"><MarkdownAuthoringField editorKey={`plan-dependency-${index}`} label={`Dependency ${index + 1} reason`} value={dependency.reason ?? ""} onChange={(reason) => onChange({ ...body, dependencies: replaceAt(body.dependencies, index, { ...dependency, reason }) })} placeholder="Why must this wait?" /></div>
+              </li>
+            ))}
+          </ul>
+          <div><Button size="xs" variant="outline" disabled={taskKeys.length < 2} onClick={() => onChange({ ...body, dependencies: [...body.dependencies, { from: taskKeys[1]!, to: taskKeys[0]! }] })}><Plus />Add a dependency</Button></div>
+        </Field>
+
+        <Field label="Boundaries">
+          <ul role="list" className="flex flex-col gap-2">{body.boundaries.map((boundary, index) => <li key={index} className="flex flex-col gap-2 rounded-lg border border-line p-3"><div className="flex gap-2"><Input aria-label={`Boundary ${index + 1} scope`} value={boundary.scope} onChange={(event) => onChange({ ...body, boundaries: replaceAt(body.boundaries, index, { ...boundary, scope: event.target.value }) })} placeholder="Package, path or responsibility"/><Button size="icon-sm" variant="ghost" aria-label={`Remove boundary ${index + 1}`} onClick={() => onChange({ ...body, boundaries: body.boundaries.filter((_, at) => at !== index) })}><X /></Button></div><MarkdownAuthoringField editorKey={`plan-boundary-${index}`} label={`Boundary ${index + 1} rule`} value={boundary.rule} onChange={(rule) => onChange({ ...body, boundaries: replaceAt(body.boundaries, index, { ...boundary, rule }) })} placeholder="What stays inside or outside?" /></li>)}</ul>
+          <div><Button size="xs" variant="outline" onClick={() => onChange({ ...body, boundaries: [...body.boundaries, { scope: "", rule: "" }] })}><Plus />Add a boundary</Button></div>
+        </Field>
+
+        <Field label="Migrations">
+          <ul role="list" className="flex flex-col gap-2">{body.migrations.map((migration, index) => <li key={index} className="flex flex-col gap-2 rounded-lg border border-line p-3"><label className="flex items-center gap-2 text-xs text-ink-2"><input type="checkbox" checked={migration.reversible} onChange={(event) => onChange({ ...body, migrations: replaceAt(body.migrations, index, { ...migration, reversible: event.target.checked }) })}/>Reversible</label><MarkdownAuthoringField editorKey={`plan-migration-${index}`} label={`Migration ${index + 1}`} value={migration.summary} onChange={(summary) => onChange({ ...body, migrations: replaceAt(body.migrations, index, { ...migration, summary }) })} placeholder="What moves?"/><MarkdownAuthoringField editorKey={`plan-migration-note-${index}`} label={`Migration ${index + 1} note`} value={migration.note ?? ""} onChange={(note) => onChange({ ...body, migrations: replaceAt(body.migrations, index, { ...migration, note }) })} placeholder="Important migration detail"/><Button size="xs" variant="ghost" onClick={() => onChange({ ...body, migrations: body.migrations.filter((_, at) => at !== index) })}><X />Remove migration</Button></li>)}</ul>
+          <div><Button size="xs" variant="outline" onClick={() => onChange({ ...body, migrations: [...body.migrations, { summary: "", reversible: false }] })}><Plus />Add a migration</Button></div>
+        </Field>
+
+        <Field label="Risks">
+          <ul role="list" className="flex flex-col gap-2">{body.risks.map((risk, index) => <li key={index} className="flex flex-col gap-2 rounded-lg border border-line p-3"><select aria-label={`Risk ${index + 1} severity`} value={risk.severity} onChange={(event) => onChange({ ...body, risks: replaceAt(body.risks, index, { ...risk, severity: event.target.value as "low" | "medium" | "high" }) })} className="h-8 rounded-md border border-line bg-surface px-2 text-sm text-ink"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select><MarkdownAuthoringField editorKey={`plan-risk-${index}`} label={`Risk ${index + 1}`} value={risk.summary} onChange={(summary) => onChange({ ...body, risks: replaceAt(body.risks, index, { ...risk, summary }) })} placeholder="What may go wrong?"/><MarkdownAuthoringField editorKey={`plan-risk-control-${index}`} label={`Risk ${index + 1} control`} value={risk.control} onChange={(control) => onChange({ ...body, risks: replaceAt(body.risks, index, { ...risk, control }) })} placeholder="How is it controlled?"/><Button size="xs" variant="ghost" onClick={() => onChange({ ...body, risks: body.risks.filter((_, at) => at !== index) })}><X />Remove risk</Button></li>)}</ul>
+          <div><Button size="xs" variant="outline" onClick={() => onChange({ ...body, risks: [...body.risks, { severity: "medium", summary: "", control: "" }] })}><Plus />Add a risk</Button></div>
+        </Field>
+
+        <LineListField label="Verification commands" values={body.verification} onChange={(verification) => onChange({ ...body, verification })} placeholder="pnpm …" addLabel="Add a command" />
+        <MarkdownAuthoringField editorKey="plan-rollback" label="Rollback" value={body.rollback ?? ""} onChange={(rollback) => onChange({ ...body, rollback })} placeholder="How can this be undone?" />
+        <MarkdownAuthoringField editorKey="plan-document" label="Document" value={body.document ?? ""} onChange={(document) => onChange({ ...body, document })} placeholder="The full plan in Markdown" />
+      </WorkEditFields>
+      <WorkEditFooter
+        compact={context.compact}
+        pending={edit.pending}
+        canSave={edit.canSubmit && changed && title.trim() !== ""}
+        saveLabel="Save as a new revision"
+        onCancel={onClose}
+        onSave={() => void save()}
+      />
+    </div>
+  );
+}
+
+function replaceAt<T>(values: readonly T[], index: number, value: T): T[] {
+  return values.map((existing, at) => at === index ? value : existing);
 }
 
 /**

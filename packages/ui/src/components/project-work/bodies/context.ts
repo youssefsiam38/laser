@@ -16,6 +16,8 @@ import type { ProjectWorkStore } from "@/project-work";
 export interface WorkBodyContext {
   store: ProjectWorkStore | undefined;
   detail: WorkDetailResult;
+  /** Explicit revision from navigation; absent means the moving current-view. */
+  selectionRevisionId?: string | undefined;
   /** False on an older revision, on an archived item, or without the capability. */
   editable: boolean;
   /** Why editing is off, in one sentence, when it is off. */

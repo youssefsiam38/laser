@@ -95,20 +95,6 @@ export function Inspector({
 
   return (
     <aside data-slot="work-inspector" className={cn("flex min-h-0 flex-col gap-5 overflow-y-auto p-3", className)}>
-      <SpecSheet
-        title="This item"
-        bare
-        rows={[
-          { label: "Kind", value: entity.kind },
-          { label: "Key", value: entity.key, typed: true },
-          { label: "State", value: entity.state },
-          { label: "Revisions", value: String(entity.revisionCount), typed: true },
-          { label: "Created", value: dateTime(entity.createdAt) },
-          { label: "Updated", value: relativeTime(entity.updatedAt) },
-          { label: "Digest", value: revision.digest.slice(0, 12), typed: true },
-        ]}
-      />
-
       {detail.body?.body?.kind === "task" ? (
         <TaskInspectorSections body={detail.body.body.task} readiness={detail.readiness} items={work.items} />
       ) : null}
@@ -222,6 +208,20 @@ export function Inspector({
           </ul>
         </Section>
       ) : null}
+
+      <SpecSheet
+        title="This item"
+        bare
+        rows={[
+          { label: "Kind", value: entity.kind },
+          { label: "Key", value: entity.key, typed: true },
+          { label: "State", value: entity.state },
+          { label: "Revisions", value: String(entity.revisionCount), typed: true },
+          { label: "Created", value: dateTime(entity.createdAt) },
+          { label: "Updated", value: relativeTime(entity.updatedAt) },
+          { label: "Digest", value: revision.digest.slice(0, 12), typed: true },
+        ]}
+      />
 
       {history.length > 0 ? (
         <Section title="History">

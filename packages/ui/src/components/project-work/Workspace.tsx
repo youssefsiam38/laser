@@ -177,7 +177,14 @@ export function ProjectWorkspace() {
           )}
           {selected ? (
             <div className="flex min-h-0 min-w-0 flex-1">
-              <WorkDetail store={store} work={work} className="min-w-0 flex-1" onBack={() => selectWork(undefined)} compact={!detailColumns} />
+              <WorkDetail
+                store={store}
+                work={work}
+                className="min-w-0 flex-1"
+                onBack={() => selectWork(undefined)}
+                compact={!detailColumns}
+                {...(!detailColumns ? { onOpenInspector: () => setInspectorOpen(true) } : {})}
+              />
               {detailColumns && wide && selected ? (
                 <Inspector store={store} work={work} className="w-[clamp(16rem,20vw,20rem)] shrink-0 border-s border-line" />
               ) : null}
@@ -192,8 +199,8 @@ export function ProjectWorkspace() {
         <Recent work={work} />
       )}
 
-      {/* At a constrained desktop width the inspector is a sheet, not a column. */}
-      <Sheet open={inspectorOpen && detailColumns && !wide} onOpenChange={setInspectorOpen}>
+      {/* Below wide desktop the existing inspector becomes a narrow sheet. */}
+      <Sheet open={inspectorOpen && selected !== undefined && !wide} onOpenChange={setInspectorOpen}>
         <SheetContent side="right" className="w-[min(88vw,320px)]">
           <SheetTitle className="sr-only">Inspector</SheetTitle>
           <SheetDescription className="sr-only">Links, comments, revisions and gates for the open item.</SheetDescription>

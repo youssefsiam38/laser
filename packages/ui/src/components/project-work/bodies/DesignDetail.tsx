@@ -19,13 +19,14 @@
  * The phone gets the same canvas, read-only: pan, zoom, tap to inspect, and a
  * full-screen prototype. Editing needs a wider window, and it says so.
  */
-import { Layers, Maximize2, Play, RefreshCw, Save, Undo2, X } from "lucide-react";
+import { Layers, Maximize2, Pencil, Play, RefreshCw, Save, Undo2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ClientRequests, DesignBody, DesignIndex, DesignIndexEntry, DesignTokenGroup, DesignTreeVocabulary } from "@lasercode/protocol";
 import { designAggregateFidelity, designIsSketchOnly, designTokenDocumentSchema, validateDesignBody } from "@lasercode/protocol";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { DesignCanvas } from "@/components/design/DesignCanvas";
 import { DesignIndexPanel, type DesignIndexAccess } from "@/components/design/DesignIndexPanel";
 import { FlowsPanel } from "@/components/design/FlowsPanel";
@@ -50,9 +51,12 @@ import { designPins, pinsForScreen } from "@/design/review";
 import { SKETCH_GATE_REFUSAL } from "@/design/sketch";
 import { frameTokens } from "@/design/tokens";
 import { designIsEmpty, nodeOf, nudgeNode, reorderChild, screenOf, screenOfNode, setNodeText } from "@/design/tree-model";
+import { MarkdownAuthoringField, MarkdownEditorActivationProvider } from "../MarkdownAuthoringField.js";
 import { quoteIntoComposer } from "../quote.js";
 
 import type { WorkBodyContext } from "./context.js";
+import { WorkEditFooter, WorkEditNewerNotice, useWorkEditSession } from "../edit-session.js";
+import { Field } from "./editor-fields.js";
 import { EmptyBody, Prose, Section } from "./fields.js";
 
 // The sections are their own modules (`components/design/*`); this file is
@@ -118,41 +122,55 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
 
   // -- the draft ------------------------------------------------------------
   const [draft, setDraft] = useState<DesignBody>(body);
-  const [saving, setSaving] = useState(false);
+  const [title, setTitle] = useState(context.detail.revision.title);
+  const [briefEditing, setBriefEditing] = useState(false);
+  const edit = useWorkEditSession<DesignBody>(context);
   const [conflict, setConflict] = useState<string | undefined>(undefined);
   useEffect(() => {
+    if (edit.matches) return;
     setDraft(body);
+    setTitle(context.detail.revision.title);
+    setBriefEditing(false);
     setConflict(undefined);
-  }, [body]);
-  const dirty = draft !== body;
-  const editable = context.editable && !compact;
+  }, [body, context.detail.revision.title, edit.matches]);
+  const original = edit.owner?.baseBody;
+  const dirty = original !== undefined && (JSON.stringify(draft) !== JSON.stringify(original) || title.trim() !== edit.owner?.baseTitle);
+  const canOfferEditing = context.editable && !compact;
+  const editable = canOfferEditing && !edit.pending;
+  const mutateDraft = useCallback((next: DesignBody | ((current: DesignBody) => DesignBody)) => {
+    if (!edit.ensure(body)) return;
+    setDraft((current) => typeof next === "function" ? next(current) : next);
+  }, [body, edit.ensure]);
   const readOnlyReason = compact ? "Editing a design needs a wider window. Here you can read it, inspect any node and play it." : context.readOnlyReason;
 
   const save = useCallback(async () => {
-    if (!context.store) return;
-    const validation = validateDesignBody(draft, vocabulary);
+    if (!edit.owner) return;
+    const submitted = structuredClone(draft);
+    const submittedTitle = title.trim();
+    const validation = validateDesignBody(submitted, vocabulary);
     if (!validation.ok) {
       actions.toast("error", validation.issues[0]?.message ?? "This design has a problem that has to be fixed first.");
       return;
     }
-    setSaving(true);
-    const outcome = await context.store.revise(
-      { entityId: context.detail.entity.entityId, expectedRevisionId: context.detail.revision.revisionId },
-      { kind: "design", design: draft },
-      { note: "Edited on the canvas" },
-    );
-    setSaving(false);
-    if (outcome.ok) {
-      actions.toast("info", `${context.detail.entity.key} · revision ${outcome.value.revision.index} saved`);
+    const settled = await edit.submit((base) => base.store.revise(
+      { entityId: base.entityId, expectedRevisionId: base.baseRevisionId },
+      { kind: "design", design: submitted },
+      { note: "Edited on the design surface", ...(submittedTitle !== base.baseTitle ? { title: submittedTitle } : {}) },
+    ));
+    if (settled.kind !== "settled") return;
+    if (settled.value.ok) {
+      actions.toast("info", `${context.detail.entity.key} · revision ${settled.value.value.revision.index} saved`);
+      edit.rebase(submitted, submittedTitle, settled.value.value.revision.revisionId, settled.value.value.revision.index);
+      setBriefEditing(false);
       context.onChanged();
       return;
     }
-    if (outcome.failure.kind === "conflict") {
-      setConflict(outcome.failure.message);
+    if (settled.value.failure.kind === "conflict") {
+      setConflict(settled.value.failure.message);
       return;
     }
-    actions.toast("error", outcome.failure.message);
-  }, [actions, context, draft, vocabulary]);
+    actions.toast("error", settled.value.failure.message);
+  }, [actions, context.detail.entity.key, context.onChanged, draft, edit, title, vocabulary]);
 
   // -- selection ------------------------------------------------------------
   const [selectedScreenId, setSelectedScreenId] = useState<string | undefined>(() => body.screens[0]?.id);
@@ -268,7 +286,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
       try {
         const answer = await wireGroundSketch({ document, screenName: `${screen?.name ?? sketch.title}, grounded` });
         setGrounded(answer);
-        setDraft((current) => ({
+        mutateDraft((current) => ({
           ...current,
           screens: [...current.screens, answer.screen],
           sketches: current.sketches.map((candidate) => (candidate.id === sketchId ? { ...candidate, groundedIntoScreenId: answer.screen.id } : candidate)),
@@ -281,7 +299,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
         return { ok: false, message: error instanceof Error ? error.message : "That sketch could not be rebuilt from the index." };
       }
     },
-    [draft.screens, draft.sketches, sketchBytes, wireGroundSketch],
+    [draft.screens, draft.sketches, mutateDraft, sketchBytes, wireGroundSketch],
   );
   const ground = groundSketch ?? (wireGroundSketch ? groundFromWire : undefined);
 
@@ -345,13 +363,13 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
         onCommitText: editable
           ? (nodeId, text) => {
               setEditingNodeId(undefined);
-              setDraft((current) => setNodeText(current, screenId, nodeId, text));
+              mutateDraft((current) => setNodeText(current, screenId, nodeId, text));
             }
           : undefined,
-        onReorder: editable ? (parentId, from, to) => setDraft((current) => reorderChild(current, screenId, parentId, from, to)) : undefined,
+        onReorder: editable ? (parentId, from, to) => mutateDraft((current) => reorderChild(current, screenId, parentId, from, to)) : undefined,
       };
     },
-    [commentedNodeIds, draft, editable, editingNodeId, entries, prototype, selectNode, selectedNodeId],
+    [commentedNodeIds, draft, editable, editingNodeId, entries, mutateDraft, prototype, selectNode, selectedNodeId],
   );
   const editContext = useCallback((screenId: string) => contextFor(screenId, "edit"), [contextFor]);
   const playContext = useCallback((screenId: string) => contextFor(screenId, "prototype"), [contextFor]);
@@ -363,13 +381,13 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
       if (!editable || !selectedScreen || !selectedNodeId || !event.altKey) return;
       if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
         event.preventDefault();
-        setDraft((current) => nudgeNode(current, selectedScreen.id, selectedNodeId, -1));
+        mutateDraft((current) => nudgeNode(current, selectedScreen.id, selectedNodeId, -1));
       } else if (event.key === "ArrowDown" || event.key === "ArrowRight") {
         event.preventDefault();
-        setDraft((current) => nudgeNode(current, selectedScreen.id, selectedNodeId, 1));
+        mutateDraft((current) => nudgeNode(current, selectedScreen.id, selectedNodeId, 1));
       }
     },
-    [editable, selectedNodeId, selectedScreen],
+    [editable, mutateDraft, selectedNodeId, selectedScreen],
   );
 
   const unresolvedPins = useMemo(() => pins.filter((pin) => !pin.resolved), [pins]);
@@ -382,31 +400,97 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
   // foundation and screens can still be read as a design.
   const foundation = draft.foundation;
   const nothingDrawn = designIsEmpty(draft);
+  const beginBrief = (): void => {
+    const owner = edit.begin(body);
+    if (!owner) return;
+    setDraft(structuredClone(owner.baseBody));
+    setTitle(owner.baseTitle);
+    setBriefEditing(true);
+    setConflict(undefined);
+  };
+  const discard = (): void => {
+    if (!edit.cancel()) return;
+    setDraft(body);
+    setTitle(context.detail.revision.title);
+    setBriefEditing(false);
+    setConflict(undefined);
+  };
+  const briefBlock = briefEditing ? (
+    <div className="flex flex-col gap-4">
+      <Field label="Title" htmlFor="design-title">
+        <Input id="design-title" value={title} maxLength={200} disabled={edit.pending || compact} onChange={(event) => setTitle(event.target.value)} />
+      </Field>
+      <MarkdownEditorActivationProvider active readOnly={edit.pending || !context.editable || compact}>
+      <MarkdownAuthoringField
+        editorKey="design-brief"
+        label="Brief"
+        value={draft.brief}
+        onChange={(brief) => mutateDraft((current) => ({ ...current, brief }))}
+        placeholder="What should this experience make possible?"
+      />
+      </MarkdownEditorActivationProvider>
+    </div>
+  ) : (
+    <Section title="Brief">
+      <Prose text={draft.brief} />
+    </Section>
+  );
 
   if (!foundation && nothingDrawn) {
     return (
       <div data-slot="design-detail" className="flex flex-col gap-5">
-        <Section title="Brief">
-          <Prose text={draft.brief} />
-        </Section>
+        <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
+          <Badge variant="live">Proposed</Badge>
+          <span className="text-xs leading-xs text-ink-3">0 screens · 0 flows · nothing drawn yet</span>
+          {canOfferEditing ? (
+            <span className="ms-auto flex items-center gap-1.5">
+              {!briefEditing ? <Button size="sm" variant="outline" disabled={edit.pending} onClick={beginBrief}><Pencil />Edit brief</Button> : null}
+              <Button size="sm" variant="ghost" disabled={!dirty || edit.pending} onClick={discard}><Undo2 />Discard</Button>
+              <Button size="sm" disabled={!dirty || !edit.canSubmit || title.trim() === ""} onClick={() => void save()}><Save />{edit.pending ? "Saving…" : "Save revision"}</Button>
+            </span>
+          ) : null}
+        </div>
+        <WorkEditNewerNotice show={edit.newerRevision} />
+        {conflict ? <p role="alert" data-slot="revision-conflict" className="rounded-lg border border-attention/40 p-3 text-sm text-ink-2">{conflict} Your edits are still here.</p> : null}
+        {briefBlock}
         <EmptyBody
           what="This design has a brief and nothing drawn yet."
           next="Screens arrive as the model composes them from this project's design index — or as a sketch, when the ask is exploratory. Ask for either in the chat with this design open."
         />
-        <FoundationStart access={access} editable={editable} onStart={startFoundation} />
+        <div className="flex flex-wrap items-center gap-2">
+          <FoundationStart access={access} editable={editable} onStart={startFoundation} />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              const request = `Compose screens for ${context.detail.entity.key} from its brief and this project's design index.`;
+              quoteIntoComposer({ text: request, workKey: context.detail.entity.key });
+            }}
+          >
+            Compose screens
+          </Button>
+        </div>
         {inContext ? (
           <HostContextPanel
             body={draft}
             brief={draft.brief}
             editable={editable}
             ground={groundPage}
-            onChange={setDraft}
+            onChange={mutateDraft}
             reference={reference}
             onReference={setReference}
             compact={compact}
           />
         ) : null}
         <DesignIndexPanel access={access} />
+        <WorkEditFooter
+          compact={compact && edit.matches}
+          pending={edit.pending}
+          canSave={edit.canSubmit && dirty && title.trim() !== ""}
+          saveLabel="Save revision"
+          onCancel={discard}
+          onSave={() => void save()}
+        />
       </div>
     );
   }
@@ -464,7 +548,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
           entry={"indexEntryId" in selectedNode.component ? entryById.get(selectedNode.component.indexEntryId) : undefined}
           editable={editable}
           readOnlyReason={readOnlyReason}
-          onChange={setDraft}
+          onChange={mutateDraft}
           onSelect={selectNode}
         />
       ) : selectedScreen ? (
@@ -521,20 +605,29 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
               actions.toast("info", `${implementCommandFor(context.detail.entity.key)} is in the composer — send it when you are ready.`);
             }}
           />
-          {editable ? (
+          {canOfferEditing ? (
             <>
-              <Button size="sm" variant="ghost" disabled={!dirty || saving} onClick={() => setDraft(body)}>
+              {!briefEditing ? (
+                <Button size="sm" variant="outline" disabled={edit.pending} onClick={beginBrief}>
+                  <Pencil />
+                  Edit brief
+                </Button>
+              ) : null}
+              <Button size="sm" variant="ghost" disabled={!dirty || edit.pending} onClick={discard}>
                 <Undo2 />
                 Discard
               </Button>
-              <Button size="sm" disabled={!dirty || saving} onClick={() => void save()}>
+              <Button size="sm" disabled={!dirty || !edit.canSubmit || title.trim() === ""} onClick={() => void save()}>
                 <Save />
-                {saving ? "Saving…" : "Save revision"}
+                {edit.pending ? "Saving…" : "Save revision"}
               </Button>
             </>
           ) : null}
         </span>
       </div>
+
+      <WorkEditNewerNotice show={edit.newerRevision} />
+      {briefBlock}
 
       {conflict ? (
         <div role="alert" data-slot="revision-conflict" className="flex flex-wrap items-center gap-2 rounded-lg border border-attention/40 bg-[color-mix(in_oklab,var(--attention)_10%,transparent)] px-3 py-2">
@@ -621,7 +714,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
           editable={editable}
           dirty={dirty}
           index={liveIndex}
-          onChange={(next) => setDraft((current) => ({ ...current, foundation: next }))}
+          onChange={(next) => mutateDraft((current) => ({ ...current, foundation: next }))}
           onSave={save}
           onStart={startFoundation}
         />
@@ -645,7 +738,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
                 brief={draft.brief}
                 editable={editable}
                 ground={groundPage}
-                onChange={setDraft}
+                onChange={mutateDraft}
                 reference={reference}
                 onReference={setReference}
                 compact={compact}
@@ -681,6 +774,14 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
         </div>
       )}
 
+      <WorkEditFooter
+        compact={compact && edit.matches}
+        pending={edit.pending}
+        canSave={edit.canSubmit && dirty && title.trim() !== ""}
+        saveLabel="Save revision"
+        onCancel={discard}
+        onSave={() => void save()}
+      />
     </div>
   );
 }

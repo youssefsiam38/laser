@@ -8,8 +8,8 @@
  * switcher never rewrites what an older revision said, and it says plainly
  * that this is not the current one.
  */
-import { ArrowLeft, Archive, ArchiveRestore, Copy, History, Link as LinkIcon, MoreHorizontal, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { ArrowLeft, Archive, ArchiveRestore, Copy, History, Link as LinkIcon, MoreHorizontal, PanelRight, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClientRequests } from "@lasercode/protocol";
 
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,7 @@ import { KIND_LABEL } from "@/project-work/vocabulary";
 
 import { ArchiveDialog, DeleteDialog } from "./ConfirmDialogs.js";
 import { DesignDetail } from "./bodies/DesignDetail.js";
+import type { WorkBodyContext } from "./bodies/context.js";
 import { PlanDetail } from "./PlanDetail.js";
 import { TaskDetail } from "./TaskDetail.js";
 import { WorkBody } from "./bodies/index.js";
@@ -53,18 +54,28 @@ export function WorkDetail({
   className,
   compact = false,
   onBack,
+  onOpenInspector,
 }: {
   store: ProjectWorkStore | undefined;
   work: ProjectWorkSnapshot;
   className?: string;
   compact?: boolean;
   onBack?: () => void;
+  onOpenInspector?: () => void;
 }) {
   const ui = useWorkspaceUi();
   const selection = ui.selection;
   const [detail, setDetail] = useState<Detail | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [refreshError, setRefreshError] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
+  const detailRef = useRef<Detail | undefined>(undefined);
+  const detailStoreRef = useRef<ProjectWorkStore | undefined>(undefined);
+  const readOwner = useRef(0);
+  detailRef.current = detail;
+  useEffect(() => () => {
+    readOwner.current += 1;
+  }, []);
   const [archiving, setArchiving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const { actions } = useLaserStable();
@@ -74,10 +85,17 @@ export function WorkDetail({
 
   const entityId = selection?.entityId;
   const revisionId = selection?.revisionId;
-  // The read is fenced by the selection and by the project's sequence: a
-  // revision that lands while this is open re-reads rather than patching.
+  // Every settlement belongs to one entity/revision request. Sequence refreshes
+  // retain the mounted detail; explicit navigation does not. The token gates
+  // success, failure and loading alike, so a slow prior selection is inert.
   const read = useCallback(async () => {
-    if (!store || !entityId) return;
+    const token = ++readOwner.current;
+    if (!store || !entityId) {
+      setLoading(false);
+      return;
+    }
+    const retained = detailRef.current;
+    const retainsSelection = retained !== undefined && detailStoreRef.current === store && retained.ref.projectId === store.getSnapshot().projectId && retained.entity.entityId === entityId && (revisionId === undefined || retained.revision.revisionId === revisionId);
     setLoading(true);
     const outcome = await store.get({
       entityId,
@@ -85,21 +103,37 @@ export function WorkDetail({
       body: { mode: "full" },
       include: { comments: true, approvals: true, evidence: true, links: true, history: true },
     });
+    if (readOwner.current !== token) return;
     setLoading(false);
     if (outcome.ok) {
+      detailRef.current = outcome.value;
+      detailStoreRef.current = store;
       setDetail(outcome.value);
       setError(undefined);
+      setRefreshError(undefined);
+    } else if (retainsSelection && retained) {
+      setRefreshError(outcome.failure.message);
     } else {
+      detailRef.current = undefined;
+      detailStoreRef.current = undefined;
       setDetail(undefined);
       setError(outcome.failure.message);
+      setRefreshError(undefined);
     }
   }, [entityId, revisionId, store]);
 
   useEffect(() => {
-    setDetail(undefined);
-    setError(undefined);
+    const retained = detailRef.current;
+    const retainsSelection = retained !== undefined && detailStoreRef.current === store && retained.ref.projectId === store?.getSnapshot().projectId && retained.entity.entityId === entityId && (revisionId === undefined || retained.revision.revisionId === revisionId);
+    if (!retainsSelection) {
+      detailRef.current = undefined;
+      detailStoreRef.current = undefined;
+      setDetail(undefined);
+      setError(undefined);
+      setRefreshError(undefined);
+    }
     void read();
-  }, [read, work.seq]);
+  }, [read, work.seq, entityId, revisionId]);
 
   if (!selection) {
     return (
@@ -121,7 +155,9 @@ export function WorkDetail({
     );
   }
 
-  if (!detail) {
+  const detailMatchesSelection = detail !== undefined && detailStoreRef.current === store && detail.ref.projectId === store?.getSnapshot().projectId && detail.entity.entityId === entityId && (revisionId === undefined || detail.revision.revisionId === revisionId);
+
+  if (!detail || !detailMatchesSelection) {
     return (
       <div className={cn("flex min-h-0 flex-col", className)}>
         <WorkLoading label={loading ? `Reading ${KIND_LABEL[selection.kind].toLocaleLowerCase()}` : "Opening"} />
@@ -132,6 +168,22 @@ export function WorkDetail({
   const { entity, revision, ref } = detail;
   const historical = revision.revisionId !== entity.currentRevisionId;
   const history = detail.history ?? [];
+  const bodyContext: WorkBodyContext = {
+    store,
+    detail,
+    selectionRevisionId: revisionId,
+    editable: !historical && canRevise.state === "available" && !entity.archivedAt,
+    readOnlyReason: historical
+      ? "Editing is disabled on an older revision."
+      : entity.archivedAt
+        ? "This is archived. Restore it to make changes."
+        : canRevise.state === "available"
+          ? undefined
+          : "This connection cannot write to this project's work.",
+    onChanged: () => void read(),
+    items: work.items,
+    compact,
+  };
 
   return (
     <div data-slot="work-detail" className={cn("flex min-h-0 flex-col", className)}>
@@ -150,6 +202,11 @@ export function WorkDetail({
             </span>
             <h2 className="min-w-0 text-base leading-6 font-semibold text-ink">{revision.title}</h2>
           </span>
+          {onOpenInspector ? (
+            <Button size="icon-sm" variant="ghost" aria-label="Details and review" onClick={onOpenInspector}>
+              <PanelRight />
+            </Button>
+          ) : null}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="icon-sm" variant="ghost" aria-label={`Actions for ${entity.key}`}>
@@ -252,57 +309,24 @@ export function WorkDetail({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {refreshError ? (
+          <p role="alert" data-slot="detail-refresh-error" className="mb-3 rounded-lg border border-attention/40 bg-[color-mix(in_oklab,var(--attention)_10%,transparent)] p-3 text-sm leading-5 text-ink-2">
+            {refreshError} The open draft and revision stay here; retry when the connection returns.
+          </p>
+        ) : null}
         {/* Plan and Task have detail surfaces of their own (M21-T16): the
             plan's Document/Dependencies switch and the task's attempts,
             evidence and checkpoints need the whole read, not just the body. */}
         {detail.body?.body?.kind === "plan" ? (
-          <PlanDetail detail={detail} body={detail.body.body.plan} items={work.items} />
+          <PlanDetail detail={detail} body={detail.body.body.plan} items={work.items} context={bodyContext} />
         ) : detail.body?.body?.kind === "task" ? (
-          <TaskDetail store={store} detail={detail} body={detail.body.body.task} items={work.items} />
+          <TaskDetail store={store} detail={detail} body={detail.body.body.task} items={work.items} context={bodyContext} />
         ) : detail.body?.body?.kind === "design" ? (
           // The Design's canvas, inspector and prototype (M21-T11): the same
           // fenced context as the other editable bodies.
-          <DesignDetail
-            body={detail.body.body.design}
-            context={{
-              store,
-              detail,
-              editable: !historical && canRevise.state === "available" && !entity.archivedAt,
-              readOnlyReason: historical
-                ? "Editing is disabled on an older revision."
-                : entity.archivedAt
-                  ? "This is archived. Restore it to make changes."
-                  : canRevise.state === "available"
-                    ? undefined
-                    : "This connection cannot write to this project's work.",
-              onChanged: () => void read(),
-              items: work.items,
-              compact,
-            }}
-          />
+          <DesignDetail body={detail.body.body.design} context={bodyContext} />
         ) : detail.body?.body ? (
-          <WorkBody
-            body={detail.body.body}
-            items={work.items}
-            context={{
-              store,
-              detail,
-              // An older revision is read as it was written, and a window
-              // without the capability says so rather than offering a control
-              // that would fail (M21-T7).
-              editable: !historical && canRevise.state === "available" && !entity.archivedAt,
-              readOnlyReason: historical
-                ? "Editing is disabled on an older revision."
-                : entity.archivedAt
-                  ? "This is archived. Restore it to make changes."
-                  : canRevise.state === "available"
-                    ? undefined
-                    : "This connection cannot write to this project's work.",
-              onChanged: () => void read(),
-              items: work.items,
-              compact,
-            }}
-          />
+          <WorkBody body={detail.body.body} items={work.items} context={bodyContext} />
         ) : detail.body?.released ? (
           <WorkRefusal
             message="This revision's content is no longer stored on this machine."

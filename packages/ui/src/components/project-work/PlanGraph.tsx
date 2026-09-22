@@ -24,6 +24,7 @@ import { CornerDownRight, GitBranch } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PlanBody, PlanGraphReport, ProjectWorkListItem } from "@lasercode/protocol";
 
+import { MarkdownDocument } from "@/components/assistant-ui/elements/markdown-document";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { selectWork } from "@/project-work";
@@ -250,6 +251,20 @@ export function PlanGraph({
           })}
         </div>
       </div>
+
+      {body.dependencies.some((dependency) => dependency.reason) ? (
+        <section className="flex flex-col gap-2">
+          <h3 className="eyebrow">Why these dependencies exist</h3>
+          <ul role="list" className="flex flex-col gap-2">
+            {body.dependencies.map((dependency, index) => dependency.reason ? (
+              <li key={`${dependency.from}-${dependency.to}-${index}`} className="flex min-w-0 flex-col gap-1 rounded-lg border border-line p-2">
+                <span className="typed text-xs leading-xs text-ink-3">{dependency.from} waits on {dependency.to}</span>
+                <MarkdownDocument text={dependency.reason} measure="prose" className="text-sm leading-5 text-ink-2" />
+              </li>
+            ) : null)}
+          </ul>
+        </section>
+      ) : null}
 
       {orphans.length > 0 ? (
         <section className="flex flex-col gap-2">

@@ -16,6 +16,7 @@
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, type ClientRequests } from "@lasercode/protocol";
 
@@ -38,13 +39,16 @@ const buttons = (): HTMLButtonElement[] => [...document.body.querySelectorAll("b
 const button = (label: string): HTMLButtonElement | undefined => buttons().find((node) => node.textContent?.includes(label));
 const query = <T extends Element = HTMLElement>(selector: string): T | null => document.body.querySelector<T>(selector);
 
-const type = async (field: HTMLTextAreaElement | HTMLInputElement | null, value: string): Promise<void> => {
-  expect(field).not.toBeNull();
-  await act(async () => {
-    const proto = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(field, value);
-    field!.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+const editCode = async (label: string, value: string): Promise<EditorView> => {
+  let content: HTMLElement | null = null;
+  for (let attempt = 0; attempt < 40 && !content; attempt += 1) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
+    content = document.body.querySelector<HTMLElement>(`.cm-content[aria-label="${label}"]`);
+  }
+  expect(content).not.toBeNull();
+  const view = EditorView.findFromDOM(content!);
+  await act(async () => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } }));
+  return view;
 };
 
 const click = async (element: Element | null | undefined): Promise<void> => {
@@ -130,6 +134,27 @@ async function mount(node: React.ReactNode): Promise<void> {
 }
 
 describe("editing a spec", () => {
+  it("names what a sparse Full spec still needs and keeps Edit as the next action", async () => {
+    const host: Host = { calls: [], conflictOnce: false, currentRevisionId: "r1" };
+    const store = makeStore(host);
+    await store.open();
+    const sparse = specFixture({ form: "full", problem: undefined, outcomes: [], requirements: [], acceptance: [] });
+    await mount(<SpecDocument body={sparse} context={{ store, detail: detail(), editable: true, onChanged: () => {}, items: [] }} />);
+    expect(text()).toContain("Still missing");
+    expect(text()).toContain("problem");
+    expect(text()).toContain("acceptance criteria");
+    expect(query('[data-slot="spec-edit"]')).not.toBeNull();
+  });
+
+  it("renders authored prose as safe Markdown before editing", async () => {
+    const host: Host = { calls: [], conflictOnce: false, currentRevisionId: "r1" };
+    const store = makeStore(host);
+    await store.open();
+    await mount(<SpecDocument body={specFixture({ brief: "A **safe** relay <script>bad()</script>." })} context={{ store, detail: detail(), editable: true, onChanged: () => {}, items: [] }} />);
+    expect(query("[data-slot='markdown-document'] strong")?.textContent).toBe("safe");
+    expect(query("script")).toBeNull();
+  });
+
   it("writes a child revision fenced by the revision that was read", async () => {
     const host: Host = { calls: [], conflictOnce: false, currentRevisionId: "r1" };
     const store = makeStore(host);
@@ -142,8 +167,7 @@ describe("editing a spec", () => {
     await click(query('[data-slot="spec-edit"]'));
 
     // The whole of a brief is its brief; the full form carries the rest.
-    const brief = [...document.body.querySelectorAll("textarea")][0] as HTMLTextAreaElement;
-    await type(brief, "One relay, and nothing readable passes it.");
+    await editCode("Brief", "One relay, and nothing readable passes it.");
     await click(button("Save as a new revision"));
 
     const revise = host.calls.find((call) => call.method === "project/work/revise");
@@ -155,6 +179,22 @@ describe("editing a spec", () => {
     expect(body.spec.brief).toBe("One relay, and nothing readable passes it.");
     expect(body.spec.form).toBe("full");
     expect(changed).toHaveBeenCalled();
+  });
+
+  it("previews without writing and Cancel restores the saved revision", async () => {
+    const host: Host = { calls: [], conflictOnce: false, currentRevisionId: "r1" };
+    const store = makeStore(host);
+    await store.open();
+    const source = specFixture();
+    await mount(<SpecDocument body={source} context={{ store, detail: detail(), editable: true, onChanged: () => {}, items: [] }} />);
+    await click(query('[data-slot="spec-edit"]'));
+    await editCode("Brief", "A **different** brief.");
+    await click(button("Preview"));
+    expect(query("[data-slot='markdown-document'] strong")?.textContent).toBe("different");
+    expect(host.calls.some((call) => call.method === "project/work/revise")).toBe(false);
+    await click(button("Cancel"));
+    expect(text()).toContain(source.brief);
+    expect(text()).not.toContain("A different brief.");
   });
 
   it("switches a brief to a full spec and says what a full spec records", async () => {
@@ -183,15 +223,14 @@ describe("editing a spec", () => {
     await store.open();
     await mount(<SpecDocument body={specFixture()} context={{ store, detail: detail(), editable: true, onChanged: () => {}, items: [] }} />);
     await click(query('[data-slot="spec-edit"]'));
-    const brief = [...document.body.querySelectorAll("textarea")][0] as HTMLTextAreaElement;
-    await type(brief, "Mine, written while somebody else was writing theirs.");
+    const brief = await editCode("Brief", "Mine, written while somebody else was writing theirs.");
     await click(button("Save as a new revision"));
 
     // Refused, not overwritten — and the person's words are still on screen.
     const banner = query('[data-slot="revision-conflict"]');
     expect(banner).not.toBeNull();
     expect(banner?.getAttribute("role")).toBe("alert");
-    expect(brief.value).toBe("Mine, written while somebody else was writing theirs.");
+    expect(brief.state.doc.toString()).toBe("Mine, written while somebody else was writing theirs.");
 
     await click(button("View the difference"));
     expect(text()).toContain("What changed");

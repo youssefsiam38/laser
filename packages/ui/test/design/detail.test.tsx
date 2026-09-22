@@ -12,6 +12,7 @@
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, type DesignBody } from "@lasercode/protocol";
 
@@ -113,6 +114,15 @@ const shadowOf = (screenId: string): ShadowRoot => {
 const settle = async (): Promise<void> => {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+};
+const editCode = async (label: string, value: string): Promise<void> => {
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
+  const editor = container.querySelector<HTMLElement>(`.cm-content[aria-label="${label}"]`);
+  expect(editor).not.toBeNull();
+  await act(async () => {
+    const view = EditorView.findFromDOM(editor!);
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
   });
 };
 
@@ -404,6 +414,45 @@ describe("DesignDetail", () => {
     expect(inspector!.querySelector<HTMLTextAreaElement>('[aria-label="Text"]')?.disabled).toBe(true);
     await click(button("Prototype"));
     expect(container.querySelector('[data-slot="design-full-screen"] [data-slot="design-prototype"]')).not.toBeNull();
+  });
+
+  it("keeps a started edit frozen with safe compact Save and Cancel actions after a resize", async () => {
+    const body = designFixture();
+    const context = contextFor(body);
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={context} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
+    await settle();
+    await click(button("Edit brief"));
+    await editCode("Brief", "A resize-safe **draft**.");
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={{ ...context, compact: true }} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
+    await settle();
+    expect(container.querySelector('[data-slot="work-edit-footer"]')).not.toBeNull();
+    expect(container.querySelector<HTMLElement>('.cm-content[aria-label="Brief"]')?.getAttribute("contenteditable")).toBe("false");
+    expect(container.querySelector<HTMLInputElement>("#design-title")?.disabled).toBe(true);
+    await click(button("Save revision"));
+    expect(calls.find((call) => call.method === "project/work/revise")?.params.expectedRevisionId).toBe("r1");
+  });
+
+  it("authors the brief in Write and Preview without replacing the design structure", async () => {
+    const body = designFixture();
+    const context = contextFor(body);
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={context} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
+    await settle();
+    await click(button("Edit brief"));
+    await editCode("Brief", "A **focused** payment surface.");
+    await click(button("Preview"));
+    expect(container.querySelector("[data-slot='markdown-document'] strong")?.textContent).toBe("focused");
+    expect(calls.find((call) => call.method === "project/work/revise")).toBeUndefined();
+    await click(button("Discard"));
+    expect(container.textContent).toContain(body.brief);
+    expect(container.textContent).not.toContain("A focused payment surface.");
+    await click(button("Edit brief"));
+    await editCode("Brief", "A **focused** payment surface.");
+    await click(button("Save revision"));
+    const written = calls.find((call) => call.method === "project/work/revise")?.params.body as { design: DesignBody };
+    expect(written.design.brief).toBe("A **focused** payment surface.");
+    expect(written.design.screens).toEqual(body.screens);
+    expect(written.design.flows).toEqual(body.flows);
+    expect(written.design.sketches).toEqual(body.sketches);
   });
 
   it("writes an edit through revise fenced by the revision read, and shows a conflict as a banner", async () => {

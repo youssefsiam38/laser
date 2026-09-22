@@ -13,6 +13,7 @@
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ResearchDetail } from "../../src/components/project-work/bodies/ResearchDetail.js";
@@ -42,6 +43,19 @@ const click = async (element: Element | null | undefined): Promise<void> => {
   await act(async () => {
     (element as HTMLElement).click();
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+};
+
+const editCode = async (label: string, value: string): Promise<void> => {
+  let editor: HTMLElement | null = null;
+  for (let attempt = 0; attempt < 40 && !editor; attempt += 1) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
+    editor = document.body.querySelector<HTMLElement>(`.cm-content[aria-label="${label}"]`);
+  }
+  expect(editor).not.toBeNull();
+  await act(async () => {
+    const view = EditorView.findFromDOM(editor!);
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
   });
 };
 
@@ -208,6 +222,30 @@ describe("the research detail", () => {
     expect(body.research.questions).toHaveLength(4);
     expect(body.research.questions.at(-1)?.text).toBe("Does it stream?");
     expect(body.research.questions.at(-1)?.state).toBe("open");
+  });
+
+  it("reframes the stable root without replacing research records", async () => {
+    const original = researchFixture();
+    await mount(original);
+    await click(button("Edit framing"));
+    await editCode("Question", "Which **loader** should we adopt?");
+    await click(button("Preview"));
+    expect(query("[data-slot='markdown-document'] strong")?.textContent).toBe("loader");
+    expect(calls.some((call) => call.method === "project/work/revise")).toBe(false);
+    await click(button("Cancel"));
+    expect(text()).toContain(original.question);
+    expect(text()).not.toContain("Which loader should we adopt?");
+    await click(button("Edit framing"));
+    await editCode("Question", "Which **loader** should we adopt?");
+    await click(button("Save as a new revision"));
+
+    const written = calls.find((call) => call.method === "project/work/revise")?.params.body as { research: ResearchBody };
+    expect(written.research.question).toBe("Which **loader** should we adopt?");
+    expect(written.research.questions[0]).toMatchObject({ id: "q1", text: "Which **loader** should we adopt?" });
+    expect(written.research.findings).toEqual(original.findings);
+    expect(written.research.sources).toEqual(original.sources);
+    expect(written.research.options).toEqual(original.options);
+    expect(written.research.unresolved).toEqual(original.unresolved);
   });
 
   it("offers no writes at all on a revision that is being read, not edited", async () => {
