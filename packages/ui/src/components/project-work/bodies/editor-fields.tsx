@@ -8,24 +8,26 @@
  * keyboard, 44px under a coarse pointer, and made of tokens.
  */
 import { Plus, X } from "lucide-react";
-import { useId, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 
-import { MarkdownDocument } from "@/components/assistant-ui/elements/markdown-document";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+
+import { MarkdownAuthoringField } from "../MarkdownAuthoringField.js";
 
 /** A labelled block inside an editor. The label is a real `<label>` where it can be. */
 export function Field({
   label,
   hint,
+  error,
   htmlFor,
   children,
   action,
 }: {
   label: string;
   hint?: ReactNode | undefined;
+  error?: string | undefined;
   htmlFor?: string | undefined;
   children: ReactNode;
   action?: ReactNode | undefined;
@@ -44,6 +46,7 @@ export function Field({
       </div>
       {children}
       {hint ? <p className="max-w-(--measure-prose) text-xs leading-xs text-ink-3">{hint}</p> : null}
+      {error ? <p role="alert" className="max-w-(--measure-prose) text-xs leading-xs text-danger">{error}</p> : null}
     </div>
   );
 }
@@ -51,29 +54,33 @@ export function Field({
 export function TextField({
   label,
   hint,
+  error,
   value,
   onChange,
   placeholder,
-  className,
+  editorKey,
+  maxLength,
 }: {
   label: string;
   hint?: ReactNode;
+  error?: string | undefined;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
-  className?: string;
+  editorKey?: string;
+  maxLength?: number;
 }) {
-  const id = useId();
   return (
-    <Field label={label} hint={hint} htmlFor={id}>
-      <Textarea
-        id={id}
-        value={value}
-        placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
-        className={cn("max-h-64 text-sm leading-5", className)}
-      />
-    </Field>
+    <MarkdownAuthoringField
+      editorKey={editorKey ?? label}
+      label={label}
+      value={value}
+      onChange={onChange}
+      {...(typeof hint === "string" ? { hint } : {})}
+      {...(error !== undefined ? { error } : {})}
+      {...(placeholder !== undefined ? { placeholder } : {})}
+      {...(maxLength !== undefined ? { maxLength } : {})}
+    />
   );
 }
 
@@ -81,22 +88,26 @@ export function TextField({
 export function LineListField({
   label,
   hint,
+  error,
   values,
   onChange,
   placeholder,
   addLabel,
+  maxLength,
 }: {
   label: string;
   hint?: ReactNode;
+  error?: string | undefined;
   values: readonly string[];
   onChange: (values: string[]) => void;
   placeholder: string;
   addLabel: string;
+  maxLength?: number | undefined;
 }) {
   const set = (index: number, value: string): void => onChange(values.map((existing, at) => (at === index ? value : existing)));
   const remove = (index: number): void => onChange(values.filter((_, at) => at !== index));
   return (
-    <Field label={label} hint={hint}>
+    <Field label={label} hint={hint} error={error}>
       <ul role="list" className="flex flex-col gap-1.5">
         {values.map((value, index) => (
           // The index is the identity here: these are ordered lines a person
@@ -106,6 +117,7 @@ export function LineListField({
               value={value}
               placeholder={placeholder}
               aria-label={`${label} ${index + 1}`}
+              {...(maxLength !== undefined ? { maxLength } : {})}
               onChange={(event) => set(index, event.target.value)}
               className="h-8 text-sm"
             />
@@ -122,6 +134,77 @@ export function LineListField({
       </ul>
       <div>
         <Button size="xs" variant="outline" onClick={() => onChange([...values, ""])}>
+          <Plus />
+          {addLabel}
+        </Button>
+      </div>
+    </Field>
+  );
+}
+
+let proseRowCounter = 0;
+const proseRowId = (): string => `prose-row-${++proseRowCounter}`;
+
+/** An ordered prose list: every row gets the same highlighted Write/Preview path. */
+export function MarkdownListField({
+  label,
+  hint,
+  error,
+  values,
+  onChange,
+  placeholder,
+  addLabel,
+  editorKey,
+  maxLength,
+}: {
+  label: string;
+  hint?: ReactNode;
+  error?: string | undefined;
+  values: readonly string[];
+  onChange: (values: string[]) => void;
+  placeholder: string;
+  addLabel: string;
+  editorKey: string;
+  maxLength?: number | undefined;
+}) {
+  // IDs belong only to this draft UI; protocol rows remain plain strings. A
+  // removal must move the surviving editor, including its undo and selection,
+  // rather than handing that state to whichever value inherits its index.
+  const rowIds = useRef<string[]>([]);
+  while (rowIds.current.length < values.length) rowIds.current.push(proseRowId());
+  if (rowIds.current.length > values.length) rowIds.current.length = values.length;
+  const set = (index: number, value: string): void => onChange(values.map((existing, at) => (at === index ? value : existing)));
+  const remove = (index: number): void => {
+    rowIds.current = rowIds.current.filter((_, at) => at !== index);
+    onChange(values.filter((_, at) => at !== index));
+  };
+  const add = (): void => {
+    rowIds.current.push(proseRowId());
+    onChange([...values, ""]);
+  };
+  return (
+    <Field label={label} hint={hint} error={error}>
+      <ul role="list" className="flex flex-col gap-2">
+        {values.map((value, index) => (
+          <li key={rowIds.current[index]} data-row-id={rowIds.current[index]} className="flex min-w-0 items-start gap-1.5 rounded-lg border border-line p-2">
+            <div className="min-w-0 flex-1">
+              <MarkdownAuthoringField
+                editorKey={`${editorKey}-${rowIds.current[index]}`}
+                label={`${label} ${index + 1}`}
+                value={value}
+                onChange={(next) => set(index, next)}
+                placeholder={placeholder}
+                {...(maxLength !== undefined ? { maxLength } : {})}
+              />
+            </div>
+            <Button size="icon-sm" variant="ghost" aria-label={`Remove ${label.toLocaleLowerCase()} ${index + 1}`} onClick={() => remove(index)}>
+              <X />
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <div>
+        <Button size="xs" variant="outline" onClick={add}>
           <Plus />
           {addLabel}
         </Button>
@@ -182,50 +265,27 @@ export function MarkdownField({
   value,
   onChange,
   placeholder,
-  view,
-  onViewChange,
+  editorKey,
+  maxLength,
+  error,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
-  view: "source" | "preview";
-  onViewChange: (view: "source" | "preview") => void;
+  editorKey?: string;
+  maxLength?: number;
+  error?: string | undefined;
 }) {
-  const id = useId();
   return (
-    <Field
+    <MarkdownAuthoringField
+      editorKey={editorKey ?? label}
       label={label}
-      htmlFor={view === "source" ? id : undefined}
-      action={
-        <Segmented
-          label={`${label} view`}
-          value={view}
-          onChange={onViewChange}
-          options={[
-            { value: "source", label: "Source" },
-            { value: "preview", label: "Preview" },
-          ]}
-        />
-      }
-    >
-      {view === "source" ? (
-        <Textarea
-          id={id}
-          value={value}
-          placeholder={placeholder}
-          onChange={(event) => onChange(event.target.value)}
-          className="typed max-h-[28rem] min-h-48 leading-5"
-        />
-      ) : value.trim() === "" ? (
-        <p className="rounded-lg border border-line bg-surface p-3 text-sm leading-5 text-ink-3">
-          Nothing written yet. Switch to Source and start the document.
-        </p>
-      ) : (
-        <div data-slot="markdown-preview" className="rounded-lg border border-line bg-surface p-3">
-          <MarkdownDocument text={value} measure="prose" />
-        </div>
-      )}
-    </Field>
+      value={value}
+      onChange={onChange}
+      {...(placeholder !== undefined ? { placeholder } : {})}
+      {...(maxLength !== undefined ? { maxLength } : {})}
+      {...(error !== undefined ? { error } : {})}
+    />
   );
 }

@@ -18,6 +18,7 @@
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, type ClientRequests } from "@lasercode/protocol";
 
@@ -84,12 +85,37 @@ const click = async (element: Element | null | undefined): Promise<void> => {
     await settle(5);
   });
 };
+const changeInput = async (selector: string, value: string): Promise<void> => {
+  const field = document.body.querySelector<HTMLInputElement>(selector);
+  expect(field).not.toBeNull();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, value);
+    field!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
+const editCode = async (label: string, value: string): Promise<void> => {
+  let editor: HTMLElement | null = null;
+  for (let attempt = 0; attempt < 40 && !editor; attempt += 1) {
+    await act(async () => { await settle(25); });
+    editor = document.body.querySelector<HTMLElement>(`.cm-content[aria-label="${label}"]`);
+  }
+  expect(editor).not.toBeNull();
+  await act(async () => {
+    const view = EditorView.findFromDOM(editor!);
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+  });
+};
 /** Radix opens on pointerdown, not click; a plain `.click()` never gets there. */
 const openMenu = async (label: string): Promise<void> => {
   await act(async () => {
     button(label)!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
-    await settle(10);
   });
+  let menu: Element | null = null;
+  for (let attempt = 0; attempt < 40 && !menu; attempt += 1) {
+    await act(async () => settle(25));
+    menu = document.querySelector("[role='menu']");
+  }
+  expect(menu).not.toBeNull();
 };
 const menuItem = (label: string): HTMLElement | undefined =>
   [...document.querySelectorAll<HTMLElement>("[role='menuitem'],[role='menuitemradio']")].find((node) => (node.textContent ?? "").includes(label));
@@ -319,6 +345,65 @@ describe("attempts, evidence and checkpoints", () => {
     await mount(detail({ kind: "task", number: 44, body: { kind: "task", task: taskBody() } }), makeStore());
     expect(text()).toContain("Nothing has been tried yet.");
     expect(text()).toContain("No repository states are recorded against this task yet.");
+  });
+});
+
+describe("task authoring", () => {
+  it.each([
+    ["criterion", taskBody({ acceptance: [{ id: "a1", text: "a".repeat(4_001), machineVerifiable: false }] }), "Acceptance criterion 1 must be 4000 characters or fewer."],
+    ["command", taskBody({ acceptance: [{ id: "a1", text: "It passes.", machineVerifiable: true, command: "c".repeat(1_001) }] }), "Acceptance command 1 must be 1000 characters or fewer."],
+    ["scope", taskBody({ scope: { packages: [], repositories: [], paths: ["p".repeat(1_025)], capabilities: [] } }), "Path 1 must be 1024 characters or fewer."],
+  ])("locates an invalid %s field before asking the host", async (_name, source, message) => {
+    const value = detail({ kind: "task", number: 44, body: { kind: "task", task: source } });
+    const store = makeStore();
+    await act(async () => root.render(<TaskDetail store={store} detail={value} body={source} items={rows} context={{ store, detail: value, editable: true, onChanged: vi.fn(), items: rows }} />));
+    await click(button("Edit task"));
+    await changeInput("#task-title", "Changed title");
+    await click(button("Save as a new revision"));
+    expect(called("project/work/revise")).toHaveLength(0);
+    expect(text()).toContain(message);
+  });
+
+  it("keeps every write disabled behind the shared historical/archive fence", async () => {
+    const source = taskBody();
+    const value = detail({ kind: "task", number: 44, body: { kind: "task", task: source } });
+    const store = makeStore();
+    await act(async () => root.render(<TaskDetail store={store} detail={value} body={source} items={rows} context={{ store, detail: value, editable: false, readOnlyReason: "Editing is disabled on an older revision.", onChanged: vi.fn(), items: rows }} />));
+    expect(button("Edit task")).toBeUndefined();
+    expect(button("Start…")?.disabled).toBe(true);
+    expect(button("Nobody yet")?.disabled).toBe(true);
+    expect(called("project/work/revise")).toHaveLength(0);
+  });
+
+  it("keeps the full task and its records through Preview, then saves explicitly", async () => {
+    answers["project/work/revise"] = { ref: {}, entity: {}, revision: { index: 2 }, seq: 9 };
+    const source = taskBody({
+      outcome: "Ship the board.",
+      notes: "Keep the **reasoning**.",
+      scope: { packages: ["@lasercode/ui"], repositories: ["repo1"], paths: ["packages/ui/src"], capabilities: ["project-work"], sharedWith: ["TASK-7"] },
+    });
+    const value = detail({ kind: "task", number: 44, body: { kind: "task", task: source }, evidence: [evidence({ evidenceId: "ev1" })] });
+    const store = makeStore();
+    await act(async () => root.render(<TaskDetail store={store} detail={value} body={source} items={rows} context={{ store, detail: value, editable: true, onChanged: vi.fn(), items: rows, compact: true }} />));
+    await click(button("Edit task"));
+    expect(document.body.querySelector('[data-slot="work-edit-footer"]')).not.toBeNull();
+    await editCode("Outcome", "Ship the **complete** board.");
+    expect(document.body.querySelectorAll(".cm-editor")).toHaveLength(1);
+    await click(button("Preview"));
+    expect(document.body.querySelector("[data-slot='markdown-document'] strong")?.textContent).toBe("complete");
+    expect(called("project/work/revise")).toHaveLength(0);
+    await click(button("Cancel"));
+    expect(text()).toContain("Ship the board.");
+    expect(text()).not.toContain("Ship the complete board.");
+    await click(button("Edit task"));
+    await editCode("Outcome", "Ship the **complete** board.");
+    await click(button("Save as a new revision"));
+    const revise = called("project/work/revise")[0];
+    const written = revise?.params.body as { task: typeof source };
+    expect(written.task.outcome).toBe("Ship the **complete** board.");
+    expect(written.task.scope.capabilities).toEqual(["project-work"]);
+    expect(written.task.scope.sharedWith).toEqual(["TASK-7"]);
+    expect(value.evidence).toHaveLength(1);
   });
 });
 

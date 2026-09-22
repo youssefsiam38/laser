@@ -12,6 +12,7 @@
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, type DesignBody } from "@lasercode/protocol";
 
@@ -105,6 +106,14 @@ const click = async (element: Element | null | undefined): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 };
+const changeInput = async (selector: string, value: string): Promise<void> => {
+  const field = container.querySelector<HTMLInputElement>(selector);
+  expect(field).not.toBeNull();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, value);
+    field!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
 const shadowOf = (screenId: string): ShadowRoot => {
   const host = container.querySelector<HTMLElement>(`[data-slot="design-tree-frame"][data-screen-id="${screenId}"]`);
   expect(host?.shadowRoot ?? null, screenId).not.toBeNull();
@@ -113,6 +122,18 @@ const shadowOf = (screenId: string): ShadowRoot => {
 const settle = async (): Promise<void> => {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+};
+const editCode = async (label: string, value: string): Promise<void> => {
+  let editor: HTMLElement | null = null;
+  for (let attempt = 0; attempt < 40 && !editor; attempt += 1) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
+    editor = container.querySelector<HTMLElement>(`.cm-content[aria-label="${label}"]`);
+  }
+  expect(editor).not.toBeNull();
+  await act(async () => {
+    const view = EditorView.findFromDOM(editor!);
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
   });
 };
 
@@ -404,6 +425,92 @@ describe("DesignDetail", () => {
     expect(inspector!.querySelector<HTMLTextAreaElement>('[aria-label="Text"]')?.disabled).toBe(true);
     await click(button("Prototype"));
     expect(container.querySelector('[data-slot="design-full-screen"] [data-slot="design-prototype"]')).not.toBeNull();
+  });
+
+  it("keeps a started edit frozen with safe compact Save and Cancel actions after a resize", async () => {
+    const body = designFixture();
+    const context = contextFor(body);
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={context} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
+    await settle();
+    await click(button("Edit brief"));
+    await editCode("Brief", "A resize-safe **draft**.");
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={{ ...context, compact: true }} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
+    await settle();
+    expect(container.querySelector('[data-slot="work-edit-footer"]')).not.toBeNull();
+    expect(container.querySelector<HTMLElement>('.cm-content[aria-label="Brief"]')?.getAttribute("contenteditable")).toBe("false");
+    expect(container.querySelector<HTMLInputElement>("#design-title")?.disabled).toBe(true);
+    await click(button("Save revision"));
+    expect(calls.find((call) => call.method === "project/work/revise")?.params.expectedRevisionId).toBe("r1");
+  });
+
+  it("keeps a canvas draft and its original fence when brief editing starts after a refresh", async () => {
+    const body = designFixture();
+    const context = contextFor(body);
+    const render = async (nextBody: DesignBody, nextContext: WorkBodyContext): Promise<void> => {
+      await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={nextBody} context={nextContext} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
+      await settle();
+    };
+    await render(body, context);
+
+    await click(shadowOf("scr_list").querySelector('[data-node-id="n_pay"]'));
+    await act(async () => container.querySelector<HTMLElement>('[data-slot="design-detail"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", altKey: true, bubbles: true })));
+
+    const refreshedBody = designFixture({ brief: "A server refresh that must not replace the draft." });
+    const refreshedDetail = designDetail(refreshedBody);
+    refreshedDetail.ref.revisionId = "r2";
+    refreshedDetail.revision.revisionId = "r2";
+    refreshedDetail.revision.index = 2;
+    refreshedDetail.entity.currentRevisionId = "r2";
+    refreshedDetail.entity.revisionCount = 2;
+    await render(refreshedBody, { ...context, detail: refreshedDetail });
+
+    await click(button("Edit brief"));
+    await editCode("Brief", "A **combined** design edit.");
+    await click(button("Save revision"));
+
+    const revise = calls.find((call) => call.method === "project/work/revise");
+    expect(revise?.params.expectedRevisionId).toBe("r1");
+    const written = revise?.params.body as { design: DesignBody };
+    expect(written.design.brief).toBe("A **combined** design edit.");
+    const actions = written.design.screens[0] && "tree" in written.design.screens[0].content
+      ? written.design.screens[0].content.tree.nodes.find((node) => node.id === "n_actions")
+      : undefined;
+    expect(actions?.children).toEqual(["n_help", "n_pay"]);
+  });
+
+  it("locates an overlong brief before asking the host", async () => {
+    const body: DesignBody = { ...designFixture(), brief: "b".repeat(4_001) };
+    const context = contextFor(body);
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={context} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
+    await settle();
+    await click(button("Edit brief"));
+    await changeInput("#design-title", "Changed title");
+    await click(button("Save revision"));
+    expect(calls.find((call) => call.method === "project/work/revise")).toBeUndefined();
+    expect(container.textContent).toContain("Brief must be 4000 characters or fewer.");
+  });
+
+  it("authors the brief in Write and Preview without replacing the design structure", async () => {
+    const body = designFixture();
+    const context = contextFor(body);
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={context} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
+    await settle();
+    await click(button("Edit brief"));
+    await editCode("Brief", "A **focused** payment surface.");
+    await click(button("Preview"));
+    expect(container.querySelector("[data-slot='markdown-document'] strong")?.textContent).toBe("focused");
+    expect(calls.find((call) => call.method === "project/work/revise")).toBeUndefined();
+    await click(button("Discard"));
+    expect(container.textContent).toContain(body.brief);
+    expect(container.textContent).not.toContain("A focused payment surface.");
+    await click(button("Edit brief"));
+    await editCode("Brief", "A **focused** payment surface.");
+    await click(button("Save revision"));
+    const written = calls.find((call) => call.method === "project/work/revise")?.params.body as { design: DesignBody };
+    expect(written.design.brief).toBe("A **focused** payment surface.");
+    expect(written.design.screens).toEqual(body.screens);
+    expect(written.design.flows).toEqual(body.flows);
+    expect(written.design.sketches).toEqual(body.sketches);
   });
 
   it("writes an edit through revise fenced by the revision read, and shows a conflict as a banner", async () => {

@@ -30,6 +30,7 @@ import { TodoList, type TodoItem } from "@/components/assistant-ui/elements/todo
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { selectWork } from "@/project-work";
+import { fullSpecGaps } from "@/project-work/spec";
 import { KIND_TEXT, stateLabel, taskMark } from "@/project-work/vocabulary";
 
 import { KeyTag } from "../KindBadge.js";
@@ -90,6 +91,7 @@ function planTasks(keys: readonly string[], items: readonly ProjectWorkListItem[
 // ---------------------------------------------------------------------------
 
 export function SpecBodyView({ body }: { body: SpecBody }) {
+  const gaps = fullSpecGaps(body);
   const bare =
     body.outcomes.length === 0 &&
     body.nonGoals.length === 0 &&
@@ -103,6 +105,11 @@ export function SpecBodyView({ body }: { body: SpecBody }) {
       <Section title={body.form === "brief" ? "Brief" : "Brief · full spec"}>
         <Prose text={body.brief} />
       </Section>
+      {gaps.length > 0 ? (
+        <p role="status" className="max-w-(--measure-prose) rounded-lg border border-line bg-surface px-3 py-2 text-xs leading-xs text-ink-2">
+          Still missing from this Full spec: {gaps.join(", ")}. Edit this revision to add them; the current revision remains readable as written.
+        </p>
+      ) : null}
       {body.problem ? (
         <Section title="Problem">
           <Prose text={body.problem} />
@@ -116,7 +123,7 @@ export function SpecBodyView({ body }: { body: SpecBody }) {
             {body.requirements.map((requirement) => (
               <li key={requirement.id} className="flex min-w-0 items-start gap-2">
                 <Badge variant={requirement.level === "must" ? "attention" : "outline"}>{requirement.level}</Badge>
-                <span className="min-w-0 text-sm leading-5 text-ink-2">{requirement.text}</span>
+                <span className="min-w-0 flex-1"><Prose text={requirement.text} /></span>
               </li>
             ))}
           </ul>
@@ -130,7 +137,7 @@ export function SpecBodyView({ body }: { body: SpecBody }) {
                 <Badge variant={criterion.machineVerifiable ? "live" : "outline"}>
                   {criterion.machineVerifiable ? "checkable" : "by a person"}
                 </Badge>
-                <span className="min-w-0 text-sm leading-5 text-ink-2">{criterion.text}</span>
+                <span className="min-w-0 flex-1"><Prose text={criterion.text} /></span>
               </li>
             ))}
           </ul>
@@ -138,7 +145,12 @@ export function SpecBodyView({ body }: { body: SpecBody }) {
       ) : null}
       <ListSection title="Constraints" items={body.constraints} />
       {body.document ? <Document text={body.document} /> : null}
-      {bare ? <EmptyBody what="This spec is still just its brief." next="Research, a design and the full requirements are added by revising it." /> : null}
+      {bare ? (
+        <EmptyBody
+          what={body.form === "brief" ? "This spec is deliberately just its brief." : "This Full spec currently contains only its brief."}
+          next={body.form === "brief" ? "Edit when the idea needs to become a Full spec." : "Edit to add the missing decision and acceptance detail named above."}
+        />
+      ) : null}
     </div>
   );
 }

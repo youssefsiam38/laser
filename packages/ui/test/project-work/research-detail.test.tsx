@@ -13,6 +13,7 @@
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ResearchDetail } from "../../src/components/project-work/bodies/ResearchDetail.js";
@@ -42,6 +43,19 @@ const click = async (element: Element | null | undefined): Promise<void> => {
   await act(async () => {
     (element as HTMLElement).click();
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+};
+
+const editCode = async (label: string, value: string): Promise<void> => {
+  let editor: HTMLElement | null = null;
+  for (let attempt = 0; attempt < 40 && !editor; attempt += 1) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
+    editor = document.body.querySelector<HTMLElement>(`.cm-content[aria-label="${label}"]`);
+  }
+  expect(editor).not.toBeNull();
+  await act(async () => {
+    const view = EditorView.findFromDOM(editor!);
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
   });
 };
 
@@ -208,6 +222,97 @@ describe("the research detail", () => {
     expect(body.research.questions).toHaveLength(4);
     expect(body.research.questions.at(-1)?.text).toBe("Does it stream?");
     expect(body.research.questions.at(-1)?.state).toBe("open");
+  });
+
+  it("reframes the stable root without replacing research records", async () => {
+    const original = researchFixture();
+    await mount(original);
+    await click(button("Edit framing"));
+    await editCode("Question", "Which **loader** should we adopt?");
+    await click(button("Preview"));
+    expect(query("[data-slot='markdown-document'] strong")?.textContent).toBe("loader");
+    expect(calls.some((call) => call.method === "project/work/revise")).toBe(false);
+    await click(button("Cancel"));
+    expect(text()).toContain(original.question);
+    expect(text()).not.toContain("Which loader should we adopt?");
+    await click(button("Edit framing"));
+    await editCode("Question", "Which **loader** should we adopt?");
+    await click(button("Save as a new revision"));
+
+    const written = calls.find((call) => call.method === "project/work/revise")?.params.body as { research: ResearchBody };
+    expect(written.research.question).toBe("Which **loader** should we adopt?");
+    expect(written.research.questions[0]).toMatchObject({ id: "q1", text: "Which **loader** should we adopt?" });
+    expect(written.research.questions.slice(1)).toEqual(original.questions.slice(1));
+    expect(written.research.findings).toEqual(original.findings);
+    expect(written.research.sources).toEqual(original.sources);
+    expect(written.research.options).toEqual(original.options);
+    expect(written.research.unresolved).toEqual(original.unresolved);
+  });
+
+  it("drops only blank optional framing rows and preserves surviving Markdown bytes", async () => {
+    const exactScope = "  **Node 24**  \n";
+    const original = researchFixture({ scope: { in: [exactScope], out: ["Browser rendering"], constraints: ["Permissive licence only"] } });
+    await mount(original);
+    await click(button("Edit framing"));
+    await click(button("Add in-scope boundary"));
+    await click(button("Save as a new revision"));
+
+    const written = calls.find((call) => call.method === "project/work/revise")?.params.body as { research: ResearchBody };
+    expect(written.research.scope.in).toEqual([exactScope]);
+    expect(written.research.findings).toEqual(original.findings);
+  });
+
+  it("locates an overlong framing question before asking the host", async () => {
+    const question = "q".repeat(501);
+    const original = researchFixture({ question, questions: [{ id: "q1", text: question, state: "open", findings: [] }] });
+    await mount(original);
+    await click(button("Edit framing"));
+    await click(button("Save as a new revision"));
+
+    expect(calls.some((call) => call.method === "project/work/revise")).toBe(false);
+    expect(text()).toContain("Question must be 500 characters or fewer.");
+    expect(text()).not.toContain("too_big");
+  });
+
+  it("locates an overlong scope row before asking the host", async () => {
+    const original = researchFixture({ scope: { in: ["x".repeat(501)], out: [], constraints: [] } });
+    await mount(original);
+    await click(button("Edit framing"));
+    await click(button("Save as a new revision"));
+
+    expect(calls.some((call) => call.method === "project/work/revise")).toBe(false);
+    expect(text()).toContain("In scope 1 must be 500 characters or fewer.");
+    expect(text()).not.toContain("too_big");
+  });
+
+  it("blocks sibling question writes while a framing save is pending", async () => {
+    let finish: ((value: unknown) => void) | undefined;
+    const pendingCalls: Array<{ method: ProjectWorkMethod; params: Record<string, unknown> }> = [];
+    const store = new ProjectWorkStore({
+      projectId: "p1",
+      request: (async (method: ProjectWorkMethod, params: Record<string, unknown>) => {
+        pendingCalls.push({ method, params });
+        if (method === "project/work/list") {
+          return { projectId: "p1", seq: 7, items: [], counts: { total: 0, needsAttention: 0, byKind: { spec: 0, research: 0, design: 0, plan: 0, task: 0 } } };
+        }
+        if (method === "project/work/revise") return await new Promise((resolve) => { finish = resolve; });
+        throw new Error(method);
+      }) as never,
+    });
+    await store.open();
+    const original = researchFixture();
+    await act(async () => root.render(<TooltipProvider><ResearchDetail body={original} context={{ store, detail: detail(), editable: true, onChanged: vi.fn(), items: [] }} /></TooltipProvider>));
+    await click(button("Edit framing"));
+    await click(button("Save as a new revision"));
+
+    const addQuestion = query<HTMLInputElement>("#add-question")?.closest("form")?.querySelector<HTMLButtonElement>('button[type="submit"]');
+    expect(button("Answer this")?.disabled).toBe(true);
+    expect(addQuestion?.disabled).toBe(true);
+    await click(button("Answer this"));
+    await click(addQuestion);
+    expect(pendingCalls.filter((call) => call.method === "project/work/revise")).toHaveLength(1);
+
+    await act(async () => finish?.({ ref: {}, entity: {}, revision: { index: 2, revisionId: "r2" }, seq: 8 }));
   });
 
   it("offers no writes at all on a revision that is being read, not edited", async () => {

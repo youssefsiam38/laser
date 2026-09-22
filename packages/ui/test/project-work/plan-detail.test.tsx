@@ -12,9 +12,11 @@
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { EditorView } from "@codemirror/view";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PlanDetail } from "../../src/components/project-work/PlanDetail.js";
+import { ProjectWorkStore, type ProjectWorkMethod } from "../../src/project-work/store.js";
 import { resetWorkspaceUi, workspaceUi } from "../../src/project-work/workspace-state.js";
 
 import { item } from "./fixture.js";
@@ -56,9 +58,29 @@ const click = async (element: Element | null | undefined): Promise<void> => {
     (element as HTMLElement).click();
   });
 };
+const changeInput = async (selector: string, value: string): Promise<void> => {
+  const field = container.querySelector<HTMLInputElement>(selector);
+  expect(field).not.toBeNull();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, value);
+    field!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
 
 const mount = async (node: React.ReactNode): Promise<void> => {
   await act(async () => root.render(node));
+};
+const editCode = async (label: string, value: string): Promise<void> => {
+  let editor: HTMLElement | null = null;
+  for (let attempt = 0; attempt < 40 && !editor; attempt += 1) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
+    editor = container.querySelector<HTMLElement>(`.cm-content[aria-label="${label}"]`);
+  }
+  expect(editor).not.toBeNull();
+  await act(async () => {
+    const view = EditorView.findFromDOM(editor!);
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+  });
 };
 
 beforeEach(() => {
@@ -120,6 +142,69 @@ describe("the plan document", () => {
     await mount(<PlanDetail detail={detail({ kind: "plan", number: 2, body: { kind: "plan", plan: body } })} body={body} items={rows} />);
     expect(container.querySelector("[data-slot='markdown-document']") ?? container.querySelector("h2")).not.toBeNull();
     expect(text()).toContain("How this lands");
+  });
+
+  it("offers no revision controls when the shared detail fence is read-only", async () => {
+    const value = detail({ kind: "plan", number: 2, body: { kind: "plan", plan: body } });
+    await mount(<PlanDetail detail={value} body={body} items={rows} context={{ store: undefined, detail: value, editable: false, readOnlyReason: "Editing is disabled on an older revision.", onChanged: vi.fn(), items: rows }} />);
+    expect(button("Edit plan")).toBeUndefined();
+    expect(text()).toContain("Ship the embedded workspace.");
+  });
+
+  it.each([
+    ["phase", planBody({ phases: [{ id: "p1", name: "", summary: "Has work", taskKeys: [] }] }), "Phase 1 name cannot be blank."],
+    ["boundary", planBody({ boundaries: [{ scope: "", rule: "Keep the seam." }] }), "Boundary 1 scope cannot be blank."],
+    ["risk", planBody({ risks: [{ severity: "medium", summary: "r".repeat(501), control: "Contain it." }] }), "Risk 1 summary must be 500 characters or fewer."],
+    ["migration", planBody({ migrations: [{ summary: "m".repeat(501), reversible: true }] }), "Migration 1 summary must be 500 characters or fewer."],
+  ])("locates an invalid %s field before asking the host", async (_name, invalid, message) => {
+    const calls: Array<{ method: ProjectWorkMethod; params: Record<string, unknown> }> = [];
+    const store = new ProjectWorkStore({
+      projectId: "p1",
+      request: (async (method: ProjectWorkMethod, params: Record<string, unknown>) => {
+        calls.push({ method, params });
+        return { ref: {}, entity: {}, revision: { index: 2 }, seq: 8 };
+      }) as never,
+    });
+    const value = detail({ kind: "plan", number: 2, body: { kind: "plan", plan: invalid } });
+    await mount(<PlanDetail detail={value} body={invalid} items={rows} context={{ store, detail: value, editable: true, onChanged: vi.fn(), items: rows }} />);
+    await click(button("Edit plan"));
+    await changeInput("#plan-title", "Changed title");
+    await click(button("Save as a new revision"));
+    expect(calls.some((call) => call.method === "project/work/revise")).toBe(false);
+    expect(text()).toContain(message);
+  });
+
+  it("keeps an exact plan draft through Preview and saves it as a fenced revision", async () => {
+    const calls: Array<{ method: ProjectWorkMethod; params: Record<string, unknown> }> = [];
+    const store = new ProjectWorkStore({
+      projectId: "p1",
+      request: (async (method: ProjectWorkMethod, params: Record<string, unknown>) => {
+        calls.push({ method, params });
+        return { ref: {}, entity: {}, revision: { index: 2 }, seq: 8 };
+      }) as never,
+    });
+    const value = detail({ kind: "plan", number: 2, body: { kind: "plan", plan: body } });
+    await mount(<PlanDetail detail={value} body={body} items={rows} context={{ store, detail: value, editable: true, onChanged: vi.fn(), items: rows, compact: true }} />);
+    await click(button("Edit plan"));
+    expect(container.querySelector('[data-slot="work-edit-footer"]')).not.toBeNull();
+    await editCode("Brief", "Ship the **whole** workspace.");
+    expect(container.querySelectorAll(".cm-editor")).toHaveLength(1);
+    await click(button("Preview"));
+    expect(container.querySelector("[data-slot='markdown-document'] strong")?.textContent).toBe("whole");
+    expect(calls).toHaveLength(0);
+    await click(button("Cancel"));
+    expect(text()).toContain("Ship the embedded workspace.");
+    expect(text()).not.toContain("Ship the whole workspace.");
+    await click(button("Edit plan"));
+    await editCode("Brief", "Ship the **whole** workspace.");
+    await click(button("Save as a new revision"));
+    const revise = calls.find((call) => call.method === "project/work/revise");
+    expect(revise?.params.expectedRevisionId).toBe("e-plan-2r1");
+    const written = revise?.params.body as { plan: typeof body };
+    expect(written.plan.brief).toBe("Ship the **whole** workspace.");
+    expect(written.plan.phases).toEqual(body.phases);
+    expect(written.plan.dependencies).toEqual(body.dependencies);
+    expect(written.plan.document).toBe(body.document);
   });
 });
 

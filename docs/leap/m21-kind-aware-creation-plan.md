@@ -1,7 +1,7 @@
 # M21-T6 follow-up — kind-aware creation and authoring
 
-Status: **Milestone 1 final review corrections implemented; awaiting parent verification/integration**. Milestone 2
-remains out of scope until Milestone 1 integration. The binding contracts are [`project-lifecycle-leap.md`](../project-lifecycle-leap.md)
+Status: **Milestone 2 final independent-review corrections implemented; awaiting parent verification/integration**.
+Milestone 1 is integrated at `de49fab3`; the complete Milestone 2 source and review histories are preserved on this correction branch. The binding contracts are [`project-lifecycle-leap.md`](../project-lifecycle-leap.md)
 ("Flexibility", "Embedded workspace" and "Detail, by kind"), D-352 and D-355,
 [`design-phase.md`](../design-phase.md), [`research-phase.md`](../research-phase.md),
 and the closed bodies in
@@ -577,6 +577,67 @@ Outcome: opening any kind gives the hierarchy above, rendered Markdown by
 default, explicit edit/preview/save, real missing/blocking facts and a reachable
 next action at wide and narrow widths.
 
+Implementation checkpoint:
+
+- `WorkDetail` already computes the exact editable/current/archive/capability
+  fence. It will pass the same `WorkBodyContext` to Plan and Task instead of
+  adding another authority; the compact header will open the existing
+  `Inspector` in the same `Workspace` sheet used at constrained desktop width.
+- `SpecDocument` already owns conflict/keep-mine settlement. Its prose controls
+  move to `MarkdownAuthoringField`; read fields move through the shared safe
+  Markdown renderer without changing title/list literal handling.
+- `ResearchDetail` already owns question actions. A separate framing draft will
+  revise `{ ...body }`, update the existing root question by stable id, and
+  replace only question/scope; findings, sources, options, unresolved records,
+  child questions and confidence remain byte-for-byte from the loaded body.
+- `DesignDetail` already owns one `draft`, one validation gate and one fenced
+  `save()`. Brief authoring edits that draft only; canvas, flow, foundation,
+  index, sketch, host grounding, review and conflict paths stay in place.
+- `PlanDetail` and `TaskDetail` gain local typed drafts and use the existing
+  `store.revise` fence. Serializers preserve fields the form does not edit:
+  Plan migration notes and all closed-body fields; Task `scope.capabilities`,
+  `scope.sharedWith`, attempts/evidence/checkpoints (which are outside the
+  body), and assignment/link facts. Graph validation remains advisory before
+  the host-authoritative write.
+- Repeated Markdown rows share `MarkdownEditorActivationProvider`, so only one
+  CodeMirror view per editor is mounted. Cancel discards local state; refusal
+  or conflict keeps it. Commands, paths, source excerpts and provenance remain
+  literal text rather than Markdown.
+
+Correction checkpoint — approval required before further source changes:
+
+- Each explicit Edit creates an immutable edit owner: project/entity/store,
+  base revision and title/body bytes. Background detail refreshes may update
+  live gates and report a newer revision, but Save remains fenced to that base;
+  changing selection, closing, or starting another edit invalidates the old
+  owner's completion. Design adopts the same base on its first edit and never
+  resets a dirty canvas/brief from incoming props.
+- `WorkDetail` separates selection identity from sequence refresh. Identity
+  changes clear the rendered detail; same-entity sequence reads keep the
+  mounted editor. A monotonically owned read token prevents a slow result for
+  an earlier entity/revision from replacing the current selection.
+- Save admission uses a synchronous ref lock and an immutable submitted
+  snapshot. Every field is frozen while pending; live capability/archive/
+  historical state is rechecked in the handler; a late reply may settle only
+  the edit owner that sent it. Refusal/conflict keeps the exact draft.
+- Authored Markdown round-trips exact surviving bytes. In particular,
+  `specBodyFrom` stops trimming nonblank prose; blank optional rows may be
+  omitted without normalizing their neighbours. String-list editors keep
+  local stable row ids through removal/reorder, never wire ids. Schema limits
+  produce visible field errors rather than truncation or draft cleanup.
+- The detail completion pass is structural, not count-chip work: Spec read mode
+  exposes Brief/Full gaps and a real next action; each kind gets its planned
+  orientation/missing state; Inspector puts the decision/gate or Task readiness
+  before metadata and keeps comments, links, evidence and history reachable.
+  Long Plan/Task/Research/Design edits get compact sticky Save/Cancel above the
+  safe area while wide actions remain in their orientation bar.
+- Regression tests mount real `WorkDetail` for all five kinds and drive
+  same-entity rerenders, selection changes, read-only revocation, deferred
+  revise, duplicate Save, refusal and late completion. Pure serializer tests
+  cover whitespace and stable row identity. Visual review uses a static fixture
+  screenshot only if one exists; otherwise the handoff records code-level
+  layout review and leaves RTL/IME/touch/theme acceptance to the person.
+
 Write paths:
 
 - `packages/ui/src/components/project-work/{WorkDetail,Inspector,Workspace}.tsx`
@@ -623,6 +684,47 @@ Acceptance evidence:
 10. Editor tests cover keyboard-only Write/Preview, screen-reader labels,
     Tab escape, Cmd/Ctrl+Enter outside IME composition, mixed RTL/LTR source,
     200 KiB source behavior, reduced motion and both theme token mappings.
+
+## Milestone 2 final correction evidence
+
+The one independent review at `2003f074` was applied on top of the complete
+opened-authoring source through `535a532b`; both histories remain merge
+ancestors. The final fixer keeps the edit-owner/read-token/pending fences and
+closes the accepted review set:
+
+- Design brief entry reuses the current edit owner and draft, so a canvas,
+  grounding or foundation change survives **Edit brief** and saves with the
+  original base revision. Shape validation and a blocked save now name the
+  field or live read-only reason without dropping the draft.
+- Research framing removes only blank optional scope rows, preserves every
+  surviving byte and stable record/id, validates before revise, and freezes
+  add/resolve/reopen siblings while the framing write is pending.
+- All five editors validate their owning closed body before revise and locate
+  the first incomplete or over-limit field with person-written labels and the
+  actual protocol bound. Source controls carry the same bounds, retain loaded
+  over-limit bytes and allow edits that reduce them back under the limit.
+- The repeated `WorkDetail` selection-match predicate is one helper. Fixed
+  100ms waits in the touched Plan, Task and Design editor tests are bounded
+  condition waits. Spec editing also retains the revision's `gated` fact.
+
+Red evidence before the fixes:
+`pnpm -F @lasercode/ui exec vitest run test/design/detail.test.tsx test/project-work/research-detail.test.tsx`
+— 2 files, 4 failed / 28 passed: the combined Design edit rebased to `r2`,
+Research retained a blank scope row, and over-limit question/scope values
+reached revise.
+
+Green evidence after the fixes:
+
+- required focused gate: 43 files / 432 tests;
+- correction focus: 7 files / 109 tests;
+- UI `test:types`, `typecheck`, production build and `pnpm identity:check` pass.
+
+Deferred, without broad refactoring: remove the unreachable alternate
+Plan/Task/Design read views; normalize Task optional-key ordering if semantic
+change detection ever needs it; and consolidate cosmetic editor/footer markup
+only when a behavior change needs that seam. The Spec footer remains local
+because moving its conflict/keep-mine actions into the simple shared footer is
+not a trivial substitution.
 
 ## Validation gates after each milestone
 

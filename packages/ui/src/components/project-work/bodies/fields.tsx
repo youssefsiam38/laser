@@ -36,7 +36,7 @@ export function ListSection({ title, items, mono = false }: { title: string; ite
             <span aria-hidden="true" className="select-none text-ink-3">
               ·
             </span>
-            <span className="min-w-0">{text}</span>
+            <span className="min-w-0 flex-1">{mono ? text : <MarkdownDocument text={text} measure="prose" />}</span>
           </li>
         ))}
       </ul>
@@ -45,7 +45,7 @@ export function ListSection({ title, items, mono = false }: { title: string; ite
 }
 
 export function Prose({ text, className }: { text: string; className?: string }) {
-  return <p className={cn("max-w-(--measure-prose) text-sm leading-5 whitespace-pre-wrap text-ink-2", className)}>{text}</p>;
+  return <MarkdownDocument text={text} measure="prose" className={cn("text-sm leading-5 text-ink-2", className)} />;
 }
 
 /** Markdown, through the shared renderer. Never raw HTML (invariant 9). */

@@ -21,9 +21,17 @@
  *   unanswerable or add one** — those are body writes through
  *   `project/work/revise`, fenced by the revision being read.
  */
-import { ExternalLink, FileText, HelpCircle, Quote as QuoteIcon } from "lucide-react";
+import { Check, ExternalLink, FileText, HelpCircle, Pencil, Quote as QuoteIcon, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { ResearchBody, ResearchFinding, ResearchQuestionState, SourceRef } from "@lasercode/protocol";
+import {
+  PROJECT_WORK_TITLE_MAX,
+  RESEARCH_QUESTION_MAX,
+  researchBodySchema,
+  type ResearchBody,
+  type ResearchFinding,
+  type ResearchQuestionState,
+  type SourceRef,
+} from "@lasercode/protocol";
 
 import { ResearchReport, type ReportSection } from "@/components/assistant-ui/elements/research-report";
 import { Badge } from "@/components/ui/badge";
@@ -62,8 +70,12 @@ import { useLaserStable } from "@/runtime";
 import type { Status } from "@/components/status";
 
 import { KeyTag } from "../KindBadge.js";
+import { MarkdownAuthoringField } from "../MarkdownAuthoringField.js";
+import { WorkEditFields, WorkEditFooter, WorkEditNewerNotice, useWorkEditSession } from "../edit-session.js";
+import { errorAt, workFieldError, WORK_LINE_MAX, type WorkFieldError } from "../opened-work-validation.js";
 import { quoteIntoComposer } from "../quote.js";
 import type { WorkBodyContext } from "./context.js";
+import { Field, MarkdownListField } from "./editor-fields.js";
 import { ListSection, Prose, Section, Tags } from "./fields.js";
 
 const QUESTION_MARK: Readonly<Record<ResearchQuestionState, Status>> = {
@@ -84,6 +96,60 @@ export function ResearchDetail({ body, context }: { body: ResearchBody; context:
   const orphans = useMemo(() => uncitedFindings(body), [body]);
   const spend = retrievalSpend(body);
   const status = deriveResearchStatus(body);
+  const [framing, setFraming] = useState<{ title: string; question: string; in: string[]; out: string[]; constraints: string[] }>();
+  const [framingError, setFramingError] = useState<string>();
+  const [framingValidation, setFramingValidation] = useState<WorkFieldError>();
+  const edit = useWorkEditSession<ResearchBody>(context);
+  const changeFraming = (next: NonNullable<typeof framing>): void => {
+    setFraming(next);
+    setFramingValidation(undefined);
+  };
+
+  const saveFraming = async (): Promise<void> => {
+    if (!framing || !edit.owner) return;
+    const original = edit.owner.baseBody;
+    const root = original.questions.find((question) => question.parent === undefined && question.text === original.question)
+      ?? original.questions.find((question) => question.parent === undefined);
+    if (!root) {
+      setFramingError("This revision has no stable root question to revise. Add the root through the research loop first.");
+      return;
+    }
+    setFramingError(undefined);
+    const present = (value: string): boolean => value.trim() !== "";
+    const next: ResearchBody = {
+      ...original,
+      question: framing.question,
+      scope: {
+        in: framing.in.filter(present),
+        out: framing.out.filter(present),
+        constraints: framing.constraints.filter(present),
+      },
+      questions: original.questions.map((question) => question.id === root.id ? { ...question, text: framing.question } : question),
+    };
+    const parsed = researchBodySchema.safeParse(next);
+    if (!parsed.success) {
+      setFramingValidation(workFieldError("research", parsed.error.issues[0]));
+      return;
+    }
+    setFramingValidation(undefined);
+    const submittedTitle = framing.title.trim();
+    const settled = await edit.submit((base) => base.store.revise(
+      { entityId: base.entityId, expectedRevisionId: base.baseRevisionId },
+      { kind: "research", research: structuredClone(next) },
+      submittedTitle !== base.baseTitle ? { title: submittedTitle } : {},
+    ));
+    if (settled.kind === "blocked") {
+      setFramingError(settled.reason ?? context.readOnlyReason ?? "This draft can no longer be saved from here.");
+      return;
+    }
+    if (settled.kind === "ignored") return;
+    if (!settled.value.ok) {
+      setFramingError(settled.value.failure.message);
+      return;
+    }
+    if (edit.cancel()) setFraming(undefined);
+    context.onChanged();
+  };
 
   // `supports` edges are what makes a Research part of a decision. With none
   // it is standalone — complete, not pending (D-352).
@@ -112,9 +178,27 @@ export function ResearchDetail({ body, context }: { body: ResearchBody; context:
             ))}
           </span>
         )}
+        {context.editable && !framing ? (
+          <Button
+            size="xs"
+            variant="outline"
+            className="ms-auto"
+            onClick={() => {
+              const owner = edit.begin(body);
+              if (!owner) return;
+              const original = owner.baseBody;
+              setFraming({ title: owner.baseTitle, question: original.question, in: [...original.scope.in], out: [...original.scope.out], constraints: [...original.scope.constraints] });
+              setFramingError(undefined);
+              setFramingValidation(undefined);
+            }}
+          >
+            <Pencil />
+            Edit framing
+          </Button>
+        ) : null}
         <Tooltip>
           <TooltipTrigger asChild>
-            <span tabIndex={0} className="typed ms-auto tnum text-ink-3 outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live">
+            <span tabIndex={0} className={cn("typed tnum text-ink-3 outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-live", (!context.editable || framing) && "ms-auto")}>
               {spend.sources} sources · {spend.findings} findings · {spend.resolved}/{spend.questions} questions settled
             </span>
           </TooltipTrigger>
@@ -125,12 +209,58 @@ export function ResearchDetail({ body, context }: { body: ResearchBody; context:
         </Tooltip>
       </div>
 
-      <Section title="Question">
-        <Prose text={body.question} className="text-ink" />
-      </Section>
-      <ListSection title="In scope" items={body.scope.in} />
-      <ListSection title="Out of scope" items={body.scope.out} />
-      <ListSection title="Constraints" items={body.scope.constraints} />
+      {framing ? (
+        <div data-slot="research-framing-editor" className="flex flex-col gap-4 rounded-lg border border-line bg-surface p-3">
+          <WorkEditNewerNotice show={edit.newerRevision} />
+          {framingError ? <p role="alert" className="text-sm leading-5 text-danger">{framingError} Your draft is still here.</p> : null}
+          <WorkEditFields locked={edit.locked}>
+          <Field label="Title" htmlFor="research-title">
+            <Input id="research-title" value={framing.title} maxLength={PROJECT_WORK_TITLE_MAX} onChange={(event) => changeFraming({ ...framing, title: event.target.value })} />
+          </Field>
+            <MarkdownAuthoringField
+              editorKey="research-question"
+              label="Question"
+              value={framing.question}
+              onChange={(question) => changeFraming({ ...framing, question })}
+              placeholder="What must this research settle?"
+              maxLength={RESEARCH_QUESTION_MAX}
+              error={errorAt(framingValidation, "question")}
+            />
+            <MarkdownListField editorKey="research-in-scope" label="In scope" values={framing.in} onChange={(value) => changeFraming({ ...framing, in: value })} placeholder="Included boundary" addLabel="Add in-scope boundary" maxLength={WORK_LINE_MAX} error={framingValidation?.path[0] === "scope" && framingValidation.path[1] === "in" ? framingValidation.message : undefined} />
+            <MarkdownListField editorKey="research-out-of-scope" label="Out of scope" values={framing.out} onChange={(value) => changeFraming({ ...framing, out: value })} placeholder="Excluded boundary" addLabel="Add out-of-scope boundary" maxLength={WORK_LINE_MAX} error={framingValidation?.path[0] === "scope" && framingValidation.path[1] === "out" ? framingValidation.message : undefined} />
+            <MarkdownListField editorKey="research-constraint" label="Constraints" values={framing.constraints} onChange={(value) => changeFraming({ ...framing, constraints: value })} placeholder="Constraint" addLabel="Add a constraint" maxLength={WORK_LINE_MAX} error={framingValidation?.path[0] === "scope" && framingValidation.path[1] === "constraints" ? framingValidation.message : undefined} />
+          </WorkEditFields>
+          {!context.compact ? (
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <Button size="sm" variant="ghost" disabled={edit.pending} onClick={() => { if (edit.cancel()) setFraming(undefined); setFramingError(undefined); setFramingValidation(undefined); }}>
+                <X />
+                Cancel
+              </Button>
+              <Button size="sm" disabled={!edit.canSubmit || framing.title.trim() === "" || framing.question.trim() === ""} onClick={() => void saveFraming()}>
+                <Check />
+                {edit.pending ? "Saving…" : "Save as a new revision"}
+              </Button>
+            </div>
+          ) : null}
+          <WorkEditFooter
+            compact={context.compact}
+            pending={edit.pending}
+            canSave={edit.canSubmit && framing.title.trim() !== "" && framing.question.trim() !== ""}
+            saveLabel="Save as a new revision"
+            onCancel={() => { if (edit.cancel()) setFraming(undefined); setFramingError(undefined); setFramingValidation(undefined); }}
+            onSave={() => void saveFraming()}
+          />
+        </div>
+      ) : (
+        <>
+          <Section title="Question">
+            <Prose text={body.question} className="text-ink" />
+          </Section>
+          <ListSection title="In scope" items={body.scope.in} />
+          <ListSection title="Out of scope" items={body.scope.out} />
+          <ListSection title="Constraints" items={body.scope.constraints} />
+        </>
+      )}
 
       <div className={cn("flex min-w-0 gap-4", wide ? "flex-row items-start" : "flex-col")}>
         <div className={cn("flex min-w-0 flex-col gap-3", wide && "w-[clamp(14rem,32%,22rem)] shrink-0")}>
@@ -152,12 +282,12 @@ export function ResearchDetail({ body, context }: { body: ResearchBody; context:
               }),
             )}
           />
-          {context.editable ? <AddQuestion body={body} context={context} parentId={selected?.id} /> : null}
+          {context.editable ? <AddQuestion body={body} context={context} parentId={selected?.id} writesLocked={edit.pending} /> : null}
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           {selected ? (
-            <QuestionPanel body={body} context={context} questionId={selected.id} findings={findings} />
+            <QuestionPanel body={body} context={context} questionId={selected.id} findings={findings} writesLocked={edit.pending} />
           ) : (
             <p className="text-sm leading-5 text-ink-2">
               No questions yet. <span className="text-ink-3">A research artifact starts with its root question and grows the tree as it reads.</span>
@@ -221,11 +351,13 @@ function QuestionPanel({
   context,
   questionId,
   findings,
+  writesLocked,
 }: {
   body: ResearchBody;
   context: WorkBodyContext;
   questionId: string;
   findings: readonly ResearchFinding[];
+  writesLocked: boolean;
 }) {
   const question = body.questions.find((candidate) => candidate.id === questionId);
   const [resolving, setResolving] = useState<ResearchQuestionState | undefined>(undefined);
@@ -255,20 +387,21 @@ function QuestionPanel({
             findings={body.findings}
             selected={question.findings}
             onClose={() => setResolving(undefined)}
+            writesLocked={writesLocked}
           />
         ) : (
           <div className="flex flex-wrap items-center gap-1.5">
-            <Button size="xs" variant="outline" onClick={() => setResolving("answered")}>
+            <Button size="xs" variant="outline" disabled={writesLocked} onClick={() => setResolving("answered")}>
               Answer this
             </Button>
-            <Button size="xs" variant="outline" onClick={() => setResolving("handed_to_person")}>
+            <Button size="xs" variant="outline" disabled={writesLocked} onClick={() => setResolving("handed_to_person")}>
               Hand it to me
             </Button>
-            <Button size="xs" variant="outline" onClick={() => setResolving("unanswerable")}>
+            <Button size="xs" variant="outline" disabled={writesLocked} onClick={() => setResolving("unanswerable")}>
               Mark unanswerable…
             </Button>
             {question.state !== "open" ? (
-              <Button size="xs" variant="ghost" onClick={() => setResolving("open")}>
+              <Button size="xs" variant="ghost" disabled={writesLocked} onClick={() => setResolving("open")}>
                 Reopen
               </Button>
             ) : null}
@@ -279,10 +412,22 @@ function QuestionPanel({
       <div data-slot="question-findings" className="flex min-w-0 flex-col">
         <Section title="Findings">
           {findings.length === 0 ? (
-            <p className="max-w-(--measure-prose) text-sm leading-5 text-ink-2">
-              No findings yet — the research loop records them{" "}
-              <span className="text-ink-3">as it reads sources, one finding per claim, each with its excerpt and licence.</span>
-            </p>
+            <div className="flex flex-col items-start gap-2">
+              <p className="max-w-(--measure-prose) text-sm leading-5 text-ink-2">
+                No findings yet — the research loop records them{" "}
+                <span className="text-ink-3">as it reads sources, one finding per claim, each with its excerpt and licence.</span>
+              </p>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => {
+                  const request = `Continue ${context.detail.entity.key}: research “${question.text}” and record findings with sources.`;
+                  quoteIntoComposer({ text: request, workKey: context.detail.entity.key });
+                }}
+              >
+                Continue this research
+              </Button>
+            </div>
           ) : (
             <ul role="list" className="flex flex-col gap-2">
               {findings.map((finding) => (
@@ -306,6 +451,7 @@ function ResolveForm({
   findings,
   selected,
   onClose,
+  writesLocked,
 }: {
   body: ResearchBody;
   context: WorkBodyContext;
@@ -314,6 +460,7 @@ function ResolveForm({
   findings: readonly ResearchFinding[];
   selected: readonly string[];
   onClose: () => void;
+  writesLocked: boolean;
 }) {
   const { actions } = useLaserStable();
   const [answer, setAnswer] = useState("");
@@ -339,7 +486,7 @@ function ResolveForm({
           : "Why it is open again";
 
   const save = async (): Promise<void> => {
-    if (!context.store || refusal) return;
+    if (!context.store || refusal || writesLocked) return;
     setSaving(true);
     let next = resolveQuestion(body, questionId, resolution);
     if (state === "unanswerable") {
@@ -402,7 +549,7 @@ function ResolveForm({
       ) : null}
       {refusal ? <p className="text-xs leading-xs text-ink-3">{refusal}</p> : null}
       <div className="flex items-center gap-1.5">
-        <Button size="xs" disabled={Boolean(refusal) || saving} onClick={() => void save()}>
+        <Button size="xs" disabled={Boolean(refusal) || saving || writesLocked} onClick={() => void save()}>
           {saving ? "Saving…" : "Save as a new revision"}
         </Button>
         <Button size="xs" variant="ghost" onClick={onClose} disabled={saving}>
@@ -413,14 +560,14 @@ function ResolveForm({
   );
 }
 
-function AddQuestion({ body, context, parentId }: { body: ResearchBody; context: WorkBodyContext; parentId: string | undefined }) {
+function AddQuestion({ body, context, parentId, writesLocked }: { body: ResearchBody; context: WorkBodyContext; parentId: string | undefined; writesLocked: boolean }) {
   const { actions } = useLaserStable();
   const [text, setText] = useState("");
   const [under, setUnder] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const add = async (): Promise<void> => {
-    if (!context.store || text.trim() === "") return;
+    if (!context.store || text.trim() === "" || writesLocked) return;
     setSaving(true);
     const next = addQuestion(body, { text, ...(under && parentId ? { parent: parentId } : {}) });
     const outcome = await context.store.revise(
@@ -463,7 +610,7 @@ function AddQuestion({ body, context, parentId }: { body: ResearchBody; context:
         </label>
       ) : null}
       <div>
-        <Button size="xs" variant="outline" type="submit" disabled={saving || text.trim() === ""}>
+        <Button size="xs" variant="outline" type="submit" disabled={saving || writesLocked || text.trim() === ""}>
           {saving ? "Adding…" : "Add"}
         </Button>
       </div>

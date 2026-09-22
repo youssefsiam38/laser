@@ -49,6 +49,7 @@ export function specDraft(body: SpecBody): SpecBody {
     acceptance: body.acceptance.map((criterion) => ({ ...criterion })),
     constraints: [...body.constraints],
     ...(body.document !== undefined ? { document: body.document } : {}),
+    ...(body.gated !== undefined ? { gated: body.gated } : {}),
   };
 }
 
@@ -57,23 +58,22 @@ export function specDraft(body: SpecBody): SpecBody {
  * empty optional field is *absent*, not present and blank.
  */
 export function specBodyFrom(draft: SpecBody): SpecBody {
-  const clean = (values: readonly string[]): string[] => values.map((value) => value.trim()).filter((value) => value !== "");
-  const problem = draft.problem?.trim();
-  const document = draft.document?.trim();
+  // Whitespace decides only whether an optional row exists. Authored Markdown
+  // that survives keeps its exact bytes; normalization would alter code,
+  // hard line breaks and revision diffs without the person's consent.
+  const present = (value: string | undefined): value is string => value !== undefined && value.trim() !== "";
+  const clean = (values: readonly string[]): string[] => values.filter(present);
   return {
     form: draft.form,
-    brief: draft.brief.trim(),
-    ...(problem ? { problem } : {}),
+    brief: draft.brief,
+    ...(present(draft.problem) ? { problem: draft.problem } : {}),
     outcomes: clean(draft.outcomes),
     nonGoals: clean(draft.nonGoals),
-    requirements: draft.requirements
-      .filter((requirement) => requirement.text.trim() !== "")
-      .map((requirement) => ({ ...requirement, text: requirement.text.trim() })),
-    acceptance: draft.acceptance
-      .filter((criterion) => criterion.text.trim() !== "")
-      .map((criterion) => ({ ...criterion, text: criterion.text.trim() })),
+    requirements: draft.requirements.filter((requirement) => present(requirement.text)),
+    acceptance: draft.acceptance.filter((criterion) => present(criterion.text)),
     constraints: clean(draft.constraints),
-    ...(document ? { document } : {}),
+    ...(present(draft.document) ? { document: draft.document } : {}),
+    ...(draft.gated !== undefined ? { gated: draft.gated } : {}),
   };
 }
 

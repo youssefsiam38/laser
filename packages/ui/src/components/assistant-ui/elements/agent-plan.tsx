@@ -24,6 +24,7 @@
 import { ChevronRight } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
 
+import { MarkdownDocument } from "@/components/assistant-ui/elements/markdown-document";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
@@ -108,7 +109,7 @@ function Phase({ phase }: { phase: AgentPlanPhase }) {
       </CollapsibleTrigger>
       <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
         <div className="flex flex-col gap-1.5 border-t border-line px-2 py-2">
-          {phase.summary ? <p className="max-w-(--measure-prose) px-1.5 text-sm leading-5 text-ink-2">{phase.summary}</p> : null}
+          {phase.summary ? <MarkdownDocument text={phase.summary} measure="prose" className="px-1.5 text-sm leading-5 text-ink-2" /> : null}
           <TodoList
             items={phase.items}
             header={false}
