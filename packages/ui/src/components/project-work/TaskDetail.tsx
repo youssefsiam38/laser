@@ -64,6 +64,7 @@ import { BOARD_COLUMNS, BOARD_EXTRA_COLUMN, boardColumnLabel } from "@/project-w
 import { KeyTag, TypeBadge } from "./KindBadge.js";
 import type { WorkBodyContext } from "./bodies/context.js";
 import { TaskBodyEditor } from "./TaskBodyEditor.js";
+import { useWorkEditSession } from "./edit-session.js";
 import { TaskCancelDialog } from "./TaskCancel.js";
 import { TaskStartDialog } from "./TaskStart.js";
 import { VerificationPanel } from "./VerificationPanel.js";
@@ -96,6 +97,8 @@ export function TaskDetail({
   const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState<{ open: boolean; error?: string }>({ open: false });
   const [draft, setDraft] = useState<ProjectTaskBody>();
+  const bodyContext: WorkBodyContext = context ?? { store: undefined, detail, editable: false, onChanged: () => {}, items };
+  const edit = useWorkEditSession<ProjectTaskBody>(bodyContext);
 
   const readiness = detail.readiness;
   const conflicts = detail.conflicts ?? [];
@@ -113,8 +116,8 @@ export function TaskDetail({
   const plan = body.planKey ? items.find((item) => item.key === body.planKey) : undefined;
   const acceptance = detail.evidence.filter((record) => record.role === "acceptance");
 
-  if (draft && context) {
-    return <TaskBodyEditor body={draft} original={body} context={context} items={items} agents={agents} onChange={setDraft} onClose={() => setDraft(undefined)} />;
+  if (draft && context && edit.matches && edit.owner) {
+    return <TaskBodyEditor body={draft} context={context} edit={edit} items={items} agents={agents} onChange={setDraft} onClose={() => { if (edit.cancel()) setDraft(undefined); }} />;
   }
 
   const fence = { entityId: detail.entity.entityId, expectedRevisionId: detail.entity.currentRevisionId };
@@ -236,7 +239,7 @@ export function TaskDetail({
 
         <div className="ms-auto flex items-center gap-1.5">
           {context?.editable ? (
-            <Button size="xs" variant="outline" onClick={() => setDraft(structuredClone(body))}>
+            <Button size="xs" variant="outline" onClick={() => { const owner = edit.begin(body); if (owner) setDraft(structuredClone(owner.baseBody)); }}>
               <Pencil />
               Edit task
             </Button>

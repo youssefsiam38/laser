@@ -9,6 +9,7 @@ import {
   MarkdownEditorActivationProvider,
 } from "../../src/components/project-work/MarkdownAuthoringField.js";
 import { MarkdownSourceEditor } from "../../src/components/project-work/MarkdownSourceEditor.js";
+import { MarkdownListField } from "../../src/components/project-work/bodies/editor-fields.js";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -131,6 +132,32 @@ describe("bounded Markdown authoring", () => {
     const content = container.querySelector<HTMLElement>('.cm-content[aria-label="Second"]');
     expect(content).not.toBeNull();
     expect(document.activeElement).toBe(content);
+  });
+
+  it("keeps an active prose row's editor identity when an earlier row is removed", async () => {
+    function List() {
+      const [values, setValues] = useState(["first", "second", "third"]);
+      return (
+        <MarkdownEditorActivationProvider active>
+          <MarkdownListField editorKey="rows" label="Rows" values={values} onChange={setValues} placeholder="row" addLabel="Add row" />
+        </MarkdownEditorActivationProvider>
+      );
+    }
+    await act(async () => root.render(<List />));
+    await settle();
+    const editSecond = [...container.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent?.includes("Edit source"));
+    expect(editSecond).toBeDefined();
+    await act(async () => editSecond!.click());
+    await settle();
+    const second = container.querySelector<HTMLElement>('.cm-content[aria-label="Rows 2"]')!;
+    const view = EditorView.findFromDOM(second);
+    await act(async () => view.dispatch({ changes: { from: view.state.doc.length, insert: "!" }, selection: { anchor: 2 } }));
+    const removeFirst = container.querySelector<HTMLButtonElement>('button[aria-label="Remove rows 1"]')!;
+    await act(async () => removeFirst.click());
+    const moved = container.querySelector<HTMLElement>('.cm-content[aria-label="Rows 1"]');
+    expect(moved).toBe(second);
+    expect(EditorView.findFromDOM(moved!).state.doc.toString()).toBe("second!");
+    expect(EditorView.findFromDOM(moved!).state.selection.main.head).toBe(2);
   });
 
   it("mounts one editor at a schema-limit row count and retains its selection and undo across kind visibility", async () => {

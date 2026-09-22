@@ -150,8 +150,9 @@ describe("the plan document", () => {
       }) as never,
     });
     const value = detail({ kind: "plan", number: 2, body: { kind: "plan", plan: body } });
-    await mount(<PlanDetail detail={value} body={body} items={rows} context={{ store, detail: value, editable: true, onChanged: vi.fn(), items: rows }} />);
+    await mount(<PlanDetail detail={value} body={body} items={rows} context={{ store, detail: value, editable: true, onChanged: vi.fn(), items: rows, compact: true }} />);
     await click(button("Edit plan"));
+    expect(container.querySelector('[data-slot="work-edit-footer"]')).not.toBeNull();
     await editCode("Brief", "Ship the **whole** workspace.");
     expect(container.querySelectorAll(".cm-editor")).toHaveLength(1);
     await click(button("Preview"));

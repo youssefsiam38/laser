@@ -62,7 +62,8 @@ import { useLaserStable } from "@/runtime";
 import type { Status } from "@/components/status";
 
 import { KeyTag } from "../KindBadge.js";
-import { MarkdownAuthoringField, MarkdownEditorActivationProvider } from "../MarkdownAuthoringField.js";
+import { MarkdownAuthoringField } from "../MarkdownAuthoringField.js";
+import { WorkEditFields, WorkEditFooter, WorkEditNewerNotice, useWorkEditSession } from "../edit-session.js";
 import { quoteIntoComposer } from "../quote.js";
 import type { WorkBodyContext } from "./context.js";
 import { Field, MarkdownListField } from "./editor-fields.js";
@@ -87,36 +88,41 @@ export function ResearchDetail({ body, context }: { body: ResearchBody; context:
   const spend = retrievalSpend(body);
   const status = deriveResearchStatus(body);
   const [framing, setFraming] = useState<{ title: string; question: string; in: string[]; out: string[]; constraints: string[] }>();
-  const [savingFraming, setSavingFraming] = useState(false);
   const [framingError, setFramingError] = useState<string>();
+  const edit = useWorkEditSession<ResearchBody>(context);
 
   const saveFraming = async (): Promise<void> => {
-    if (!framing || !context.store) return;
-    const root = body.questions.find((question) => question.parent === undefined && question.text === body.question)
-      ?? body.questions.find((question) => question.parent === undefined);
+    if (!framing || !edit.owner) return;
+    const original = edit.owner.baseBody;
+    const root = original.questions.find((question) => question.parent === undefined && question.text === original.question)
+      ?? original.questions.find((question) => question.parent === undefined);
     if (!root) {
       setFramingError("This revision has no stable root question to revise. Add the root through the research loop first.");
       return;
     }
-    setSavingFraming(true);
     setFramingError(undefined);
     const next: ResearchBody = {
-      ...body,
+      ...original,
       question: framing.question,
       scope: { in: framing.in, out: framing.out, constraints: framing.constraints },
-      questions: body.questions.map((question) => question.id === root.id ? { ...question, text: framing.question } : question),
+      questions: original.questions.map((question) => question.id === root.id ? { ...question, text: framing.question } : question),
     };
-    const outcome = await context.store.revise(
-      { entityId: context.detail.entity.entityId, expectedRevisionId: context.detail.revision.revisionId },
-      { kind: "research", research: next },
-      framing.title.trim() !== context.detail.revision.title ? { title: framing.title.trim() } : {},
-    );
-    setSavingFraming(false);
-    if (!outcome.ok) {
-      setFramingError(outcome.failure.message);
+    const submittedTitle = framing.title.trim();
+    const settled = await edit.submit((base) => base.store.revise(
+      { entityId: base.entityId, expectedRevisionId: base.baseRevisionId },
+      { kind: "research", research: structuredClone(next) },
+      submittedTitle !== base.baseTitle ? { title: submittedTitle } : {},
+    ));
+    if (settled.kind === "blocked") {
+      setFramingError(context.readOnlyReason ?? "This draft can no longer be saved from here.");
       return;
     }
-    setFraming(undefined);
+    if (settled.kind === "ignored") return;
+    if (!settled.value.ok) {
+      setFramingError(settled.value.failure.message);
+      return;
+    }
+    if (edit.cancel()) setFraming(undefined);
     context.onChanged();
   };
 
@@ -153,7 +159,10 @@ export function ResearchDetail({ body, context }: { body: ResearchBody; context:
             variant="outline"
             className="ms-auto"
             onClick={() => {
-              setFraming({ title: context.detail.revision.title, question: body.question, in: [...body.scope.in], out: [...body.scope.out], constraints: [...body.scope.constraints] });
+              const owner = edit.begin(body);
+              if (!owner) return;
+              const original = owner.baseBody;
+              setFraming({ title: owner.baseTitle, question: original.question, in: [...original.scope.in], out: [...original.scope.out], constraints: [...original.scope.constraints] });
               setFramingError(undefined);
             }}
           >
@@ -176,11 +185,12 @@ export function ResearchDetail({ body, context }: { body: ResearchBody; context:
 
       {framing ? (
         <div data-slot="research-framing-editor" className="flex flex-col gap-4 rounded-lg border border-line bg-surface p-3">
+          <WorkEditNewerNotice show={edit.newerRevision} />
           {framingError ? <p role="alert" className="text-sm leading-5 text-danger">{framingError} Your draft is still here.</p> : null}
+          <WorkEditFields locked={edit.locked}>
           <Field label="Title" htmlFor="research-title">
             <Input id="research-title" value={framing.title} maxLength={200} onChange={(event) => setFraming({ ...framing, title: event.target.value })} />
           </Field>
-          <MarkdownEditorActivationProvider active>
             <MarkdownAuthoringField
               editorKey="research-question"
               label="Question"
@@ -191,17 +201,27 @@ export function ResearchDetail({ body, context }: { body: ResearchBody; context:
             <MarkdownListField editorKey="research-in-scope" label="In scope" values={framing.in} onChange={(value) => setFraming({ ...framing, in: value })} placeholder="Included boundary" addLabel="Add in-scope boundary" />
             <MarkdownListField editorKey="research-out-of-scope" label="Out of scope" values={framing.out} onChange={(value) => setFraming({ ...framing, out: value })} placeholder="Excluded boundary" addLabel="Add out-of-scope boundary" />
             <MarkdownListField editorKey="research-constraint" label="Constraints" values={framing.constraints} onChange={(value) => setFraming({ ...framing, constraints: value })} placeholder="Constraint" addLabel="Add a constraint" />
-          </MarkdownEditorActivationProvider>
-          <div className="flex flex-wrap items-center justify-end gap-1.5">
-            <Button size="sm" variant="ghost" disabled={savingFraming} onClick={() => { setFraming(undefined); setFramingError(undefined); }}>
-              <X />
-              Cancel
-            </Button>
-            <Button size="sm" disabled={savingFraming || framing.title.trim() === "" || framing.question.trim() === ""} onClick={() => void saveFraming()}>
-              <Check />
-              {savingFraming ? "Saving…" : "Save as a new revision"}
-            </Button>
-          </div>
+          </WorkEditFields>
+          {!context.compact ? (
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <Button size="sm" variant="ghost" disabled={edit.pending} onClick={() => { if (edit.cancel()) setFraming(undefined); setFramingError(undefined); }}>
+                <X />
+                Cancel
+              </Button>
+              <Button size="sm" disabled={!edit.canSubmit || framing.title.trim() === "" || framing.question.trim() === ""} onClick={() => void saveFraming()}>
+                <Check />
+                {edit.pending ? "Saving…" : "Save as a new revision"}
+              </Button>
+            </div>
+          ) : null}
+          <WorkEditFooter
+            compact={context.compact}
+            pending={edit.pending}
+            canSave={edit.canSubmit && framing.title.trim() !== "" && framing.question.trim() !== ""}
+            saveLabel="Save as a new revision"
+            onCancel={() => { if (edit.cancel()) setFraming(undefined); setFramingError(undefined); }}
+            onSave={() => void saveFraming()}
+          />
         </div>
       ) : (
         <>

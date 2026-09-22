@@ -9,7 +9,7 @@
  * that this is not the current one.
  */
 import { ArrowLeft, Archive, ArchiveRestore, Copy, History, Link as LinkIcon, MoreHorizontal, PanelRight, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClientRequests } from "@lasercode/protocol";
 
 import { Button } from "@/components/ui/button";
@@ -67,7 +67,15 @@ export function WorkDetail({
   const selection = ui.selection;
   const [detail, setDetail] = useState<Detail | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [refreshError, setRefreshError] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(false);
+  const detailRef = useRef<Detail | undefined>(undefined);
+  const detailStoreRef = useRef<ProjectWorkStore | undefined>(undefined);
+  const readOwner = useRef(0);
+  detailRef.current = detail;
+  useEffect(() => () => {
+    readOwner.current += 1;
+  }, []);
   const [archiving, setArchiving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const { actions } = useLaserStable();
@@ -77,10 +85,17 @@ export function WorkDetail({
 
   const entityId = selection?.entityId;
   const revisionId = selection?.revisionId;
-  // The read is fenced by the selection and by the project's sequence: a
-  // revision that lands while this is open re-reads rather than patching.
+  // Every settlement belongs to one entity/revision request. Sequence refreshes
+  // retain the mounted detail; explicit navigation does not. The token gates
+  // success, failure and loading alike, so a slow prior selection is inert.
   const read = useCallback(async () => {
-    if (!store || !entityId) return;
+    const token = ++readOwner.current;
+    if (!store || !entityId) {
+      setLoading(false);
+      return;
+    }
+    const retained = detailRef.current;
+    const retainsSelection = retained !== undefined && detailStoreRef.current === store && retained.ref.projectId === store.getSnapshot().projectId && retained.entity.entityId === entityId && (revisionId === undefined || retained.revision.revisionId === revisionId);
     setLoading(true);
     const outcome = await store.get({
       entityId,
@@ -88,21 +103,37 @@ export function WorkDetail({
       body: { mode: "full" },
       include: { comments: true, approvals: true, evidence: true, links: true, history: true },
     });
+    if (readOwner.current !== token) return;
     setLoading(false);
     if (outcome.ok) {
+      detailRef.current = outcome.value;
+      detailStoreRef.current = store;
       setDetail(outcome.value);
       setError(undefined);
+      setRefreshError(undefined);
+    } else if (retainsSelection && retained) {
+      setRefreshError(outcome.failure.message);
     } else {
+      detailRef.current = undefined;
+      detailStoreRef.current = undefined;
       setDetail(undefined);
       setError(outcome.failure.message);
+      setRefreshError(undefined);
     }
   }, [entityId, revisionId, store]);
 
   useEffect(() => {
-    setDetail(undefined);
-    setError(undefined);
+    const retained = detailRef.current;
+    const retainsSelection = retained !== undefined && detailStoreRef.current === store && retained.ref.projectId === store?.getSnapshot().projectId && retained.entity.entityId === entityId && (revisionId === undefined || retained.revision.revisionId === revisionId);
+    if (!retainsSelection) {
+      detailRef.current = undefined;
+      detailStoreRef.current = undefined;
+      setDetail(undefined);
+      setError(undefined);
+      setRefreshError(undefined);
+    }
     void read();
-  }, [read, work.seq]);
+  }, [read, work.seq, entityId, revisionId]);
 
   if (!selection) {
     return (
@@ -124,7 +155,9 @@ export function WorkDetail({
     );
   }
 
-  if (!detail) {
+  const detailMatchesSelection = detail !== undefined && detailStoreRef.current === store && detail.ref.projectId === store?.getSnapshot().projectId && detail.entity.entityId === entityId && (revisionId === undefined || detail.revision.revisionId === revisionId);
+
+  if (!detail || !detailMatchesSelection) {
     return (
       <div className={cn("flex min-h-0 flex-col", className)}>
         <WorkLoading label={loading ? `Reading ${KIND_LABEL[selection.kind].toLocaleLowerCase()}` : "Opening"} />
@@ -138,6 +171,7 @@ export function WorkDetail({
   const bodyContext: WorkBodyContext = {
     store,
     detail,
+    selectionRevisionId: revisionId,
     editable: !historical && canRevise.state === "available" && !entity.archivedAt,
     readOnlyReason: historical
       ? "Editing is disabled on an older revision."
@@ -275,6 +309,11 @@ export function WorkDetail({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {refreshError ? (
+          <p role="alert" data-slot="detail-refresh-error" className="mb-3 rounded-lg border border-attention/40 bg-[color-mix(in_oklab,var(--attention)_10%,transparent)] p-3 text-sm leading-5 text-ink-2">
+            {refreshError} The open draft and revision stay here; retry when the connection returns.
+          </p>
+        ) : null}
         {/* Plan and Task have detail surfaces of their own (M21-T16): the
             plan's Document/Dependencies switch and the task's attempts,
             evidence and checkpoints need the whole read, not just the body. */}

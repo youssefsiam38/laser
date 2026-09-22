@@ -27,8 +27,9 @@ import { selectWork } from "@/project-work";
 import { stateLabel, taskMark } from "@/project-work/vocabulary";
 
 import { KeyTag, TypeBadge } from "./KindBadge.js";
-import { MarkdownAuthoringField, MarkdownEditorActivationProvider } from "./MarkdownAuthoringField.js";
+import { MarkdownAuthoringField } from "./MarkdownAuthoringField.js";
 import { PlanGraph } from "./PlanGraph.js";
+import { WorkEditFields, WorkEditFooter, WorkEditNewerNotice, useWorkEditSession } from "./edit-session.js";
 import type { WorkBodyContext } from "./bodies/context.js";
 import { Field, LineListField } from "./bodies/editor-fields.js";
 import { Document, EmptyBody, ListSection, Prose, Section } from "./bodies/fields.js";
@@ -45,6 +46,8 @@ type PlanView = (typeof VIEWS)[number]["id"];
 export function PlanDetail({ detail, body, items, context }: { detail: Detail; body: PlanBody; items: readonly ProjectWorkListItem[]; context?: WorkBodyContext }) {
   const [view, setView] = useState<PlanView>("document");
   const [draft, setDraft] = useState<PlanBody>();
+  const bodyContext: WorkBodyContext = context ?? { store: undefined, detail, editable: false, onChanged: () => {}, items };
+  const edit = useWorkEditSession<PlanBody>(bodyContext);
 
   // Where the Plan came from, if anywhere. A Plan is usable alone (D-352), so
   // "standalone" is a first-class answer and not a missing link.
@@ -74,8 +77,8 @@ export function PlanDetail({ detail, body, items, context }: { detail: Detail; b
     return planTasks(keys, items);
   }, [body.dependencies, body.phases, items]);
 
-  if (draft && context) {
-    return <PlanEditor body={draft} original={body} context={context} items={items} onChange={setDraft} onClose={() => setDraft(undefined)} />;
+  if (draft && context && edit.matches && edit.owner) {
+    return <PlanEditor body={draft} context={context} items={items} edit={edit} onChange={setDraft} onClose={() => { if (edit.cancel()) setDraft(undefined); }} />;
   }
 
   return (
@@ -113,7 +116,7 @@ export function PlanDetail({ detail, body, items, context }: { detail: Detail; b
           <span className="text-xs leading-xs text-ink-3">Order: {detail.planGraph.order.join(" → ")}</span>
         ) : null}
         {context?.editable ? (
-          <Button size="sm" variant="outline" className="ms-auto" onClick={() => setDraft(structuredClone(body))}>
+          <Button size="sm" variant="outline" className="ms-auto" onClick={() => { const owner = edit.begin(body); if (owner) setDraft(structuredClone(owner.baseBody)); }}>
             <Pencil />
             Edit plan
           </Button>
@@ -237,48 +240,52 @@ export function PlanDetail({ detail, body, items, context }: { detail: Detail; b
 
 function PlanEditor({
   body,
-  original,
   context,
   items,
+  edit,
   onChange,
   onClose,
 }: {
   body: PlanBody;
-  original: PlanBody;
   context: WorkBodyContext;
   items: readonly ProjectWorkListItem[];
+  edit: ReturnType<typeof useWorkEditSession<PlanBody>>;
   onChange: (body: PlanBody) => void;
   onClose: () => void;
 }) {
-  const [saving, setSaving] = useState(false);
-  const [title, setTitle] = useState(context.detail.revision.title);
+  const [title, setTitle] = useState(edit.owner?.baseTitle ?? context.detail.revision.title);
   const [error, setError] = useState<string>();
   const taskKeys = items.filter((item) => item.kind === "task").map((item) => item.key);
-  const changed = JSON.stringify(body) !== JSON.stringify(original) || title.trim() !== context.detail.revision.title;
+  const original = edit.owner?.baseBody ?? body;
+  const changed = JSON.stringify(body) !== JSON.stringify(original) || title.trim() !== edit.owner?.baseTitle;
 
   const save = async (): Promise<void> => {
-    if (!context.store) return;
-    const parsed = projectWorkBodySchema.safeParse({ kind: "plan", plan: body });
+    const submitted = structuredClone(body);
+    const submittedTitle = title.trim();
+    const parsed = projectWorkBodySchema.safeParse({ kind: "plan", plan: submitted });
     if (!parsed.success) {
       setError("Some plan fields are incomplete. Finish or remove the incomplete row before saving.");
       return;
     }
     const known = new Map(items.map((item) => [item.key, { kind: item.kind, state: item.state, entityId: item.ref.entityId, title: item.title }]));
-    const report = validatePlanGraph({ phases: body.phases, dependencies: body.dependencies, known });
+    const report = validatePlanGraph({ phases: submitted.phases, dependencies: submitted.dependencies, known });
     if (!report.ok) {
       setError(report.problems[0]?.message ?? "The dependency graph has a problem that must be fixed before saving.");
       return;
     }
-    setSaving(true);
     setError(undefined);
-    const outcome = await context.store.revise(
-      { entityId: context.detail.entity.entityId, expectedRevisionId: context.detail.revision.revisionId },
-      { kind: "plan", plan: body },
-      title.trim() !== context.detail.revision.title ? { title: title.trim() } : {},
-    );
-    setSaving(false);
-    if (!outcome.ok) {
-      setError(`${outcome.failure.message} Your draft is still here.`);
+    const settled = await edit.submit((base) => base.store.revise(
+      { entityId: base.entityId, expectedRevisionId: base.baseRevisionId },
+      { kind: "plan", plan: submitted },
+      submittedTitle !== base.baseTitle ? { title: submittedTitle } : {},
+    ));
+    if (settled.kind === "blocked") {
+      setError(`${context.readOnlyReason ?? "This draft can no longer be saved from here."} Your draft is still here.`);
+      return;
+    }
+    if (settled.kind === "ignored") return;
+    if (!settled.value.ok) {
+      setError(`${settled.value.failure.message} Your draft is still here.`);
       return;
     }
     onClose();
@@ -290,16 +297,19 @@ function PlanEditor({
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
         <Badge variant="outline">{body.phases.length} phases · {taskKeys.length} available tasks</Badge>
         <span className="text-xs leading-xs text-ink-3">Plan structure and prose become one fenced child revision.</span>
-        <span className="ms-auto flex items-center gap-1.5">
-          <Button size="sm" variant="ghost" disabled={saving} onClick={onClose}><X />Cancel</Button>
-          <Button size="sm" disabled={saving || !changed || title.trim() === ""} onClick={() => void save()}><Check />{saving ? "Saving…" : "Save as a new revision"}</Button>
-        </span>
+        {!context.compact ? (
+          <span className="ms-auto flex items-center gap-1.5">
+            <Button size="sm" variant="ghost" disabled={edit.pending} onClick={onClose}><X />Cancel</Button>
+            <Button size="sm" disabled={!edit.canSubmit || !changed || title.trim() === ""} onClick={() => void save()}><Check />{edit.pending ? "Saving…" : "Save as a new revision"}</Button>
+          </span>
+        ) : null}
       </div>
+      <WorkEditNewerNotice show={edit.newerRevision} />
       {error ? <p role="alert" className="rounded-lg border border-danger/40 p-3 text-sm leading-5 text-danger">{error}</p> : null}
+      <WorkEditFields locked={edit.locked}>
       <Field label="Title" htmlFor="plan-title">
         <Input id="plan-title" value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} />
       </Field>
-      <MarkdownEditorActivationProvider active>
         <MarkdownAuthoringField editorKey="plan-brief" label="Brief" value={body.brief} onChange={(brief) => onChange({ ...body, brief })} placeholder="What does this plan deliver?" />
 
         <Field label="Phases" hint="A task can appear in one phase. Dependency order remains a separate fact.">
@@ -358,7 +368,15 @@ function PlanEditor({
         <LineListField label="Verification commands" values={body.verification} onChange={(verification) => onChange({ ...body, verification })} placeholder="pnpm …" addLabel="Add a command" />
         <MarkdownAuthoringField editorKey="plan-rollback" label="Rollback" value={body.rollback ?? ""} onChange={(rollback) => onChange({ ...body, rollback })} placeholder="How can this be undone?" />
         <MarkdownAuthoringField editorKey="plan-document" label="Document" value={body.document ?? ""} onChange={(document) => onChange({ ...body, document })} placeholder="The full plan in Markdown" />
-      </MarkdownEditorActivationProvider>
+      </WorkEditFields>
+      <WorkEditFooter
+        compact={context.compact}
+        pending={edit.pending}
+        canSave={edit.canSubmit && changed && title.trim() !== ""}
+        saveLabel="Save as a new revision"
+        onCancel={onClose}
+        onSave={() => void save()}
+      />
     </div>
   );
 }

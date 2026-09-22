@@ -416,6 +416,22 @@ describe("DesignDetail", () => {
     expect(container.querySelector('[data-slot="design-full-screen"] [data-slot="design-prototype"]')).not.toBeNull();
   });
 
+  it("keeps a started edit frozen with safe compact Save and Cancel actions after a resize", async () => {
+    const body = designFixture();
+    const context = contextFor(body);
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={context} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
+    await settle();
+    await click(button("Edit brief"));
+    await editCode("Brief", "A resize-safe **draft**.");
+    await act(async () => root.render(<LaserStoreProvider store={designStore}><TooltipProvider><DesignDetail body={body} context={{ ...context, compact: true }} index={indexFixture()} /></TooltipProvider></LaserStoreProvider>));
+    await settle();
+    expect(container.querySelector('[data-slot="work-edit-footer"]')).not.toBeNull();
+    expect(container.querySelector<HTMLElement>('.cm-content[aria-label="Brief"]')?.getAttribute("contenteditable")).toBe("false");
+    expect(container.querySelector<HTMLInputElement>("#design-title")?.disabled).toBe(true);
+    await click(button("Save revision"));
+    expect(calls.find((call) => call.method === "project/work/revise")?.params.expectedRevisionId).toBe("r1");
+  });
+
   it("authors the brief in Write and Preview without replacing the design structure", async () => {
     const body = designFixture();
     const context = contextFor(body);

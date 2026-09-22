@@ -86,8 +86,11 @@ const click = async (element: Element | null | undefined): Promise<void> => {
   });
 };
 const editCode = async (label: string, value: string): Promise<void> => {
-  await act(async () => { await settle(100); });
-  const editor = document.body.querySelector<HTMLElement>(`.cm-content[aria-label="${label}"]`);
+  let editor: HTMLElement | null = null;
+  for (let attempt = 0; attempt < 40 && !editor; attempt += 1) {
+    await act(async () => { await settle(25); });
+    editor = document.body.querySelector<HTMLElement>(`.cm-content[aria-label="${label}"]`);
+  }
   expect(editor).not.toBeNull();
   await act(async () => {
     const view = EditorView.findFromDOM(editor!);
@@ -353,8 +356,9 @@ describe("task authoring", () => {
     });
     const value = detail({ kind: "task", number: 44, body: { kind: "task", task: source }, evidence: [evidence({ evidenceId: "ev1" })] });
     const store = makeStore();
-    await act(async () => root.render(<TaskDetail store={store} detail={value} body={source} items={rows} context={{ store, detail: value, editable: true, onChanged: vi.fn(), items: rows }} />));
+    await act(async () => root.render(<TaskDetail store={store} detail={value} body={source} items={rows} context={{ store, detail: value, editable: true, onChanged: vi.fn(), items: rows, compact: true }} />));
     await click(button("Edit task"));
+    expect(document.body.querySelector('[data-slot="work-edit-footer"]')).not.toBeNull();
     await editCode("Outcome", "Ship the **complete** board.");
     expect(document.body.querySelectorAll(".cm-editor")).toHaveLength(1);
     await click(button("Preview"));

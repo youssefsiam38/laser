@@ -8,7 +8,7 @@
  * keyboard, 44px under a coarse pointer, and made of tokens.
  */
 import { Plus, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -131,6 +131,9 @@ export function LineListField({
   );
 }
 
+let proseRowCounter = 0;
+const proseRowId = (): string => `prose-row-${++proseRowCounter}`;
+
 /** An ordered prose list: every row gets the same highlighted Write/Preview path. */
 export function MarkdownListField({
   label,
@@ -149,29 +152,43 @@ export function MarkdownListField({
   addLabel: string;
   editorKey: string;
 }) {
+  // IDs belong only to this draft UI; protocol rows remain plain strings. A
+  // removal must move the surviving editor, including its undo and selection,
+  // rather than handing that state to whichever value inherits its index.
+  const rowIds = useRef<string[]>([]);
+  while (rowIds.current.length < values.length) rowIds.current.push(proseRowId());
+  if (rowIds.current.length > values.length) rowIds.current.length = values.length;
   const set = (index: number, value: string): void => onChange(values.map((existing, at) => (at === index ? value : existing)));
+  const remove = (index: number): void => {
+    rowIds.current = rowIds.current.filter((_, at) => at !== index);
+    onChange(values.filter((_, at) => at !== index));
+  };
+  const add = (): void => {
+    rowIds.current.push(proseRowId());
+    onChange([...values, ""]);
+  };
   return (
     <Field label={label} hint={hint}>
       <ul role="list" className="flex flex-col gap-2">
         {values.map((value, index) => (
-          <li key={index} className="flex min-w-0 items-start gap-1.5 rounded-lg border border-line p-2">
+          <li key={rowIds.current[index]} data-row-id={rowIds.current[index]} className="flex min-w-0 items-start gap-1.5 rounded-lg border border-line p-2">
             <div className="min-w-0 flex-1">
               <MarkdownAuthoringField
-                editorKey={`${editorKey}-${index}`}
+                editorKey={`${editorKey}-${rowIds.current[index]}`}
                 label={`${label} ${index + 1}`}
                 value={value}
                 onChange={(next) => set(index, next)}
                 placeholder={placeholder}
               />
             </div>
-            <Button size="icon-sm" variant="ghost" aria-label={`Remove ${label.toLocaleLowerCase()} ${index + 1}`} onClick={() => onChange(values.filter((_, at) => at !== index))}>
+            <Button size="icon-sm" variant="ghost" aria-label={`Remove ${label.toLocaleLowerCase()} ${index + 1}`} onClick={() => remove(index)}>
               <X />
             </Button>
           </li>
         ))}
       </ul>
       <div>
-        <Button size="xs" variant="outline" onClick={() => onChange([...values, ""])}>
+        <Button size="xs" variant="outline" onClick={add}>
           <Plus />
           {addLabel}
         </Button>

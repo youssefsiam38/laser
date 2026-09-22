@@ -40,8 +40,11 @@ const button = (label: string): HTMLButtonElement | undefined => buttons().find(
 const query = <T extends Element = HTMLElement>(selector: string): T | null => document.body.querySelector<T>(selector);
 
 const editCode = async (label: string, value: string): Promise<EditorView> => {
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
-  const content = document.body.querySelector<HTMLElement>(`.cm-content[aria-label="${label}"]`);
+  let content: HTMLElement | null = null;
+  for (let attempt = 0; attempt < 40 && !content; attempt += 1) {
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)); });
+    content = document.body.querySelector<HTMLElement>(`.cm-content[aria-label="${label}"]`);
+  }
   expect(content).not.toBeNull();
   const view = EditorView.findFromDOM(content!);
   await act(async () => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } }));
@@ -131,6 +134,18 @@ async function mount(node: React.ReactNode): Promise<void> {
 }
 
 describe("editing a spec", () => {
+  it("names what a sparse Full spec still needs and keeps Edit as the next action", async () => {
+    const host: Host = { calls: [], conflictOnce: false, currentRevisionId: "r1" };
+    const store = makeStore(host);
+    await store.open();
+    const sparse = specFixture({ form: "full", problem: undefined, outcomes: [], requirements: [], acceptance: [] });
+    await mount(<SpecDocument body={sparse} context={{ store, detail: detail(), editable: true, onChanged: () => {}, items: [] }} />);
+    expect(text()).toContain("Still missing");
+    expect(text()).toContain("problem");
+    expect(text()).toContain("acceptance criteria");
+    expect(query('[data-slot="spec-edit"]')).not.toBeNull();
+  });
+
   it("renders authored prose as safe Markdown before editing", async () => {
     const host: Host = { calls: [], conflictOnce: false, currentRevisionId: "r1" };
     const store = makeStore(host);

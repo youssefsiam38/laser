@@ -72,4 +72,5 @@ it("opens the existing Inspector as a sheet from a narrow opened detail", async 
   expect(sheet).not.toBeNull();
   expect(sheet?.querySelector("[data-slot='work-inspector']")).not.toBeNull();
   expect(sheet?.textContent).toContain("This item");
+  expect(sheet!.textContent!.indexOf("Gate")).toBeLessThan(sheet!.textContent!.indexOf("This item"));
 });

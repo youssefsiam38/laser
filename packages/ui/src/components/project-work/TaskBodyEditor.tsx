@@ -10,48 +10,53 @@ import { Input } from "@/components/ui/input";
 
 import type { WorkBodyContext } from "./bodies/context.js";
 import { Field, LineListField, MarkdownListField } from "./bodies/editor-fields.js";
-import { MarkdownAuthoringField, MarkdownEditorActivationProvider } from "./MarkdownAuthoringField.js";
+import { MarkdownAuthoringField } from "./MarkdownAuthoringField.js";
+import { WorkEditFields, WorkEditFooter, WorkEditNewerNotice, useWorkEditSession } from "./edit-session.js";
 
 export function TaskBodyEditor({
   body,
-  original,
   context,
+  edit,
   items,
   agents,
   onChange,
   onClose,
 }: {
   body: ProjectTaskBody;
-  original: ProjectTaskBody;
   context: WorkBodyContext;
+  edit: ReturnType<typeof useWorkEditSession<ProjectTaskBody>>;
   items: readonly ProjectWorkListItem[];
   agents: readonly { name: string }[];
   onChange: (body: ProjectTaskBody) => void;
   onClose: () => void;
 }) {
-  const [saving, setSaving] = useState(false);
-  const [title, setTitle] = useState(context.detail.revision.title);
+  const [title, setTitle] = useState(edit.owner?.baseTitle ?? context.detail.revision.title);
   const [error, setError] = useState<string>();
-  const changed = JSON.stringify(body) !== JSON.stringify(original) || title.trim() !== context.detail.revision.title;
+  const original = edit.owner?.baseBody ?? body;
+  const changed = JSON.stringify(body) !== JSON.stringify(original) || title.trim() !== edit.owner?.baseTitle;
   const tasks = items.filter((item) => item.kind === "task" && item.ref.entityId !== context.detail.entity.entityId);
   const plans = items.filter((item) => item.kind === "plan");
 
   const save = async (): Promise<void> => {
-    if (!context.store) return;
-    if (!projectWorkBodySchema.safeParse({ kind: "task", task: body }).success) {
+    const submitted = structuredClone(body);
+    const submittedTitle = title.trim();
+    if (!projectWorkBodySchema.safeParse({ kind: "task", task: submitted }).success) {
       setError("Some task fields are incomplete. Finish or remove the incomplete row before saving.");
       return;
     }
-    setSaving(true);
     setError(undefined);
-    const outcome = await context.store.revise(
-      { entityId: context.detail.entity.entityId, expectedRevisionId: context.detail.revision.revisionId },
-      { kind: "task", task: body },
-      title.trim() !== context.detail.revision.title ? { title: title.trim() } : {},
-    );
-    setSaving(false);
-    if (!outcome.ok) {
-      setError(`${outcome.failure.message} Your draft is still here.`);
+    const settled = await edit.submit((base) => base.store.revise(
+      { entityId: base.entityId, expectedRevisionId: base.baseRevisionId },
+      { kind: "task", task: submitted },
+      submittedTitle !== base.baseTitle ? { title: submittedTitle } : {},
+    ));
+    if (settled.kind === "blocked") {
+      setError(`${context.readOnlyReason ?? "This draft can no longer be saved from here."} Your draft is still here.`);
+      return;
+    }
+    if (settled.kind === "ignored") return;
+    if (!settled.value.ok) {
+      setError(`${settled.value.failure.message} Your draft is still here.`);
       return;
     }
     onClose();
@@ -63,17 +68,20 @@ export function TaskBodyEditor({
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
         <Badge variant="outline">{body.acceptance.length} acceptance criteria · {body.dependencies.length} dependencies</Badge>
         <span className="text-xs leading-xs text-ink-3">Task scope, assignment and prose become one fenced child revision.</span>
-        <span className="ms-auto flex items-center gap-1.5">
-          <Button size="sm" variant="ghost" disabled={saving} onClick={onClose}><X />Cancel</Button>
-          <Button size="sm" disabled={saving || !changed || title.trim() === ""} onClick={() => void save()}><Check />{saving ? "Saving…" : "Save as a new revision"}</Button>
-        </span>
+        {!context.compact ? (
+          <span className="ms-auto flex items-center gap-1.5">
+            <Button size="sm" variant="ghost" disabled={edit.pending} onClick={onClose}><X />Cancel</Button>
+            <Button size="sm" disabled={!edit.canSubmit || !changed || title.trim() === ""} onClick={() => void save()}><Check />{edit.pending ? "Saving…" : "Save as a new revision"}</Button>
+          </span>
+        ) : null}
       </div>
+      <WorkEditNewerNotice show={edit.newerRevision} />
       {error ? <p role="alert" className="rounded-lg border border-danger/40 p-3 text-sm leading-5 text-danger">{error}</p> : null}
 
+      <WorkEditFields locked={edit.locked}>
       <Field label="Title" htmlFor="task-title">
         <Input id="task-title" value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} />
       </Field>
-      <MarkdownEditorActivationProvider active>
         <MarkdownAuthoringField editorKey="task-outcome" label="Outcome" value={body.outcome} onChange={(outcome) => onChange({ ...body, outcome })} placeholder="What is true when this task is done?" />
         <MarkdownListField
           editorKey="task-non-goal"
@@ -158,7 +166,15 @@ export function TaskBodyEditor({
           Visual evidence is required
         </label>
         <MarkdownAuthoringField editorKey="task-notes" label="Notes" value={body.notes ?? ""} onChange={(notes) => onChange({ ...body, notes })} placeholder="Context that should travel with the task" />
-      </MarkdownEditorActivationProvider>
+      </WorkEditFields>
+      <WorkEditFooter
+        compact={context.compact}
+        pending={edit.pending}
+        canSave={edit.canSubmit && changed && title.trim() !== ""}
+        saveLabel="Save as a new revision"
+        onCancel={onClose}
+        onSave={() => void save()}
+      />
     </div>
   );
 }

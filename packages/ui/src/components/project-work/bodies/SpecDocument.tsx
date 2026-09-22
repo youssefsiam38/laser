@@ -33,7 +33,6 @@ import {
   newCriterion,
   newRequirement,
   REQUIREMENT_LEVELS,
-  sameSpecBody,
   specBodyFrom,
   specBodyText,
   specDraft,
@@ -42,7 +41,8 @@ import {
   SPEC_FORM_LABEL,
 } from "@/project-work/spec";
 
-import { MarkdownAuthoringField, MarkdownEditorActivationProvider } from "../MarkdownAuthoringField.js";
+import { MarkdownAuthoringField } from "../MarkdownAuthoringField.js";
+import { WorkEditFields, WorkEditNewerNotice, useWorkEditSession } from "../edit-session.js";
 import type { WorkBodyContext } from "./context.js";
 import { Field, MarkdownField, MarkdownListField, Segmented, TextField } from "./editor-fields.js";
 import { SpecBodyView } from "./index.js";
@@ -60,35 +60,47 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
   const { actions } = useLaserStable();
   const [draft, setDraft] = useState<SpecBody | undefined>(undefined);
   const [title, setTitle] = useState(context.detail.revision.title);
-  const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState<Conflict | undefined>(undefined);
   const [difference, setDifference] = useState(false);
 
-  const entityId = context.detail.entity.entityId;
-  const revisionId = context.detail.revision.revisionId;
+  const edit = useWorkEditSession<SpecBody>(context);
 
   const start = useCallback(() => {
-    setDraft(specDraft(body));
-    setTitle(context.detail.revision.title);
+    const owner = edit.begin(body);
+    if (!owner) return;
+    setDraft(specDraft(owner.baseBody));
+    setTitle(owner.baseTitle);
     setConflict(undefined);
-  }, [body, context.detail.revision.title]);
+  }, [body, edit.begin]);
 
   const stop = useCallback(() => {
+    if (!edit.cancel()) return;
     setDraft(undefined);
     setConflict(undefined);
     setDifference(false);
-  }, []);
+  }, [edit.cancel]);
 
   const write = useCallback(
-    async (expectedRevisionId: string, next: SpecBody, note: string | undefined) => {
-      if (!context.store) return;
-      setSaving(true);
-      const outcome = await context.store.revise(
-        { entityId, expectedRevisionId },
-        { kind: "spec", spec: specBodyFrom(next) },
-        { ...(title.trim() && title.trim() !== context.detail.revision.title ? { title: title.trim() } : {}), ...(note ? { note } : {}) },
-      );
-      setSaving(false);
+    async (expectedRevisionId: string | undefined, next: SpecBody, note: string | undefined) => {
+      const submitted = specBodyFrom(structuredClone(next));
+      const submittedTitle = title.trim();
+      const settled = await edit.submit(async (base) => {
+        const outcome = await base.store.revise(
+          { entityId: base.entityId, expectedRevisionId: expectedRevisionId ?? base.baseRevisionId },
+          { kind: "spec", spec: submitted },
+          { ...(submittedTitle && submittedTitle !== base.baseTitle ? { title: submittedTitle } : {}), ...(note ? { note } : {}) },
+        );
+        const current = outcome.ok || outcome.failure.kind !== "conflict"
+          ? undefined
+          : await base.store.get({ entityId: base.entityId, body: { mode: "full" } });
+        return { outcome, current };
+      });
+      if (settled.kind === "blocked") {
+        actions.toast("error", context.readOnlyReason ?? "This draft can no longer be saved from here.");
+        return;
+      }
+      if (settled.kind === "ignored") return;
+      const { outcome, current } = settled.value;
       if (outcome.ok) {
         actions.toast("info", `${context.detail.entity.key} · revision ${outcome.value.revision.index} saved`);
         stop();
@@ -101,19 +113,18 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
       }
       // Somebody else wrote while this was open. Read what is current now, so
       // the difference is between two real revisions and not a guess.
-      const current = await context.store.get({ entityId, body: { mode: "full" } });
-      const theirsBody = current.ok ? current.value.body?.body : undefined;
+      const theirsBody = current?.ok ? current.value.body?.body : undefined;
       setConflict({
         message: outcome.failure.message,
         current: outcome.failure.current,
         theirs: theirsBody?.kind === "spec" ? theirsBody.spec : undefined,
-        theirsRevisionId: current.ok ? current.value.revision.revisionId : outcome.failure.current?.revisionId,
+        theirsRevisionId: current?.ok ? current.value.revision.revisionId : outcome.failure.current?.revisionId,
       });
     },
-    [actions, context, entityId, stop, title],
+    [actions, context.detail.entity.key, context.onChanged, context.readOnlyReason, edit.submit, stop, title],
   );
 
-  if (!draft) {
+  if (!draft || !edit.matches) {
     return (
       <div className="flex flex-col gap-4">
         <SpecToolbar body={body} editable={context.editable} reason={context.readOnlyReason} onEdit={start} />
@@ -123,17 +134,17 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
   }
 
   const gaps = fullSpecGaps(specBodyFrom(draft));
-  const unchanged = sameSpecBody(specBodyFrom(draft), body) && title.trim() === context.detail.revision.title;
+  const unchanged = JSON.stringify(specBodyFrom(draft)) === JSON.stringify(edit.owner?.baseBody ?? body) && title.trim() === edit.owner?.baseTitle;
 
   const actionButtons = (
     <>
-      <Button size="sm" variant="ghost" onClick={stop} disabled={saving}>
+      <Button size="sm" variant="ghost" onClick={stop} disabled={edit.pending}>
         <X />
         Cancel
       </Button>
-      <Button size="sm" disabled={saving || !specIsWritable(draft) || unchanged} onClick={() => void write(revisionId, draft, undefined)}>
+      <Button size="sm" disabled={!edit.canSubmit || !specIsWritable(draft) || unchanged} onClick={() => void write(undefined, draft, undefined)}>
         <Check />
-        {saving ? "Saving…" : "Save as a new revision"}
+        {edit.pending ? "Saving…" : "Save as a new revision"}
       </Button>
     </>
   );
@@ -156,10 +167,13 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
         {context.compact ? null : <span className="ms-auto flex items-center gap-1.5">{actionButtons}</span>}
       </div>
 
+      <WorkEditNewerNotice show={edit.newerRevision} />
+
       {conflict ? (
         <ConflictBanner
           conflict={conflict}
           mine={specBodyFrom(draft)}
+          pending={edit.pending}
           onViewDifference={() => setDifference(true)}
           onKeepMine={() => {
             const expected = conflict.theirsRevisionId;
@@ -171,15 +185,15 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
 
       {unchanged ? null : (
         <p className="text-xs leading-xs text-ink-3">
-          Saving writes revision {context.detail.entity.revisionCount + 1}. Revision {context.detail.revision.index} stays exactly as it is.
+          Saving requests a new child revision. Revision {edit.owner?.baseRevisionIndex ?? context.detail.revision.index} stays exactly as it is.
         </p>
       )}
 
+      <WorkEditFields locked={edit.locked}>
       <Field label="Title" htmlFor="spec-title">
         <Input id="spec-title" value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} className="text-sm" />
       </Field>
 
-      <MarkdownEditorActivationProvider active>
       <TextField
         editorKey="brief"
         label="Brief"
@@ -239,15 +253,15 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
         onChange={(document) => setDraft({ ...draft, document })}
         placeholder="The long form, in Markdown. Headings, lists, code — the same renderer the conversation uses."
       />
-      </MarkdownEditorActivationProvider>
+      </WorkEditFields>
 
       {context.compact ? (
-        <div
+        <footer
           data-slot="spec-editor-footer"
           className="sticky bottom-0 z-10 -mx-3 flex items-center justify-end gap-1.5 border-t border-line bg-bg px-3 py-2 pb-[max(var(--spacing)*2,env(safe-area-inset-bottom))]"
         >
           {actionButtons}
-        </div>
+        </footer>
       ) : null}
 
       <DifferenceDialog
@@ -295,11 +309,13 @@ function SpecToolbar({
 function ConflictBanner({
   conflict,
   mine,
+  pending,
   onViewDifference,
   onKeepMine,
 }: {
   conflict: Conflict;
   mine: SpecBody;
+  pending: boolean;
   onViewDifference: () => void;
   onKeepMine: () => void;
 }) {
@@ -323,7 +339,7 @@ function ConflictBanner({
           <FileDiff />
           View the difference
         </Button>
-        <Button size="xs" onClick={onKeepMine} disabled={!conflict.theirsRevisionId}>
+        <Button size="xs" onClick={onKeepMine} disabled={pending || !conflict.theirsRevisionId}>
           Keep mine as a new revision
         </Button>
       </div>
