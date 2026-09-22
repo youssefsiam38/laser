@@ -226,6 +226,56 @@ describe("SessionTelemetryCoordinator", () => {
     }
   });
 
+  it("refreshes the interested ancestor on its own worker, not the child or unrelated worker", async () => {
+    const parent = "/parent.jsonl";
+    const child = "/child.jsonl";
+    const unrelated = "/unrelated.jsonl";
+    const runs = new AgentRunRegistry();
+    runs.upsert(run(parent, child));
+    const makeWorker = (generation: string) => ({
+      generation,
+      request: vi.fn(async (method: string, params: unknown) => {
+        if (method === "pi/session/telemetry/invalidate") return { generation: (params as { generation: number }).generation };
+        const source = (params as { snapshot: TelemetryChildSpendSnapshot }).snapshot;
+        return { telemetry: telemetry(source.generation), generation: source.generation, applied: true, published: true };
+      }),
+    });
+    const parentWorker = makeWorker("parent-worker");
+    const childWorker = makeWorker("child-worker");
+    const unrelatedWorker = makeWorker("unrelated-worker");
+    const owners = new Map([
+      [parent, parentWorker], [child, childWorker], [unrelated, unrelatedWorker],
+    ]);
+    const reader = {
+      environmentKey: "e1.test",
+      childSnapshot: async (path: string, generation: number) => snapshot(path, generation),
+    } as unknown as SessionTelemetryReader;
+    const coordinator = new SessionTelemetryCoordinator({
+      reader, runs, owner: (path) => owners.get(path) as unknown as WorkerClient | undefined, coalesceMs: 1,
+    });
+    try {
+      for (const [path, worker] of owners) {
+        await coordinator.read(worker as unknown as WorkerClient, { path, include: ["spend"] });
+        worker.request.mockClear();
+      }
+      coordinator.childChanged(child);
+      await vi.waitFor(() => expect(parentWorker.request).toHaveBeenCalledTimes(2));
+      expect(parentWorker.request.mock.calls[0]?.[0]).toBe("pi/session/telemetry/invalidate");
+      expect(parentWorker.request.mock.calls[1]).toEqual([
+        "pi/session/telemetry/with-sources",
+        expect.objectContaining({ path: parent, subscribe: false, publishIfWanted: true }),
+      ]);
+      expect(childWorker.request).not.toHaveBeenCalled();
+      expect(unrelatedWorker.request).not.toHaveBeenCalled();
+      expect(coordinator.isDirty(parent)).toBe(false);
+      coordinator.childChanged("/cold.jsonl");
+      expect(coordinator.retainedScopes()).toBe(3);
+    } finally {
+      coordinator.close();
+      runs.close();
+    }
+  });
+
   it("allocates only for interested scopes and tears them down on rekey and worker loss", async () => {
     const parent = "/parent.jsonl";
     const child = "/child.jsonl";

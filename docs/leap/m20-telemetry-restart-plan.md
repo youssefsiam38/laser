@@ -321,3 +321,31 @@ After the correction:
 - `pnpm identity:check`: passed.
 
 One focused host run initially exposed that the router fallback test double did not publish the worker it had just spawned through `ownerOfSession`; the double now models production ownership, and the complete 48-test host command passes. The conservative partial-baseline limitation above remains intentional. The parent still owns `pnpm verify`, release validation, and publication.
+
+## Final parent review triage
+
+The single independent review (`6f557f7a`) found no blocking issues. The person
+requested parent-owned corrections without another review round.
+
+- F1: original serialized membership now survives trimming in a separate bounded
+  path set. A later live run cannot count a trimmed canonical child twice.
+- F2: removed the unused full-fold `TelemetryChildSource`/`children` merge surface;
+  the existing protocol arithmetic test now uses compact `childSpend`.
+- F4: clarification to the original policy wording: the three internal methods
+  have **native-only** policy inventory entries, not public capability grants.
+  Router rejects them for client requests, including local and paired clients.
+- F5: added an explicit coordinator test with separate parent, child and unrelated
+  worker owners. Child invalidation refreshes only the interested parent worker;
+  unrelated/cold signals allocate no new interest. This tests coordinator routing,
+  not a second multi-process production scenario.
+- F6: correction generations travel only on the live notification copy, not the
+  buffered client replay copy. A WorkerServer dispatch/reload regression verifies
+  live freshness fencing and absence of the private field on replay.
+- F3: bounded repeated encoding remains an explicit efficiency limitation, not
+  a correctness blocker. No unmeasured incremental-byte optimization is added
+  during final release correction; source/model/envelope ceilings remain enforced.
+
+F1 and F6 were independently reproduced before correction: worker scope had
+2 failing / 10 passing tests (`/tmp/laser-final-spend-red.log`). The accepted
+partial-baseline, registry-retention, synthetic-state exclusion and moved-read
+limitations remain unchanged. Browser/person acceptance has not been performed.

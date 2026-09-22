@@ -174,12 +174,6 @@ export interface SessionTelemetryParams {
   revision?: string;
 }
 
-export interface TelemetryChildSource {
-  /** `provider/id` when the run recorded a model. Sets billing even with no usage. */
-  model?: string;
-  fold?: TelemetryFoldState;
-}
-
 /** Only fields consumed while merging child spend; no history/series cross the pipe. */
 export interface TelemetryChildSpendFold {
   billingApi: boolean;
@@ -642,13 +636,6 @@ function mergeChildSpend(
   }
 }
 
-function mergeChild(state: TelemetryFoldState, child: TelemetryChildSource): void {
-  mergeChildSpend(state, {
-    ...(child.model ? { model: child.model } : {}),
-    ...(child.fold ? { spend: childSpendFoldOf(child.fold) } : {}),
-  });
-}
-
 function billingOf(state: TelemetryFoldState, overlay?: TelemetryLiveOverlay): SessionBillingMode {
   let api = state.billingApi;
   let account = state.billingAccount;
@@ -685,13 +672,11 @@ export function sessionTelemetryOf(
     scope?: TelemetryScope;
     turnId?: string;
     overlay?: TelemetryLiveOverlay;
-    children?: readonly TelemetryChildSource[];
     childSpend?: readonly TelemetryChildSpendSource[];
     coverage?: TelemetrySpendCoverage;
   } = {},
 ): SessionTelemetry {
   const state = cloneState(fold);
-  for (const child of options.children ?? []) mergeChild(state, child);
   for (const child of options.childSpend ?? []) mergeChildSpend(state, child);
   const include = options.include;
   const overlay = options.overlay;

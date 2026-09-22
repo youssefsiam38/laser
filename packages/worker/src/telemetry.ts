@@ -204,6 +204,7 @@ export class ChildTelemetryCache {
   ): ResolvedChildSpend {
     const sources = new Map(snapshot.sources.map((source) => [source.sessionPath, structuredClone(source)]));
     const coverage = { ...snapshot.coverage };
+    const canonicalPaths = new Set(sources.keys());
     const serializedMembershipComplete = snapshot.coverage.knownChildren === snapshot.sources.length;
     const sourceLimit = this.limits.sources ?? TELEMETRY_CHILD_SOURCE_MAX;
     const modelLineLimit = this.limits.modelLines ?? TELEMETRY_CHILD_MODEL_LINE_MAX;
@@ -214,8 +215,9 @@ export class ChildTelemetryCache {
       seen.add(run.sessionPath);
       const canonical = sources.get(run.sessionPath);
       // An absent path in a partial membership snapshot may be a host-known
-      // child omitted by a bound. Adding it would count that child twice.
-      if (!canonical && !serializedMembershipComplete) continue;
+      // child omitted by a bound, including one trimmed earlier in this loop.
+      // Adding it would count that child twice.
+      if (!canonical && (!serializedMembershipComplete || canonicalPaths.has(run.sessionPath))) continue;
       const entries = liveEntries(run.sessionPath);
       if (!entries) continue;
       const fold = this.liveFolds.get(run.sessionPath) ?? TelemetryFold.create();

@@ -3486,13 +3486,16 @@ export class WorkerServer {
               const telemetry = this.sessionTelemetry(live, snapshot, { revision, environmentKey });
               if (telemetry) {
                 params.telemetry = telemetry;
-                if (telemetryGeneration !== undefined) params.telemetryGeneration = telemetryGeneration;
               }
             } catch { /* a turn still streams; the next fold will carry numbers */ }
           }
         }
         live.buffer.push(params);
-        this.notify("session/update", params);
+        // The freshness marker belongs only to the host's live publication
+        // fence, never to the client-visible replay suffix.
+        this.notify("session/update", telemetryGeneration !== undefined && params.telemetry
+          ? { ...params, telemetryGeneration }
+          : params);
         // The run is over: whatever the person wrote while it ran goes in now,
         // in the order they wrote it. Fire and forget — a delivery that fails
         // keeps its message and its reason in the tray, and says so there.

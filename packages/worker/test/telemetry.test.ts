@@ -246,6 +246,23 @@ describe("host baseline plus live child overlay", () => {
     expectStrictSnapshot(staleBaseline, byteResolved);
   });
 
+  it("does not recount canonical membership removed by byte trimming", () => {
+    const root = "/root.jsonl";
+    const paths = ["/a.jsonl", "/b.jsonl", "/c.jsonl", "/d.jsonl", "/e.jsonl", "/f.jsonl"];
+    const baseline: TelemetryChildSpendSnapshot = {
+      scopeSessionPath: root, generation: 1,
+      sources: paths.map((path) => spendSource(path, 1)),
+      coverage: { knownChildren: 6, includedChildren: 6, unavailableChildren: 0 },
+    };
+    const resolved = new ChildTelemetryCache({ bytes: 250 }).resolve(baseline, [
+      run({ runId: "new", sessionPath: "/g.jsonl", rootSessionPath: root, status: "running" }),
+      run({ runId: "existing", sessionPath: "/f.jsonl", rootSessionPath: root, status: "running" }),
+    ], () => childEntries(9));
+    expect(resolved.coverage).toEqual({ knownChildren: 7, includedChildren: 0, unavailableChildren: 7 });
+    expect(new TextEncoder().encode(JSON.stringify({ ...baseline, ...resolved })).byteLength).toBeLessThanOrEqual(250);
+    expectStrictSnapshot(baseline, resolved);
+  });
+
   it("replaces one unavailable canonical child once across duplicate active runs", () => {
     const cache = new ChildTelemetryCache();
     const snapshot: TelemetryChildSpendSnapshot = {

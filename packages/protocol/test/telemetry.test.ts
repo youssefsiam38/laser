@@ -3,6 +3,7 @@ import {
   TELEMETRY_SERIES_MAX,
   TELEMETRY_TOOL_HISTOGRAM_TOP,
   TelemetryFold,
+  childSpendFoldOf,
   downsampleSeries,
   runsBeneathSession,
   sessionTelemetryOf,
@@ -166,14 +167,14 @@ describe("telemetry fold", () => {
     const child = fold([user("c-u", null), assistant("c-a", "c-u", { provider: "anthropic", model: "claude", input: 8, output: 2, cost: 0.2 })]);
     const mixed = sessionTelemetryOf(parent, fence, {
       include: ["spend"],
-      children: [{ model: "anthropic/claude", fold: child }],
+      childSpend: [{ sessionPath: "/child.jsonl", model: "anthropic/claude", spend: childSpendFoldOf(child) }],
     });
     expect(mixed.spend?.billing).toBe("mixed");
     expect(mixed.spend?.api?.totals).toMatchObject({ input: 8, output: 2, cost: 0.2, turns: 1 });
 
     const flagOnly = sessionTelemetryOf(parent, fence, {
       include: ["spend"],
-      children: [{ model: "anthropic/claude" }],
+      childSpend: [{ sessionPath: "/child.jsonl", model: "anthropic/claude" }],
     });
     expect(flagOnly.spend?.billing).toBe("mixed");
     expect(flagOnly.spend?.api).toBeUndefined();

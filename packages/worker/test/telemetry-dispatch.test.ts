@@ -130,6 +130,33 @@ describe("pi/session/telemetry through WorkerServer.handle", () => {
     await h.server.dispose();
   });
 
+  it("keeps correction generations on live notifications but out of replay", async () => {
+    const h = harness();
+    try {
+      await h.call(1, "session/new", { cwd: "/tmp/fake" });
+      h.drivers[0]!.history = { entries: [user, assistant], leafId: "a1" };
+      const path = "/tmp/fake/s1.jsonl";
+      const snapshot = {
+        scopeSessionPath: path, generation: 1, sources: [],
+        coverage: { knownChildren: 0, includedChildren: 0, unavailableChildren: 0 },
+      };
+      await h.call(2, "pi/session/telemetry/with-sources", { path, snapshot, subscribe: true });
+      await h.call(3, "pi/session/telemetry/with-sources", {
+        path, snapshot: { ...snapshot, generation: 2 }, subscribe: false, publishIfWanted: true,
+      });
+      const correction = h.updates().at(-1)!.params;
+      expect(correction.telemetryGeneration).toBe(2);
+      const before = h.updates().length;
+      const loaded = await h.call(4, "session/load", { path, fromSeq: correction.seq - 1 });
+      expect(loaded.error).toBeUndefined();
+      const replay = h.updates().slice(before).find((update) => update.params.seq === correction.seq);
+      expect(replay?.params.telemetry).toEqual(correction.telemetry);
+      expect(replay?.params).not.toHaveProperty("telemetryGeneration");
+    } finally {
+      await h.server.dispose();
+    }
+  });
+
   it("does not stream snapshots until a subscriber has asked", async () => {
     const h = harness();
     await h.call(1, "session/new", { cwd: "/tmp/fake" });

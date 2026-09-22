@@ -63,6 +63,8 @@ nothing in your repository until you say Start.
 ## Also in this release
 
 - Design's **Build index** action no longer crashes while sending its request.
+- Known child-session API spend survives worker restarts. Missing child records
+  show a partial subtotal, and account allowance stays separate from API cost.
 - Background work is called a **Command** everywhere a person reads it.
 - Scrolling up in a long conversation keeps working after a compaction.
 - A message to an agent that finished reopens it instead of calling it unknown.
