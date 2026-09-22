@@ -6052,7 +6052,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T20 | Cross-session continuity and recovery | done | leap integration | merged `a0db54b5` (`cfba7d09`,`9c9eca46`,`ded072cf`); host453 (`continuity.test.ts` 15)/protocol768/UI241 (`continuity.test.tsx` 7)/identity (`/tmp/laser-t20-parent.log`); red 9/14 without the fix (`/tmp/t20-red.log`); D-368 | see notes; IdentityNotice look and move-the-folder flow person-owned (T24) |
 | M21-T21 | Import, export and repository publication | done | leap integration | merged `23a3fa45`; build/typecheck/host224/UI34/identity; final strict UTF-8 correction interop61 + host typecheck/identity | see notes |
 | M21-T22 | Security, privacy, relay and resource hardening | done | leap integration | merged `fd77dfb9` (threat model `fd4f263f`, `docs/leap/m21-threat-model.md`); host400/worker232/UI359/protocol763/identity (`/tmp/laser-t22-parent.log`); G1/G5/G6/G7 red-before-fix; D-369 | see notes; G10 git-run registration deferred to M20 |
-| M21-T23 | Product-language and element reconciliation | in-progress | leap integration (reconciliation owner) | — | see notes |
+| M21-T23 | Product-language and element reconciliation | done | leap integration | merged `38552cc9` (6 commits); `docs/leap/m21-t23-reconciliation.md`, `docs/ux-elements.md` ledger, `docs/ux-fleet.md`/`agents.md`/`architecture.md` as-built; UI `product-language.test.ts` red→green; full UI 3384 pass (2 pre-existing T20 reds fixed by parent) | see notes; M17-T11 NOT absorbed (honest gap, three decisions pending); Research Command fleet wiring recorded as open |
 | M21-T24 | End-to-end project lifecycle acceptance | in-progress | leap integration (acceptance owner) | — | see notes |
 | M21-T25 | Release the project lifecycle leap | todo | — | — | `PLAN.md` M21 |
 | M21-T26 | Research phase: adapters, tools and loop | done | claude-2026-09-21-leap | `331962d4` (merged `170b1457`); `pnpm -F @lasercode/worker test` (1452 passed; `test/research/*` 100) · protocol 619 | see notes |
@@ -6143,6 +6143,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - Claimed. Deterministic half (owner): established React and non-React projects, greenfield, backend-only skip, design revision during Build, multiple sessions, cross-project mention — real host+worker+git fixtures, no browser. The browser matrix is the person's (D-342) and is listed as the open acceptance item with exact steps.
 
 #### M21-T23 notes
+- Parent fixed two T20 regressions the focused suites missed: IdentityNotice used Tailwind `animate-spin` (now `motion-safe:animate-busy`), and the capability-family map lacked `project/work/identity`/`relink`. M17-T11 remains a separate open task (decisions A/B/C in the reconciliation record); not part of M21 release scope by contract — recorded, not hidden.
 - Owner run_3230568d (session 01a0c686-598d-7358-a82e-60a6583b95e8), branch agents/reconcile-product-language-and-elements-3230568d, base 257b175a.
 - Claimed. Owner reconciles docs (D-140/D-147/goal/fleet), absorbs M17-T11, makes person surfaces say Command, and audits every claimed assistant-ui element row in docs/ux-elements.md as installed/mapped or rejected with reason. Write set: docs + UI copy/element mapping only; no host/protocol/worker source.
 
