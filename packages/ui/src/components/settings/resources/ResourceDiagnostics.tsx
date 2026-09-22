@@ -702,7 +702,7 @@ function ProcessAssociations({ process }: { process: ResourceProcess }) {
       {taskIds.map((id) => {
         const current = tasks[id];
         return (
-          <AssociationRow key={`task:${id}`} kind="Background task" id={id}>
+          <AssociationRow key={`task:${id}`} kind="Command" id={id}>
             <Button
               size="xs"
               variant="outline"

@@ -309,7 +309,7 @@ checkout, which is the authoritative list. Each is claimed here too.
 | Element | Exports | laser surface |
 | --- | --- | --- |
 | `surfaces` | `paper`, `floating`, `field` | **The shared style vocabulary every other element builds on.** **Adopted** at `packages/ui/src/components/assistant-ui/elements/surfaces.tsx`, mapped onto the semantic tokens: `paper` is `bg-surface border-line`, `mono` is `typed` (12px, the floor), `live` is `text-live`, every duration a motion token. `utils/range.ts` (`elements-range`) came with it. `fieldInteractive` and `inkButton` came with the copy and never found a caller — deleted, on the same standard as any other unmountable code |
-| `shimmer-labels` | shimmer helpers | The label that shimmers while a run streams — **adopted** as `ShimmerLabel` / `SwapLabel` in `surfaces.tsx` (the registry has no separate file; `shimmer-labels.test.tsx` tests those). The reasoning header now shimmers through `ShimmerLabel` (via `thinking-indicator`) rather than a class spelled in `messages.tsx`; the `shimmer-text` utility in `globals.css` stays as the token-driven implementation behind it, so `tw-shimmer` is not imported |
+| `shimmer-labels` | shimmer helpers | The label that shimmers while a run streams — **adopted** as `ShimmerLabel` / `SwapLabel` in `surfaces.tsx` (the registry has no separate file; `packages/ui/test/design-system.test.ts` tests those — corrected in M21-T23, it never was a file of its own). The reasoning header now shimmers through `ShimmerLabel` (via `thinking-indicator`) rather than a class spelled in `messages.tsx`; the `shimmer-text` utility in `globals.css` stays as the token-driven implementation behind it, so `tw-shimmer` is not imported |
 | `reasoning-panel` | `ReasoningPanel` | The expanded reasoning body, distinct from the `reasoning` collapsible header — **not mounted; file removed (M13-T61)**: `elements/reasoning-panel.tsx` was de-demoed from a titled-steps collapsible to the body only (Pi's reasoning is one markdown stream), the hairlined, bottom-pinned, fading scroller under `reasoning.aui`'s trigger — and `reasoning.aui` had no importer and is removed too (see Reasoning). The activity row draws `ReasoningText` inside the Tool group's own content instead; a standalone reasoning body would re-install `elements-reasoning-panel` |
 | `suggestions` | `Suggestions` | Empty-state and post-turn suggestions, the props-driven sibling of `follow-up-suggestions`. **Not installed**: `follow-up-suggestions.aui` is the one kept (it reads `thread.suggestions`, which the thread configures), and the empty state composes `ThreadPrimitive.Suggestion` itself. Two pill components for one job would be the "assembled" look this inventory exists to prevent |
 | `quote-reply` | `QuoteReply` | The quoted block shown on the message you are replying to, paired with `quote` in the composer — **adopted**: `elements/quote-reply.tsx`, the quoted block plus `splitLeadingQuote`, which lifts the blockquote the composer folded into a prompt back out for display (`thread/messages.tsx`). The demo's highlighted selection and toolbar are `quote`'s |
@@ -327,6 +327,209 @@ Eight names on the published page have no file of their own because they are
 `composer-model-picker`, `composer-voice` and `composer-context` all live
 inside `composer`; `orb` lives inside `voice`; `thread-list-sidebar` is
 `threadlist-sidebar`. Install the parent and configure the feature.
+
+## The verification ledger (M21-T23)
+
+Status: **checked mechanically, then read.** Every row above claims something;
+this table is the verdict on each claim, with the evidence that produced it.
+Three verdicts only:
+
+- **Installed** — the file is in
+  `packages/ui/src/components/assistant-ui/elements/` and at least one app
+  source outside that directory imports it. The evidence names one importer;
+  most have several.
+- **Mapped to X** — the need is met by a Laser-owned component, and the row
+  above says why the catalog element could not be it.
+- **Rejected because Y** — not installed on purpose. The reason is the row's
+  own, in one line.
+
+Method (re-runnable): list the element directory; for each file, `grep -rlE
+"(elements/|\./)<base>(\.js)?[\"']" packages/ui/src` and drop importers inside
+the element directory itself; then resolve every backticked path in this
+document against the tree. Result at the time of writing: **96 files in the
+element directory — 81 imported directly by app sources, 12 more reached
+through another element (`reasoning` through `tool-group.aui`, `mermaid-*` and
+`inline-citation` through `markdown-text`, the Shiki and KaTeX helpers through
+their own parents), and exactly 3 with no importer anywhere, which are the
+three rows below that say so.** Every backticked path in this document resolves
+to a file that exists or to one the row itself records as deleted — except the
+one correction below.
+
+**One correction to the rows above.** The `shimmer-labels` row said
+`shimmer-labels.test.tsx` tests `ShimmerLabel`/`SwapLabel`; there is no such
+file. They are tested in `packages/ui/test/design-system.test.ts` (the
+animation and token assertions) alongside the rest of the shared vocabulary.
+Nothing else in this inventory names a file that is not there.
+
+### Installed and mounted
+
+| Row | Element file | One importer |
+| --- | --- | --- |
+| Loader | `loading-state.tsx` | `thread/Thread.tsx` (33 importers) |
+| Thinking indicator | `thinking-indicator.tsx` | `thread/messages.tsx` |
+| Streaming text | `streaming-text.tsx` | `thread/messages.tsx` |
+| Reasoning effort | `reasoning-effort.tsx` | `thread/Composer.tsx` |
+| Guardrail notice | `guardrail-notice.tsx` | `thread/Thread.tsx` |
+| Message pair | `message-pair.tsx` | `thread/messages.tsx` |
+| Message branches | `message-branches.tsx` | `thread/messages.tsx` |
+| Message actions | `message-actions.tsx` | `thread/messages.tsx` |
+| Error state | `error-state.tsx` | `thread/Thread.tsx` (22 importers) |
+| Message queue | `message-queue.tsx` | `thread/Composer.tsx` |
+| Edit a sent message | `edit-message.tsx` | `thread/messages.tsx` |
+| Stopped run | `stopped-run.tsx` | `thread/messages.tsx` |
+| Timestamps | `message-timestamp.tsx` | `thread/messages.tsx` (the day separator stays removed, D-105) |
+| Speaker identity | `speaker-identity.tsx` | `thread/messages.tsx` |
+| Regenerate with | `regenerate-menu.tsx` | `thread/messages.tsx` |
+| Confidence marker | `confidence-marker.tsx` | `logs/ApiRequestDialogBody.tsx` |
+| Tool call | `tool-call.tsx` | `thread/ToolRow.tsx` |
+| Terminal block | `terminal-block.tsx` | `thread/ToolRow.tsx`, `fleet/FleetPanel.tsx` |
+| Code diff | `code-diff.tsx` | `thread/UndoTurn.tsx`, `project-work/bodies/SpecDocument.tsx` |
+| File tree | `file-tree.tsx` | `source-control/rail.tsx` |
+| Elicitation form | `elicitation-form.tsx` | `dialogs/DialogBody.tsx` |
+| Server panel | `mcp-server-panel.tsx` | `settings/mcp/McpServerList.tsx` |
+| Tool failure | `tool-error.tsx` | `thread/ToolRow.tsx` |
+| Permission grant | `permission-grant.tsx` | `dialogs/DialogBody.tsx` |
+| Inline citation | `inline-citation.tsx` | `markdown-text.tsx` (the chip style only, as the row says) |
+| Research report | `research-report.tsx` | `project-work/bodies/ResearchDetail.tsx` |
+| Data table | `data-table.tsx` | `settings/ModelsTab.tsx`, `project-work/WorkBacklog.tsx` |
+| Number ticker | `number-ticker.tsx` | `thread/StatusLine.tsx` |
+| Chart | `chart.tsx` | `telemetry/model-section.tsx` |
+| Spec sheet | `spec-sheet.tsx` | `logs/ApiRequestDialogBody.tsx`, `project-work/Inspector.tsx` |
+| Timeline | `timeline.tsx` | `agents/map/Inspector.tsx`, `project-work/Recent.tsx` |
+| Agent plan | `agent-plan.tsx` | `project-work/PlanDetail.tsx` |
+| Subagent list | `subagent-list.tsx` | `fleet/FleetPanel.tsx` |
+| Approval card | `approval-card.tsx` | `dialogs/DialogBody.tsx`, `project-work/ApprovalRequestCard.tsx` |
+| Artifact card | `artifact-card.tsx` | `thread/FileCard.tsx` |
+| Todo list | `todo-list.tsx` | `project-work/PlanDetail.tsx`, `project-work/Board.tsx` |
+| Agent card | `agent-card.tsx` | `agents/page/Overview.tsx` |
+| Handoff | `agent-handoff.tsx` | `thread/AgentEventMessage.tsx` (as `AgentEventCard`) |
+| Checkpoints | `checkpoint-history.tsx` | `telemetry/history-section.tsx`, `project-work/TaskDetail.tsx` |
+| Trace waterfall | `trace-waterfall.tsx` | `logs/LogsScreen.tsx` |
+| Cost meter | `cost-meter.tsx` | `telemetry/spend-section.tsx` |
+| Quota banner | `quota-banner.tsx` | `shell/AccountAllowances.tsx` |
+| Composer · Attachments · Dictation | `composer.tsx` | `thread/Composer.tsx`, `mobile/DictateButton.tsx` |
+| Slash commands · Mentions · Composer trigger popover | `composer-trigger-popover.aui.tsx` | `thread/Composer.tsx` |
+| Agents (pre-turn picker) | `agent-selector.tsx` | `thread/Composer.tsx` |
+| Models · Model selector · `model-picker` | `model-selector.tsx` | `thread/Composer.tsx`, `settings/ModelsTab.tsx` |
+| Context · Context display | `context-display.tsx` | `thread/Composer.tsx`, `telemetry/context-section.tsx` |
+| Draft restore | `draft-restore.tsx` | `thread/Composer.tsx` |
+| Command palette | `command-palette.tsx` | `shell/CommandPalette.tsx` |
+| Empty state | `empty-state.tsx` | `thread/EmptyState.tsx` |
+| Scroll anchor | `scroll-anchor.tsx` | `thread/Thread.tsx` |
+| Connection state | `connection-state.tsx` | `shell/Shell.tsx` |
+| Search in conversation | `conversation-search.tsx` | `thread/use-conversation-find.tsx` |
+| Thread search | `thread-search.tsx` | `shell/SessionsPanel.tsx`, `shell/GlobalSearch.tsx` |
+| Settings | `settings-panel.tsx` | `settings/fields.tsx` (10 importers; the switch and toggle row only) |
+| Mobile composer | `mobile-composer.tsx` | `thread/Composer.tsx` |
+| Thread list | `thread-list.aui.tsx` | `shell/SessionsPanel.tsx` |
+| Reasoning | `reasoning.tsx` | `tool-group.aui.tsx` → `thread/messages.tsx` (the activity row, D-89) |
+| Message timing | `message-timing.aui.tsx` | `thread/messages.tsx` |
+| Conversation map | `conversation-map.aui.tsx` (+ `conversation-map.tsx`) | `thread/Thread.tsx` |
+| Attachment · `message-attachment` | `message-attachment.tsx` | `thread/messages.tsx` |
+| Follow-up suggestions | `follow-up-suggestions.aui.tsx` | `thread/Thread.tsx` |
+| Tool fallback | `tool-fallback.aui.tsx` | `thread/ToolRow.tsx` |
+| Tool group | `tool-group.aui.tsx` | `thread/messages.tsx` |
+| Quote | `quote.aui.tsx` | `thread/Composer.tsx`, `thread/Thread.tsx` |
+| `quote-reply` | `quote-reply.tsx` | `thread/messages.tsx` |
+| Sources | `sources.aui.tsx` | `thread/messages.tsx` (draws nothing until the engine emits `source` parts) |
+| Image | `image.tsx` | `thread/messages.tsx` |
+| File | `file.tsx` | `thread/messages.tsx` |
+| Directive text | `directive-text.aui.tsx` (+ `directive-text.tsx`) | `thread/messages.tsx` |
+| Markdown document | `markdown-document.tsx` | `thread/MarkdownBodyReader.tsx`, `project-work/bodies/fields.tsx` |
+| Markdown text | `markdown-text.tsx` | `thread/messages.tsx` |
+| Shiki highlighter | `shiki-highlighter.tsx` (+ `.aui`, `-impl`) | `preview/FileSource.tsx`, `markdown-text.tsx` |
+| Mermaid diagram · Diagram | `mermaid-diagram.aui.tsx` (+ `mermaid-diagram.tsx`, lazy) | `markdown-text.tsx` |
+| Model logos | `logos.tsx` | `settings/ModelsTab.tsx`, `telemetry/model-section.tsx` |
+| `surfaces` · `shimmer-labels` | `surfaces.tsx` | 49 element files and 7 app files |
+| Tooltip icon button | `components/ui/tooltip-icon-button.tsx` | the restyled copy, app-wide |
+
+### Installed and deliberately unmounted
+
+| Row | Element file | Why it is in the tree with no importer |
+| --- | --- | --- |
+| Typing indicator | `typing-indicator.tsx` | no surface watches something silent today; the fleet row says its state in words (M13-T26). Claimed for the next one that does |
+| Job progress | `job-progress.tsx` | neither fleet producer has a percentage or a phase (fleet R6); it draws nothing when there is nothing to draw, which is currently always |
+| Canvas (`canvas-split`) | `canvas-split.tsx` | the shell's three side columns are fixed-width, and the Design canvas is its own DOM canvas (M21-T11). Kept for the first resizable pane |
+
+The leap's "Elements and the bar" list names `canvas-split` among the elements
+to use; this is the verdict on that claim. **Not used, on purpose**: the
+embedded workspace's three areas are the shell's own layout row, the Design
+surface needs Shadow DOM frames that survive every pan and zoom, and a
+resizable-pane element is neither. Nothing in M21 mounts it, and the file stays
+only because a resizable column is a real future need, not to look finished.
+
+### Mapped to a Laser-owned component
+
+| Row | What draws it instead | Why not the catalog element |
+| --- | --- | --- |
+| Change preview | `source-control/change-preview.tsx` | no catalog element for "what a write would do"; one component serves the git dialogs and the transcript preview row, as the tool contract requires |
+| Chat panel | `thread/Thread.tsx` | the registry element is finished chrome (its own header, composer, welcome); this column carries the guardrail, the waiting notice, the question card and the status line |
+| Thread | `thread/Thread.tsx`, composed from primitives | same reason; every *part* it would have supplied is installed separately |
+| Flow graph | `agents/` + `components/agents/map/` on `@xyflow/react` | the element drew a declared `plan` panel; the live map is a per-session domain surface with ancestry edges and measured layouts (D-140) |
+| Design workspace sections | `project-work/bodies/DesignDetail.tsx` | a chip strip that keeps the canvas, inspector and conversation mounted — not a tab bar and not a registry element |
+| Design in context | `components/design/HostContextPanel.tsx` | the host outline, the region anchor and the Conform/Island chip have no catalog shape |
+| Design pins | `components/design/ScreenFrame.tsx` + `ReviewPanel.tsx` | anchored numbered pins on a canvas frame; the catalog has no anchored-review element |
+| Math | `markdown-text.tsx` (remark-math + rehype-katex) | `elements-math-block` is hand-authored steps the engine never emits |
+| Onboarding | `components/onboarding/SetupCard.tsx` | the element has no slot for a body that is a form; `SetupCard` follows its grammar and names it as the reference |
+| MCP config dialog | `components/settings/mcp/*` | `mcp-config` manages *browser-side* servers with `localStorage` and in-tab OAuth; Laser's servers belong to the project's worker (invariant 6b) |
+| Settings (the card) | `settings/SettingsForm.tsx` | the element's card is model + system prompt + temperature; the Laser taxonomy is two scopes of classified product settings. Its switch and toggle row *are* adopted |
+| Board, type badge, key tag | `project-work/Board.tsx`, `TypeBadge`, `KeyTag` | D-355 keeps these Laser's own domain surfaces on purpose |
+| Data table (narrow form) | `project-work/WorkBacklog.tsx` rows | a table in a 20rem column is a table nobody can read |
+
+### Rejected, with the reason
+
+| Row | Reason |
+| --- | --- |
+| Feedback dialog | a rejection is one declared field and a tool denial is free text; canned reason chips would invent words nobody said |
+| Tool timeline | replaced by the authority's ranked tool histogram in the telemetry Work section; the thread-derived path is gone |
+| Reviewable diff | per-hunk apply needs a `project/apply` method the protocol does not have (M17-T6/T7); the element could only mount with a dead Apply |
+| Computer use | Laser drives no computer |
+| Code runner | no sandboxed execution surface in v1 |
+| Web search | the results already render in the tool call that produced them (D-61) |
+| Image generation · Retrieval chunks · Map · Recommendation card · Launcher · Assistant modal · Assistant sidebar · Shared conversation · Voice conversation | no such surface, data or product idea in v1 |
+| Document reference | file references are popover rows and inline chips; no surface shows one as a card |
+| Memory | no per-turn context-file list exists on any session update; the element could only be fed a guess. Protocol first |
+| Web preview | embeds are out of scope for v1 (D-18) |
+| Activity graph · Heat graph | nothing renders per-project history; installing them now leaves two dead files |
+| Comparison | there is no shortlist to compare; the information went into the model table's Cost / M column |
+| Score breakdown | retired with the pi-subagents acceptance gates (D-140). A run ends `completed` or `blocked`; adding a verdict score is a protocol decision first |
+| Agent status | its one mount was the run island's header pill, and the islands went with the panels (D-147); every surface draws `StatusDot` and words |
+| Background runs | a second attention inbox duplicates the session row's own state (D-103) |
+| Schedule | the harness has no schedules; `AgentRunOrigin` is `agent` or `user` |
+| Context breakdown | the engine exposes live per-request estimates, not window occupancy; feeding them to this element would present estimates as facts |
+| Prompt library | prompt templates arrive as a group inside the `/` popover, which is where a person looks |
+| Read aloud | plausible for a phone; not v1 |
+| Thread list sidebar (`threadlist-sidebar`) | the shell already owns that frame; a second sidebar system would fight it |
+| Orb (`voice`) | a WebGL orb is a picture of activity with no measurement behind it, and every surface floated for it already shows something truer |
+| `suggestions` | `follow-up-suggestions.aui` is the one kept; two pill components for one job is the assembled look this inventory prevents |
+| `reasoning-panel` | the activity row draws `ReasoningText` inside the Tool group's own content |
+| Syntax highlighter (Prism) | Shiki won the evaluation; a second highlighter would render nowhere |
+| Generative UI | a model-driven display bus is the exact thing the fleet replaced, and there is no component vocabulary to compose from |
+| `flow` · `flow-canvas` · `flow-expand` | not published in the registry (404 on both URLs); and nothing draws a declared workflow graph |
+| Generative demos (`generative-*`) | domain demos; their value to us is the pattern, not the components |
+
+### What M21 claimed, and what it got
+
+The leap's "Elements and the bar" names ten elements and the shared Markdown
+renderer. Verdict on each claim, in that order:
+
+| Claimed | Verdict |
+| --- | --- |
+| `agent-plan` | installed, mounted by the Plan detail's Document view (no bar, no percentage, no cursor) |
+| `todo-list` | installed, mounted by the Plan detail per phase and by the board's compact form |
+| `research-report` | installed, mounted by the Research detail as the question tree |
+| `approval-card` | installed; second mount is the lifecycle review request above the composer |
+| `artifact-card` | installed; the Needs you queue keeps its *shape* and not the element, because that row is not file-shaped |
+| `timeline` | installed; two more mounts (Recent, revision history) |
+| `spec-sheet` | installed; second mount is the workspace inspector header |
+| `data-table` | installed; second mount is the Work backlog's wide form |
+| `checkpoint-history` | installed; a second form, `CheckpointTrail`, draws a Task's git checkpoints with neither verb |
+| `canvas-split` | **rejected for M21** — see "Installed and deliberately unmounted" |
+| the shared Markdown renderer | installed; the Spec and Plan documents and the Spec editor's Preview all mount `markdown-document`, so project text is never rendered as HTML (invariant 9) |
+
+No element was installed by M21-T23 itself: every claim above was already met
+or already refused, and installing one to make a table look complete is the
+failure this inventory exists to prevent.
 
 ## How this interacts with the fleet
 

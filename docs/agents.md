@@ -4,8 +4,8 @@ Status: **binding for M13 (D-140).** Agents are first-class in Laser: a
 person defines reusable agents on an Agents page, any session can start other
 agents through one `start_agent` tool, every child is a sub-session the person
 can chat with — in a worktree of its own unless its parent said otherwise — a
-live map shows each top-level session's agent tree, and long commands run as
-background tasks. Every agent on the Agents page is one a person wrote: the
+live map shows each top-level session's agent tree, and long commands keep
+running as Commands in the fleet (§6; the wire still calls them tasks). Every agent on the Agents page is one a person wrote: the
 product ships no agent of its own beyond the seeded, editable `default`
 (D-347, [`plain-chat.md`](plain-chat.md)).
 
@@ -624,7 +624,19 @@ arrangement — and a layout is recomputed only when the tree's structure
 changes, never on an output or status update. Reduced motion loses only the
 movement.
 
-## 6. Background tasks
+## 6. Commands (the wire calls them tasks)
+
+**The word a person reads is “Command”** (M21-T23,
+[`project-lifecycle-leap.md`](project-lifecycle-leap.md) “Outside the
+workspace”). M21 gave the project a kind of its own called **Task**
+(`TASK-44`), so what this section describes is a *Command* on every surface a
+person reads, and `task` everywhere the machine reads: `tasks/list`,
+`tasks/update`, `tasks/output`, `tasks/stop`, `BackgroundTask`, `task_output`,
+`task_stop`, `task:<id>` and the module's own name are unchanged, because
+renaming a wire method to settle a noun is how a release breaks. The agent-
+facing text is the wire's, not the person's, so the tool result an agent reads
+may still say `task`. `packages/ui/test/product-language.test.ts` guards the
+person-facing half.
 
 The `background-work` module (`packages/pi-extension/src/modules/background-work.ts`)
 owns long commands. It overrides the engine's `bash` with one that delegates
@@ -673,7 +685,11 @@ process-tree kill, output truncation stay the engine's) and adds:
   is recorded and shown with the next turn, never waking one. `notify`
   without `background` is ignored.
 
-Background tasks and child agents share the fleet's run vocabulary.
+Commands and child agents share the fleet's run vocabulary. Since M21 the
+module is no longer the only producer of one: the worker publishes a Design
+**index build** and a **verification run** as Commands on the same surface,
+with no process behind either ([`ux-fleet.md`](ux-fleet.md), “The project
+lifecycle leap, as built”).
 
 The two task tools are Laser's own and obey the agent-facing tool contract
 ([`agent-tool-contract.md`](agent-tool-contract.md), D-350) like the harness
@@ -1015,3 +1031,54 @@ blockers, not advice.
   failure after the stop leaves the session stopped, unmoved and served, and
   the abandoned turn keeps its stop row. Never let the UI issue the stop and
   the move as two requests.
+
+## 12. As built after the project lifecycle leap (M21-T23)
+
+This section **amends D-140 without rewriting it**. D-140 stands as recorded:
+Laser owns the harness, one `start_agent` tool and four identities, every child
+an in-process session in a mandatory `.worktrees/` worktree of its project,
+`complete_agent_run` as the only successful ending, run state pushed as
+`agents/run` and persisted by the host, and a worktree read as part of its
+project and never as a second one (invariant 5). None of that moved.
+
+What M21 changed, and nothing else:
+
+- **Something does persist above runs now.** D-140's consequence "the harness
+  has runs and nothing above them" was true until the leap. The project now
+  owns five durable kinds — Spec, Research, Design, Plan and **Project Task** —
+  in a host-owned store (`<stateDir>/project-work.db` plus content-addressed
+  blobs), partitioned by a stable `projectId`, never by session path
+  ([`project-lifecycle-leap.md`](project-lifecycle-leap.md), "Canonical
+  persistence"). The leap says this supersedes D-140 narrowly; this is the same
+  sentence read from the harness's side.
+- **A run is still a run.** A Project Task links to sessions, agent runs,
+  checkpoints, branches and Commands through *execution links*
+  (`ExecutionLinkKind` in `packages/protocol/src/project-work.ts`), which
+  transfer no ownership: deleting or archiving a session leaves the link as an
+  unavailable reference, and no agent run is ever promoted into project work.
+  `AgentRunOrigin` is still `agent` or `user` only, there are still no
+  schedules and no scored gate verdicts, and nothing above a run measures what
+  it spent (fleet R5).
+- **A worktree sees its project's work.** Identity resolves through the
+  repository's git common directory, so a child agent working in
+  `<project>/.worktrees/<slug>` reads and writes the same Specs and Tasks as
+  its parent (`packages/host/src/project-work/ids.ts`), while its execution
+  links keep the checkout and branch the work actually happened in. This is
+  invariant 5 and the leap's `projectId` rule agreeing.
+- **Project work is a destination, never a fleet row.** A Spec or a Task is
+  reached in the embedded workspace, through a transcript artifact card, a
+  mention chip, a slash command or the palette; what needs a person arrives in
+  the **Needs you** queue and the Approval Card above the composer. The fleet's
+  two kinds are unchanged, and the worker's new Commands (index build,
+  verification run) join the existing kind rather than adding a third
+  ([`ux-fleet.md`](ux-fleet.md), "The project lifecycle leap, as built").
+- **The word for background work is Command** (§6). D-147 is amended the same
+  way in `ux-fleet.md`: the column reads typed data, the panel bus stays gone,
+  and the new producers publish `BackgroundTask` rows with no process behind
+  them.
+
+Open, recorded rather than fixed by M21-T23: a Research run builds a
+`ResearchCommand` in the worker but nothing publishes it, so it has a budget
+line in the Research header and no fleet row or Stop; and `session/set_mode`
+(M17-T11, plan mode) is a schema entry the worker still refuses — see
+[`leap/m21-t23-reconciliation.md`](leap/m21-t23-reconciliation.md).

@@ -466,8 +466,10 @@ function AgentDetail({ item, contextOnly }: { item: FleetItem; contextOnly: bool
   return (
     <div className="min-w-0">
       <dl className="flex flex-col gap-2">
+        {/* "Brief", not "Task": `Task` is the project's own noun (`TASK-44`,
+            M21-T23), and this is what the parent asked this agent to do. */}
         {item.subtitle && (
-          <Field label="Task">
+          <Field label="Brief">
             <span className="line-clamp-4 whitespace-pre-wrap break-words">{item.subtitle}</span>
           </Field>
         )}

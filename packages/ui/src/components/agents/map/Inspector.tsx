@@ -103,7 +103,8 @@ export function InspectorBody({ node, header = true, className }: { node: AgentT
 
       {task && (
         <section className="flex min-w-0 flex-col gap-1.5">
-          <h4 className="eyebrow">Task</h4>
+          {/* "Brief": `Task` belongs to the project's own kind (M21-T23). */}
+          <h4 className="eyebrow">Brief</h4>
           <p className="nowheel max-h-40 overflow-y-auto rounded-md bg-surface-2 px-2.5 py-2 text-sm leading-sm whitespace-pre-wrap text-ink-2">{task}</p>
         </section>
       )}
@@ -230,7 +231,7 @@ export function InspectorSheet({ node, onClose }: { node: AgentTreeNode | undefi
     <Sheet open={node !== undefined} onOpenChange={(open) => !open && onClose()}>
       <SheetContent side="bottom" data-slot="agent-map-inspector-sheet" className="max-h-[85dvh] overflow-y-auto px-4 pb-4">
         <SheetTitle className="sr-only">{shown ? nodeName(shown) : "Agent details"}</SheetTitle>
-        <SheetDescription className="sr-only">Status, timeline, task and worktree of the selected agent.</SheetDescription>
+        <SheetDescription className="sr-only">Status, timeline, brief and worktree of the selected agent.</SheetDescription>
         {shown && <InspectorBody node={shown} className="pt-2" />}
       </SheetContent>
     </Sheet>

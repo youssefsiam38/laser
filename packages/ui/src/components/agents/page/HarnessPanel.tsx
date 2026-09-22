@@ -1,8 +1,8 @@
 "use client";
 /**
  * The harness policy: how deep agents may nest, and how long a foreground
- * command runs before it becomes a background task. Two numbers, each saved
- * on its own the moment it is committed.
+ * command runs before it becomes a Command of its own in the fleet. Two
+ * numbers, each saved on its own the moment it is committed.
  */
 import type { AgentPolicy, AgentsSnapshot } from "@lasercode/protocol";
 import { SlidersHorizontal } from "lucide-react";
@@ -40,7 +40,7 @@ export function HarnessPanel({ snapshot, writable = true }: { snapshot: AgentsSn
       <PolicyField
         id="foregroundCommandSeconds"
         title="Foreground command seconds"
-        description="A command an agent runs in the foreground is moved to a background task after this long, so a slow build never freezes the turn. Agents can also choose to run a command in the background from the start."
+        description="A command an agent runs in the foreground keeps running in the background after this long — as a Command in the fleet, where you can watch it and stop it — so a slow build never freezes the turn. Agents can also choose to run a command in the background from the start."
         unit="seconds"
         limits={POLICY_LIMITS.foregroundCommandSeconds}
         value={snapshot.policy.foregroundCommandSeconds}

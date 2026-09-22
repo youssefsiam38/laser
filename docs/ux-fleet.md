@@ -25,10 +25,21 @@ column is the tree of the session being read, not a roll-up of the project
 
 ## The two kinds of work
 
-| Kind | What it is | Where it comes from |
-| --- | --- | --- |
-| **agent** | one execution of an agent in its own child session | the harness (`docs/agents.md`), as `agents/run` |
-| **task** | one long command an agent left running | the companion's `background-work` module, as `tasks/update` |
+| Kind | The word a person reads | What it is | Where it comes from |
+| --- | --- | --- | --- |
+| **agent** | Agent | one execution of an agent in its own child session | the harness (`docs/agents.md`), as `agents/run` |
+| **task** | **Command** | one bounded piece of work a conversation left running: a long shell command, an index build, a verification run | the companion's `background-work` module and the worker's own producers, all as `tasks/update` |
+
+**Command is the noun, `task` is the identifier** (M21-T23,
+`docs/project-lifecycle-leap.md` "Outside the workspace"). Since M21 the
+project has a kind of its own called **Task** (`TASK-44`), so the second kind
+of work is called a Command everywhere a person reads it — the row, the filter,
+the transcript notice when one exits, the resource diagnostics — while
+`tasks/list`, `tasks/update`, `tasks/output`, `tasks/stop`, `BackgroundTask`
+and `task:<id>` keep their names, because renaming a wire method to settle a
+noun is how a release breaks. `packages/ui/test/product-language.test.ts` is
+the guard: nothing a person can read says "background task" again, and an
+agent's own brief is labelled **Brief**, never "Task".
 
 That list is closed, and closing it is the point. A third kind is a decision
 recorded in `STATUS_DETAILED.md`, not a convenience. Anything that is *not*
@@ -48,6 +59,52 @@ An extension that wants to *show* something shows it through the tool call
 that produced it. An extension that wants to *ask* something asks it inline
 (see "Questions"). There is no third road, and adding one is the decision this
 document exists to force.
+
+## The project lifecycle leap, as built (M21-T23)
+
+This section amends **D-147** with what M21 actually shipped. It adds no kind:
+it records who else produces a Command, and it states the rule the leap and the
+decision agree on — *project work is a destination, never a fleet row*.
+
+**A Command no longer has to be a process.** `BackgroundTask` is the row's
+vocabulary, not a claim about a pid. Three producers, one surface:
+
+| Command | Who runs it | How it reaches the fleet | Stop |
+| --- | --- | --- | --- |
+| a long shell command | the companion's `background-work` module | `lasercode/task/update` → `tasks/update` | delivered to the session that owns the process |
+| a Design **index build** | the worker's own loop, parse-only (D-353) | `design/workspace.ts` publishes a `BackgroundTask` under `designCommandTaskId` | answered by the worker: `pi/task/stop` routes a `isDesignCommandTaskId` id to the build |
+| a **verification run** | the worker's own loop (M21-T19, D-364) | `project-work/verification/service.ts` publishes under `verificationFleetTaskId` | answered by the worker: `isVerificationFleetTaskId` routes to the run |
+
+Neither of the two new producers spawns anything, so `outputBytes` is `0` and
+no row offers a log pane it cannot fill (R4). Progress is files parsed and
+commands run — never a percentage (R6) — and the terminal row says how it
+ended, including a stopped run whose record could not be written (R7).
+
+**Every Command belongs to a conversation.** `design/index/build` and a
+verification run both *refuse* to start without a `sessionPath`, for the reason
+R4 gives: a Command nobody can see in the fleet is a Command nobody can stop.
+The workspace's Re-index control is hidden, with the reason in its place, when
+no conversation can own the build (`components/design/build-owner.ts`).
+A Command's row hangs under the session that started it, exactly as a shell
+command's does, and a session whose runtime closed stops its own runs rather
+than publishing rows under a path nothing can reach any more.
+
+**No project entity is ever a fleet item.** A Spec, a Research, a Design, a
+Plan and a Project Task live in the embedded workspace and are reached from
+the Work list, the transcript's artifact card, a mention chip, a slash command
+or the palette. A Project Task may link to many agent runs and Commands; it
+never becomes a third kind here, and the leap's "Execution remains execution"
+and D-147's closed work model are the same rule read from two ends. What a
+person must answer about project work reaches them through the **Needs you**
+queue and the Approval Card above the composer — never as a row in this column.
+
+**Known gap — a Research run has no row yet.** `packages/worker/src/research/`
+carries a full `ResearchCommand` (title, phase, counted spend, elapsed,
+`stop()`), and the leap's "Fleet" line claims it beside the index build. Nothing
+constructs it in the worker's session wiring today, so a running Research
+reports its budget in the Research header only (`ResearchDetail.tsx`) and takes
+no fleet row and no Stop. Recorded, not fixed, by M21-T23: wiring it is the
+same publish/stop pair the other two producers already have.
 
 ## The layout
 
@@ -337,10 +394,10 @@ agents/runs/list      every run the host knows           → state.agents.runs
 agents/run            one run appeared or changed        (notification)
 agents/runs/stop      a person ends a run
 
-tasks/list            every background command           → state.tasks.tasks
-tasks/update          one task appeared or changed       (notification)
+tasks/list            every Command                      → state.tasks.tasks
+tasks/update          one Command appeared or changed    (notification)
 tasks/output          a bounded range of its bytes
-tasks/stop            a person ends a task
+tasks/stop            a person ends a Command
 ```
 
 Both lists are primed on connect and again after a reconnect
@@ -351,7 +408,9 @@ show a column that is quietly wrong.
 `pi/task/stop` is host→worker only. A client calls `tasks/stop`, which the
 host answers from its register; the worker hands the stop to the session that
 owns the process, because the companion extension owns it and nothing else can
-end it.
+end it — unless the id is one of the worker's own Commands (an index build, a
+verification run), which the worker stops itself without ever reaching the
+extension (`packages/worker/src/server.ts`, `pi/task/stop`).
 
 ## Implementation map
 
@@ -369,6 +428,9 @@ end it.
 | questions: where they land | `packages/ui/src/dialogs/InlineDialogs.tsx` |
 | the register, in the host | `packages/host/src/tasks/register.ts` |
 | the producer | `packages/pi-extension/src/modules/background-work.ts` |
+| the index-build Command | `packages/worker/src/design/index/command.ts`, published by `design/workspace.ts` |
+| the verification Command | `packages/worker/src/project-work/verification/{run,service}.ts` |
+| the Research Command (built, not yet published — see the leap section above) | `packages/worker/src/research/command.ts` |
 | the types | `packages/protocol/src/tasks.ts`, `attention.ts` |
 
 ## Related
