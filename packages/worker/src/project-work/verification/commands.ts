@@ -180,6 +180,30 @@ function terminationCode(error: unknown): string {
 }
 
 /**
+ * `taskkill`'s own status for "there is no such process".
+ *
+ * Windows has no `ESRCH` to give: the kill is another program, so it answers
+ * by exiting, and `execFile` hands that exit status back as a **number** in
+ * `error.code`. 128 is the one `taskkill` uses for a pid it cannot find, which
+ * is the ordinary outcome of stopping a run whose tree has already ended by
+ * itself — the commonest stop there is.
+ */
+const TASKKILL_NOT_FOUND = 128;
+
+/**
+ * Was the tree already gone when the kill got there?
+ *
+ * Both spellings of the same news: the errno a system call gives, and the exit
+ * status `taskkill` gives. Neither is a failure to end a process tree, so
+ * neither reaches the person as one. Every other refusal still does.
+ */
+function treeAlreadyGone(error: unknown): boolean {
+  const known = error as { code?: unknown; status?: unknown } | undefined;
+  if (known?.code === "ESRCH") return true;
+  return known?.code === TASKKILL_NOT_FOUND || known?.status === TASKKILL_NOT_FOUND;
+}
+
+/**
  * The parts of the platform this kill uses, so a test can drive the Windows
  * path on any machine without a real process anywhere near it.
  *
@@ -217,11 +241,12 @@ export function killVerificationTree(child: ChildProcess, onProblem?: (code: str
     // POSIX branch's: it is the same refusal, arriving sooner.
     run(["/pid", String(child.pid), "/T", "/F"], (error) => {
       if (error === null || error === undefined) return;
-      // The process is gone already: `taskkill` says so with its own status,
-      // and "already ended" is not a failure to end it.
-      const code = terminationCode(error);
-      if (code === "ESRCH") return;
-      onProblem?.(code);
+      // The process is gone already: `taskkill` says so with its own exit
+      // status, and "already ended" is not a failure to end it — exactly as
+      // `ESRCH` is not one on POSIX. Saying otherwise would tell a person a
+      // run they stopped is still running, in the most ordinary stop there is.
+      if (treeAlreadyGone(error)) return;
+      onProblem?.(terminationCode(error));
     });
     return;
   }

@@ -1103,8 +1103,127 @@ describe.runIf(haveGit)("evidence that outlives what it came from", () => {
     const finding = again.findings.find((row) => row.criterionId === again.criteria.find((c) => c.kind === "visual")!.id)!;
     expect(finding.outcome, "the review reads back from the store alone").toBe("satisfied");
     expect(finding.repositoryLinkId).toBe(linkId);
+    expect(finding.repositoryLinkIds, "one repository is one link, said the way it always was").toBeUndefined();
     const capture = await captureOf(task.entity.entityId, linkId);
     expect(sourceOf(capture, "src/a.ts"), "including what the person was looking at").toBe("what a person looked at\n");
+  });
+
+  /** A Task that has been marked ready and started, which is what an attempt needs. */
+  async function startedTask(title: string): Promise<ProjectWorkWriteResult> {
+    const task = await create("task", title, taskBody({ visual: true, commands: ["pnpm test"] }));
+    for (const action of ["mark_ready", "start"] as const) {
+      ok(
+        await h.call("project/task/action", {
+          projectId: h.projectId,
+          entityId: task.entity.entityId,
+          expectedRevisionId: task.revision.revisionId,
+          action,
+          idempotencyKey: idem(action),
+        }),
+      );
+    }
+    return task;
+  }
+
+  /** The visual finding of a fresh run, read at whatever revision the Task is on now. */
+  async function visualFindingNow(entityId: string, runId: string) {
+    const current = ok<ProjectWorkGetResult>(
+      await h.call("project/work/get", { projectId: h.projectId, entityId, body: { mode: "none" } }),
+    );
+    const report = await verify(entityId, current.revision.revisionId, runId);
+    return report.findings.find((row) => row.criterionId === report.criteria.find((c) => c.kind === "visual")!.id)!;
+  }
+
+  /**
+   * Two repositories are two builds, two changes and two reviews (D-367).
+   *
+   * The case this protects is the quiet one: a person opens the app's build,
+   * accepts it, and never looks at the library's change at all. One accepted
+   * preview satisfying the criterion would tell them their unreviewed work
+   * had been reviewed — by evidence about somewhere else.
+   */
+  it("needs an accepted preview in every repository the attempt touched, and names the ones without one", async () => {
+    const { app, lib } = workspace({ app: { "src/a.ts": "one\n" }, lib: { "src/b.ts": "one\n" } }) as { app: string; lib: string };
+    const task = await startedTask("Two repositories");
+    await startAttempt(task);
+    write(app, { "src/a.ts": "the build a person opened\n" });
+    write(lib, { "src/b.ts": "the change nobody looked at\n" });
+    const appCommit = checkpoint(app, SESSION, 1);
+    const libCommit = checkpoint(lib, SESSION, 1);
+    const ref = checkpointRef(checkpointSessionKey(SESSION), 1);
+    const run = await endAttempt(task);
+
+    const appWritten = ok<ProjectWorkLinkResult>(
+      await accept({ subject: task, repositoryId: run.repositoryId("app"), commitObjectId: appCommit, checkpointId: ref, attempt: run.attempt }),
+    );
+    const appLink = linkIdOf(appWritten);
+
+    const half = await visualFindingNow(task.entity.entityId, "ver_repo_1");
+    expect(half.outcome, "one repository's review does not speak for the other").toBe("needs_person");
+    expect(half.detail).toContain("lib");
+    expect(half.detail).toContain("app");
+    expect(half.steps!.join(" "), "and the step says which one to open").toContain("lib");
+    expect(half.repositoryLinkId, "what has been accepted is still named").toBe(appLink);
+
+    const libWritten = ok<ProjectWorkLinkResult>(
+      await accept({ subject: task, repositoryId: run.repositoryId("lib"), commitObjectId: libCommit, checkpointId: ref, attempt: run.attempt }),
+    );
+    const libLink = linkIdOf(libWritten);
+
+    const whole = await visualFindingNow(task.entity.entityId, "ver_repo_2");
+    expect(whole.outcome, "both repositories reviewed is what satisfies it").toBe("satisfied");
+    expect(new Set(whole.repositoryLinkIds), "and both links are what says so").toEqual(new Set([appLink, libLink]));
+    expect(whole.repositoryLinkIds).toContain(whole.repositoryLinkId);
+    const acceptances = (await detail(task.entity.entityId)).evidence.filter(
+      (record) => record.repositoryLinkId === appLink || record.repositoryLinkId === libLink,
+    );
+    expect(acceptances, "two acceptances, two evidence records").toHaveLength(2);
+    for (const record of acceptances) expect(whole.evidenceIds).toContain(record.evidenceId);
+    expect(whole.detail).toContain(appCommit.slice(0, 10));
+    expect(whole.detail).toContain(libCommit.slice(0, 10));
+  });
+
+  /**
+   * The readable check and the completeness check read one blob: the one the
+   * acceptance was bound to (review O2). A correction to what the link points
+   * at — and whatever later happens to *that* blob — cannot reach back and
+   * unmake a review whose own proof is still whole (D-363).
+   */
+  it("reads the proof the acceptance was bound to, not whatever the link points at now", async () => {
+    const { app } = workspace();
+    const task = await startedTask("Bound proof");
+    await startAttempt(task);
+    write(app, { "src/a.ts": "what a person looked at\n" });
+    const made = checkpoint(app, SESSION, 1);
+    const ref = checkpointRef(checkpointSessionKey(SESSION), 1);
+    const run = await endAttempt(task);
+    const written = ok<ProjectWorkLinkResult>(
+      await accept({ subject: task, repositoryId: run.repositoryId("app"), commitObjectId: made, checkpointId: ref, attempt: run.attempt }),
+    );
+    const linkId = linkIdOf(written);
+    const bound = (await detail(task.entity.entityId)).repositoryLinks.find((row) => row.linkId === linkId)!.captureBlobId!;
+
+    // A later, equally complete capture becomes the link's current pointer…
+    const corrected = storeCapture(h.store, {
+      projectId: h.projectId,
+      entityId: task.entity.entityId,
+      capture: (await buildStateCapture({
+        repository: { path: app, gitDir: join(app, ".git"), name: "app" },
+        repositoryId: run.repositoryId("app"),
+        state: { vcs: "git", objectFormat: "sha1", commitObjectId: made, checkpointId: ref },
+        now: new Date(Date.now() + 1000).toISOString(),
+        required: { basis: "attempt_base_to_state", base: run.base("app"), executionLinkId: run.attempt.executionLinkId, taskEntityId: task.entity.entityId },
+      }))!,
+      gate: "A later correction",
+    });
+    expect(h.store.attachCapture(h.projectId, linkId, corrected.blobId, bound, { gate: "A later correction" })).toBe(true);
+    // …and then that pointer's bytes go, the way a release policy would take
+    // them. What the person accepted is untouched, so their review stands.
+    expect(h.store.releaseDerived({ projectId: h.projectId, blobId: corrected.blobId, reason: "retention", detail: "a later pointer" })).toBeGreaterThan(0);
+
+    const finding = await visualFindingNow(task.entity.entityId, "ver_bound_1");
+    expect(finding.outcome, "the bound proof is whole, and it is the one that decides").toBe("satisfied");
+    expect(finding.repositoryLinkId).toBe(linkId);
   });
 
   /**

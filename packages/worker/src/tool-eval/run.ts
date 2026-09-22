@@ -288,6 +288,10 @@ function projectWorkSession(
     : undefined;
   return new ProjectWorkSession({
     ...(bridge ? { bridge } : {}),
+    // This is the fixture world, and it says so: the one place a session may
+    // hold verification runs that no fleet row is ever published for, because
+    // there is no fleet and no person here to lose one (review S3).
+    evaluation: true,
     // A verification run needs a checkout to run the Task's commands in. The
     // evaluation gives it one and scripts the runner, so a fixture exercises
     // the real tool, the real refusals and the real report without spawning a

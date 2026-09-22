@@ -751,8 +751,21 @@ function gateRefusedForSpace(error: ProjectWorkQuotaError, gate: string): Projec
 
 /** Is this link's capture still readable, bytes and all? */
 export function captureReadable(store: CaptureStore, projectId: string, link: RepositoryLink): boolean {
-  if (!link.captureBlobId) return false;
-  const range = store.readBlob({ projectId, blobId: link.captureBlobId, offset: 0, limit: 1 });
+  return blobReadable(store, projectId, link.captureBlobId);
+}
+
+/**
+ * Is this exact blob still readable, bytes and all?
+ *
+ * Asked of a blob rather than of a link, because a decision's proof is the
+ * blob that decision was bound to, which is not always the one the link points
+ * at today (D-363): the reader that asks "can this proof still be read" and
+ * the reader that asks "does it hold everything" have to be asking about the
+ * same bytes, or a later correction could make them disagree (review O2).
+ */
+export function blobReadable(store: CaptureStore, projectId: string, blobId: string | undefined): boolean {
+  if (!blobId) return false;
+  const range = store.readBlob({ projectId, blobId, offset: 0, limit: 1 });
   return range !== undefined && range.released === undefined && range.corrupt !== true;
 }
 

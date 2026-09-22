@@ -1336,3 +1336,132 @@ Host, protocol and worker suites were not re-run: nothing outside
 **Still the person's (D-342):** how the pagers and the new refusals read in
 both themes and at both widths, including a proof with a hundred files and a
 file of one enormous line.
+
+## The final review batch — S1, S3, O1/O2 (M21-T19)
+
+The one correction batch the full independent review
+(`docs/leap/m21-verification-review.md`) leaves the parent, implemented on
+`agents/apply-final-verification-review-batch-b9185bf3` from `cfa0451d`. S2
+(the `store.ts` capture-history extraction) is deliberately **not** in it: it
+is recorded deferred debt, not a correction. No store accounting, SDK, lock,
+plan or status file is touched, and no UI file changed.
+
+### S1 · a Windows tree that is already gone is not a run this app could not stop
+
+`killVerificationTree`'s Windows branch called a refusal benign only when
+`terminationCode(error)` answered `"ESRCH"` — a shape `taskkill` never
+produces. `taskkill` is *another process*: it answers by exiting, and
+`execFile` hands that exit status back as a **number** in `error.code`. So the
+commonest stop on Windows — the tree ended by itself before the kill got there
+— read as a refusal and became the person-facing sentence *"This run's command
+could not be stopped (128), so it is still running"*, plus a log line, about a
+run that was settling normally.
+
+Now both spellings of the same news are benign, and only those two:
+`treeAlreadyGone()` accepts the errno (`ESRCH`) and `taskkill`'s own
+not-found status (128, in `code` or `status`). Everything else still reaches
+`onProblem` → `cannotEnd` with its bounded code, keeps the run unsettled and
+invents no exit. The POSIX branch is untouched.
+
+Two seam tests, driven with the **real** shape rather than a synthetic one:
+`runTaskkill` invoked with `["/pid","4242","/T","/F"]` and `error.code = 128`
+(numeric) raises no problem; the same call with `error.code = 1` still raises
+`"1"`, so "not found" is benign and nothing else is. The existing EPERM and
+synthetic-`ESRCH` tests are unchanged.
+
+### S3 · a session cannot mint a fleet-invisible verification registry
+
+`ProjectWorkSession` used to fall back to
+`new VerificationService({ bridgeFor: () => bridge })` whenever the worker did
+not pass one: no `publishTask`, no `holdsSession` — exactly the invisible run
+the design forbids, kept out of production only by every call site remembering
+the option. Now the tool is offered **only** with the worker's own registry,
+or with an explicit `evaluation: true` from a fixture world (`tool-eval/run.ts`
+sets it, and is the only place that does; it also passes its own scripted
+service). A session that has a bridge and a checkout but no registry simply
+does not offer `verify_project_task` — absent, never listed as unavailable
+(D-356.g) — so the "nothing runs unseen" invariant no longer rests on a
+constructor call being remembered.
+
+Three capability-gating tests: a session with bridge + `cwd` + `sessionPath`
+and no registry does **not** offer the tool (red before the fix); one given the
+worker's registry does; an evaluation fixture does. The tool-eval matrix,
+including the `verify_project_task` fixture, still passes.
+
+### O1/O2 · native visual evidence is per repository, read from the bound blob (D-367)
+
+`acceptedPreview` satisfied a `visual` criterion with **one** accepted preview
+on **either** repository of a workspace: a person who opened the app's build
+and never looked at the library's change was told their unreviewed work had
+been reviewed — by evidence about somewhere else. Per D-367:
+
+- `acceptedPreviews()` gathers the six stored facts **per repository**;
+- the repositories that must each have one are the ones the Task's attempt
+  recorded a state in (`EvaluationInput.attempts`, the latest attempt that
+  recorded repositories; `methods.ts` drops records the attempt could not read,
+  because the acceptance door refuses those and nobody can be asked to review
+  them), and when there is no attempt at all, every repository carrying a
+  `verified_at` state link for that exact subject;
+- `satisfied` needs at least one acceptance **and** no missing repository; it
+  carries every link in the new optional `repositoryLinkIds` (schema + test;
+  `repositoryLinkId` stays the first, so existing readers stay true) and the
+  evidence of all of them;
+- `needs_person` **names** the repositories still without one, in the detail
+  and in one step per repository, and still names what *has* been accepted.
+  The three unreviewed truths stay distinct: nothing accepted; a review whose
+  proof does not hold every file it rests on; some repositories reviewed and
+  the rest not.
+
+O2, the one-line alignment, is in the same place: the readable check and the
+completeness check now read **one** blob — the acceptance-bound one
+(`acceptance.captureBlobId`, else the link's own `first_capture` association),
+through the new `blobReadable()`. A later pointer correction, or a release
+policy applied to whatever the link points at today, can no longer unmake a
+review whose own proof is whole.
+
+Sentences stay bounded: at most four repositories are named, then "and N
+more"; steps are capped at ten plus the acceptance line; evidence ids at 32 and
+link ids at `ATTEMPT_REPOSITORIES_MAX`.
+
+**Limit, stated rather than discovered:** the expected set is the *latest*
+attempt that recorded repositories. An older attempt's acceptances still count
+(they are matched by repository, not by attempt), but a repository that only an
+earlier attempt recorded is not demanded, and a repository the latest attempt
+recorded without changing anything is. That is D-367 read literally; it is a
+rule about which repositories were worked in, not about how much changed.
+
+### Evidence
+
+Frozen install, `pnpm -r build`, then:
+
+| Command | Result |
+| --- | --- |
+| `pnpm -F @lasercode/host exec vitest run test/project-work` | 376 passed (22 files) |
+| `pnpm -F @lasercode/worker exec vitest run test/project-work test/tool-eval` | 172 passed (10 files) |
+| `pnpm -F @lasercode/protocol exec vitest run test/project-work-verification.test.ts` | 20 passed, no type errors |
+| `pnpm -F @lasercode/ui exec vitest run test/project-work/{native-acceptance,verification,proof-reader,verification-stop}.test.tsx` | 57 passed (4 files, no UI change) |
+| `pnpm -F @lasercode/{protocol,host,worker} typecheck` | clean |
+| `pnpm identity:check` | passes |
+
+Red before each fix, on this tree:
+
+- worker `…verification.test.ts -t "ending a process tree"`: the 128 test
+  failed with `expected [ '128' ] to deeply equal []`;
+- worker `…tools.test.ts -t "capability gating"`: the no-registry test failed
+  with `expected [ 'inspect_project_work', …(4) ] to not include
+  'verify_project_task'`;
+- host `…capture-completeness.test.ts -t "evidence that outlives"` with
+  `packages/host/src` stashed: the two-repository test failed
+  (`expected 'satisfied' to be 'needs_person'`) and the bound-proof test failed
+  (`expected 'needs_person' to be 'satisfied'`), while both pre-existing tests
+  in that block stayed green;
+- protocol with `packages/protocol/src` stashed: the `repositoryLinkIds`
+  round-trip failed (`expected false to be true`) against the strict schema.
+
+Not run here, deliberately: `pnpm verify`, other packages' suites, any browser
+(D-342). The parent owns the full gate.
+
+**Still the person's (D-342):** how the per-repository sentences read in the
+Task detail verification panel — the satisfied line naming two commits in two
+repositories, and the needs_person line naming the repository nobody has
+opened yet — in both themes and at both widths.

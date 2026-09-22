@@ -84,8 +84,8 @@ import {
   type IdentifiedRepository,
 } from "./delivery.js";
 import {
+  blobReadable,
   buildCapture,
-  captureReadable,
   evidenceUnreviewable,
   readCaptureBlob,
   requiredComplete,
@@ -1007,16 +1007,34 @@ export class ProjectWorkMethods {
       ...(gathered.design ? gathered.design.detail.evidence : []),
     ];
     const completeness = new Map<string, boolean>();
+    // The proof a decision was bound to, which is what every reader of that
+    // decision has to read (D-363, review O2): the acceptance's own blob, or
+    // — for an acceptance written before that binding existed — the link's
+    // own original association, the row written inside the link's insert.
+    // Never the pointer of the day.
+    const boundProof = (link: RepositoryLink): string | undefined =>
+      link.acceptance?.captureBlobId ?? this.store.originalCaptureAssociation(projectId, link.linkId)?.blobId;
+    const repositoryNames = new Map(this.store.repositories(projectId).map((row) => [row.repositoryId, row.name]));
     const evaluation = evaluate({
       plan,
       gathered,
       commands: verify.commands,
       repositoryLinks,
       evidence,
+      // Which repositories a person has to have reviewed, for a visual
+      // criterion: the ones this Task's own attempt recorded a state in
+      // (D-367). A repository the attempt could not read is not one anybody
+      // can be asked to open a preview of — the acceptance door refuses it —
+      // so it is not counted against the person here either.
+      attempts: gathered.task.executionLinks.map((link) => ({
+        ...link,
+        ...(link.repositories ? { repositories: link.repositories.filter((row) => row.unavailable !== true) } : {}),
+      })),
+      repositoryName: (repositoryId) => repositoryNames.get(repositoryId),
       // Convergence reads what was stored when the person accepted, never git:
       // the contract protects this evidence against the day retention prunes
       // the checkpoint it came from (D-361).
-      captureReadable: (link) => captureReadable(this.store, projectId, link),
+      captureReadable: (link) => blobReadable(this.store, projectId, boundProof(link)),
       // And, for native evidence, whether the capture the acceptance was
       // taken against holds every source it rests on — read out of the stored
       // blob, never out of git (M21-T19), and checked against what the record
@@ -1031,14 +1049,16 @@ export class ProjectWorkMethods {
       // and never against a migration baseline, which is only what the
       // migration happened to see and says nothing about what that acceptance
       // consumed. With neither, the honest answer is that this is not proved
-      // here, and the criterion asks for the review again.
+      // here, and the criterion asks for the review again. The readable check
+      // above reads that same blob, so the two cannot answer about different
+      // bytes (review O2).
       //
       // Answered once per link: several visual criteria commonly rest on the
       // same acceptance, and a capture is up to four megabytes.
       captureComplete: (link) => {
         const known = completeness.get(link.linkId);
         if (known !== undefined) return known;
-        const bound = link.acceptance?.captureBlobId ?? this.store.originalCaptureAssociation(projectId, link.linkId)?.blobId;
+        const bound = boundProof(link);
         const capture = bound === undefined ? undefined : readCaptureBlob(this.store, projectId, bound);
         const answer = capture !== undefined && requiredComplete(capture, expectedRequiredFacts(this.store, projectId, link));
         completeness.set(link.linkId, answer);

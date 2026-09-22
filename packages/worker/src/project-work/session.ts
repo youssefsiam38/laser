@@ -126,6 +126,17 @@ export interface ProjectWorkSessionOptions {
    * same registry, stoppable from either side.
    */
   verification?: VerificationService | undefined;
+  /**
+   * This session is an evaluation fixture, not a person's conversation.
+   *
+   * The only thing it buys is the fallback below: a fixture world may run the
+   * verify tool over its own scripted bridge without the worker's registry,
+   * because nothing in it is a run a person could be waiting on. Production
+   * never sets it, and the invariant that a run is always visible in the
+   * fleet therefore does not rest on every future call site remembering to
+   * pass `verification` — it rests on this being false everywhere else.
+   */
+  evaluation?: boolean;
 }
 
 /** The worker's implementation of what the companion module consumes. */
@@ -224,14 +235,24 @@ export class ProjectWorkSession implements ExtensionProjectWorkBridge {
   /**
    * This session's verification runs.
    *
-   * Supplied by the worker when it has one; a session assembled without it
-   * (a narrow test, a fixture) gets its own, over this session's own bridge,
-   * so the tool exists wherever the bridge does.
+   * The worker's own registry, or nothing. A run started through this tool is
+   * a Command of this conversation: it takes a row in the fleet, it pins the
+   * session while it works, and a person stops it from that row (M21-T19).
+   * Only the worker's registry can do any of that — it is the one holding
+   * `publishTask` and `holdsSession` — so a session that was not given it
+   * does not get a private one to start invisible runs with. The tool is
+   * simply not offered, which is the honest answer and the one the fleet's
+   * "nothing runs unseen" rule needs.
+   *
+   * The single exception is an evaluation fixture, which says it is one: its
+   * scripted world has no fleet, no person and no run to lose.
    */
   private verification(): VerificationService | undefined {
     const bridge = this.options.bridge;
     if (!bridge) return undefined;
-    this.ownVerification ??= this.options.verification ?? new VerificationService({ bridgeFor: () => bridge });
+    if (this.options.verification) return this.options.verification;
+    if (this.options.evaluation !== true) return undefined;
+    this.ownVerification ??= new VerificationService({ bridgeFor: () => bridge });
     return this.ownVerification;
   }
 
