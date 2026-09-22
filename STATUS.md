@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** M21 integrated on main · code checkpoint: e7442ca2
-**Current focus:** Person testing reopened M21-T13 (Build index loses the RPC receiver and crashes) and M21-T6 (all creation forms are the same two-field shell). Index repair is independently reviewing regression-tested `9e7c6cd1`; kind-aware creation and opened detail views are in design planning with a separate owner, including rendered Markdown by default and highlighted Write/Preview editing before Save. Browser acceptance and release remain pending; Goal mode is inactive.
+**Last updated:** Design index receiver repair merged · code checkpoint: c085f82a
+**Current focus:** Build index receiver crash fixed on main (`c085f82a`), independently reviewed; design123, test types, typecheck, identity and UI build pass. Person retry remains pending. M21-T6 kind-aware creation and opened detail views are in design planning, including rendered Markdown by default and highlighted Write/Preview editing before Save. Browser acceptance and release remain pending; Goal mode is inactive.
 
 | Milestone | State |
 | --- | --- |
@@ -35,7 +35,7 @@
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
-**M21, task by task:** T6 is reopened for purpose-specific creation forms and T13 for the index request-binding defect; other T0–T23 and T26 rows retain their recorded evidence in `STATUS_DETAILED.md`. T24 is half done — the deterministic matrix (8 scenarios across host, worker and UI) is merged; **the browser matrix B1–B12 in `docs/leap/m21-acceptance.md` is the person's and is the one open acceptance item** (D-342). T25 is `todo` and needs the person's release authorization.
+**M21, task by task:** T6 is reopened for purpose-specific creation/forms and detail views; T13 receiver repair is merged and unit-verified; other T0–T23 and T26 rows retain their recorded evidence in `STATUS_DETAILED.md`. T24 is half done — the deterministic matrix (8 scenarios across host, worker and UI) is merged; **the browser matrix B1–B12 in `docs/leap/m21-acceptance.md` is the person's and is the one open acceptance item** (D-342). T25 is `todo` and needs the person's release authorization.
 
 **Gate:** **`pnpm verify && pnpm identity:check` pass on `main`** at `e7442ca2` (`t-da68933b`, verify 151.3s, `/tmp/laser-main-verify-1.log`), in a clean graphical environment. The same tree passed on the integration branch (`t-81817021`, 163.1s). Two suite defects were fixed on the way, not re-run away: three desktop real-host-spawn tests inherited the 5s default timeout under workspace concurrency (now declared 30s, like the other real-spawn suites), and one relay-client test counted retries that accrue after the moment it asserts.
 
