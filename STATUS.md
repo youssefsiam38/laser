@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
 **Last updated:** M21 integrated on main · code checkpoint: e7442ca2
-**Current focus:** Person testing reopened M21-T13 (Build index loses the RPC receiver and crashes) and M21-T6 (all creation forms are the same two-field shell). Index repair is independently reviewing regression-tested `9e7c6cd1`; kind-aware creation and opened detail views are in design planning with a separate owner. Browser acceptance and release remain pending; Goal mode is inactive.
+**Current focus:** Person testing reopened M21-T13 (Build index loses the RPC receiver and crashes) and M21-T6 (all creation forms are the same two-field shell). Index repair is independently reviewing regression-tested `9e7c6cd1`; kind-aware creation and opened detail views are in design planning with a separate owner, including rendered Markdown by default and highlighted Write/Preview editing before Save. Browser acceptance and release remain pending; Goal mode is inactive.
 
 | Milestone | State |
 | --- | --- |
