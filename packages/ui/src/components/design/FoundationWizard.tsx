@@ -218,7 +218,11 @@ export function FoundationWizard({ body, foundation, context, editable, dirty, o
       const skeleton = foundationPlanSkeleton(foundation, { designKey: workKey });
       const keys: string[] = [];
       for (const task of skeleton.tasks) {
-        const created = await context.store.create({ title: task.title, body: { kind: "task", task: task.body } });
+        const created = await context.store.create({
+          title: task.title,
+          body: { kind: "task", task: task.body },
+          note: "From the approved foundation",
+        });
         if (!created.ok) {
           actions.toast("error", created.failure.message);
           return;
@@ -226,7 +230,11 @@ export function FoundationWizard({ body, foundation, context, editable, dirty, o
         keys.push(created.value.entity.key);
       }
       const plan = foundationPlanWithKeys(skeleton, keys);
-      const createdPlan = await context.store.create({ title: "Build on the foundation", body: { kind: "plan", plan } });
+      const createdPlan = await context.store.create({
+        title: "Build on the foundation",
+        body: { kind: "plan", plan },
+        note: "From the approved foundation",
+      });
       if (!createdPlan.ok) {
         actions.toast("error", createdPlan.failure.message);
         return;

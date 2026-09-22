@@ -2,12 +2,14 @@
 
 import {
   createContext,
+  forwardRef,
   lazy,
   Suspense,
   useCallback,
   useContext,
   useEffect,
   useId,
+  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -68,10 +70,20 @@ export interface MarkdownAuthoringFieldProps extends Omit<MarkdownSourceEditorPr
   className?: string | undefined;
 }
 
-export function MarkdownAuthoringField({ label, editorKey, error, className, readOnly = false, ...editorProps }: MarkdownAuthoringFieldProps) {
+export interface MarkdownAuthoringFieldHandle {
+  /** Focus the source editor, activating and awaiting its lazy chunk if needed. */
+  focus(): void;
+}
+
+export const MarkdownAuthoringField = forwardRef<MarkdownAuthoringFieldHandle, MarkdownAuthoringFieldProps>(function MarkdownAuthoringField(
+  { label, editorKey, error, className, readOnly = false, ...editorProps },
+  forwardedRef,
+) {
   const activation = useContext(EditorActivation);
   const [mode, setMode] = useState<"write" | "preview">("write");
-  const editor = useRef<MarkdownSourceEditorHandle>(null);
+  const editor = useRef<MarkdownSourceEditorHandle | null>(null);
+  const root = useRef<HTMLElement>(null);
+  const focusPending = useRef(false);
   const previousMode = useRef<"write" | "preview">("write");
   const id = useId();
   const fieldKey = editorKey ?? id;
@@ -81,6 +93,7 @@ export function MarkdownAuthoringField({ label, editorKey, error, className, rea
   const writeTabId = `${id}-write-tab`;
   const previewTabId = `${id}-preview-tab`;
   const managed = activation !== undefined;
+  const activate = activation?.activate;
   const mounted = !managed || activation.activeField === fieldKey;
   const locked = readOnly || activation?.readOnly === true;
   const describedBy = [editorProps.describedBy, error ? errorId : undefined].filter(Boolean).join(" ") || undefined;
@@ -89,10 +102,39 @@ export function MarkdownAuthoringField({ label, editorKey, error, className, rea
     if (activation?.active) activation.ensure(fieldKey);
   }, [activation?.active, activation?.ensure, fieldKey]);
 
+  const focusEditor = useCallback((): boolean => {
+    if (!editor.current) return false;
+    focusPending.current = false;
+    editor.current.measure();
+    editor.current.focus();
+    return true;
+  }, []);
+
+  const attachEditor = useCallback((handle: MarkdownSourceEditorHandle | null): void => {
+    editor.current = handle;
+    if (!handle || !focusPending.current) return;
+    requestAnimationFrame(() => {
+      if (editor.current === handle && focusPending.current) focusEditor();
+    });
+  }, [focusEditor]);
+
+  const requestEditorFocus = useCallback((): void => {
+    if (locked) return;
+    focusPending.current = true;
+    // Keep focus in this field while React replaces an inactive-row button or
+    // Suspense fallback. The editor takes it as soon as its lazy chunk mounts.
+    root.current?.focus();
+    activate?.(fieldKey);
+    setMode("write");
+    requestAnimationFrame(() => focusEditor());
+  }, [activate, fieldKey, focusEditor, locked]);
+
+  useImperativeHandle(forwardedRef, () => ({ focus: requestEditorFocus }), [requestEditorFocus]);
+
   useEffect(() => {
     const returningToWrite = previousMode.current === "preview" && mode === "write";
     previousMode.current = mode;
-    if (!returningToWrite || !mounted) return;
+    if (!returningToWrite || !mounted || focusPending.current) return;
     const frame = requestAnimationFrame(() => {
       editor.current?.measure();
       editor.current?.focus();
@@ -102,12 +144,12 @@ export function MarkdownAuthoringField({ label, editorKey, error, className, rea
 
   const write = (): void => {
     if (locked) return;
-    activation?.activate(fieldKey);
+    activate?.(fieldKey);
     setMode("write");
   };
 
   return (
-    <section className={cn("flex min-w-0 flex-col gap-1.5", className)} aria-labelledby={`${id}-label`}>
+    <section ref={root} tabIndex={-1} className={cn("flex min-w-0 flex-col gap-1.5", className)} aria-labelledby={`${id}-label`}>
       <div className="flex items-center justify-between gap-2">
         <span id={`${id}-label`} className="eyebrow">
           {label}
@@ -164,7 +206,7 @@ export function MarkdownAuthoringField({ label, editorKey, error, className, rea
         {mounted ? (
           <Suspense fallback={<div className="min-h-24 rounded-md border border-line bg-surface p-3 text-sm text-ink-3">Loading editor…</div>}>
             <LazyMarkdownSourceEditor
-              ref={editor}
+              ref={attachEditor}
               {...editorProps}
               label={label}
               readOnly={locked}
@@ -178,7 +220,7 @@ export function MarkdownAuthoringField({ label, editorKey, error, className, rea
             ) : (
               <p className="text-sm text-ink-3">Nothing written yet.</p>
             )}
-            <Button type="button" size="xs" variant="outline" className="self-start" disabled={locked} onClick={write}>
+            <Button type="button" size="xs" variant="outline" className="self-start" disabled={locked} onClick={requestEditorFocus}>
               Edit source
             </Button>
           </div>
@@ -204,4 +246,4 @@ export function MarkdownAuthoringField({ label, editorKey, error, className, rea
       ) : null}
     </section>
   );
-}
+});

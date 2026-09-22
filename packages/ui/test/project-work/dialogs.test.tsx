@@ -10,7 +10,7 @@
 import { act, forwardRef, useImperativeHandle, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClientRequests } from "@lasercode/protocol";
+import type { ClientRequests, ProjectWorkKind } from "@lasercode/protocol";
 
 import { CreateDialog } from "../../src/components/project-work/CreateDialog.js";
 import { DeleteDialog } from "../../src/components/project-work/ConfirmDialogs.js";
@@ -26,7 +26,20 @@ vi.mock("../../src/components/project-work/MarkdownSourceEditor.js", () => ({
   ) {
     const field = useRef<HTMLTextAreaElement>(null);
     useImperativeHandle(ref, () => ({ focus: () => field.current?.focus(), measure: () => {} }), []);
-    return <textarea ref={field} aria-label={props.label} value={props.value} placeholder={props.placeholder} onChange={(event) => props.onChange(event.target.value)} />;
+    return (
+      <textarea
+        ref={field}
+        aria-label={props.label}
+        value={props.value}
+        placeholder={props.placeholder}
+        onChange={(event) => props.onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey) || event.nativeEvent.isComposing) return;
+          event.preventDefault();
+          props.onCreateShortcut?.();
+        }}
+      />
+    );
   }),
 }));
 
@@ -54,6 +67,9 @@ const world = (): FakeProject => ({
 const text = (): string => document.body.textContent ?? "";
 const buttons = (): HTMLButtonElement[] => [...document.body.querySelectorAll("button")];
 const button = (label: string): HTMLButtonElement | undefined => buttons().find((node) => node.textContent?.includes(label));
+const createForm = (kind: ProjectWorkKind): HTMLFormElement => document.querySelector<HTMLInputElement>(`#${kind}-create-title`)!.closest("form")!;
+const formButton = (form: HTMLFormElement, label: string): HTMLButtonElement | undefined =>
+  [...form.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent?.includes(label));
 
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -130,6 +146,120 @@ describe("+ Create", () => {
     await act(async () => button("Spec")?.click());
     expect((document.querySelector<HTMLInputElement>("#spec-create-title")?.value)).toBe("Spec title");
     expect(specForm!.querySelector<HTMLTextAreaElement>('textarea[aria-label="Brief"]')?.value).toBe("  **spec bytes**  ");
+  });
+
+  it("preserves every kind's title, prose, row, and Preview mode across switches", async () => {
+    const work = await store();
+    await act(async () => root.render(<CreateDialog store={work} />));
+    await act(async () => openWorkCreate("spec"));
+
+    const rows: Record<ProjectWorkKind, { add: string; input: string; value: string }> = {
+      spec: { add: "Add outcome", input: 'input[aria-label="Outcome 1"]', value: "Spec outcome" },
+      research: { add: "Add in scope", input: 'input[aria-label="In scope 1"]', value: "Research scope" },
+      design: { add: "Add principle", input: 'input[aria-label="Principle 1"]', value: "Design principle" },
+      plan: { add: "Add phase", input: 'input[aria-label="Phase 1 name"]', value: "Plan phase" },
+      task: { add: "Add affected area", input: 'input[aria-label="Affected area 1"]', value: "Task path" },
+    };
+
+    for (const kind of ["spec", "research", "design", "plan", "task"] as const) {
+      await act(async () => button(kind === "task" ? "Task" : `${kind[0]!.toUpperCase()}${kind.slice(1)}`)?.click());
+      const form = createForm(kind);
+      await setInput(form.querySelector<HTMLInputElement>(`#${kind}-create-title`)!, `${kind} title`);
+      await setInput(form.querySelector<HTMLTextAreaElement>("textarea")!, `${kind} prose`);
+      await act(async () => formButton(form, rows[kind].add)?.click());
+      await setInput(form.querySelector<HTMLInputElement>(rows[kind].input)!, rows[kind].value);
+      await act(async () => formButton(form, "Preview")?.click());
+    }
+
+    for (const kind of ["spec", "research", "design", "plan", "task"] as const) {
+      await act(async () => button(kind === "task" ? "Task" : `${kind[0]!.toUpperCase()}${kind.slice(1)}`)?.click());
+      const form = createForm(kind);
+      expect(form.querySelector<HTMLInputElement>(`#${kind}-create-title`)?.value).toBe(`${kind} title`);
+      expect(form.textContent).toContain(`${kind} prose`);
+      expect(form.querySelector<HTMLInputElement>(rows[kind].input)?.value).toBe(rows[kind].value);
+      expect(formButton(form, "Preview")?.getAttribute("aria-selected")).toBe("true");
+    }
+  });
+
+  it("focuses an empty primary editor after Ctrl/Cmd+Enter, including when that editor is inactive", async () => {
+    const work = await store();
+    await act(async () => root.render(<CreateDialog store={work} />));
+    await act(async () => openWorkCreate("spec"));
+    const form = createForm("spec");
+    const title = form.querySelector<HTMLInputElement>("#spec-create-title")!;
+    const primary = form.querySelector<HTMLTextAreaElement>('textarea[aria-label="Brief"]')!;
+    await setInput(title, "Needs a brief");
+    title.focus();
+    await act(async () => primary.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true })));
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+    expect(document.activeElement).toBe(primary);
+    expect(text()).toContain("Write the brief.");
+
+    await act(async () => formButton(form, "Add requirement")?.click());
+    const editRequirement = [...form.querySelectorAll<HTMLButtonElement>("button")].find(
+      (candidate) => candidate.textContent?.includes("Edit source") && candidate.closest("section")?.textContent?.includes("Requirement 1"),
+    );
+    await act(async () => editRequirement?.click());
+    const requirement = form.querySelector<HTMLTextAreaElement>('textarea[aria-label="Requirement 1"]')!;
+    expect(form.querySelector('textarea[aria-label="Brief"]')).toBeNull();
+    requirement.focus();
+    await act(async () => requirement.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })));
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+    expect(document.activeElement).toBe(form.querySelector('textarea[aria-label="Brief"]'));
+    expect(form.querySelector('textarea[aria-label="Requirement 1"]')).toBeNull();
+  });
+
+  it("names incomplete Plan rows, focuses their region, and retains what was entered", async () => {
+    const work = await store();
+    await act(async () => root.render(<CreateDialog store={work} />));
+    await act(async () => openWorkCreate("plan"));
+    const form = createForm("plan");
+    await setInput(form.querySelector<HTMLInputElement>("#plan-create-title")!, "A plan");
+    const primary = form.querySelector<HTMLTextAreaElement>('textarea[aria-label="Brief"]')!;
+    await setInput(primary, "Plan it");
+    await act(async () => formButton(form, "Add phase")?.click());
+    const selectedTask = form.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    await act(async () => selectedTask.click());
+    primary.focus();
+    await act(async () => primary.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true })));
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+
+    expect(text()).toContain("Name every phase that has selected Tasks or a summary.");
+    expect(text()).not.toContain("String must contain");
+    expect(document.activeElement).toBe(document.querySelector("#plan-create-details"));
+    expect(selectedTask.checked).toBe(true);
+    expect(form.querySelector<HTMLInputElement>("#plan-create-title")?.value).toBe("A plan");
+    expect(primary.value).toBe("Plan it");
+  });
+
+  it("selects the new entity and clears all drafts after success", async () => {
+    const work = await store();
+    vi.spyOn(work, "create").mockResolvedValue({
+      ok: true,
+      value: {
+        entity: { entityId: "new-task", kind: "task", key: "TASK-10" },
+        revision: { revisionId: "r1" },
+        ref: {},
+        seq: 4,
+      } as never,
+    });
+    await act(async () => root.render(<CreateDialog store={work} />));
+    await act(async () => openWorkCreate("spec"));
+    await setInput(createForm("spec").querySelector<HTMLInputElement>("#spec-create-title")!, "Unsaved other draft");
+    await setInput(createForm("spec").querySelector<HTMLTextAreaElement>('textarea[aria-label="Brief"]')!, "Other prose");
+    await act(async () => button("Task")?.click());
+    const form = createForm("task");
+    await setInput(form.querySelector<HTMLInputElement>("#task-create-title")!, "Created task");
+    await setInput(form.querySelector<HTMLTextAreaElement>('textarea[aria-label="Outcome"]')!, "Created outcome");
+    await act(async () => button("Create task")?.click());
+
+    expect(workspaceUi()).toMatchObject({ creating: undefined, tab: "work", selection: { entityId: "new-task", kind: "task" } });
+    await act(async () => openWorkCreate("task"));
+    expect(createForm("task").querySelector<HTMLInputElement>("#task-create-title")?.value).toBe("");
+    expect(createForm("task").querySelector<HTMLTextAreaElement>('textarea[aria-label="Outcome"]')?.value).toBe("");
+    await act(async () => button("Spec")?.click());
+    expect(createForm("spec").querySelector<HTMLInputElement>("#spec-create-title")?.value).toBe("");
+    expect(createForm("spec").querySelector<HTMLTextAreaElement>('textarea[aria-label="Brief"]')?.value).toBe("");
   });
 
   it("previews without writing, blocks Enter/composition, and fences duplicate pending creates", async () => {

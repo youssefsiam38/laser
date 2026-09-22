@@ -33,7 +33,11 @@ import { openWorkCreate, selectWork, setWorkspaceTab, useProjectWorkSnapshot, us
 import { KIND_FIELD, KIND_ICON, KIND_LABEL, KIND_TEXT } from "@/project-work/vocabulary";
 
 import { KindCreateFields } from "./CreateKindFields.js";
-import { MarkdownAuthoringField, MarkdownEditorActivationProvider } from "./MarkdownAuthoringField.js";
+import {
+  MarkdownAuthoringField,
+  MarkdownEditorActivationProvider,
+  type MarkdownAuthoringFieldHandle,
+} from "./MarkdownAuthoringField.js";
 import { WorkRefusal } from "./states.js";
 
 export function nextKeyFor(kind: ProjectWorkKind, keys: readonly string[]): string {
@@ -73,6 +77,7 @@ export function CreateDialog({ store }: { store: ProjectWorkStore | undefined })
   const [errors, setErrors] = useState<FieldErrors>({});
   const [hostError, setHostError] = useState<string | undefined>(undefined);
   const wasOpen = useRef(false);
+  const primaryEditors = useRef<Partial<Record<ProjectWorkKind, MarkdownAuthoringFieldHandle>>>({});
   const busyRef = useRef(false);
   const scope = useRef(0);
 
@@ -127,9 +132,11 @@ export function CreateDialog({ store }: { store: ProjectWorkStore | undefined })
       setErrors(nextErrors);
       const target = checked.title ? `${kind}-create-title` : checked.primary ? `${kind}-create-primary` : `${kind}-create-details`;
       requestAnimationFrame(() => {
-        const region = document.getElementById(target);
-        const control = checked.primary ? region?.querySelector<HTMLElement>("[aria-label]") : region;
-        control?.focus();
+        if (checked.primary) {
+          primaryEditors.current[kind]?.focus();
+          return;
+        }
+        document.getElementById(target)?.focus();
       });
       return;
     }
@@ -232,6 +239,10 @@ export function CreateDialog({ store }: { store: ProjectWorkStore | undefined })
 
                 <div id={`${candidate}-create-primary`} tabIndex={-1}>
                   <MarkdownAuthoringField
+                    ref={(editor) => {
+                      if (editor) primaryEditors.current[candidate] = editor;
+                      else delete primaryEditors.current[candidate];
+                    }}
                     label={field.label}
                     editorKey={`${candidate}:primary`}
                     value={draft.primary}

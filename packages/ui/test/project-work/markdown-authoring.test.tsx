@@ -108,6 +108,31 @@ describe("bounded Markdown authoring", () => {
     );
   }
 
+  it("focuses the real editor after Edit source replaces its focused button", async () => {
+    function TwoFields() {
+      const [first, setFirst] = useState("first");
+      const [second, setSecond] = useState("second");
+      return (
+        <MarkdownEditorActivationProvider active>
+          <MarkdownAuthoringField editorKey="first" label="First" value={first} onChange={setFirst} />
+          <MarkdownAuthoringField editorKey="second" label="Second" value={second} onChange={setSecond} />
+        </MarkdownEditorActivationProvider>
+      );
+    }
+
+    await act(async () => root.render(<TwoFields />));
+    await settle();
+    const editSecond = button("Edit source");
+    editSecond.focus();
+    expect(document.activeElement).toBe(editSecond);
+    await act(async () => editSecond.click());
+    await settle();
+
+    const content = container.querySelector<HTMLElement>('.cm-content[aria-label="Second"]');
+    expect(content).not.toBeNull();
+    expect(document.activeElement).toBe(content);
+  });
+
   it("mounts one editor at a schema-limit row count and retains its selection and undo across kind visibility", async () => {
     await act(async () => root.render(<Fields active />));
     await settle();

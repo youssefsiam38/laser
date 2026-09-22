@@ -268,9 +268,30 @@ export function validateCreateDraft(draft: CreateDraft, items: readonly ProjectW
   if (draft.kind === "design" && present(draft.notes) && !draft.principles.some((row) => present(row.text))) {
     return { details: "Add at least one principle to start a proposed foundation, or clear the direction notes." };
   }
+  if (draft.kind === "plan") {
+    if (draft.phases.some((phase) => !present(phase.name) && (present(phase.summary) || phase.taskKeys.length > 0))) {
+      return { details: "Name every phase that has selected Tasks or a summary." };
+    }
+    if (draft.dependencies.some((edge) => (present(edge.from) || present(edge.to) || present(edge.reason)) && (!present(edge.from) || !present(edge.to)))) {
+      return { details: "Choose both the waiting Task and prerequisite Task for every dependency." };
+    }
+    if (draft.boundaries.some((row) => present(row.scope) !== present(row.rule))) {
+      return { details: "Complete both the scope and rule for every boundary." };
+    }
+    if (draft.risks.some((row) => present(row.summary) !== present(row.control))) {
+      return { details: "Complete both the summary and control for every risk." };
+    }
+  }
+  if (draft.kind === "task" && draft.acceptance.some((row) => present(row.command) && !present(row.text))) {
+    return { details: "Write the acceptance criterion before adding its command." };
+  }
+
   const body = bodyFromCreateDraft(draft);
   const parsed = projectWorkBodySchema.safeParse(body);
-  if (!parsed.success) return { details: parsed.error.issues[0]?.message ?? "Check the structured details." };
+  if (!parsed.success) {
+    const label = draft.kind === "task" ? "Task" : `${draft.kind[0]!.toUpperCase()}${draft.kind.slice(1)}`;
+    return { details: `Check the ${label} details. One field is incomplete or longer than its allowed limit.` };
+  }
 
   if (draft.kind === "plan" && body.kind === "plan") {
     const known = new Map(items.map((item) => [item.key, { kind: item.kind, state: item.state, entityId: item.ref.entityId, title: item.title }]));

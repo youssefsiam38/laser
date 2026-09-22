@@ -67,7 +67,7 @@ describe("the project work store", () => {
     }) as unknown as ProjectWorkRequest;
     const store = new ProjectWorkStore({ request, projectId: "p1", newIdempotencyKey: () => "create-1" });
 
-    const outcome = await store.create({ title: "Typed", body });
+    const outcome = await store.create({ title: "Typed", body, note: "From the approved foundation" });
 
     expect(outcome.ok).toBe(true);
     expect(request).toHaveBeenCalledWith("project/work/create", {
@@ -76,6 +76,7 @@ describe("the project work store", () => {
       title: "Typed",
       body,
       idempotencyKey: "create-1",
+      note: "From the approved foundation",
     });
   });
 

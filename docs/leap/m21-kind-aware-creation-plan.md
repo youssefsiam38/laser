@@ -1,7 +1,7 @@
 # M21-T6 follow-up — kind-aware creation and authoring
 
-Status: **Milestone 1 corrected; ready for independent review**. Milestone 2
-remains out of scope until Milestone 1 review and integration. The binding contracts are [`project-lifecycle-leap.md`](../project-lifecycle-leap.md)
+Status: **Milestone 1 final review corrections implemented; awaiting parent verification/integration**. Milestone 2
+remains out of scope until Milestone 1 integration. The binding contracts are [`project-lifecycle-leap.md`](../project-lifecycle-leap.md)
 ("Flexibility", "Embedded workspace" and "Detail, by kind"), D-352 and D-355,
 [`design-phase.md`](../design-phase.md), [`research-phase.md`](../research-phase.md),
 and the closed bodies in
@@ -72,6 +72,18 @@ closes the editor/pending defects found by the parent inspection:
 - Editor CSS-object variables were checked directly against `globals.css`; the
   stale `--surface-1` and undefined `--weight-semibold` references are gone,
   and the focus selector targets the editor root as `&.cm-focused`.
+- The final review correction focuses an invalid primary through the authoring
+  field handle, including an inactive or not-yet-loaded editor, and moves focus
+  into a real CodeMirror surface when **Edit source** replaces its button.
+- Creation notes now cross the typed store seam, so Foundation Task and Plan
+  first revisions retain `From the approved foundation` without a revise call.
+  Known incomplete Plan/Task rows have person-written validation messages;
+  protocol parse defaults are never exposed as UI copy.
+- Dialog regressions cover all five drafts across kind switches, zero-write
+  Preview, invalid-field focus/data retention, refusal preservation, and
+  successful selection plus all-draft reset. The required combined UI run is
+  green at 41 files / 391 tests; the earlier parent 385-test evidence remains
+  the pre-final-correction baseline rather than being rewritten.
 
 Visual appearance, touch behavior, real assistive technology, browser IME and
 full RTL interaction remain person-owned checks under D-342; unit tests do not
@@ -120,8 +132,9 @@ form.
   copy, primary field, validation and optional details.
 - Title stays plain text and required. The primary field is the kind's real
   noun: Brief, Question, Experience brief, Plan brief, or Outcome.
-- The required pair is enough to create every kind. **Add details** reveals
-  optional structured fields for that kind. Collapsing never clears them.
+- The required pair is enough to create every kind. Purposeful optional
+  structure for that kind is visible immediately; it is not hidden behind one
+  generic disclosure.
 - The dialog uses a scrollable body and persistent action footer. At phone
   width it uses the viewport safely, fields remain at the legibility floor,
   and all targets remain 44px for a coarse pointer. No page-level horizontal
@@ -134,9 +147,9 @@ form.
   explicit close. Switching kinds never copies or resets another kind's text.
 - Submit validates the active kind only, focuses the first invalid control,
   and associates one concise message with that control. The host refusal stays
-  visible with every draft untouched. Editing after a refusal clears only a
-  now-obsolete field error; it does not silently dismiss the host's recovery
-  sentence.
+  visible with every draft untouched. Editing uses the simple bounded-dialog
+  policy of clearing current field/detail validation messages; it does not
+  silently dismiss the host's recovery sentence.
 - A synchronous submission guard prevents double clicks and repeated
   Cmd/Ctrl+Enter. While the request is pending, kind changes, fields, closing,
   outside click, Escape and submit are protected; the exact submitted snapshot
@@ -150,8 +163,9 @@ form.
 Blank optional rows are removed at serialization. Nonblank values are trimmed
 only at their edges; Markdown bytes inside the value are otherwise preserved.
 IDs are minted when a row is added, not during submit, so validation and retry
-send the same body. Existing schema limits are shown before the host has to
-refuse them.
+send the same body. Creation deliberately caps each repeatable section at eight
+rows: this keeps the first-revision dialog scannable and editor mounting bounded,
+while opened detail editors remain the place to grow to the larger schema limits.
 
 ### Spec
 

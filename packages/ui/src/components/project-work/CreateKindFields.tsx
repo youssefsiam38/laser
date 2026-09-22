@@ -10,7 +10,6 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
   createDraftId,
   emptyRow,
@@ -25,7 +24,8 @@ import {
 
 import { MarkdownAuthoringField } from "./MarkdownAuthoringField.js";
 
-// Creation stays a concise first revision. Detail editors can grow to the schema limits.
+// Creation is a bounded first pass: eight rows per repeatable section keeps
+// every kind's dialog scannable. Opened detail editors can reach schema limits.
 const MAX_CREATE_ROWS = 8;
 const LINE_MAX = 500;
 const COMMAND_MAX = 1_000;
@@ -165,57 +165,446 @@ export function DesignCreateFields({ draft, onChange, onCreateShortcut }: { draf
 function TaskChecks({ tasks, selected, onChange, label }: { tasks: ProjectWorkListItem[]; selected: string[]; onChange(keys: string[]): void; label: string }) {
   return tasks.length === 0 ? <p className="text-xs text-ink-3">No existing Tasks to select. This can stay empty.</p> : (
     <div className="grid gap-1" aria-label={label}>
-      {tasks.map((task) => <label key={task.key} className="flex items-center gap-2 text-xs text-ink-2"><input type="checkbox" checked={selected.includes(task.key)} onChange={(event) => onChange(event.target.checked ? [...selected, task.key] : selected.filter((key) => key !== task.key))} /><span className="typed">{task.key}</span><span className="truncate">{task.title}</span></label>)}
+      {tasks.map((task) => (
+        <label key={task.key} className="flex items-center gap-2 text-xs text-ink-2">
+          <input
+            type="checkbox"
+            checked={selected.includes(task.key)}
+            onChange={(event) => onChange(event.target.checked ? [...selected, task.key] : selected.filter((key) => key !== task.key))}
+          />
+          <span className="typed">{task.key}</span>
+          <span className="truncate">{task.title}</span>
+        </label>
+      ))}
     </div>
   );
 }
 
-export function PlanCreateFields({ draft, onChange, items, onCreateShortcut }: { draft: PlanCreateDraft; onChange(draft: PlanCreateDraft): void; items: readonly ProjectWorkListItem[]; onCreateShortcut(): void }) {
+export function PlanCreateFields({
+  draft,
+  onChange,
+  items,
+  onCreateShortcut,
+}: {
+  draft: PlanCreateDraft;
+  onChange(draft: PlanCreateDraft): void;
+  items: readonly ProjectWorkListItem[];
+  onCreateShortcut(): void;
+}) {
   const tasks = items.filter((item) => item.kind === "task" && !item.archived);
   const selected = [...new Set(draft.phases.flatMap((phase) => phase.taskKeys))];
   return (
     <div className="grid gap-3">
       <Section title="Phases" detail="Group real existing Tasks without turning the Plan into a schedule.">
-        {draft.phases.map((phase, index) => <div key={phase.id} className="rounded-md border border-line bg-surface-2 p-2"><div className="mb-2 flex gap-2"><Input aria-label={`Phase ${index + 1} name`} value={phase.name} maxLength={200} placeholder="Phase name" onChange={(event) => onChange({ ...draft, phases: draft.phases.map((item) => item.id === phase.id ? { ...item, name: event.target.value } : item) })} /><Remove label={`Remove phase ${index + 1}`} onClick={() => onChange({ ...draft, phases: draft.phases.filter((item) => item.id !== phase.id) })} /></div><MarkdownAuthoringField label={`Phase ${index + 1} summary`} editorKey={`plan:phase:${phase.id}`} value={phase.summary} maxLength={PROJECT_WORK_TEXT_MAX} onChange={(summary) => onChange({ ...draft, phases: draft.phases.map((item) => item.id === phase.id ? { ...item, summary } : item) })} onCreateShortcut={onCreateShortcut} /><div className="mt-2"><TaskChecks label={`Phase ${index + 1} Tasks`} tasks={tasks} selected={phase.taskKeys} onChange={(taskKeys) => onChange({ ...draft, phases: draft.phases.map((item) => item.id === phase.id ? { ...item, taskKeys } : item) })} /></div></div>)}
-        <Button type="button" variant="outline" size="sm" disabled={draft.phases.length >= MAX_CREATE_ROWS} onClick={() => onChange({ ...draft, phases: [...draft.phases, { id: createDraftId("phase"), name: "", summary: "", taskKeys: [] }] })} className="self-start"><Plus /> Add phase</Button>
+        {draft.phases.map((phase, index) => (
+          <div key={phase.id} className="rounded-md border border-line bg-surface-2 p-2">
+            <div className="mb-2 flex gap-2">
+              <Input
+                aria-label={`Phase ${index + 1} name`}
+                value={phase.name}
+                maxLength={200}
+                placeholder="Phase name"
+                onChange={(event) => onChange({
+                  ...draft,
+                  phases: draft.phases.map((item) => item.id === phase.id ? { ...item, name: event.target.value } : item),
+                })}
+              />
+              <Remove
+                label={`Remove phase ${index + 1}`}
+                onClick={() => onChange({ ...draft, phases: draft.phases.filter((item) => item.id !== phase.id) })}
+              />
+            </div>
+            <MarkdownAuthoringField
+              label={`Phase ${index + 1} summary`}
+              editorKey={`plan:phase:${phase.id}`}
+              value={phase.summary}
+              maxLength={PROJECT_WORK_TEXT_MAX}
+              onChange={(summary) => onChange({
+                ...draft,
+                phases: draft.phases.map((item) => item.id === phase.id ? { ...item, summary } : item),
+              })}
+              onCreateShortcut={onCreateShortcut}
+            />
+            <div className="mt-2">
+              <TaskChecks
+                label={`Phase ${index + 1} Tasks`}
+                tasks={tasks}
+                selected={phase.taskKeys}
+                onChange={(taskKeys) => onChange({
+                  ...draft,
+                  phases: draft.phases.map((item) => item.id === phase.id ? { ...item, taskKeys } : item),
+                })}
+              />
+            </div>
+          </div>
+        ))}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={draft.phases.length >= MAX_CREATE_ROWS}
+          onClick={() => onChange({
+            ...draft,
+            phases: [...draft.phases, { id: createDraftId("phase"), name: "", summary: "", taskKeys: [] }],
+          })}
+          className="self-start"
+        >
+          <Plus /> Add phase
+        </Button>
       </Section>
       <Section title="Dependency graph" detail="“Waiting Task” depends on “Prerequisite Task”. Both must belong to a phase.">
-        {draft.dependencies.map((edge, index) => <div key={edge.id} className="grid gap-2 rounded-md border border-line bg-surface-2 p-2 sm:grid-cols-[1fr_1fr_auto]"><select aria-label={`Dependency ${index + 1} waiting Task`} className={selectClass} value={edge.from} onChange={(event) => onChange({ ...draft, dependencies: draft.dependencies.map((item) => item.id === edge.id ? { ...item, from: event.target.value } : item) })}><option value="">Waiting Task</option>{selected.map((key) => <option key={key} value={key}>{key}</option>)}</select><select aria-label={`Dependency ${index + 1} prerequisite Task`} className={selectClass} value={edge.to} onChange={(event) => onChange({ ...draft, dependencies: draft.dependencies.map((item) => item.id === edge.id ? { ...item, to: event.target.value } : item) })}><option value="">Prerequisite Task</option>{selected.map((key) => <option key={key} value={key}>{key}</option>)}</select><Remove label={`Remove dependency ${index + 1}`} onClick={() => onChange({ ...draft, dependencies: draft.dependencies.filter((item) => item.id !== edge.id) })} /><Input aria-label={`Dependency ${index + 1} reason`} className="sm:col-span-2" value={edge.reason} maxLength={LINE_MAX} placeholder="Why it must wait (optional)" onChange={(event) => onChange({ ...draft, dependencies: draft.dependencies.map((item) => item.id === edge.id ? { ...item, reason: event.target.value } : item) })} /></div>)}
-        <Button type="button" variant="outline" size="sm" disabled={draft.dependencies.length >= MAX_CREATE_ROWS || selected.length < 2} onClick={() => onChange({ ...draft, dependencies: [...draft.dependencies, { id: createDraftId("dependency"), from: "", to: "", reason: "" }] })} className="self-start"><Plus /> Add dependency</Button>
+        {draft.dependencies.map((edge, index) => (
+          <div key={edge.id} className="grid gap-2 rounded-md border border-line bg-surface-2 p-2 sm:grid-cols-[1fr_1fr_auto]">
+            <select
+              aria-label={`Dependency ${index + 1} waiting Task`}
+              className={selectClass}
+              value={edge.from}
+              onChange={(event) => onChange({
+                ...draft,
+                dependencies: draft.dependencies.map((item) => item.id === edge.id ? { ...item, from: event.target.value } : item),
+              })}
+            >
+              <option value="">Waiting Task</option>
+              {selected.map((key) => <option key={key} value={key}>{key}</option>)}
+            </select>
+            <select
+              aria-label={`Dependency ${index + 1} prerequisite Task`}
+              className={selectClass}
+              value={edge.to}
+              onChange={(event) => onChange({
+                ...draft,
+                dependencies: draft.dependencies.map((item) => item.id === edge.id ? { ...item, to: event.target.value } : item),
+              })}
+            >
+              <option value="">Prerequisite Task</option>
+              {selected.map((key) => <option key={key} value={key}>{key}</option>)}
+            </select>
+            <Remove
+              label={`Remove dependency ${index + 1}`}
+              onClick={() => onChange({ ...draft, dependencies: draft.dependencies.filter((item) => item.id !== edge.id) })}
+            />
+            <Input
+              aria-label={`Dependency ${index + 1} reason`}
+              className="sm:col-span-2"
+              value={edge.reason}
+              maxLength={LINE_MAX}
+              placeholder="Why it must wait (optional)"
+              onChange={(event) => onChange({
+                ...draft,
+                dependencies: draft.dependencies.map((item) => item.id === edge.id ? { ...item, reason: event.target.value } : item),
+              })}
+            />
+          </div>
+        ))}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={draft.dependencies.length >= MAX_CREATE_ROWS || selected.length < 2}
+          onClick={() => onChange({
+            ...draft,
+            dependencies: [...draft.dependencies, { id: createDraftId("dependency"), from: "", to: "", reason: "" }],
+          })}
+          className="self-start"
+        >
+          <Plus /> Add dependency
+        </Button>
       </Section>
       <Section title="Boundaries, risks, and verification" detail="Capture the edges and proof that make this executable.">
-        {draft.boundaries.map((row, index) => <div key={row.id} className="rounded-md border border-line bg-surface-2 p-2"><div className="mb-2 flex gap-2"><Input aria-label={`Boundary ${index + 1} scope`} value={row.scope} maxLength={LINE_MAX} placeholder="Boundary scope" onChange={(event) => onChange({ ...draft, boundaries: draft.boundaries.map((item) => item.id === row.id ? { ...item, scope: event.target.value } : item) })} /><Remove label={`Remove boundary ${index + 1}`} onClick={() => onChange({ ...draft, boundaries: draft.boundaries.filter((item) => item.id !== row.id) })} /></div><MarkdownAuthoringField label={`Boundary ${index + 1} rule`} editorKey={`plan:boundary:${row.id}`} value={row.rule} maxLength={PROJECT_WORK_TEXT_MAX} onChange={(rule) => onChange({ ...draft, boundaries: draft.boundaries.map((item) => item.id === row.id ? { ...item, rule } : item) })} onCreateShortcut={onCreateShortcut} /></div>)}
-        <Button type="button" variant="outline" size="sm" disabled={draft.boundaries.length >= MAX_CREATE_ROWS} onClick={() => onChange({ ...draft, boundaries: [...draft.boundaries, { id: createDraftId("boundary"), scope: "", rule: "" }] })} className="self-start"><Plus /> Add boundary</Button>
-        {draft.risks.map((row, index) => <div key={row.id} className="rounded-md border border-line bg-surface-2 p-2"><div className="mb-2 flex gap-2"><select aria-label={`Risk ${index + 1} severity`} className={selectClass} value={row.severity} onChange={(event) => onChange({ ...draft, risks: draft.risks.map((item) => item.id === row.id ? { ...item, severity: event.target.value as typeof row.severity } : item) })}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select><Input aria-label={`Risk ${index + 1} summary`} value={row.summary} maxLength={LINE_MAX} placeholder="Risk" onChange={(event) => onChange({ ...draft, risks: draft.risks.map((item) => item.id === row.id ? { ...item, summary: event.target.value } : item) })} /><Remove label={`Remove risk ${index + 1}`} onClick={() => onChange({ ...draft, risks: draft.risks.filter((item) => item.id !== row.id) })} /></div><MarkdownAuthoringField label={`Risk ${index + 1} control`} editorKey={`plan:risk:${row.id}`} value={row.control} maxLength={PROJECT_WORK_TEXT_MAX} onChange={(control) => onChange({ ...draft, risks: draft.risks.map((item) => item.id === row.id ? { ...item, control } : item) })} onCreateShortcut={onCreateShortcut} /></div>)}
-        <Button type="button" variant="outline" size="sm" disabled={draft.risks.length >= MAX_CREATE_ROWS} onClick={() => onChange({ ...draft, risks: [...draft.risks, { id: createDraftId("risk"), summary: "", control: "", severity: "medium" }] })} className="self-start"><Plus /> Add risk</Button>
-        <LineList label="Verification check" rows={draft.verification} placeholder="How the Plan will be verified" onChange={(verification) => onChange({ ...draft, verification })} />
-        <MarkdownAuthoringField label="Plan document" editorKey="plan:document" value={draft.document} maxLength={PROJECT_WORK_MARKDOWN_MAX} onChange={(document) => onChange({ ...draft, document })} onCreateShortcut={onCreateShortcut} />
+        {draft.boundaries.map((row, index) => (
+          <div key={row.id} className="rounded-md border border-line bg-surface-2 p-2">
+            <div className="mb-2 flex gap-2">
+              <Input
+                aria-label={`Boundary ${index + 1} scope`}
+                value={row.scope}
+                maxLength={LINE_MAX}
+                placeholder="Boundary scope"
+                onChange={(event) => onChange({
+                  ...draft,
+                  boundaries: draft.boundaries.map((item) => item.id === row.id ? { ...item, scope: event.target.value } : item),
+                })}
+              />
+              <Remove
+                label={`Remove boundary ${index + 1}`}
+                onClick={() => onChange({ ...draft, boundaries: draft.boundaries.filter((item) => item.id !== row.id) })}
+              />
+            </div>
+            <MarkdownAuthoringField
+              label={`Boundary ${index + 1} rule`}
+              editorKey={`plan:boundary:${row.id}`}
+              value={row.rule}
+              maxLength={PROJECT_WORK_TEXT_MAX}
+              onChange={(rule) => onChange({
+                ...draft,
+                boundaries: draft.boundaries.map((item) => item.id === row.id ? { ...item, rule } : item),
+              })}
+              onCreateShortcut={onCreateShortcut}
+            />
+          </div>
+        ))}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={draft.boundaries.length >= MAX_CREATE_ROWS}
+          onClick={() => onChange({
+            ...draft,
+            boundaries: [...draft.boundaries, { id: createDraftId("boundary"), scope: "", rule: "" }],
+          })}
+          className="self-start"
+        >
+          <Plus /> Add boundary
+        </Button>
+        {draft.risks.map((row, index) => (
+          <div key={row.id} className="rounded-md border border-line bg-surface-2 p-2">
+            <div className="mb-2 flex gap-2">
+              <select
+                aria-label={`Risk ${index + 1} severity`}
+                className={selectClass}
+                value={row.severity}
+                onChange={(event) => onChange({
+                  ...draft,
+                  risks: draft.risks.map((item) => item.id === row.id
+                    ? { ...item, severity: event.target.value as typeof row.severity }
+                    : item),
+                })}
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+              <Input
+                aria-label={`Risk ${index + 1} summary`}
+                value={row.summary}
+                maxLength={LINE_MAX}
+                placeholder="Risk"
+                onChange={(event) => onChange({
+                  ...draft,
+                  risks: draft.risks.map((item) => item.id === row.id ? { ...item, summary: event.target.value } : item),
+                })}
+              />
+              <Remove
+                label={`Remove risk ${index + 1}`}
+                onClick={() => onChange({ ...draft, risks: draft.risks.filter((item) => item.id !== row.id) })}
+              />
+            </div>
+            <MarkdownAuthoringField
+              label={`Risk ${index + 1} control`}
+              editorKey={`plan:risk:${row.id}`}
+              value={row.control}
+              maxLength={PROJECT_WORK_TEXT_MAX}
+              onChange={(control) => onChange({
+                ...draft,
+                risks: draft.risks.map((item) => item.id === row.id ? { ...item, control } : item),
+              })}
+              onCreateShortcut={onCreateShortcut}
+            />
+          </div>
+        ))}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={draft.risks.length >= MAX_CREATE_ROWS}
+          onClick={() => onChange({
+            ...draft,
+            risks: [...draft.risks, { id: createDraftId("risk"), summary: "", control: "", severity: "medium" }],
+          })}
+          className="self-start"
+        >
+          <Plus /> Add risk
+        </Button>
+        <LineList
+          label="Verification check"
+          rows={draft.verification}
+          placeholder="How the Plan will be verified"
+          onChange={(verification) => onChange({ ...draft, verification })}
+        />
+        <MarkdownAuthoringField
+          label="Plan document"
+          editorKey="plan:document"
+          value={draft.document}
+          maxLength={PROJECT_WORK_MARKDOWN_MAX}
+          onChange={(document) => onChange({ ...draft, document })}
+          onCreateShortcut={onCreateShortcut}
+        />
       </Section>
     </div>
   );
 }
 
-export function TaskCreateFields({ draft, onChange, items, agentNames, onCreateShortcut }: { draft: TaskCreateDraft; onChange(draft: TaskCreateDraft): void; items: readonly ProjectWorkListItem[]; agentNames: readonly string[]; onCreateShortcut(): void }) {
+export function TaskCreateFields({
+  draft,
+  onChange,
+  items,
+  agentNames,
+  onCreateShortcut,
+}: {
+  draft: TaskCreateDraft;
+  onChange(draft: TaskCreateDraft): void;
+  items: readonly ProjectWorkListItem[];
+  agentNames: readonly string[];
+  onCreateShortcut(): void;
+}) {
   const tasks = items.filter((item) => item.kind === "task" && !item.archived);
   const plans = items.filter((item) => item.kind === "plan" && !item.archived);
   return (
     <div className="grid gap-3">
       <Section title="Scope and dependencies" detail="Declare where this writes and any real Tasks that must finish first.">
         <TaskChecks label="Task dependencies" tasks={tasks} selected={draft.dependencies} onChange={(dependencies) => onChange({ ...draft, dependencies })} />
-        {draft.scope.map((row, index) => <div key={row.id} className="flex gap-2"><select aria-label={`Affected area ${index + 1} type`} className={selectClass} value={row.type} onChange={(event) => onChange({ ...draft, scope: draft.scope.map((item) => item.id === row.id ? { ...item, type: event.target.value as typeof row.type } : item) })}><option value="package">Package</option><option value="repository">Repository</option><option value="path">Path</option></select><Input aria-label={`Affected area ${index + 1}`} value={row.text} maxLength={row.type === "path" ? 1_024 : 200} placeholder="Where the work lands" onChange={(event) => onChange({ ...draft, scope: draft.scope.map((item) => item.id === row.id ? { ...item, text: event.target.value } : item) })} /><Remove label={`Remove affected area ${index + 1}`} onClick={() => onChange({ ...draft, scope: draft.scope.filter((item) => item.id !== row.id) })} /></div>)}
-        <Button type="button" variant="outline" size="sm" disabled={draft.scope.length >= MAX_CREATE_ROWS} onClick={() => onChange({ ...draft, scope: [...draft.scope, { id: createDraftId("scope"), type: "path", text: "" }] })} className="self-start"><Plus /> Add affected area</Button>
+        {draft.scope.map((row, index) => (
+          <div key={row.id} className="flex gap-2">
+            <select
+              aria-label={`Affected area ${index + 1} type`}
+              className={selectClass}
+              value={row.type}
+              onChange={(event) => onChange({
+                ...draft,
+                scope: draft.scope.map((item) => item.id === row.id
+                  ? { ...item, type: event.target.value as typeof row.type }
+                  : item),
+              })}
+            >
+              <option value="package">Package</option>
+              <option value="repository">Repository</option>
+              <option value="path">Path</option>
+            </select>
+            <Input
+              aria-label={`Affected area ${index + 1}`}
+              value={row.text}
+              maxLength={row.type === "path" ? 1_024 : 200}
+              placeholder="Where the work lands"
+              onChange={(event) => onChange({
+                ...draft,
+                scope: draft.scope.map((item) => item.id === row.id ? { ...item, text: event.target.value } : item),
+              })}
+            />
+            <Remove
+              label={`Remove affected area ${index + 1}`}
+              onClick={() => onChange({ ...draft, scope: draft.scope.filter((item) => item.id !== row.id) })}
+            />
+          </div>
+        ))}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={draft.scope.length >= MAX_CREATE_ROWS}
+          onClick={() => onChange({
+            ...draft,
+            scope: [...draft.scope, { id: createDraftId("scope"), type: "path", text: "" }],
+          })}
+          className="self-start"
+        >
+          <Plus /> Add affected area
+        </Button>
         <LineList label="Non-goal" rows={draft.nonGoals} placeholder="What this Task will not change" onChange={(nonGoals) => onChange({ ...draft, nonGoals })} />
       </Section>
       <Section title="Acceptance and proof" detail="Say how done is judged. Commands remain literal and are never rendered as Markdown.">
-        {draft.acceptance.map((row, index) => <div key={row.id} className="rounded-md border border-line bg-surface-2 p-2"><div className="mb-1 flex items-center justify-between gap-2"><label className="flex items-center gap-2 text-xs text-ink-2"><input type="checkbox" checked={row.machineVerifiable} onChange={(event) => onChange({ ...draft, acceptance: draft.acceptance.map((item) => item.id === row.id ? { ...item, machineVerifiable: event.target.checked } : item) })} /> Checkable automatically</label><Remove label={`Remove acceptance criterion ${index + 1}`} onClick={() => onChange({ ...draft, acceptance: draft.acceptance.filter((item) => item.id !== row.id) })} /></div><MarkdownAuthoringField label={`Acceptance criterion ${index + 1}`} editorKey={`task:acceptance:${row.id}`} value={row.text} maxLength={PROJECT_WORK_TEXT_MAX} onChange={(text) => onChange({ ...draft, acceptance: draft.acceptance.map((item) => item.id === row.id ? { ...item, text } : item) })} onCreateShortcut={onCreateShortcut} />{row.machineVerifiable ? <Input className="mt-2 font-mono" aria-label={`Acceptance criterion ${index + 1} command`} value={row.command} maxLength={COMMAND_MAX} placeholder="Command (optional)" onChange={(event) => onChange({ ...draft, acceptance: draft.acceptance.map((item) => item.id === row.id ? { ...item, command: event.target.value } : item) })} /> : null}</div>)}
-        <Button type="button" variant="outline" size="sm" disabled={draft.acceptance.length >= MAX_CREATE_ROWS} onClick={() => onChange({ ...draft, acceptance: [...draft.acceptance, { ...emptyRow("acceptance"), machineVerifiable: false, command: "" }] })} className="self-start"><Plus /> Add acceptance criterion</Button>
-        <LineList label="Verification command" rows={draft.verificationCommands} placeholder="pnpm test" maxLength={COMMAND_MAX} onChange={(verificationCommands) => onChange({ ...draft, verificationCommands })} />
-        <label className="flex items-center gap-2 text-sm text-ink-2"><input type="checkbox" checked={draft.visualEvidenceRequired} onChange={(event) => onChange({ ...draft, visualEvidenceRequired: event.target.checked })} /> Visual evidence is required</label>
+        {draft.acceptance.map((row, index) => (
+          <div key={row.id} className="rounded-md border border-line bg-surface-2 p-2">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <label className="flex items-center gap-2 text-xs text-ink-2">
+                <input
+                  type="checkbox"
+                  checked={row.machineVerifiable}
+                  onChange={(event) => onChange({
+                    ...draft,
+                    acceptance: draft.acceptance.map((item) => item.id === row.id
+                      ? { ...item, machineVerifiable: event.target.checked }
+                      : item),
+                  })}
+                />
+                Checkable automatically
+              </label>
+              <Remove
+                label={`Remove acceptance criterion ${index + 1}`}
+                onClick={() => onChange({ ...draft, acceptance: draft.acceptance.filter((item) => item.id !== row.id) })}
+              />
+            </div>
+            <MarkdownAuthoringField
+              label={`Acceptance criterion ${index + 1}`}
+              editorKey={`task:acceptance:${row.id}`}
+              value={row.text}
+              maxLength={PROJECT_WORK_TEXT_MAX}
+              onChange={(text) => onChange({
+                ...draft,
+                acceptance: draft.acceptance.map((item) => item.id === row.id ? { ...item, text } : item),
+              })}
+              onCreateShortcut={onCreateShortcut}
+            />
+            {row.machineVerifiable ? (
+              <Input
+                className="mt-2 font-mono"
+                aria-label={`Acceptance criterion ${index + 1} command`}
+                value={row.command}
+                maxLength={COMMAND_MAX}
+                placeholder="Command (optional)"
+                onChange={(event) => onChange({
+                  ...draft,
+                  acceptance: draft.acceptance.map((item) => item.id === row.id ? { ...item, command: event.target.value } : item),
+                })}
+              />
+            ) : null}
+          </div>
+        ))}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={draft.acceptance.length >= MAX_CREATE_ROWS}
+          onClick={() => onChange({
+            ...draft,
+            acceptance: [...draft.acceptance, { ...emptyRow("acceptance"), machineVerifiable: false, command: "" }],
+          })}
+          className="self-start"
+        >
+          <Plus /> Add acceptance criterion
+        </Button>
+        <LineList
+          label="Verification command"
+          rows={draft.verificationCommands}
+          placeholder="pnpm test"
+          maxLength={COMMAND_MAX}
+          onChange={(verificationCommands) => onChange({ ...draft, verificationCommands })}
+        />
+        <label className="flex items-center gap-2 text-sm text-ink-2">
+          <input
+            type="checkbox"
+            checked={draft.visualEvidenceRequired}
+            onChange={(event) => onChange({ ...draft, visualEvidenceRequired: event.target.checked })}
+          />
+          Visual evidence is required
+        </label>
       </Section>
       <Section title="Ownership and context" detail="A Plan and an owner are optional; neither is a prerequisite for creating this Task.">
-        <label className="flex flex-col gap-1"><span className="eyebrow">Owner</span><select className={selectClass} value={draft.assignment} onChange={(event) => onChange({ ...draft, assignment: event.target.value as TaskCreateDraft["assignment"] })}><option value="unassigned">Nobody yet</option><option value="person">You</option>{agentNames.map((name) => <option key={name} value={`agent:${name}`}>{name}</option>)}</select></label>
-        <label className="flex flex-col gap-1"><span className="eyebrow">Plan</span><select className={selectClass} value={draft.planKey} onChange={(event) => onChange({ ...draft, planKey: event.target.value })}><option value="">No Plan</option>{plans.map((plan) => <option key={plan.key} value={plan.key}>{plan.key} · {plan.title}</option>)}</select></label>
-        <MarkdownAuthoringField label="Notes" editorKey="task:notes" value={draft.notes} maxLength={PROJECT_WORK_TEXT_MAX} onChange={(notes) => onChange({ ...draft, notes })} onCreateShortcut={onCreateShortcut} />
+        <label className="flex flex-col gap-1">
+          <span className="eyebrow">Owner</span>
+          <select
+            className={selectClass}
+            value={draft.assignment}
+            onChange={(event) => onChange({ ...draft, assignment: event.target.value as TaskCreateDraft["assignment"] })}
+          >
+            <option value="unassigned">Nobody yet</option>
+            <option value="person">You</option>
+            {agentNames.map((name) => <option key={name} value={`agent:${name}`}>{name}</option>)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="eyebrow">Plan</span>
+          <select className={selectClass} value={draft.planKey} onChange={(event) => onChange({ ...draft, planKey: event.target.value })}>
+            <option value="">No Plan</option>
+            {plans.map((plan) => <option key={plan.key} value={plan.key}>{plan.key} · {plan.title}</option>)}
+          </select>
+        </label>
+        <MarkdownAuthoringField
+          label="Notes"
+          editorKey="task:notes"
+          value={draft.notes}
+          maxLength={PROJECT_WORK_TEXT_MAX}
+          onChange={(notes) => onChange({ ...draft, notes })}
+          onCreateShortcut={onCreateShortcut}
+        />
       </Section>
     </div>
   );

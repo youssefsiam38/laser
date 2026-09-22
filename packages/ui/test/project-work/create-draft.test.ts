@@ -150,6 +150,31 @@ describe("typed creation drafts", () => {
     expect(projectWorkBodySchema.safeParse(body).success).toBe(true);
   });
 
+  it("uses person-written errors for incomplete structured Plan rows", () => {
+    const plan = newCreateDrafts().plan;
+    const first = item({ entityId: "t1", kind: "task", number: 1 });
+    const cases = [
+      {
+        draft: { ...plan, title: "Plan", primary: "Plan it", phases: [{ id: "p", name: "", summary: "", taskKeys: [first.key] }] },
+        message: "Name every phase that has selected Tasks or a summary.",
+      },
+      {
+        draft: { ...plan, title: "Plan", primary: "Plan it", boundaries: [{ id: "b", scope: "", rule: "Do not cross this." }] },
+        message: "Complete both the scope and rule for every boundary.",
+      },
+      {
+        draft: { ...plan, title: "Plan", primary: "Plan it", risks: [{ id: "r", summary: "", control: "Contain it.", severity: "high" as const }] },
+        message: "Complete both the summary and control for every risk.",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const checked = validateCreateDraft(testCase.draft, [first]);
+      expect(checked.details).toBe(testCase.message);
+      expect(checked.details).not.toContain("String must contain");
+    }
+  });
+
   it("uses trim only to test emptiness and rejects incomplete graph rows", () => {
     const design = newCreateDrafts().design;
     const body = bodyFromCreateDraft({ ...design, primary: markdown, principles: [], notes: markdown });

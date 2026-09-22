@@ -175,6 +175,7 @@ export function describeProjectWorkError(error: unknown): ProjectWorkFailure {
 export interface CreateWorkInput {
   title: string;
   body: ProjectWorkBody;
+  note?: string | undefined;
   sessionId?: string | undefined;
   actorLabel?: string | undefined;
 }
@@ -379,6 +380,7 @@ export class ProjectWorkStore {
       title: input.title,
       body: input.body,
       idempotencyKey: this.#newKey(),
+      ...(input.note !== undefined ? { note: input.note } : {}),
       ...origin(input),
     });
   }
