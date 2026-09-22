@@ -13,6 +13,13 @@ worktrees.
   move that the plan does not allow, in words.
 - **`/spec`, `/research`, `/design` and `/plan` work alone**, from any chat. No
   Spec is required to start researching; a chat with no project asks which one.
+- **Each kind has its own form and detail view.** Specs capture the problem and
+  acceptance criteria; Research frames questions; Designs hold the brief and
+  canvas; Plans organize phases and dependencies; Tasks define the work and
+  checks. Open a record to see its purpose, status, missing work and next actions.
+- **Read Markdown, write with highlighting.** Switch between Write and Preview
+  without saving your draft. Save is explicit, and a newer revision does not
+  silently replace the draft you are editing.
 - **Comments, reviews and approvals** sit on the exact revision they are about.
   An approval covers the bytes it approved — change them and it says so.
 
@@ -55,6 +62,7 @@ nothing in your repository until you say Start.
 
 ## Also in this release
 
+- Design's **Build index** action no longer crashes while sending its request.
 - Background work is called a **Command** everywhere a person reads it.
 - Scrolling up in a long conversation keeps working after a compaction.
 - A message to an agent that finished reopens it instead of calling it unknown.
