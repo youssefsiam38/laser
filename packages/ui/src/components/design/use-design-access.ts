@@ -82,9 +82,8 @@ export function useDesignAccess(projectId: string, options: { sessionPath?: stri
   const running = useMemo(() => commands.find((command) => command.running), [commands]);
 
   useEffect(() => {
-    const request = clientRef.current?.request;
     if (projectId === "") return;
-    if (!request) {
+    if (!clientRef.current) {
       setState({ kind: "unavailable", detail: DISCONNECTED_SENTENCE });
       return;
     }
@@ -92,8 +91,10 @@ export function useDesignAccess(projectId: string, options: { sessionPath?: stri
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const read = async (): Promise<void> => {
+      const currentClient = clientRef.current;
+      if (!currentClient) return;
       try {
-        const answer = await request("design/index/get", { projectId });
+        const answer = await currentClient.request("design/index/get", { projectId });
         if (cancelled) return;
         setCommands(answer.commands);
         setState(answer.state === "ready" && answer.index ? { kind: "ready", index: answer.index } : { kind: "absent", detail: answer.detail ?? "" });
@@ -112,10 +113,10 @@ export function useDesignAccess(projectId: string, options: { sessionPath?: stri
 
   const review = useCallback(
     async (verb: DesignReviewVerb): Promise<{ ok: true } | { ok: false; message: string }> => {
-      const request = clientRef.current?.request;
-      if (!request) return { ok: false, message: "This window is not connected right now." };
+      const currentClient = clientRef.current;
+      if (!currentClient) return { ok: false, message: "This window is not connected right now." };
       try {
-        const answer = await request("design/index/review", {
+        const answer = await currentClient.request("design/index/review", {
           projectId,
           entryId: verb.entryId,
           action: verb.action,
@@ -132,13 +133,13 @@ export function useDesignAccess(projectId: string, options: { sessionPath?: stri
   );
 
   const reindex = useCallback(async (): Promise<{ ok: true; commandId: string } | { ok: false; message: string }> => {
-    const request = clientRef.current?.request;
-    if (!request) return { ok: false, message: "This window is not connected right now." };
+    const currentClient = clientRef.current;
+    if (!currentClient) return { ok: false, message: "This window is not connected right now." };
     // Never sent without one: the control that calls this is only offered when
     // a conversation can own the build.
     if (ownerPath === undefined) return { ok: false, message: ownerRefusal ?? "" };
     try {
-      const answer = await request("design/index/build", {
+      const answer = await currentClient.request("design/index/build", {
         projectId,
         rebuild: false,
         sessionPath: ownerPath,
@@ -153,9 +154,9 @@ export function useDesignAccess(projectId: string, options: { sessionPath?: stri
 
   const stopReindex = useCallback(
     (commandId: string): void => {
-      const request = clientRef.current?.request;
-      if (!request) return;
-      void request("design/index/stop", { projectId, commandId })
+      const currentClient = clientRef.current;
+      if (!currentClient) return;
+      void currentClient.request("design/index/stop", { projectId, commandId })
         .then(() => refresh())
         .catch(() => refresh());
     },
@@ -164,18 +165,18 @@ export function useDesignAccess(projectId: string, options: { sessionPath?: stri
 
   const ground = useCallback(
     async (params: Omit<ClientRequests["design/host/ground"]["params"], "projectId">) => {
-      const request = clientRef.current?.request;
-      if (!request) throw new Error("This window is not connected right now.");
-      return await request("design/host/ground", { ...params, projectId });
+      const currentClient = clientRef.current;
+      if (!currentClient) throw new Error("This window is not connected right now.");
+      return await currentClient.request("design/host/ground", { ...params, projectId });
     },
     [projectId],
   );
 
   const groundSketchDocument = useCallback(
     async (params: Omit<ClientRequests["design/sketch/ground"]["params"], "projectId">) => {
-      const request = clientRef.current?.request;
-      if (!request) throw new Error("This window is not connected right now.");
-      return await request("design/sketch/ground", { ...params, projectId });
+      const currentClient = clientRef.current;
+      if (!currentClient) throw new Error("This window is not connected right now.");
+      return await currentClient.request("design/sketch/ground", { ...params, projectId });
     },
     [projectId],
   );
