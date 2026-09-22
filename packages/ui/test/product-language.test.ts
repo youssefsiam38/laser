@@ -14,6 +14,8 @@
  * "subagents", applied to the one word M21 gave a second meaning.
  */
 import { readdirSync, readFileSync } from "node:fs";
+
+import { FEATURE_MANIFESTS } from "@lasercode/protocol";
 import { describe, expect, it } from "vitest";
 
 const SRC = new URL("../src/", import.meta.url);
@@ -55,6 +57,15 @@ describe("the words a person reads", () => {
         const hit = phrase.exec(code);
         if (hit) offenders.push(`${name}: “${hit[0]}” — say ${instead}`);
       }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("says it in the Features cards too, which are copy the protocol happens to hold", () => {
+    const offenders: string[] = [];
+    for (const manifest of FEATURE_MANIFESTS) {
+      const words = [manifest.name, manifest.description, ...manifest.capabilities.map((capability) => capability.replaceAll("-", " "))].join(" \u00b7 ");
+      for (const { phrase } of RETIRED) if (phrase.test(words)) offenders.push(`${manifest.id}: “${phrase.exec(words)?.[0]}”`);
     }
     expect(offenders).toEqual([]);
   });

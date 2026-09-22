@@ -624,7 +624,19 @@ arrangement — and a layout is recomputed only when the tree's structure
 changes, never on an output or status update. Reduced motion loses only the
 movement.
 
-## 6. Background tasks
+## 6. Commands (the wire calls them tasks)
+
+**The word a person reads is “Command”** (M21-T23,
+[`project-lifecycle-leap.md`](project-lifecycle-leap.md) “Outside the
+workspace”). M21 gave the project a kind of its own called **Task**
+(`TASK-44`), so what this section describes is a *Command* on every surface a
+person reads, and `task` everywhere the machine reads: `tasks/list`,
+`tasks/update`, `tasks/output`, `tasks/stop`, `BackgroundTask`, `task_output`,
+`task_stop`, `task:<id>` and the module's own name are unchanged, because
+renaming a wire method to settle a noun is how a release breaks. The agent-
+facing text is the wire's, not the person's, so the tool result an agent reads
+may still say `task`. `packages/ui/test/product-language.test.ts` guards the
+person-facing half.
 
 The `background-work` module (`packages/pi-extension/src/modules/background-work.ts`)
 owns long commands. It overrides the engine's `bash` with one that delegates
@@ -673,7 +685,11 @@ process-tree kill, output truncation stay the engine's) and adds:
   is recorded and shown with the next turn, never waking one. `notify`
   without `background` is ignored.
 
-Background tasks and child agents share the fleet's run vocabulary.
+Commands and child agents share the fleet's run vocabulary. Since M21 the
+module is no longer the only producer of one: the worker publishes a Design
+**index build** and a **verification run** as Commands on the same surface,
+with no process behind either ([`ux-fleet.md`](ux-fleet.md), “The project
+lifecycle leap, as built”).
 
 The two task tools are Laser's own and obey the agent-facing tool contract
 ([`agent-tool-contract.md`](agent-tool-contract.md), D-350) like the harness

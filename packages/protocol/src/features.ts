@@ -46,11 +46,14 @@ export const FEATURE_MANIFESTS: readonly FeatureManifest[] = [
   {
     id: "subagents",
     name: "Subagents",
-    description: "Let agents start other agents as persistent sub-sessions, isolated in their own worktree unless the parent says otherwise, and run long commands as background tasks.",
+    // The card and its chips are read by a person, so they say Command, the
+    // fleet's own noun (M21-T23). The feature id, the module name and the
+    // `tasks/*` methods are unchanged: only the words moved.
+    description: "Let agents start other agents as persistent sub-sessions, isolated in their own worktree unless the parent says otherwise, and keep long commands running in the fleet.",
     defaultEnabled: true,
     scopes: ["global", "project"],
     dependencies: [],
-    capabilities: ["delegation", "sub-sessions", "worktrees", "background-tasks", "live-map"],
+    capabilities: ["delegation", "sub-sessions", "worktrees", "commands", "live-map"],
     restart: "worker",
   },
   {
