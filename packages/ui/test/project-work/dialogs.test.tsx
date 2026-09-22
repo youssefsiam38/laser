@@ -7,7 +7,7 @@
  * **Enter confirms neither** destructive act — the typed field swallows it and
  * the cancelling control holds focus when the dialog opens (D-355, AGENTS.md).
  */
-import { act } from "react";
+import { act, forwardRef, useImperativeHandle, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClientRequests } from "@lasercode/protocol";
@@ -15,15 +15,27 @@ import type { ClientRequests } from "@lasercode/protocol";
 import { CreateDialog } from "../../src/components/project-work/CreateDialog.js";
 import { DeleteDialog } from "../../src/components/project-work/ConfirmDialogs.js";
 import { ProjectWorkStore } from "../../src/project-work/store.js";
-import { openWorkCreate, resetWorkspaceUi } from "../../src/project-work/workspace-state.js";
+import { openWorkCreate, resetWorkspaceUi, workspaceUi } from "../../src/project-work/workspace-state.js";
 
 import { fakeHost, item, type FakeProject } from "./fixture.js";
+
+vi.mock("../../src/components/project-work/MarkdownSourceEditor.js", () => ({
+  MarkdownSourceEditor: forwardRef(function MockMarkdownSourceEditor(
+    props: { value: string; onChange(value: string): void; label: string; placeholder?: string; onCreateShortcut?(): void },
+    ref,
+  ) {
+    const field = useRef<HTMLTextAreaElement>(null);
+    useImperativeHandle(ref, () => ({ focus: () => field.current?.focus(), measure: () => {} }), []);
+    return <textarea ref={field} aria-label={props.label} value={props.value} placeholder={props.placeholder} onChange={(event) => props.onChange(event.target.value)} />;
+  }),
+}));
 
 vi.mock("../../src/runtime", async (original) => {
   const actual = await original<typeof import("../../src/runtime/index.js")>();
   return {
     ...actual,
     useLaserStable: () => ({ actions: { toast: () => {} } }),
+    useLaserState: () => undefined,
     useCapability: () => ({ state: "available" }),
   };
 });
@@ -58,6 +70,15 @@ afterEach(async () => {
   resetWorkspaceUi();
 });
 
+const setInput = async (field: HTMLInputElement | HTMLTextAreaElement, value: string): Promise<void> => {
+  await act(async () => {
+    const prototype = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+    setter?.call(field, value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
+
 async function store(): Promise<ProjectWorkStore> {
   const host = fakeHost([world()]);
   const created = new ProjectWorkStore({ request: host.request, projectId: "p1" });
@@ -85,8 +106,101 @@ describe("+ Create", () => {
     const work = await store();
     await act(async () => root.render(<CreateDialog store={work} />));
     await act(async () => openWorkCreate("research"));
-    expect(text()).toContain("Question");
+    expect(text()).toContain("Question tree");
+    expect(text()).toContain("Research boundary");
     expect(button("Create research")?.disabled).toBe(true);
+  });
+
+  it("shows distinct structure immediately and keeps each kind's exact draft while switching", async () => {
+    const work = await store();
+    await act(async () => root.render(<CreateDialog store={work} />));
+    await act(async () => openWorkCreate("spec"));
+
+    const specForm = document.querySelector<HTMLFormElement>("#spec-create-title")?.closest("form");
+    expect(specForm?.textContent).toContain("Requirements and acceptance");
+    await setInput(specForm!.querySelector<HTMLInputElement>("#spec-create-title")!, "Spec title");
+    await setInput(specForm!.querySelector<HTMLTextAreaElement>('textarea[aria-label="Brief"]')!, "  **spec bytes**  ");
+
+    await act(async () => button("Plan")?.click());
+    const planForm = document.querySelector<HTMLFormElement>("#plan-create-title")?.closest("form");
+    expect(planForm?.textContent).toContain("Dependency graph");
+    await setInput(planForm!.querySelector<HTMLInputElement>("#plan-create-title")!, "Plan title");
+    await setInput(planForm!.querySelector<HTMLTextAreaElement>('textarea[aria-label="Brief"]')!, "Plan bytes");
+
+    await act(async () => button("Spec")?.click());
+    expect((document.querySelector<HTMLInputElement>("#spec-create-title")?.value)).toBe("Spec title");
+    expect(specForm!.querySelector<HTMLTextAreaElement>('textarea[aria-label="Brief"]')?.value).toBe("  **spec bytes**  ");
+  });
+
+  it("previews without writing, blocks Enter/composition, and fences duplicate pending creates", async () => {
+    const work = await store();
+    let settleCreate: ((value: Awaited<ReturnType<ProjectWorkStore["create"]>>) => void) | undefined;
+    const creating = new Promise<Awaited<ReturnType<ProjectWorkStore["create"]>>>((resolve) => { settleCreate = resolve; });
+    const createSpy = vi.spyOn(work, "create").mockImplementation(() => creating);
+
+    await act(async () => root.render(<CreateDialog store={work} />));
+    await act(async () => openWorkCreate("task"));
+    const form = document.querySelector<HTMLFormElement>("#task-create-title")?.closest("form");
+    const title = form!.querySelector<HTMLInputElement>("#task-create-title")!;
+    const outcome = form!.querySelector<HTMLTextAreaElement>('textarea[aria-label="Outcome"]')!;
+    await setInput(title, "Typed task");
+    const exactOutcome = "  **exact outcome**\n<script id=\"draft-script\">bad()</script>  ";
+    await setInput(outcome, exactOutcome);
+    outcome.setSelectionRange(4, 9);
+
+    const writeTab = form!.querySelector<HTMLButtonElement>('button[role="tab"][aria-controls$="write"]')!;
+    await act(async () => writeTab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })));
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(form?.textContent).toContain("exact outcome");
+    expect(form?.querySelector("#draft-script")).toBeNull();
+
+    const previewTab = form!.querySelector<HTMLButtonElement>('button[role="tab"][aria-controls$="preview"]')!;
+    await act(async () => previewTab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true })));
+    expect([outcome.selectionStart, outcome.selectionEnd]).toEqual([4, 9]);
+    await act(async () => {
+      outcome.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, isComposing: true, bubbles: true, cancelable: true }));
+    });
+    expect(createSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      title.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(createSpy).not.toHaveBeenCalled();
+
+    await act(async () => button("Create task")?.click());
+    await act(async () => button("Create task")?.click());
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    expect(createSpy.mock.calls[0]?.[0]).toMatchObject({ body: { kind: "task", task: { outcome: exactOutcome } } });
+
+    await act(async () => settleCreate?.({ ok: false, failure: { kind: "refused", message: "Try again." } }));
+    expect(text()).toContain("Try again.");
+    expect(outcome.value).toBe(exactOutcome);
+  });
+
+  it("ignores a successful response after the dialog scope closes", async () => {
+    const work = await store();
+    let finish: ((value: Awaited<ReturnType<ProjectWorkStore["create"]>>) => void) | undefined;
+    vi.spyOn(work, "create").mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    await act(async () => root.render(<CreateDialog store={work} />));
+    await act(async () => openWorkCreate("design"));
+    const form = document.querySelector<HTMLFormElement>("#design-create-title")?.closest("form");
+    await setInput(form!.querySelector<HTMLInputElement>("#design-create-title")!, "Design it");
+    await setInput(form!.querySelector<HTMLTextAreaElement>('textarea[aria-label="Brief"]')!, "A real brief");
+    await act(async () => button("Create design")?.click());
+
+    await act(async () => openWorkCreate(undefined));
+    await act(async () => finish?.({
+      ok: true,
+      value: {
+        entity: { entityId: "late", kind: "design", key: "DES-2" },
+        revision: { revisionId: "r1" },
+        ref: {},
+        seq: 4,
+      } as never,
+    }));
+
+    expect(workspaceUi().creating).toBeUndefined();
+    expect(workspaceUi().selection).toBeUndefined();
   });
 });
 

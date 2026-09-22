@@ -218,35 +218,17 @@ export function FoundationWizard({ body, foundation, context, editable, dirty, o
       const skeleton = foundationPlanSkeleton(foundation, { designKey: workKey });
       const keys: string[] = [];
       for (const task of skeleton.tasks) {
-        const created = await context.store.create({ kind: "task", title: task.title, text: task.body.outcome });
+        const created = await context.store.create({ title: task.title, body: { kind: "task", task: task.body } });
         if (!created.ok) {
           actions.toast("error", created.failure.message);
           return;
         }
         keys.push(created.value.entity.key);
-        const written = await context.store.revise(
-          { entityId: created.value.entity.entityId, expectedRevisionId: created.value.revision.revisionId },
-          { kind: "task", task: task.body },
-          { note: "From the approved foundation" },
-        );
-        if (!written.ok) {
-          actions.toast("error", written.failure.message);
-          return;
-        }
       }
       const plan = foundationPlanWithKeys(skeleton, keys);
-      const createdPlan = await context.store.create({ kind: "plan", title: "Build on the foundation", text: plan.brief });
+      const createdPlan = await context.store.create({ title: "Build on the foundation", body: { kind: "plan", plan } });
       if (!createdPlan.ok) {
         actions.toast("error", createdPlan.failure.message);
-        return;
-      }
-      const writtenPlan = await context.store.revise(
-        { entityId: createdPlan.value.entity.entityId, expectedRevisionId: createdPlan.value.revision.revisionId },
-        { kind: "plan", plan },
-        { note: "From the approved foundation" },
-      );
-      if (!writtenPlan.ok) {
-        actions.toast("error", writtenPlan.failure.message);
         return;
       }
       actions.toast("info", `${createdPlan.value.entity.key} created · ${keys[0] ?? "the foundation task"} is built first`);
