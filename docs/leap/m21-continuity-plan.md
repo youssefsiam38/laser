@@ -75,8 +75,9 @@ Everything the parent flagged is confirmed. Two further findings:
 { "version": 1, "projectId": "prj_…" }
 ```
 
-- Written when the store first mints an id for a path, best effort: an
-  unwritable folder is not an error and absence is always tolerated.
+- Written when the project **first holds work** — after a successful
+  `project/work/*` write, not on a read (see "As built" below) — best effort:
+  an unwritable folder is not an error and absence is always tolerated.
 - Not in `TRUST_REQUIRING` (`settings.json`, `worktree-setup`, `agents`), so
   writing it never turns an ordinary folder into a trust prompt.
 - `.laser`, never `.pi` (invariant 6). Host-owned, like
@@ -88,8 +89,10 @@ bridge):
 
 | Situation | Answer |
 | --- | --- |
-| path already has a `project_paths` row | that id; write the marker if it is missing |
-| no row, no marker | mint (today's behaviour); write the marker |
+| path is the project's **current** folder | that id |
+| path has a row that is only *history* (the project moved on) and no matching marker | the row decides nothing: it is forgotten and the folder is treated as unknown, so a new folder at an old path never inherits another project's work |
+| path has a history row whose marker names that same project | the folder was moved back: relink and make it current |
+| no row, no marker | mint (today's behaviour) |
 | no row, marker names an **unknown** id that parses as an opaque id | adopt it as this store's id for the folder — the file is not rewritten, so the same folder keeps one identity across installs and machines |
 | no row, marker names a **known** id whose current path no longer exists | reconnect: `relinkProject`, silently — this is the relocation case |
 | no row, marker names a **known** id whose current path still exists | **conflict**: mint a fresh id so the app keeps working, and offer the person the previewed choice |
@@ -141,6 +144,26 @@ token-only visuals, keyboard reachable, no new colour.
 Protocol tests cover the two new methods (schema, policy, limit, sample,
 confirm/digest fences). UI tests cover the relink notice model. Worker tests
 cover any surface touched (expected: none beyond reading the existing field).
+
+## 2b. As built — two decisions the code makes that this plan did not
+
+1. **The marker is written when the project first holds work, not when its id
+   is minted.** Reading a project puts no file in anybody's repository: until
+   something is saved there is nothing a relocation could lose, and a file
+   appearing in `git status` merely because the workspace was opened is a cost
+   with no benefit. `ProjectWorkMethods.handle` calls `ProjectIdentity.noteWork`
+   after every successful write method; `project/work/identity` also heals a
+   project that has work and no marker. A project whose folder cannot be
+   written reads `unmarked` and says so, and only once it has work — an empty
+   project is `linked`, because nothing is at stake yet.
+2. **A conflict does not go away by being asked twice.** A copied folder is
+   given its own empty project on first open so the app keeps working, and
+   every later read still reports `conflict` (or `blocked`) while the folder's
+   marker names another live project, until the person chooses. Choosing
+   `reconnect` deletes that empty project, relinks the folder and **forgets
+   the still-existing folder it was copied from**, so two live folders never
+   map to one history; choosing `fresh` rewrites the marker to this folder's
+   own project and the question stops.
 
 ## 3. Constraints honoured
 
