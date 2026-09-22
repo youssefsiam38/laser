@@ -30,8 +30,8 @@
 | M21 Project lifecycle leap | in-progress (T24 acceptance and T25 release are the person's) |
 | M22 Model profiles | done |
 | M23 Plain Chat | done |
-| M24 Ask Oracle | in-progress (contract only) |
-| M25 External work links | in-progress (contract only) |
+| M24 Ask Oracle | in-progress (building, unmerged) |
+| M25 External work links | in-progress (building, unmerged) |
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
@@ -46,5 +46,7 @@
 **Needs you:**
 1. `pnpm -r build && pnpm sandbox` (http://127.0.0.1:41441), then work through B1–B12 in `docs/leap/m21-acceptance.md` — both themes, both widths, pointer and touch, reduced motion.
 2. Authorize the M21 release (T25) when the matrix looks right.
+
+**M24 and M25** are being built on isolated branches while M21 waits for authorization (D-370); neither reaches `main` or a release until M21 is published.
 
 **Other retained blockers:** M19-T7 waits for M19-T6 shared storage ownership. `packages/protocol/src/git-run.ts` registers no owned process (threat model G10), owned by the source-control leap. M17-T11 stays dropped by D-330.

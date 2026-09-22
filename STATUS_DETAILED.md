@@ -6496,10 +6496,10 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | --- | --- | --- | --- | --- | --- |
 | M24-T0 | Binding contract | done | codex-2026-09-21-model-profiles | `docs/ask-oracle.md`; `PLAN.md` M24; D-348 | see notes |
 | M24-T1 | Protocol and tool schema | in-progress | leap integration (oracle owner) | — | `PLAN.md` M24 |
-| M24-T2 | Worker Oracle service | todo | — | — | `PLAN.md` M24 |
-| M24-T3 | Work and repo context | todo | — | — | `PLAN.md` M24 |
-| M24-T4 | Transcript row, logs, usage | todo | — | — | `PLAN.md` M24 |
-| M24-T5 | Docs and release | todo | — | — | `PLAN.md` M24 |
+| M24-T2 | Worker Oracle service | in-progress | leap integration (oracle owner) | — | `PLAN.md` M24 |
+| M24-T3 | Work and repo context | in-progress | leap integration (oracle owner) | — | `PLAN.md` M24 |
+| M24-T4 | Transcript row, logs, usage | in-progress | leap integration (oracle owner) | — | `PLAN.md` M24 |
+| M24-T5 | Docs and release | in-progress | leap integration (oracle owner) | — | `PLAN.md` M24 |
 
 #### M24-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/ask-oracle.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M24 tasks added; D-348 recorded. Implementation not started.
@@ -6509,11 +6509,11 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M25-T0 | Binding contract | done | codex-2026-09-21-model-profiles | `docs/external-work-links.md`; `PLAN.md` M25; D-349 | see notes |
-| M25-T1 | Protocol: links, export methods, integration methods | todo | — | — | `PLAN.md` M25 |
-| M25-T2 | Host Jira client and store | todo | — | — | `PLAN.md` M25 |
-| M25-T3 | UI: chip, dialogs, integrations tab | todo | — | — | `PLAN.md` M25 |
-| M25-T4 | Agent export tool | todo | — | — | `PLAN.md` M25 |
-| M25-T5 | Security review, docs and release | todo | — | — | `PLAN.md` M25 |
+| M25-T1 | Protocol: links, export methods, integration methods | in-progress | leap integration (jira owner) | — | `PLAN.md` M25 |
+| M25-T2 | Host Jira client and store | in-progress | leap integration (jira owner) | — | `PLAN.md` M25 |
+| M25-T3 | UI: chip, dialogs, integrations tab | in-progress | leap integration (jira owner) | — | `PLAN.md` M25 |
+| M25-T4 | Agent export tool | in-progress | leap integration (jira owner) | — | `PLAN.md` M25 |
+| M25-T5 | Security review, docs and release | in-progress | leap integration (jira owner) | — | `PLAN.md` M25 |
 
 #### M25-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/external-work-links.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M25 tasks added; D-349 recorded. Implementation not started.
@@ -6539,6 +6539,11 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 - First publish preparation stopped before push/tag: full build/typecheck passed, worker MCP service test reported `unknown` instead of `connected` under the suite. Focused rerun in the exact isolated candidate passed 11/11 (`/tmp/laser-m26-mcp-check.log`). Resume started with unchanged source/notes as task `t-22636077`, log `/tmp/laser-m26-release-resume.log`. No release yet; no gate bypass.
 - Reviewed source assembly: `08ebe228b6d3e396b56494f17cf9d78a4ee8b9b5` on `release/m26-reviewed` is `f0267525` plus the exact reviewed `13b310f7` patch; both stable patch ids are `899a51d719cf30a196d2c8405f007ad06431881f`. Read-only release preview confirmed remote main `842bd911`, absent v0.14.0 tag/release, no exact-SHA CI yet, and 14-line notes `docs/leap/m26-release-notes.md`. Routine publish transaction started as task `t-4bf75353`, log `/tmp/laser-m26-release.log`; publication is not yet proven. Orchestrator will run isolated staged full gates before any tag.
 - Claimed: publish the missing M26 milestone required by `docs/goal-project-lifecycle-leap.md`. Prepare a source containing only the already-reviewed M26 implementation and review fixes, not unfinished M21. Base `f0267525` (M26 before lifecycle store merge), apply exact `13b310f7` M26-only review-fix patch; verify patch identity and run full gate. Routine release orchestrator owns isolated versioning, exact-source CI, tag and publication. Preserve parent/active worker state.
+
+#### M24/M25 owners
+- M24 Ask Oracle: run_4a596c3f (session 01a0c6f4-427b-7358-a82e-60b92f624588), branch agents/build-ask-oracle-4a596c3f, base 611ccab7.
+- M25 External work links: run_f195d12e (session 01a0c6f4-e393-7358-a82e-60bebafbee6b), branch agents/build-external-work-links-f195d12e, base 611ccab7.
+- Neither merges to `main` until M21 is published (D-370).
 
 ### D-370 · M24 and M25 are built while M21 waits for its release authorization
 
