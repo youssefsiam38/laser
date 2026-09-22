@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
 **Last updated:** M21 integrated on main · code checkpoint: e7442ca2
-**Current focus:** M21 is code-complete and green on main. Two things are the person's: the M21-T24 browser matrix and authorizing the M21-T25 release. M24 and M25 stay release-gated behind it.
+**Current focus:** M21-T13 reopened: person testing found Build index crashes reading `versionBlocked`. Repairing Design RPC receiver binding with behavioral regression coverage; earlier green gates did not catch it. Browser acceptance and release remain pending; Goal mode is inactive.
 
 | Milestone | State |
 | --- | --- |
@@ -35,7 +35,7 @@
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
-**M21, task by task:** T0–T23 and T26 are `done` with evidence in `STATUS_DETAILED.md`. T24 is half done — the deterministic matrix (8 scenarios across host, worker and UI) is merged; **the browser matrix B1–B12 in `docs/leap/m21-acceptance.md` is the person's and is the one open acceptance item** (D-342). T25 is `todo` and needs the person's release authorization.
+**M21, task by task:** T13 is reopened for the index request-binding defect; other T0–T23 and T26 rows retain their recorded evidence in `STATUS_DETAILED.md`. T24 is half done — the deterministic matrix (8 scenarios across host, worker and UI) is merged; **the browser matrix B1–B12 in `docs/leap/m21-acceptance.md` is the person's and is the one open acceptance item** (D-342). T25 is `todo` and needs the person's release authorization.
 
 **Gate:** **`pnpm verify && pnpm identity:check` pass on `main`** at `e7442ca2` (`t-da68933b`, verify 151.3s, `/tmp/laser-main-verify-1.log`), in a clean graphical environment. The same tree passed on the integration branch (`t-81817021`, 163.1s). Two suite defects were fixed on the way, not re-run away: three desktop real-host-spawn tests inherited the 5s default timeout under workspace concurrency (now declared 30s, like the other real-spawn suites), and one relay-client test counted retries that accrue after the moment it asserts.
 
@@ -44,7 +44,7 @@
 **What the leap shipped since the last release:** durable verification evidence with per-repository native acceptance (D-361/D-363/D-367), canonical metadata quotas (D-365), the verification Command with truthful Stop and settlement (D-364), project identity that survives relocation (D-368), the security/privacy/resource hardening pass with its threat model (D-369), product language reconciled to Command, the Research run as a fleet Command, and the deterministic lifecycle acceptance matrix.
 
 **Needs you:**
-1. `pnpm -r build && pnpm sandbox` (http://127.0.0.1:41441), then work through B1–B12 in `docs/leap/m21-acceptance.md` — both themes, both widths, pointer and touch, reduced motion.
+1. After the index repair, `pnpm -r build && PORT=41442 pnpm sandbox` (http://127.0.0.1:41442), then work through B1–B12 in `docs/leap/m21-acceptance.md`. Port 41441 is occupied by the installed host with real data, not the sandbox.
 2. Authorize the M21 release (T25) when the matrix looks right.
 
 **M24 and M25** are being built on isolated branches while M21 waits for authorization (D-370); neither reaches `main` or a release until M21 is published.
