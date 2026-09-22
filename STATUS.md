@@ -43,7 +43,7 @@
 - T2: quota accounting reviewed (`472b1347`) and final batch `ad09bb38` integrated; host 374 tests.
 - T20: done, merged `c3c64337` (D-368); host453/protocol768/UI241.
 - T23: done, merged; two T20 UI regressions fixed by parent. M17-T11 is absorbed by D-330 (dropped), not reopened.
-- T26: reopened for the missing Research fleet row/Stop (`run_253a9729`).
+- T26: done; the Research run is a fleet Command with Stop and five honest endings (`dbd2e6a0`).
 - Forensics fixes integrated from `fix/session-forensics` (v0.14.0 + 4): M16-T100 scroll-up after compaction, M13-T129 message reopens a released child, M18-T20 catalog paging + worker compile cache; parent reproduced focused worker169/host69 green, 7 red without the fixes. Ship in the next release.
 - Integrated: T9/T17 mentions, T14 Foundation, T21 interop, image fixture and transcript continuity repairs. Exact ancestry/owners in `STATUS_DETAILED.md`.
 
