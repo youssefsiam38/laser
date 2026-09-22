@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
-**Last updated:** resumed leap integration · code checkpoint: f846a90f
-**Current focus:** M21 integration and acceptance gaps. T10/T13 and T14 integrated/done; T18/T19 evidence/lifetime remain, and T2 canonical metadata quota coverage is reopened. T21 reviewed corrections integrated/done. M26 v0.14.0 is published and verified; M21 remains the next release gate.
+**Last updated:** M21 integrated on main · code checkpoint: e7442ca2
+**Current focus:** M21 is code-complete and green on main. Two things are the person's: the M21-T24 browser matrix and authorizing the M21-T25 release. M24 and M25 stay release-gated behind it.
 
 | Milestone | State |
 | --- | --- |
@@ -27,7 +27,7 @@
 | M18 Resource containment | done |
 | M19 Runtime recovery/update activation | in-progress |
 | M20 Source-control leap | in-progress |
-| M21 Project lifecycle leap | in-progress |
+| M21 Project lifecycle leap | in-progress (T24 acceptance and T25 release are the person's) |
 | M22 Model profiles | done |
 | M23 Plain Chat | done |
 | M24 Ask Oracle | in-progress (contract only) |
@@ -35,19 +35,16 @@
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 
-**Active owners:**
-- T10/T13: done; reviewed source merged `b4ed1003` + correction `d408e8ea`. Parent450 focused tests and merged full verify/identity pass.
-- T2/T18/T19: done; final batch `c8d20389` merged (`f10501a0`).
-- T22: done, merged (D-369, `docs/leap/m21-threat-model.md`); host415 post-merge.
-- T24: deterministic half done and merged (8 scenarios, `docs/leap/m21-acceptance.md`); **the person's browser matrix B1–B12 is the one open acceptance item**.
-- T2: quota accounting reviewed (`472b1347`) and final batch `ad09bb38` integrated; host 374 tests.
-- T20: done, merged `c3c64337` (D-368); host453/protocol768/UI241.
-- T23: done, merged; two T20 UI regressions fixed by parent. M17-T11 is absorbed by D-330 (dropped), not reopened.
-- T26: done; the Research run is a fleet Command with Stop and five honest endings (`dbd2e6a0`).
-- Forensics fixes integrated from `fix/session-forensics` (v0.14.0 + 4): M16-T100 scroll-up after compaction, M13-T129 message reopens a released child, M18-T20 catalog paging + worker compile cache; parent reproduced focused worker169/host69 green, 7 red without the fixes. Ship in the next release.
-- Integrated: T9/T17 mentions, T14 Foundation, T21 interop, image fixture and transcript continuity repairs. Exact ancestry/owners in `STATUS_DETAILED.md`.
+**M21, task by task:** T0–T23 and T26 are `done` with evidence in `STATUS_DETAILED.md`. T24 is half done — the deterministic matrix (8 scenarios across host, worker and UI) is merged; **the browser matrix B1–B12 in `docs/leap/m21-acceptance.md` is the person's and is the one open acceptance item** (D-342). T25 is `todo` and needs the person's release authorization.
 
-**Gate:** integrated M21 line: **`pnpm verify && pnpm identity:check` pass** (`t-81817021`, verify 163.1s, `/tmp/laser-integrated-verify-4.log`). An earlier run of the same tree failed three desktop real-host-spawn tests on the 5s default timeout under workspace concurrency (`/tmp/laser-integrated-verify-3.log`); the cause was the undeclared timeout, now declared at 30s like the other real-spawn suites, and one relay-client test that counted retries after the moment it asserts. Both fixed, not re-run away.
-**Published:** v0.14.0 Latest (M26), v0.13.0 (M23), v0.12.0 (M22). Candidate `ac098597`; source CI `35616431166` and release `35616858358` attempt4 pass. Twelve assets/digests/source provenance verified; `docs/leap/m26-release-evidence.json`.
-**Next:** land T24 deterministic half and T26 research Command → full gate → T25 release (person browser matrix listed as open) → T22 hardening → T23 reconciliation/T24 acceptance → M21 release. M24/M25 implementation stays release-gated.
-**Other retained blocker:** M19-T7 waits for M19-T6 shared storage ownership. Person-owned M20/visual acceptance must not be inferred from unit tests.
+**Gate:** **`pnpm verify && pnpm identity:check` pass on `main`** at `e7442ca2` (`t-da68933b`, verify 151.3s, `/tmp/laser-main-verify-1.log`), in a clean graphical environment. The same tree passed on the integration branch (`t-81817021`, 163.1s). Two suite defects were fixed on the way, not re-run away: three desktop real-host-spawn tests inherited the 5s default timeout under workspace concurrency (now declared 30s, like the other real-spawn suites), and one relay-client test counted retries that accrue after the moment it asserts.
+
+**Published:** v0.14.0 Latest (M26), v0.13.0 (M23), v0.12.0 (M22). `docs/leap/m26-release-evidence.json` holds assets, digests and source provenance.
+
+**What the leap shipped since the last release:** durable verification evidence with per-repository native acceptance (D-361/D-363/D-367), canonical metadata quotas (D-365), the verification Command with truthful Stop and settlement (D-364), project identity that survives relocation (D-368), the security/privacy/resource hardening pass with its threat model (D-369), product language reconciled to Command, the Research run as a fleet Command, and the deterministic lifecycle acceptance matrix.
+
+**Needs you:**
+1. `pnpm -r build && pnpm sandbox` (http://127.0.0.1:41441), then work through B1–B12 in `docs/leap/m21-acceptance.md` — both themes, both widths, pointer and touch, reduced motion.
+2. Authorize the M21 release (T25) when the matrix looks right.
+
+**Other retained blockers:** M19-T7 waits for M19-T6 shared storage ownership. `packages/protocol/src/git-run.ts` registers no owned process (threat model G10), owned by the source-control leap. M17-T11 stays dropped by D-330.
