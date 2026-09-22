@@ -4,8 +4,8 @@ Status: **binding for M13 (D-140).** Agents are first-class in Laser: a
 person defines reusable agents on an Agents page, any session can start other
 agents through one `start_agent` tool, every child is a sub-session the person
 can chat with — in a worktree of its own unless its parent said otherwise — a
-live map shows each top-level session's agent tree, and long commands run as
-background tasks. Every agent on the Agents page is one a person wrote: the
+live map shows each top-level session's agent tree, and long commands keep
+running as Commands in the fleet (§6; the wire still calls them tasks). Every agent on the Agents page is one a person wrote: the
 product ships no agent of its own beyond the seeded, editable `default`
 (D-347, [`plain-chat.md`](plain-chat.md)).
 

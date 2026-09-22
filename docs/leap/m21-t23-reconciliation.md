@@ -136,6 +136,14 @@ fixture — identifiers and wire names are not copy. The agent-facing tool resul
 ("Background task `<id>` exited…") is also unchanged: the model is not a person
 surface, and that string is part of the tool's documented output.
 
+Engineering prose left alone: `docs/product-boundary.md`,
+`docs/project-environment.md`, `docs/environment-policy.md` and
+`docs/resource-and-loading-plan.md` still say "background task" where they
+describe the mechanism rather than the surface. The rule is about what a person
+reads; renaming every internal sentence would churn four documents this task
+does not own. `docs/agents.md` and `docs/architecture.md`, which it does own,
+read Command throughout.
+
 Guard: `packages/ui/test/product-language.test.ts` walks `packages/ui/src` with
 comments stripped, walks the protocol's feature manifests, and fails on
 "background task" / "background command" anywhere a person could read it, plus
