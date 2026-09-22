@@ -107,7 +107,7 @@ export class ProjectIdentity {
   private readonly store: ProjectWorkStore;
   private readonly marker: ProjectMarkerIo;
   private readonly exists: (path: string) => boolean;
-  /** Folders whose marker this process has already reconciled. */
+  /** Projects whose folder this process has already given a marker. */
   private readonly checked = new Set<string>();
 
   constructor(options: ProjectIdentityOptions) {
@@ -136,8 +136,7 @@ export class ProjectIdentity {
         // came from, and the person's answer is what settles it.
         return { projectId: row.projectId, state: "conflict", markedProjectId: marked, marker: true };
       }
-      const marker = marked === row.projectId ? true : this.ensureMarker(projectRoot, row.projectId, marked !== undefined);
-      return { projectId: row.projectId, state: marker ? "linked" : "unmarked", marker };
+      return { projectId: row.projectId, state: "linked", marker: marked !== undefined };
     }
 
     if (row !== undefined && marked === row.projectId) {
@@ -157,7 +156,6 @@ export class ProjectIdentity {
         // The folder it used to be at is gone. This is a move, and a move
         // keeps the id: nothing is merged, because there is only one folder.
         this.store.relinkProject(marked, projectRoot);
-        this.checked.add(projectRoot);
         return { projectId: marked, state: "linked", marker: true };
       }
       // Two live folders, one marker. This one gets its own empty project so
@@ -168,8 +166,35 @@ export class ProjectIdentity {
 
     // An unknown marker is adopted rather than overwritten; no marker mints.
     const projectId = this.store.projectIdFor(projectRoot, marked !== undefined ? { adopt: marked } : {})!;
-    const marker = projectId === marked ? true : this.ensureMarker(projectRoot, projectId, marked !== undefined);
-    return { projectId, state: marker ? "linked" : "unmarked", marker };
+    return { projectId, state: "linked", marker: marked !== undefined };
+  }
+
+  /**
+   * This project now holds work, so the folder should say which project it
+   * is (M21-T20).
+   *
+   * Called after a mutation rather than on every read, for one reason: until
+   * a person has saved something, there is nothing a relocation could lose,
+   * and Laser does not put a file in somebody's repository to prepare for a
+   * move that may never happen. Once there is work, the marker is what makes
+   * moving the folder keep it.
+   *
+   * Best effort throughout: a folder that cannot be written is not an error,
+   * it is a project whose relocation will need one confirmation.
+   */
+  noteWork(projectId: string): void {
+    if (this.checked.has(projectId)) return;
+    const root = this.store.projectPaths(projectId)[0];
+    if (root === undefined) return;
+    const marked = this.markerOf(root);
+    if (marked === projectId) {
+      this.checked.add(projectId);
+      return;
+    }
+    // A marker naming another project is never overwritten by a write: that
+    // is a conflict a person resolves, not something a save repairs.
+    if (marked !== undefined) return;
+    if (this.marker.write(root, projectId)) this.checked.add(projectId);
   }
 
   /**
@@ -185,7 +210,12 @@ export class ProjectIdentity {
     const marked = resolved.markedProjectId !== undefined ? this.sideOf(resolved.markedProjectId) : undefined;
     const hidden = this.store.isRemoved(resolved.projectId);
     const blocked = marked !== undefined && here.entities > 0;
-    const state: ProjectIdentityState = marked === undefined ? resolved.state : blocked ? "blocked" : "conflict";
+    // A project with work and no marker is one a move would lose. Try once to
+    // give it one; a folder that cannot be written says so instead.
+    if (marked === undefined && !resolved.marker && here.entities > 0) this.noteWork(resolved.projectId);
+    const marker = resolved.marker || this.markerOf(projectRoot) === resolved.projectId;
+    const state: ProjectIdentityState =
+      marked !== undefined ? (blocked ? "blocked" : "conflict") : marker || here.entities === 0 ? "linked" : "unmarked";
     const choices: ProjectRelinkChoice[] = state === "conflict" ? ["reconnect", "fresh"] : state === "blocked" ? ["fresh"] : [];
     const facts = {
       cwd: projectRoot,
@@ -193,7 +223,7 @@ export class ProjectIdentity {
       state,
       here,
       ...(marked ? { marked } : {}),
-      marker: resolved.marker,
+      marker,
       hidden,
       choices,
     };
@@ -260,7 +290,11 @@ export class ProjectIdentity {
     for (const path of before) {
       if (path !== input.projectRoot && this.exists(path)) this.store.forgetProjectPath(marked.projectId, path);
     }
-    this.checked.delete(input.projectRoot);
+    this.checked.delete(previousProjectId);
+    this.checked.delete(marked.projectId);
+    // The folder is this project's now, and it holds its work: say so on disk
+    // straight away rather than waiting for the next save.
+    this.noteWork(marked.projectId);
     return {
       cwd: input.projectRoot,
       projectId: marked.projectId,
@@ -279,16 +313,6 @@ export class ProjectIdentity {
     return text === undefined ? undefined : parseProjectMarker(text)?.projectId;
   }
 
-  /** Write the marker when it is missing, once per folder per process. */
-  private ensureMarker(projectRoot: string, projectId: string, present: boolean): boolean {
-    // A marker naming another project is never overwritten here: that is a
-    // conflict a person resolves, not something a read repairs.
-    if (present) return true;
-    if (this.checked.has(projectRoot)) return true;
-    const written = this.marker.write(projectRoot, projectId);
-    if (written) this.checked.add(projectRoot);
-    return written;
-  }
 
   private sideOf(projectId: string, fallbackPath?: string): ProjectIdentitySide {
     const path = this.store.projectPaths(projectId)[0] ?? fallbackPath;

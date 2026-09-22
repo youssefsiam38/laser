@@ -66,6 +66,7 @@ import {
   type ProjectWorkWrongProject,
   type ProjectTaskLinkExecutionResult,
   PROJECT_WORK_READ_METHODS,
+  PROJECT_WORK_WRITE_METHODS,
   type VerificationBridgeResult,
   type VerificationDeviation,
   type VerificationEnvelope,
@@ -257,10 +258,26 @@ export class ProjectWorkMethods {
    */
   async handle(request: ProjectWorkRequest, caller: ProjectWorkCaller): Promise<ProjectWorkResult> {
     try {
-      return await this.route(request, caller);
+      const result = await this.route(request, caller);
+      this.noteWork(request);
+      return result;
     } catch (error) {
       throw toProtocolError(error);
     }
+  }
+
+  /**
+   * A project that now holds work gets a marker in its folder (M21-T20).
+   *
+   * Deliberately after a write and never after a read: until a person has
+   * saved something there is nothing a move could lose, and Laser does not
+   * leave a file in somebody's repository preparing for one. Once there is
+   * work, the folder says which project it is, and moving it keeps it.
+   */
+  private noteWork(request: ProjectWorkRequest): void {
+    if (!(PROJECT_WORK_WRITE_METHODS as readonly string[]).includes(request.method)) return;
+    const projectId = (request.params as { projectId?: string }).projectId;
+    if (projectId !== undefined) this.identity.noteWork(projectId);
   }
 
   /**

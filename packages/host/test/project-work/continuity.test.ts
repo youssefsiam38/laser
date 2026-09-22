@@ -382,13 +382,13 @@ describe("removing a project hides its work and keeps it", () => {
 // ---------------------------------------------------------------------------
 
 describe.runIf(haveGit)("a project keeps its identity when its folder moves", () => {
-  it("writes a marker when it mints an id, and reconnects the same project from the new folder", async () => {
+  it("writes a marker when the project has work, and reconnects it from the new folder", async () => {
     const { root, repo } = project();
-    expect(markerId(root)).toEqual({ version: 1, projectId: h.projectId });
 
     const spec = ok<ProjectWorkWriteResult>(
       await h.call("project/work/create", { projectId: h.projectId, kind: "spec", title: "Phone review", body: specBody(), idempotencyKey: "spec" }),
     );
+    expect(markerId(root)).toEqual({ version: 1, projectId: h.projectId });
     const task = ok<ProjectWorkWriteResult>(
       await h.call("project/work/create", { projectId: h.projectId, kind: "task", title: "Sticky footer", body: taskBody(), idempotencyKey: "task" }),
     );
@@ -615,11 +615,28 @@ describe.runIf(haveGit)("a project keeps its identity when its folder moves", ()
     expect(markerId(root).projectId).toBe("prj_fromElsewhere1");
   });
 
-  it("works, and says so, when the folder cannot be written", async () => {
+  it("leaves a folder alone until the project has work in it", async () => {
+    const { root } = project();
+    // Reading a project puts no file in anybody's repository: there is
+    // nothing a move could lose yet.
+    const empty = await identity(root);
+    expect(empty.state).toBe("linked");
+    expect(empty.marker).toBe(false);
+    expect(existsSync(markerFile(root))).toBe(false);
+
+    ok(await h.call("project/work/create", { projectId: h.projectId, kind: "spec", title: "Phone review", body: specBody(), idempotencyKey: "spec" }));
+    expect(markerId(root)).toEqual({ version: 1, projectId: h.projectId });
+    expect((await identity(root)).marker).toBe(true);
+  });
+
+  it("works, and says so, when a project with work is in a folder that cannot be written", async () => {
     const dir = temp("continuity");
     h = projectWorkHarness({ dir });
     // A folder that is not there at all is the simplest unwritable folder.
     const absent = join(dir, "not-here");
+    const projectId = ok<ProjectWorkListResult>(await h.call("project/work/list", { cwd: absent })).projectId;
+    ok(await h.call("project/work/create", { projectId, kind: "spec", title: "Phone review", body: specBody(), idempotencyKey: "spec" }));
+
     const state = ok<ProjectIdentityResult>(await h.call("project/work/identity", { cwd: absent }));
     expect(state.state).toBe("unmarked");
     expect(state.marker).toBe(false);

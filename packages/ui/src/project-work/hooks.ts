@@ -25,6 +25,7 @@ const EMPTY: ProjectWorkSnapshot = {
   loading: false,
   resets: 0,
   more: false,
+  identity: undefined,
 };
 
 /**
