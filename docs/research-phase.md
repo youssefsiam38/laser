@@ -171,12 +171,22 @@ The engine instructions for a research session/run say, in this order:
    contradictions recorded, not silently resolved.
 6. **Resolve**: answer with citations; mark unanswerable with what would
    settle it; hand domain and preference questions to the person.
-7. **Stop**: when every question is resolved or the budget is spent; report
-   the budget spent and what remains.
+7. **Stop**: when every question is resolved, the budget is spent, the person
+   stops the run from its fleet row, or the turn the loop was running in
+   ends; report the budget spent and what remains.
 
 Budgets are per research run and visible: `maxSearches`, `maxReads`,
 `maxBytes`, wall clock; defaults are settings, overrides are per run and
 shown in the fleet row.
+
+A run **is a Command** (M21-T26), on the same terms as an index build and a
+verification run: one row under the conversation the loop runs in, showing the
+step and the counted spend and nothing else — no question text, no source
+address, no percentage; the conversation is pinned while the loop is live, so
+it cannot be released or retired underneath it; Stop from the row refuses the
+loop's next tool call with the sentence that tells the model to report what it
+found, and every finding already written stays written; and the terminal row
+says which of the five endings it was.
 
 ## Starting research
 
@@ -254,7 +264,7 @@ person writes may pin a profile and narrow adapters.
 | Layer | Change |
 | --- | --- |
 | Protocol | Research body schema (questions, findings, options, unresolved, `SourceRef`), adapter descriptors, research settings, `project/research/{record-finding,resolve-question}` methods (or body-typed `project/work/revise` operations), tool schemas under the contract |
-| Worker | `research/adapters/{web,project,repository,package,document,scholarly,tracker}.ts`, readable-text extraction, digest cache, budget accounting, tool registration, engine-instruction playbook, `/research` command handling |
+| Worker | `research/adapters/{web,project,repository,package,document,scholarly,tracker}.ts`, readable-text extraction, digest cache, budget accounting, the run registry that publishes the fleet row and answers its Stop (`research/runs.ts`), tool registration, engine-instruction playbook, `/research` command handling |
 | Host | authority for finding/question writes with confidence and citation rules, research cache quotas, attention items, adapter settings |
 | UI | Research tab list/detail (tree, findings, source panel with highlight), finding rows and chips, option matrix, budget header, settings "Research sources", `/research` and palette entries, phone read-only variant |
 | pi-extension | web-search module reuse for the `web` adapter; account-usage tagging of research requests |

@@ -46,6 +46,8 @@ import {
   type FoundationModelAccess,
   type ProposeFoundationInput,
 } from "../design/foundation/index.js";
+import type { ResearchLedger } from "../research/budget.js";
+import type { ResearchRunService } from "../research/runs.js";
 import {
   RESEARCH_TOOL_RECOVERY,
   readSourceTool,
@@ -104,8 +106,25 @@ export interface ProjectWorkSessionOptions {
    * profile that was assigned when it opened.
    */
   foundationModels?: FoundationModelAccess | (() => FoundationModelAccess | undefined) | undefined;
-  /** This session's research run, and the adapters it may use. */
-  research?: { bridge: ResearchBridge; adapters: readonly ResearchAdapterId[] } | undefined;
+  /**
+   * This session's research run, and the adapters it may use.
+   *
+   * `runs` and `ledger` are what make the loop a visible Command (M21-T26):
+   * the registry publishes the fleet row and answers a Stop from it, and the
+   * ledger is the budget that row shows and the stop that ends the loop.
+   * Absent in an evaluation fixture, which has no fleet and no person: the
+   * tools then work exactly as before, with no row.
+   */
+  research?:
+    | {
+        bridge: ResearchBridge;
+        adapters: readonly ResearchAdapterId[];
+        runs?: ResearchRunService | undefined;
+        ledger?: ResearchLedger | undefined;
+        /** Cut what the adapters are doing now, when a person stops the run. */
+        abort?: (() => void) | undefined;
+      }
+    | undefined;
   /** The Task this session is an attempt on, when it was opened for one. */
   task?: { entityId: string; key: string } | undefined;
   /** The project's own instructions, for the context packet. */
@@ -320,12 +339,32 @@ export class ProjectWorkSession implements ExtensionProjectWorkBridge {
       record_finding: (input) => recordFindingTool(bridge, input as unknown as RecordFindingInput),
       resolve_question: (input) => resolveQuestionTool(bridge, input as unknown as ResolveQuestionInput),
     };
+    // The loop is a Command: the first of these calls opens a run in the
+    // fleet under this conversation, every call moves its row on, and a
+    // person can stop it from that row (M21-T26). Nothing about the call
+    // itself changes — the registry wraps it, never replaces it.
+    const runs = research.runs;
+    const ledger = research.ledger;
+    const watched =
+      runs && ledger
+        ? (tool: string, handler: (input: Record<string, unknown>) => Promise<Record<string, unknown>>) =>
+            (input: Record<string, unknown>) =>
+              runs.during(
+                {
+                  sessionPath: this.options.sessionPath?.(),
+                  tool,
+                  ledger,
+                  ...(research.abort ? { abort: research.abort } : {}),
+                },
+                () => handler(input),
+              )
+        : (_tool: string, handler: (input: Record<string, unknown>) => Promise<Record<string, unknown>>) => handler;
     // The specs are built from the adapters this session really has, so a
     // switched-off source is not an option the model can pick and fail on.
     return researchToolSpecs(adapters).flatMap((spec) => {
       const run = handlers[spec.name];
       const recovery = RESEARCH_TOOL_RECOVERY[spec.name];
-      return run && recovery ? [{ spec, run, recovery }] : [];
+      return run && recovery ? [{ spec, run: watched(spec.name, run), recovery }] : [];
     });
   }
 

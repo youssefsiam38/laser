@@ -35,5 +35,15 @@ export {
   type SearchSourcesInput,
 } from "./tools.js";
 export { ProjectResearch, adapterForSourceId, type ProjectResearchOptions, type ResearchStore } from "./bridge.js";
-export { ResearchCommand, RESEARCH_PHASES, type ResearchCommandOptions, type ResearchCommandProgress, type ResearchPhase } from "./command.js";
+export {
+  ResearchCommand,
+  RESEARCH_PHASES,
+  RESEARCH_PHASE_LINES,
+  RESEARCH_ROW_ACTIVITY_MAX,
+  researchActivityLine,
+  type ResearchCommandOptions,
+  type ResearchCommandProgress,
+  type ResearchPhase,
+} from "./command.js";
+export { ResearchRunService, RESEARCH_ROW_INTERVAL_MS, RESEARCH_RUNS_KEPT, type ResearchEnding, type ResearchRunServiceOptions } from "./runs.js";
 export { researchPlaybook, researchPlaybookStep, RESEARCH_PLAYBOOK_STEPS, type ResearchPlaybookContext, type ResearchPlaybookStep } from "./playbook.js";

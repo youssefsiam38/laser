@@ -87,7 +87,9 @@ import type { DesignIndexBridge } from "./design/index/tools.js";
 import { designModelAccess, type DesignModelAccess } from "./design/profile.js";
 import { DesignWorkspace, isDesignCommandTaskId } from "./design/workspace.js";
 import { ProjectResearch } from "./research/bridge.js";
-import { enabledResearchAdapters, type ResearchAdapterId } from "@lasercode/protocol";
+import { enabledResearchAdapters, isResearchFleetTaskId, type ResearchAdapterId } from "@lasercode/protocol";
+import { ResearchRunService } from "./research/runs.js";
+import type { ResearchLedger } from "./research/budget.js";
 import type { ResearchBridge } from "./research/tools.js";
 import { createProcessRunner } from "./git-actions/index.js";
 import {
@@ -393,8 +395,15 @@ export class WorkerServer {
   private projectDesignIndex: ProjectDesignIndex | undefined;
   /** The design workspace's six methods over those two engines (M21-T13). */
   private projectDesignWorkspace: DesignWorkspace | undefined;
-  /** This worker's research run, with the adapters the person left on. */
-  private researchSession: { bridge: ResearchBridge; adapters: ResearchAdapterId[] } | undefined;
+  /**
+   * The research runs this worker holds, once a loop has started one
+   * (M21-T26).
+   *
+   * One registry for the whole worker, the way the verification runs have
+   * one: a research loop is a Command with a fleet row under the conversation
+   * it runs in, and Stop from that row is answered here.
+   */
+  private researchRunsService: ResearchRunService | undefined;
 
   constructor(private readonly options: WorkerServerOptions) {
     this.environmentId = options.environmentId ?? UNCONFIGURED_ENVIRONMENT;
@@ -746,7 +755,11 @@ export class WorkerServer {
           // serializes the move, plus verification runs that are winding up
           // and have not published their ending yet.
           const running = this.tasks.tasksOf(live.path).filter((task) => task.status === "running").length;
-          if (running > 0 || this.verificationRuns?.hasUnsettled(live.path) === true) {
+          if (
+            running > 0 ||
+            this.verificationRuns?.hasUnsettled(live.path) === true ||
+            this.researchRunsService?.hasUnsettled(live.path) === true
+          ) {
             throw new ProtocolError(
               ErrorCodes.SessionBusy,
               "This chat still has work running in it. Stop it and wait for it to finish, then move it.",
@@ -1130,6 +1143,14 @@ export class WorkerServer {
         // rather than delivered to the companion extension.
         if (isDesignCommandTaskId(req.params.id)) {
           return { delivered: this.designWorkspace().stopByTaskId(req.params.id) } satisfies Result<"pi/task/stop">;
+        }
+        // A research loop is the agent's own turn (D-351), not a process: Stop
+        // from its row sets the run's stop, so the loop's next tool call is
+        // refused with the sentence that tells it to report what it found.
+        // The field, not a getter: a worker nothing has researched in holds no
+        // registry, and a stop cannot mint one.
+        if (isResearchFleetTaskId(req.params.id)) {
+          return { delivered: this.researchRunsService?.stopByTaskId(req.params.id) ?? false } satisfies Result<"pi/task/stop">;
         }
         // The companion extension owns the process, so Stop is a command to
         // the session that started it. `delivered: false` means nobody in
@@ -2297,6 +2318,7 @@ export class WorkerServer {
       // session's own profile, and the link says which one, never a model.
       execution: () => this.executionShape(openOptions.cwd, () => live.driver.state().profile?.id, () => live.path),
     });
+    const research = this.researchRun(bridge, openOptions.cwd);
     return new ProjectWorkSession({
       bridge,
       cwd: openOptions.cwd,
@@ -2309,7 +2331,10 @@ export class WorkerServer {
       // "Model profiles"), read per call so a profile assigned while this
       // session is open counts.
       foundationModels: () => this.designModels(),
-      ...(this.researchRun(bridge, openOptions.cwd) ? { research: this.researchRun(bridge, openOptions.cwd) } : {}),
+      // Built once for this session: a second call would mint a second
+      // budget, and the row a person watches has to be the ledger the tools
+      // are really spending.
+      ...(research ? { research } : {}),
       projectInstructions: () => projectInstructions(this.options.cwd),
       // A run a model starts belongs to the conversation it ran in, and shows
       // in the fleet under it (M21-T19).
@@ -2533,14 +2558,57 @@ export class WorkerServer {
   }
 
   /**
+   * The research runs this worker holds (M21-T26).
+   *
+   * A research loop is a Command: it takes a fleet row under the conversation
+   * it runs in, it pins that conversation while it is going — because a
+   * session with a running command is pinned (`session-safety.ts`) — and a
+   * person stops it from that row. One registry for the whole worker, so one
+   * loop is one run whichever session it is in.
+   */
+  private researchRuns(): ResearchRunService {
+    this.researchRunsService ??= new ResearchRunService({
+      // A run belongs to a conversation this worker is actually holding: a
+      // path nobody here has open could not be watched or stopped, and a row
+      // under it would be a row nobody can find.
+      holdsSession: (path) => this.runtimes.get(path) !== undefined,
+      // The row travels the road every Command row already travels: an
+      // extension message the host's task register folds into its own. This
+      // worker's own fleet index first, then the host's — an agent reading
+      // `inspect_fleet` sees the run, and the conversation that owns it cannot
+      // be released, unloaded or retired out from under it while it runs.
+      publishTask: (path, task) => {
+        const { logPath: _logPath, ...rest } = task as typeof task & { logPath?: string };
+        const message = { type: "lasercode/task/update", task: rest } as const;
+        this.tasks.observe(path, message);
+        this.notify("pi/extension/message", { path, message });
+      },
+      // The one thing the registry cannot report through a row: an observer
+      // that threw and lost one. Bounded and content-free.
+      log: (line) => console.error(`${PRODUCT_NAME} worker: ${line}`),
+    });
+    return this.researchRunsService;
+  }
+
+  /**
    * The research run this session may use, or nothing.
+   *
+   * One per session, because a research run's budget is its own
+   * (`docs/research-phase.md`: "Budgets are per research run") and so is the
+   * fleet row that shows it: two conversations researching at once are two
+   * runs, two rows and two budgets, not one shared ledger whose numbers
+   * neither of them can account for.
    *
    * The adapters come from Settings → Research sources, merged global then
    * project, so a source the person switched off is not a tool the model can
    * pick; with every source off, the research tools are simply absent.
    */
-  private researchRun(bridge: ProjectWorkBridge, cwd: string): { bridge: ResearchBridge; adapters: ResearchAdapterId[] } | undefined {
-    if (this.researchSession) return this.researchSession;
+  private researchRun(
+    bridge: ProjectWorkBridge,
+    cwd: string,
+  ):
+    | { bridge: ResearchBridge; adapters: ResearchAdapterId[]; runs: ResearchRunService; ledger: ResearchLedger; abort: () => void }
+    | undefined {
     let sources;
     try {
       sources = researchSourcesFrom(readEffectiveProductSettings(this.options.cwd, this.settings().agentDir, this.options.projectTrusted));
@@ -2550,6 +2618,9 @@ export class WorkerServer {
     const adapters = enabledResearchAdapters(sources);
     if (adapters.length === 0) return undefined;
     const search = new WebSearchService(this.settings().agentDir);
+    // A person's Stop reaches the fetches that are already in the air through
+    // this, and the ledger's own stop refuses the calls that come after it.
+    const stopping = new AbortController();
     const research = new ProjectResearch({
       projectCwd: cwd,
       stateDir: this.stateDir(),
@@ -2557,9 +2628,15 @@ export class WorkerServer {
       sources,
       store: bridgeResearchStore(bridge),
       webSearch: (query) => search.search(query),
+      signal: stopping.signal,
     });
-    this.researchSession = { bridge: research, adapters };
-    return this.researchSession;
+    return {
+      bridge: research,
+      adapters,
+      runs: this.researchRuns(),
+      ledger: research.ledger,
+      abort: () => stopping.abort(),
+    };
   }
 
   private async openAndAttach(openOptions: Parameters<SessionDriver["open"]>[0], handle?: SessionHandle): Promise<Live> {
@@ -2814,7 +2891,19 @@ export class WorkerServer {
    */
   private detachedWork(): SessionSafety[] {
     const out: SessionSafety[] = [];
-    for (const owed of this.verificationRuns?.unsettledWork() ?? []) {
+    const owedWork: Array<{ owed: { sessionPath: string; taskIds: string[] }; what: string }> = [
+      ...(this.verificationRuns?.unsettledWork() ?? []).map((owed) => ({ owed, what: "verification run" })),
+      // A research loop writes findings to the host as it goes, so the same
+      // rule holds for it (M21-T26): a run whose conversation closed while a
+      // write was in flight is work this worker still owes, and the process
+      // must not end in the middle of it.
+      ...(this.researchRunsService?.unsettledWork() ?? []).map((owed) => ({ owed, what: "research run" })),
+    ];
+    // One row per path, whatever kind of work is owed under it: the lifetime
+    // adds a row for a path it holds no runtime for only once, so two rows
+    // for one conversation would drop the second pin entirely.
+    const byPath = new Map<string, SessionSafety>();
+    for (const { owed, what } of owedWork) {
       const counted = new Set(
         this.tasks
           .tasksOf(owed.sessionPath)
@@ -2823,11 +2912,12 @@ export class WorkerServer {
       );
       const unaccounted = owed.taskIds.filter((id) => !counted.has(id)).length;
       if (unaccounted === 0) continue;
-      out.push({
-        path: owed.sessionPath,
-        pins: [{ kind: "task" as const, detail: `${String(unaccounted)} verification run(s) still settling` }],
-      });
+      const pin = { kind: "task" as const, detail: `${String(unaccounted)} ${what}(s) still settling` };
+      const row = byPath.get(owed.sessionPath);
+      if (row) row.pins = [...row.pins, pin];
+      else byPath.set(owed.sessionPath, { path: owed.sessionPath, pins: [pin] });
     }
+    out.push(...byPath.values());
     return out;
   }
 
@@ -3343,6 +3433,13 @@ export class WorkerServer {
         // in the order they wrote it. Fire and forget — a delivery that fails
         // keeps its message and its reason in the tray, and says so there.
         if (update.kind === "agent_settled" && live.pending) void live.pending.drain();
+        // And the research loop that turn was running is over: the agent runs
+        // the loop itself (D-351), so when its turn ends the loop has ended
+        // too, and its row says how far it got instead of staying `running`
+        // for ever under a conversation nobody is working in (M21-T26). The
+        // field, not a getter: a worker nothing has researched in holds no
+        // registry. A later turn that goes back to it opens the next run.
+        if (update.kind === "agent_settled") this.researchRunsService?.turnEnded(live.path);
         // Snapshot at Send, keyed by this prompt's id. Settles (including extra
         // wakes from children) must not mint another numbered checkpoint.
         if (update.kind === "message_end" && update.entry?.id) {
@@ -3411,6 +3508,10 @@ export class WorkerServer {
         // session itself. The field, not the getter: a conversation that
         // never verified must not acquire a service because it closed.
         this.verificationRuns?.sessionClosed(live.path);
+        // A research loop of this conversation on the same terms (M21-T26):
+        // it stops, it publishes nothing further, and what it had already
+        // recorded stays in the project's record.
+        this.researchRunsService?.sessionClosed(live.path);
         this.tasks.sessionClosed(live.path);
         // One holder fewer: the rest of this worker's sessions may keep more.
         this.applyLogBudgets();
@@ -3496,6 +3597,11 @@ export class WorkerServer {
     // follow the conversation, and the host requests it makes from here on
     // name the address it now lives at. The field, not the getter.
     this.verificationRuns?.rekeySession(oldPath, newPath);
+    // A research loop is a Command of the conversation it runs in, so it
+    // follows the same fork: the owner is unchanged, only its address moved,
+    // and the row is republished there so the moved conversation sees the
+    // Command it owns (M21-T26).
+    this.researchRunsService?.rekeySession(oldPath, newPath);
   }
 
   /** Re-send accepted updates after `fromSeq`, then any dialogs still waiting. */
