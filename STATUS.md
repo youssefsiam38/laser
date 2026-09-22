@@ -1,7 +1,7 @@
 # STATUS.md — one screen, always current
 
 **Last updated:** Design index receiver repair merged · code checkpoint: c085f82a
-**Current focus:** Build index receiver crash fixed on main (`c085f82a`), independently reviewed; design123, test types, typecheck, identity and UI build pass. Person retry remains pending. M21-T6 kind-aware creation and opened detail views are in design planning, including rendered Markdown by default and highlighted Write/Preview editing before Save. Browser acceptance and release remain pending; Goal mode is inactive.
+**Current focus:** Build index receiver crash fixed on main (`c085f82a`), independently reviewed; design123, test types, typecheck, identity and UI build pass. Person retry remains pending. M21-T6 plan approved: kind-specific creation forms and highlighted Markdown Write/Preview control are implementing first; opened detail views follow as a separate reviewed milestone under the same owner. Viewing will render Markdown by default; Preview never saves. Browser acceptance and release remain pending; Goal mode is inactive.
 
 | Milestone | State |
 | --- | --- |
