@@ -6495,7 +6495,7 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M24-T0 | Binding contract | done | codex-2026-09-21-model-profiles | `docs/ask-oracle.md`; `PLAN.md` M24; D-348 | see notes |
-| M24-T1 | Protocol and tool schema | todo | — | — | `PLAN.md` M24 |
+| M24-T1 | Protocol and tool schema | in-progress | leap integration (oracle owner) | — | `PLAN.md` M24 |
 | M24-T2 | Worker Oracle service | todo | — | — | `PLAN.md` M24 |
 | M24-T3 | Work and repo context | todo | — | — | `PLAN.md` M24 |
 | M24-T4 | Transcript row, logs, usage | todo | — | — | `PLAN.md` M24 |
@@ -6539,6 +6539,10 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 - First publish preparation stopped before push/tag: full build/typecheck passed, worker MCP service test reported `unknown` instead of `connected` under the suite. Focused rerun in the exact isolated candidate passed 11/11 (`/tmp/laser-m26-mcp-check.log`). Resume started with unchanged source/notes as task `t-22636077`, log `/tmp/laser-m26-release-resume.log`. No release yet; no gate bypass.
 - Reviewed source assembly: `08ebe228b6d3e396b56494f17cf9d78a4ee8b9b5` on `release/m26-reviewed` is `f0267525` plus the exact reviewed `13b310f7` patch; both stable patch ids are `899a51d719cf30a196d2c8405f007ad06431881f`. Read-only release preview confirmed remote main `842bd911`, absent v0.14.0 tag/release, no exact-SHA CI yet, and 14-line notes `docs/leap/m26-release-notes.md`. Routine publish transaction started as task `t-4bf75353`, log `/tmp/laser-m26-release.log`; publication is not yet proven. Orchestrator will run isolated staged full gates before any tag.
 - Claimed: publish the missing M26 milestone required by `docs/goal-project-lifecycle-leap.md`. Prepare a source containing only the already-reviewed M26 implementation and review fixes, not unfinished M21. Base `f0267525` (M26 before lifecycle store merge), apply exact `13b310f7` M26-only review-fix patch; verify patch identity and run full gate. Routine release orchestrator owns isolated versioning, exact-source CI, tag and publication. Preserve parent/active worker state.
+
+### D-370 · M24 and M25 are built while M21 waits for its release authorization
+
+M21 is code-complete and green on `main`; its publication needs the person's explicit release authorization and the person's browser matrix (T24, D-342), neither of which an agent may supply. Rather than idle, M24 and M25 are implemented on isolated branches. Nothing they produce is merged into `main` and nothing is released until M21 is published, so the delivery order in `docs/goal-project-lifecycle-leap.md` is preserved where it binds — the order of *releases*. This is recorded rather than done quietly, because M21's own history contains an unrecorded development-before-publication violation that this decision deliberately does not repeat.
 
 ### D-369 · Native acceptance reach stays "any paired device"
 
