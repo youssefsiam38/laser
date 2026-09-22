@@ -6139,6 +6139,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap: host gate rules (`project-work/gates.ts` + the store's comment/review/approve paths) and the UI comments/gate card/Approval Card; write set disjoint from T16 (plan/task/board files) and T17 (bridge/methods wiring).
 
 #### M21-T22 notes
+- Owner run_8fb1f38d (session 01a0c66f-62d0-7358-a82e-60a167b2a18f), branch agents/harden-leap-security-and-resources-8fb1f38d, base 55014507.
 - Claimed. Owner audits the whole leap surface (host methods/policy, tools, relay/phone capability matrix, quotas, hostile payloads, credential/source-markup leakage) and writes docs/leap/m21-threat-model.md before hardening code; write set disjoint from T20 (identity/relocation) — T22 does not touch project identity/relocation code.
 
 #### M21-T20 notes
