@@ -6052,7 +6052,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T20 | Cross-session continuity and recovery | done | leap integration | merged `a0db54b5` (`cfba7d09`,`9c9eca46`,`ded072cf`); host453 (`continuity.test.ts` 15)/protocol768/UI241 (`continuity.test.tsx` 7)/identity (`/tmp/laser-t20-parent.log`); red 9/14 without the fix (`/tmp/t20-red.log`); D-368 | see notes; IdentityNotice look and move-the-folder flow person-owned (T24) |
 | M21-T21 | Import, export and repository publication | done | leap integration | merged `23a3fa45`; build/typecheck/host224/UI34/identity; final strict UTF-8 correction interop61 + host typecheck/identity | see notes |
 | M21-T22 | Security, privacy, relay and resource hardening | in-progress | leap integration (hardening owner) | — | see notes |
-| M21-T23 | Product-language and element reconciliation | todo | — | — | `PLAN.md` M21 |
+| M21-T23 | Product-language and element reconciliation | in-progress | leap integration (reconciliation owner) | — | see notes |
 | M21-T24 | End-to-end project lifecycle acceptance | todo | — | — | `PLAN.md` M21 |
 | M21-T25 | Release the project lifecycle leap | todo | — | — | `PLAN.md` M21 |
 | M21-T26 | Research phase: adapters, tools and loop | done | claude-2026-09-21-leap | `331962d4` (merged `170b1457`); `pnpm -F @lasercode/worker test` (1452 passed; `test/research/*` 100) · protocol 619 | see notes |
@@ -6137,6 +6137,9 @@ live work holding its row when a snapshot thins — because both are real hazard
 #### M21-T8 notes
 - 2026-09-21 done (`98a01428`): host `gates.ts` `GateEngine` (Brief/Design/Build subjects and requirements, complete digest set, person-only, blocking comments named, invalidation on material revise via covers ∪ `propagateStale`), comments with semantic anchors re-decided orphaned per revision; protocol gate report/anchor helpers, `SpecBody.gated` opt-in (decision 1); UI `GateCard` (Approve disabled with the host's reason, typed key confirmation, Enter never approves), `CommentsPanel` (threads, anchors, blocking, batched one-revision request), `ApprovalRequestCard` above the composer opening the workspace at the exact revision.
 - 2026-09-21 claimed by claude-2026-09-21-leap: host gate rules (`project-work/gates.ts` + the store's comment/review/approve paths) and the UI comments/gate card/Approval Card; write set disjoint from T16 (plan/task/board files) and T17 (bridge/methods wiring).
+
+#### M21-T23 notes
+- Claimed. Owner reconciles docs (D-140/D-147/goal/fleet), absorbs M17-T11, makes person surfaces say Command, and audits every claimed assistant-ui element row in docs/ux-elements.md as installed/mapped or rejected with reason. Write set: docs + UI copy/element mapping only; no host/protocol/worker source.
 
 #### M21-T22 notes
 - Owner run_8fb1f38d (session 01a0c66f-62d0-7358-a82e-60a167b2a18f), branch agents/harden-leap-security-and-resources-8fb1f38d, base 55014507.
