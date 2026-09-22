@@ -19,7 +19,15 @@
  */
 import { AlertTriangle, Check, FileDiff, Pencil, X } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
-import type { ProjectWorkRef, SpecBody, SpecForm } from "@lasercode/protocol";
+import {
+  PROJECT_WORK_MARKDOWN_MAX,
+  PROJECT_WORK_TEXT_MAX,
+  PROJECT_WORK_TITLE_MAX,
+  specBodySchema,
+  type ProjectWorkRef,
+  type SpecBody,
+  type SpecForm,
+} from "@lasercode/protocol";
 
 import { CodeDiff } from "@/components/assistant-ui/elements/code-diff";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +51,7 @@ import {
 
 import { MarkdownAuthoringField } from "../MarkdownAuthoringField.js";
 import { WorkEditFields, WorkEditNewerNotice, useWorkEditSession } from "../edit-session.js";
+import { errorAt, errorWithin, workFieldError, WORK_LINE_MAX, type WorkFieldError } from "../opened-work-validation.js";
 import type { WorkBodyContext } from "./context.js";
 import { Field, MarkdownField, MarkdownListField, Segmented, TextField } from "./editor-fields.js";
 import { SpecBodyView } from "./index.js";
@@ -62,6 +71,7 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
   const [title, setTitle] = useState(context.detail.revision.title);
   const [conflict, setConflict] = useState<Conflict | undefined>(undefined);
   const [difference, setDifference] = useState(false);
+  const [fieldError, setFieldError] = useState<WorkFieldError | undefined>(undefined);
 
   const edit = useWorkEditSession<SpecBody>(context);
 
@@ -71,6 +81,7 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
     setDraft(specDraft(owner.baseBody));
     setTitle(owner.baseTitle);
     setConflict(undefined);
+    setFieldError(undefined);
   }, [body, edit.begin]);
 
   const stop = useCallback(() => {
@@ -78,11 +89,18 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
     setDraft(undefined);
     setConflict(undefined);
     setDifference(false);
+    setFieldError(undefined);
   }, [edit.cancel]);
 
   const write = useCallback(
     async (expectedRevisionId: string | undefined, next: SpecBody, note: string | undefined) => {
       const submitted = specBodyFrom(structuredClone(next));
+      const parsed = specBodySchema.safeParse(submitted);
+      if (!parsed.success) {
+        setFieldError(workFieldError("spec", parsed.error.issues[0]));
+        return;
+      }
+      setFieldError(undefined);
       const submittedTitle = title.trim();
       const settled = await edit.submit(async (base) => {
         const outcome = await base.store.revise(
@@ -96,7 +114,7 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
         return { outcome, current };
       });
       if (settled.kind === "blocked") {
-        actions.toast("error", context.readOnlyReason ?? "This draft can no longer be saved from here.");
+        actions.toast("error", settled.reason ?? context.readOnlyReason ?? "This draft can no longer be saved from here.");
         return;
       }
       if (settled.kind === "ignored") return;
@@ -191,7 +209,7 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
 
       <WorkEditFields locked={edit.locked}>
       <Field label="Title" htmlFor="spec-title">
-        <Input id="spec-title" value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} className="text-sm" />
+        <Input id="spec-title" value={title} maxLength={PROJECT_WORK_TITLE_MAX} onChange={(event) => setTitle(event.target.value)} className="text-sm" />
       </Field>
 
       <TextField
@@ -201,6 +219,8 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
         value={draft.brief}
         onChange={(brief) => setDraft({ ...draft, brief })}
         placeholder="What is this, in a few sentences?"
+        maxLength={PROJECT_WORK_TEXT_MAX}
+        error={errorAt(fieldError, "brief")}
       />
 
       {draft.form === "full" ? (
@@ -216,6 +236,8 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
             value={draft.problem ?? ""}
             onChange={(problem) => setDraft({ ...draft, problem })}
             placeholder="What is wrong today, for whom?"
+            maxLength={PROJECT_WORK_TEXT_MAX}
+            error={errorAt(fieldError, "problem")}
           />
           <MarkdownListField
             editorKey="spec-outcome"
@@ -224,6 +246,8 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
             onChange={(outcomes) => setDraft({ ...draft, outcomes })}
             placeholder="What is true once this is done"
             addLabel="Add an outcome"
+            maxLength={WORK_LINE_MAX}
+            error={errorWithin(fieldError, "outcomes")}
           />
           <MarkdownListField
             editorKey="spec-non-goal"
@@ -232,9 +256,11 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
             onChange={(nonGoals) => setDraft({ ...draft, nonGoals })}
             placeholder="What this deliberately does not do"
             addLabel="Add a non-goal"
+            maxLength={WORK_LINE_MAX}
+            error={errorWithin(fieldError, "nonGoals")}
           />
-          <RequirementsField draft={draft} onChange={setDraft} />
-          <AcceptanceField draft={draft} onChange={setDraft} />
+          <RequirementsField draft={draft} onChange={setDraft} error={errorWithin(fieldError, "requirements")} />
+          <AcceptanceField draft={draft} onChange={setDraft} error={errorWithin(fieldError, "acceptance")} />
           <MarkdownListField
             editorKey="spec-constraint"
             label="Constraints"
@@ -242,6 +268,8 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
             onChange={(constraints) => setDraft({ ...draft, constraints })}
             placeholder="A rule this has to work inside"
             addLabel="Add a constraint"
+            maxLength={WORK_LINE_MAX}
+            error={errorWithin(fieldError, "constraints")}
           />
         </>
       ) : null}
@@ -252,6 +280,8 @@ export function SpecDocument({ body, context }: { body: SpecBody; context: WorkB
         value={draft.document ?? ""}
         onChange={(document) => setDraft({ ...draft, document })}
         placeholder="The long form, in Markdown. Headings, lists, code — the same renderer the conversation uses."
+        maxLength={PROJECT_WORK_MARKDOWN_MAX}
+        error={errorAt(fieldError, "document")}
       />
       </WorkEditFields>
 
@@ -381,9 +411,9 @@ function DifferenceDialog({
   );
 }
 
-function RequirementsField({ draft, onChange }: { draft: SpecBody; onChange: (body: SpecBody) => void }) {
+function RequirementsField({ draft, onChange, error }: { draft: SpecBody; onChange: (body: SpecBody) => void; error?: string | undefined }) {
   return (
-    <Field label="Requirements" hint="`must` blocks a gate; `should` and `may` do not.">
+    <Field label="Requirements" hint="`must` blocks a gate; `should` and `may` do not." error={error}>
       <ul role="list" className="flex flex-col gap-1.5">
         {draft.requirements.map((requirement, index) => (
           <li key={requirement.id} className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-line p-2">
@@ -403,6 +433,7 @@ function RequirementsField({ draft, onChange }: { draft: SpecBody; onChange: (bo
               label={`Requirement ${index + 1}`}
               value={requirement.text}
               placeholder="The system does…"
+              maxLength={PROJECT_WORK_TEXT_MAX}
               onChange={(text) =>
                 onChange({
                   ...draft,
@@ -432,9 +463,9 @@ function RequirementsField({ draft, onChange }: { draft: SpecBody; onChange: (bo
   );
 }
 
-function AcceptanceField({ draft, onChange }: { draft: SpecBody; onChange: (body: SpecBody) => void }) {
+function AcceptanceField({ draft, onChange, error }: { draft: SpecBody; onChange: (body: SpecBody) => void; error?: string | undefined }) {
   return (
-    <Field label="Acceptance" hint="Mark a criterion checkable when a command or a test can decide it without a person.">
+    <Field label="Acceptance" hint="Mark a criterion checkable when a command or a test can decide it without a person." error={error}>
       <ul role="list" className="flex flex-col gap-1.5">
         {draft.acceptance.map((criterion, index) => (
           <li key={criterion.id} className="flex min-w-0 flex-col gap-1.5 rounded-lg border border-line p-2">
@@ -459,6 +490,7 @@ function AcceptanceField({ draft, onChange }: { draft: SpecBody; onChange: (body
               label={`Acceptance criterion ${index + 1}`}
               value={criterion.text}
               placeholder="It is accepted when…"
+              maxLength={PROJECT_WORK_TEXT_MAX}
               onChange={(text) =>
                 onChange({
                   ...draft,

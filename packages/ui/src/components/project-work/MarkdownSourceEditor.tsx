@@ -68,7 +68,9 @@ export const MarkdownSourceEditor = forwardRef<MarkdownSourceEditorHandle, Markd
         ? []
         : [
             EditorState.transactionFilter.of((transaction) =>
-              !transaction.docChanged || transaction.newDoc.length <= maxLength ? transaction : [],
+              !transaction.docChanged || transaction.newDoc.length <= maxLength || transaction.newDoc.length < transaction.startState.doc.length
+                ? transaction
+                : [],
             ),
           ]),
       theme,

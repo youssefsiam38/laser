@@ -93,6 +93,24 @@ describe("the real Markdown source editor", () => {
     expect(container.textContent).toContain("12345");
     expect(container.textContent).not.toContain("123456");
   });
+
+  it("keeps an over-limit loaded draft and allows edits that recover it", async () => {
+    function Harness() {
+      const [value, setValue] = useState("1234567");
+      return <MarkdownAuthoringField label="Brief" value={value} maxLength={5} onChange={setValue} />;
+    }
+
+    await act(async () => root.render(<Harness />));
+    await settle();
+    const view = editorView();
+    expect(view.state.doc.toString()).toBe("1234567");
+    await act(async () => view.dispatch({ changes: { from: 6, to: 7 } }));
+    expect(view.state.doc.toString()).toBe("123456");
+    await act(async () => view.dispatch({ changes: { from: 6, insert: "7" } }));
+    expect(view.state.doc.toString()).toBe("123456");
+    await act(async () => view.dispatch({ changes: { from: 5, to: 6 } }));
+    expect(view.state.doc.toString()).toBe("12345");
+  });
 });
 
 describe("bounded Markdown authoring", () => {

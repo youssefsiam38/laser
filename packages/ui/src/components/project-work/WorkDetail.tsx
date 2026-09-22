@@ -48,6 +48,21 @@ import { WorkLoading, WorkPlaceholder, WorkRefusal } from "./states.js";
 
 type Detail = ClientRequests["project/work/get"]["result"];
 
+function retainsWorkSelection(
+  detail: Detail | undefined,
+  detailStore: ProjectWorkStore | undefined,
+  store: ProjectWorkStore | undefined,
+  entityId: string | undefined,
+  revisionId: string | undefined,
+): detail is Detail {
+  return detail !== undefined
+    && store !== undefined
+    && detailStore === store
+    && detail.ref.projectId === store.getSnapshot().projectId
+    && detail.entity.entityId === entityId
+    && (revisionId === undefined || detail.revision.revisionId === revisionId);
+}
+
 export function WorkDetail({
   store,
   work,
@@ -95,7 +110,7 @@ export function WorkDetail({
       return;
     }
     const retained = detailRef.current;
-    const retainsSelection = retained !== undefined && detailStoreRef.current === store && retained.ref.projectId === store.getSnapshot().projectId && retained.entity.entityId === entityId && (revisionId === undefined || retained.revision.revisionId === revisionId);
+    const retainsSelection = retainsWorkSelection(retained, detailStoreRef.current, store, entityId, revisionId);
     setLoading(true);
     const outcome = await store.get({
       entityId,
@@ -124,7 +139,7 @@ export function WorkDetail({
 
   useEffect(() => {
     const retained = detailRef.current;
-    const retainsSelection = retained !== undefined && detailStoreRef.current === store && retained.ref.projectId === store?.getSnapshot().projectId && retained.entity.entityId === entityId && (revisionId === undefined || retained.revision.revisionId === revisionId);
+    const retainsSelection = retainsWorkSelection(retained, detailStoreRef.current, store, entityId, revisionId);
     if (!retainsSelection) {
       detailRef.current = undefined;
       detailStoreRef.current = undefined;
@@ -155,7 +170,7 @@ export function WorkDetail({
     );
   }
 
-  const detailMatchesSelection = detail !== undefined && detailStoreRef.current === store && detail.ref.projectId === store?.getSnapshot().projectId && detail.entity.entityId === entityId && (revisionId === undefined || detail.revision.revisionId === revisionId);
+  const detailMatchesSelection = retainsWorkSelection(detail, detailStoreRef.current, store, entityId, revisionId);
 
   if (!detail || !detailMatchesSelection) {
     return (

@@ -22,7 +22,7 @@
 import { Layers, Maximize2, Pencil, Play, RefreshCw, Save, Undo2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ClientRequests, DesignBody, DesignIndex, DesignIndexEntry, DesignTokenGroup, DesignTreeVocabulary } from "@lasercode/protocol";
-import { designAggregateFidelity, designIsSketchOnly, designTokenDocumentSchema, validateDesignBody } from "@lasercode/protocol";
+import { PROJECT_WORK_TEXT_MAX, PROJECT_WORK_TITLE_MAX, designAggregateFidelity, designBodySchema, designIsSketchOnly, designTokenDocumentSchema, validateDesignBody } from "@lasercode/protocol";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -56,6 +56,7 @@ import { quoteIntoComposer } from "../quote.js";
 
 import type { WorkBodyContext } from "./context.js";
 import { WorkEditFooter, WorkEditNewerNotice, useWorkEditSession } from "../edit-session.js";
+import { errorAt, workFieldError, type WorkFieldError } from "../opened-work-validation.js";
 import { Field } from "./editor-fields.js";
 import { EmptyBody, Prose, Section } from "./fields.js";
 
@@ -126,12 +127,16 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
   const [briefEditing, setBriefEditing] = useState(false);
   const edit = useWorkEditSession<DesignBody>(context);
   const [conflict, setConflict] = useState<string | undefined>(undefined);
+  const [saveError, setSaveError] = useState<string | undefined>(undefined);
+  const [fieldError, setFieldError] = useState<WorkFieldError | undefined>(undefined);
   useEffect(() => {
     if (edit.matches) return;
     setDraft(body);
     setTitle(context.detail.revision.title);
     setBriefEditing(false);
     setConflict(undefined);
+    setSaveError(undefined);
+    setFieldError(undefined);
   }, [body, context.detail.revision.title, edit.matches]);
   const original = edit.owner?.baseBody;
   const dirty = original !== undefined && (JSON.stringify(draft) !== JSON.stringify(original) || title.trim() !== edit.owner?.baseTitle);
@@ -147,30 +152,49 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
     if (!edit.owner) return;
     const submitted = structuredClone(draft);
     const submittedTitle = title.trim();
-    const validation = validateDesignBody(submitted, vocabulary);
-    if (!validation.ok) {
-      actions.toast("error", validation.issues[0]?.message ?? "This design has a problem that has to be fixed first.");
+    const parsed = designBodySchema.safeParse(submitted);
+    if (!parsed.success) {
+      const problem = workFieldError("design", parsed.error.issues[0]);
+      setFieldError(problem);
+      setSaveError(problem?.message ?? "One design field is not valid. Check it and try again.");
       return;
     }
+    const validation = validateDesignBody(submitted, vocabulary);
+    if (!validation.ok) {
+      const message = validation.issues[0]?.message ?? "This design has a problem that has to be fixed first.";
+      setSaveError(message);
+      actions.toast("error", message);
+      return;
+    }
+    setSaveError(undefined);
+    setFieldError(undefined);
     const settled = await edit.submit((base) => base.store.revise(
       { entityId: base.entityId, expectedRevisionId: base.baseRevisionId },
       { kind: "design", design: submitted },
       { note: "Edited on the design surface", ...(submittedTitle !== base.baseTitle ? { title: submittedTitle } : {}) },
     ));
-    if (settled.kind !== "settled") return;
+    if (settled.kind === "blocked") {
+      setSaveError(`${settled.reason ?? context.readOnlyReason ?? "This draft can no longer be saved from here."} Your draft is still here.`);
+      return;
+    }
+    if (settled.kind === "ignored") return;
     if (settled.value.ok) {
       actions.toast("info", `${context.detail.entity.key} · revision ${settled.value.value.revision.index} saved`);
       edit.rebase(submitted, submittedTitle, settled.value.value.revision.revisionId, settled.value.value.revision.index);
       setBriefEditing(false);
+      setSaveError(undefined);
+      setFieldError(undefined);
       context.onChanged();
       return;
     }
     if (settled.value.failure.kind === "conflict") {
       setConflict(settled.value.failure.message);
+      setSaveError(undefined);
       return;
     }
+    setSaveError(settled.value.failure.message);
     actions.toast("error", settled.value.failure.message);
-  }, [actions, context.detail.entity.key, context.onChanged, draft, edit, title, vocabulary]);
+  }, [actions, context.detail.entity.key, context.onChanged, context.readOnlyReason, draft, edit, title, vocabulary]);
 
   // -- selection ------------------------------------------------------------
   const [selectedScreenId, setSelectedScreenId] = useState<string | undefined>(() => body.screens[0]?.id);
@@ -401,12 +425,17 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
   const foundation = draft.foundation;
   const nothingDrawn = designIsEmpty(draft);
   const beginBrief = (): void => {
-    const owner = edit.begin(body);
+    const existing = edit.currentOwner();
+    const owner = edit.ensure(body);
     if (!owner) return;
-    setDraft(structuredClone(owner.baseBody));
-    setTitle(owner.baseTitle);
+    if (!existing || existing.id !== owner.id) {
+      setDraft(structuredClone(owner.baseBody));
+      setTitle(owner.baseTitle);
+    }
     setBriefEditing(true);
     setConflict(undefined);
+    setSaveError(undefined);
+    setFieldError(undefined);
   };
   const discard = (): void => {
     if (!edit.cancel()) return;
@@ -414,19 +443,23 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
     setTitle(context.detail.revision.title);
     setBriefEditing(false);
     setConflict(undefined);
+    setSaveError(undefined);
+    setFieldError(undefined);
   };
   const briefBlock = briefEditing ? (
     <div className="flex flex-col gap-4">
       <Field label="Title" htmlFor="design-title">
-        <Input id="design-title" value={title} maxLength={200} disabled={edit.pending || compact} onChange={(event) => setTitle(event.target.value)} />
+        <Input id="design-title" value={title} maxLength={PROJECT_WORK_TITLE_MAX} disabled={edit.pending || compact} onChange={(event) => setTitle(event.target.value)} />
       </Field>
       <MarkdownEditorActivationProvider active readOnly={edit.pending || !context.editable || compact}>
       <MarkdownAuthoringField
         editorKey="design-brief"
         label="Brief"
         value={draft.brief}
-        onChange={(brief) => mutateDraft((current) => ({ ...current, brief }))}
+        onChange={(brief) => { setFieldError(undefined); setSaveError(undefined); mutateDraft((current) => ({ ...current, brief })); }}
         placeholder="What should this experience make possible?"
+        maxLength={PROJECT_WORK_TEXT_MAX}
+        error={errorAt(fieldError, "brief")}
       />
       </MarkdownEditorActivationProvider>
     </div>
@@ -451,6 +484,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
           ) : null}
         </div>
         <WorkEditNewerNotice show={edit.newerRevision} />
+        {saveError ? <p role="alert" className="rounded-lg border border-danger/40 p-3 text-sm leading-5 text-danger">{saveError}</p> : null}
         {conflict ? <p role="alert" data-slot="revision-conflict" className="rounded-lg border border-attention/40 p-3 text-sm text-ink-2">{conflict} Your edits are still here.</p> : null}
         {briefBlock}
         <EmptyBody
@@ -627,6 +661,7 @@ export function DesignDetail({ body, context, index, indexAccess, groundSketch, 
       </div>
 
       <WorkEditNewerNotice show={edit.newerRevision} />
+      {saveError ? <p role="alert" className="rounded-lg border border-danger/40 p-3 text-sm leading-5 text-danger">{saveError}</p> : null}
       {briefBlock}
 
       {conflict ? (

@@ -58,6 +58,14 @@ const click = async (element: Element | null | undefined): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 };
+const changeInput = async (selector: string, value: string): Promise<void> => {
+  const field = query<HTMLInputElement>(selector);
+  expect(field).not.toBeNull();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, value);
+    field!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
 
 interface Host {
   calls: Array<{ method: ProjectWorkMethod; params: Record<string, unknown> }>;
@@ -155,6 +163,22 @@ describe("editing a spec", () => {
     expect(query("script")).toBeNull();
   });
 
+  it.each([
+    ["brief", specFixture({ brief: "b".repeat(4_001) }), "Brief must be 4000 characters or fewer."],
+    ["problem", specFixture({ form: "full", problem: "p".repeat(4_001) }), "Problem must be 4000 characters or fewer."],
+    ["document", specFixture({ document: "d".repeat(200_001) }), "Document must be 200000 characters or fewer."],
+  ])("locates overlong %s prose before asking the host", async (_name, source, message) => {
+    const host: Host = { calls: [], conflictOnce: false, currentRevisionId: "r1" };
+    const store = makeStore(host);
+    await store.open();
+    await mount(<SpecDocument body={source} context={{ store, detail: detail(), editable: true, onChanged: () => {}, items: [] }} />);
+    await click(query('[data-slot="spec-edit"]'));
+    await changeInput("#spec-title", "Changed title");
+    await click(button("Save as a new revision"));
+    expect(host.calls.some((call) => call.method === "project/work/revise")).toBe(false);
+    expect(text()).toContain(message);
+  });
+
   it("writes a child revision fenced by the revision that was read", async () => {
     const host: Host = { calls: [], conflictOnce: false, currentRevisionId: "r1" };
     const store = makeStore(host);
@@ -167,7 +191,7 @@ describe("editing a spec", () => {
     await click(query('[data-slot="spec-edit"]'));
 
     // The whole of a brief is its brief; the full form carries the rest.
-    await editCode("Brief", "One relay, and nothing readable passes it.");
+    await editCode("Brief", "  One relay, and nothing readable passes it.  \n");
     await click(button("Save as a new revision"));
 
     const revise = host.calls.find((call) => call.method === "project/work/revise");
@@ -176,7 +200,7 @@ describe("editing a spec", () => {
     expect(revise?.params.idempotencyKey).toEqual(expect.any(String));
     const body = revise?.params.body as { kind: string; spec: { brief: string; form: string } };
     expect(body.kind).toBe("spec");
-    expect(body.spec.brief).toBe("One relay, and nothing readable passes it.");
+    expect(body.spec.brief).toBe("  One relay, and nothing readable passes it.  \n");
     expect(body.spec.form).toBe("full");
     expect(changed).toHaveBeenCalled();
   });

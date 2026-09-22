@@ -21,7 +21,7 @@ export interface WorkEditOwner<Body> {
 
 type SubmitResult<Value> =
   | { kind: "settled"; value: Value }
-  | { kind: "blocked" }
+  | { kind: "blocked"; reason?: string | undefined }
   | { kind: "ignored" };
 
 const sameOwner = (owner: WorkEditOwner<unknown>, context: WorkBodyContext): boolean =>
@@ -89,10 +89,12 @@ export function useWorkEditSession<Body>(context: WorkBodyContext) {
     return next;
   }, []);
 
-  const ensure = useCallback((body: Body): WorkEditOwner<Body> | undefined => {
+  const currentOwner = useCallback((): WorkEditOwner<Body> | undefined => {
     const current = ownerRef.current;
-    return current && sameOwner(current, contextRef.current) ? current : begin(body);
-  }, [begin]);
+    return current && sameOwner(current, contextRef.current) ? current : undefined;
+  }, []);
+
+  const ensure = useCallback((body: Body): WorkEditOwner<Body> | undefined => currentOwner() ?? begin(body), [begin, currentOwner]);
 
   // An accepted save can keep a canvas open on the exact body the host just
   // accepted, while moving the next fence to the returned child revision.
@@ -129,7 +131,9 @@ export function useWorkEditSession<Body>(context: WorkBodyContext) {
   const submit = useCallback(async <Value,>(run: (base: WorkEditOwner<Body>) => Promise<Value>): Promise<SubmitResult<Value>> => {
     const base = ownerRef.current;
     const current = contextRef.current;
-    if (submitting.current || !base || !sameOwner(base, current) || !current.editable) return { kind: "blocked" };
+    if (submitting.current || !base || !sameOwner(base, current) || !current.editable) {
+      return { kind: "blocked", ...(current.readOnlyReason ? { reason: current.readOnlyReason } : {}) };
+    }
     submitting.current = true;
     setPending(true);
     const ownerId = base.id;
@@ -157,6 +161,7 @@ export function useWorkEditSession<Body>(context: WorkBodyContext) {
     canSubmit: matches && context.editable && !pending,
     newerRevision: matches && owner.selectionRevisionId === undefined && context.detail.revision.index > owner.baseRevisionIndex,
     begin,
+    currentOwner,
     ensure,
     rebase,
     cancel,

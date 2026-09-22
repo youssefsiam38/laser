@@ -85,6 +85,14 @@ const click = async (element: Element | null | undefined): Promise<void> => {
     await settle(5);
   });
 };
+const changeInput = async (selector: string, value: string): Promise<void> => {
+  const field = document.body.querySelector<HTMLInputElement>(selector);
+  expect(field).not.toBeNull();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(field, value);
+    field!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
 const editCode = async (label: string, value: string): Promise<void> => {
   let editor: HTMLElement | null = null;
   for (let attempt = 0; attempt < 40 && !editor; attempt += 1) {
@@ -101,8 +109,13 @@ const editCode = async (label: string, value: string): Promise<void> => {
 const openMenu = async (label: string): Promise<void> => {
   await act(async () => {
     button(label)!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
-    await settle(100);
   });
+  let menu: Element | null = null;
+  for (let attempt = 0; attempt < 40 && !menu; attempt += 1) {
+    await act(async () => settle(25));
+    menu = document.querySelector("[role='menu']");
+  }
+  expect(menu).not.toBeNull();
 };
 const menuItem = (label: string): HTMLElement | undefined =>
   [...document.querySelectorAll<HTMLElement>("[role='menuitem'],[role='menuitemradio']")].find((node) => (node.textContent ?? "").includes(label));
@@ -336,6 +349,21 @@ describe("attempts, evidence and checkpoints", () => {
 });
 
 describe("task authoring", () => {
+  it.each([
+    ["criterion", taskBody({ acceptance: [{ id: "a1", text: "a".repeat(4_001), machineVerifiable: false }] }), "Acceptance criterion 1 must be 4000 characters or fewer."],
+    ["command", taskBody({ acceptance: [{ id: "a1", text: "It passes.", machineVerifiable: true, command: "c".repeat(1_001) }] }), "Acceptance command 1 must be 1000 characters or fewer."],
+    ["scope", taskBody({ scope: { packages: [], repositories: [], paths: ["p".repeat(1_025)], capabilities: [] } }), "Path 1 must be 1024 characters or fewer."],
+  ])("locates an invalid %s field before asking the host", async (_name, source, message) => {
+    const value = detail({ kind: "task", number: 44, body: { kind: "task", task: source } });
+    const store = makeStore();
+    await act(async () => root.render(<TaskDetail store={store} detail={value} body={source} items={rows} context={{ store, detail: value, editable: true, onChanged: vi.fn(), items: rows }} />));
+    await click(button("Edit task"));
+    await changeInput("#task-title", "Changed title");
+    await click(button("Save as a new revision"));
+    expect(called("project/work/revise")).toHaveLength(0);
+    expect(text()).toContain(message);
+  });
+
   it("keeps every write disabled behind the shared historical/archive fence", async () => {
     const source = taskBody();
     const value = detail({ kind: "task", number: 44, body: { kind: "task", task: source } });

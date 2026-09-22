@@ -20,12 +20,14 @@ import { MarkdownAuthoringField } from "../MarkdownAuthoringField.js";
 export function Field({
   label,
   hint,
+  error,
   htmlFor,
   children,
   action,
 }: {
   label: string;
   hint?: ReactNode | undefined;
+  error?: string | undefined;
   htmlFor?: string | undefined;
   children: ReactNode;
   action?: ReactNode | undefined;
@@ -44,6 +46,7 @@ export function Field({
       </div>
       {children}
       {hint ? <p className="max-w-(--measure-prose) text-xs leading-xs text-ink-3">{hint}</p> : null}
+      {error ? <p role="alert" className="max-w-(--measure-prose) text-xs leading-xs text-danger">{error}</p> : null}
     </div>
   );
 }
@@ -51,6 +54,7 @@ export function Field({
 export function TextField({
   label,
   hint,
+  error,
   value,
   onChange,
   placeholder,
@@ -59,6 +63,7 @@ export function TextField({
 }: {
   label: string;
   hint?: ReactNode;
+  error?: string | undefined;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
@@ -72,6 +77,7 @@ export function TextField({
       value={value}
       onChange={onChange}
       {...(typeof hint === "string" ? { hint } : {})}
+      {...(error !== undefined ? { error } : {})}
       {...(placeholder !== undefined ? { placeholder } : {})}
       {...(maxLength !== undefined ? { maxLength } : {})}
     />
@@ -82,22 +88,26 @@ export function TextField({
 export function LineListField({
   label,
   hint,
+  error,
   values,
   onChange,
   placeholder,
   addLabel,
+  maxLength,
 }: {
   label: string;
   hint?: ReactNode;
+  error?: string | undefined;
   values: readonly string[];
   onChange: (values: string[]) => void;
   placeholder: string;
   addLabel: string;
+  maxLength?: number | undefined;
 }) {
   const set = (index: number, value: string): void => onChange(values.map((existing, at) => (at === index ? value : existing)));
   const remove = (index: number): void => onChange(values.filter((_, at) => at !== index));
   return (
-    <Field label={label} hint={hint}>
+    <Field label={label} hint={hint} error={error}>
       <ul role="list" className="flex flex-col gap-1.5">
         {values.map((value, index) => (
           // The index is the identity here: these are ordered lines a person
@@ -107,6 +117,7 @@ export function LineListField({
               value={value}
               placeholder={placeholder}
               aria-label={`${label} ${index + 1}`}
+              {...(maxLength !== undefined ? { maxLength } : {})}
               onChange={(event) => set(index, event.target.value)}
               className="h-8 text-sm"
             />
@@ -138,19 +149,23 @@ const proseRowId = (): string => `prose-row-${++proseRowCounter}`;
 export function MarkdownListField({
   label,
   hint,
+  error,
   values,
   onChange,
   placeholder,
   addLabel,
   editorKey,
+  maxLength,
 }: {
   label: string;
   hint?: ReactNode;
+  error?: string | undefined;
   values: readonly string[];
   onChange: (values: string[]) => void;
   placeholder: string;
   addLabel: string;
   editorKey: string;
+  maxLength?: number | undefined;
 }) {
   // IDs belong only to this draft UI; protocol rows remain plain strings. A
   // removal must move the surviving editor, including its undo and selection,
@@ -168,7 +183,7 @@ export function MarkdownListField({
     onChange([...values, ""]);
   };
   return (
-    <Field label={label} hint={hint}>
+    <Field label={label} hint={hint} error={error}>
       <ul role="list" className="flex flex-col gap-2">
         {values.map((value, index) => (
           <li key={rowIds.current[index]} data-row-id={rowIds.current[index]} className="flex min-w-0 items-start gap-1.5 rounded-lg border border-line p-2">
@@ -179,6 +194,7 @@ export function MarkdownListField({
                 value={value}
                 onChange={(next) => set(index, next)}
                 placeholder={placeholder}
+                {...(maxLength !== undefined ? { maxLength } : {})}
               />
             </div>
             <Button size="icon-sm" variant="ghost" aria-label={`Remove ${label.toLocaleLowerCase()} ${index + 1}`} onClick={() => remove(index)}>
@@ -251,6 +267,7 @@ export function MarkdownField({
   placeholder,
   editorKey,
   maxLength,
+  error,
 }: {
   label: string;
   value: string;
@@ -258,6 +275,7 @@ export function MarkdownField({
   placeholder?: string;
   editorKey?: string;
   maxLength?: number;
+  error?: string | undefined;
 }) {
   return (
     <MarkdownAuthoringField
@@ -267,6 +285,7 @@ export function MarkdownField({
       onChange={onChange}
       {...(placeholder !== undefined ? { placeholder } : {})}
       {...(maxLength !== undefined ? { maxLength } : {})}
+      {...(error !== undefined ? { error } : {})}
     />
   );
 }

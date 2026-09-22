@@ -60,6 +60,7 @@ describe("the spec body a person edits", () => {
       requirements: [{ id: "r1", level: "must", text: "  **exact** requirement  \n" }],
       acceptance: [{ id: "a1", machineVerifiable: false, text: "\n exact acceptance  " }],
       document: "\n# Exact document  \n\n",
+      gated: true,
     }));
     const body = specBodyFrom(draft);
     expect(body.brief).toBe("  brief with deliberate edges  \n");
@@ -68,6 +69,7 @@ describe("the spec body a person edits", () => {
     expect(body.requirements[0]?.text).toBe("  **exact** requirement  \n");
     expect(body.acceptance[0]?.text).toBe("\n exact acceptance  ");
     expect(body.document).toBe("\n# Exact document  \n\n");
+    expect(body.gated).toBe(true);
   });
 
   it("renders one body as stable text, so a difference is between revisions", () => {

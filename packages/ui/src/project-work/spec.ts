@@ -49,6 +49,7 @@ export function specDraft(body: SpecBody): SpecBody {
     acceptance: body.acceptance.map((criterion) => ({ ...criterion })),
     constraints: [...body.constraints],
     ...(body.document !== undefined ? { document: body.document } : {}),
+    ...(body.gated !== undefined ? { gated: body.gated } : {}),
   };
 }
 
@@ -72,6 +73,7 @@ export function specBodyFrom(draft: SpecBody): SpecBody {
     acceptance: draft.acceptance.filter((criterion) => present(criterion.text)),
     constraints: clean(draft.constraints),
     ...(present(draft.document) ? { document: draft.document } : {}),
+    ...(draft.gated !== undefined ? { gated: draft.gated } : {}),
   };
 }
 
