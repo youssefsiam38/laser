@@ -1031,3 +1031,54 @@ blockers, not advice.
   failure after the stop leaves the session stopped, unmoved and served, and
   the abandoned turn keeps its stop row. Never let the UI issue the stop and
   the move as two requests.
+
+## 12. As built after the project lifecycle leap (M21-T23)
+
+This section **amends D-140 without rewriting it**. D-140 stands as recorded:
+Laser owns the harness, one `start_agent` tool and four identities, every child
+an in-process session in a mandatory `.worktrees/` worktree of its project,
+`complete_agent_run` as the only successful ending, run state pushed as
+`agents/run` and persisted by the host, and a worktree read as part of its
+project and never as a second one (invariant 5). None of that moved.
+
+What M21 changed, and nothing else:
+
+- **Something does persist above runs now.** D-140's consequence "the harness
+  has runs and nothing above them" was true until the leap. The project now
+  owns five durable kinds — Spec, Research, Design, Plan and **Project Task** —
+  in a host-owned store (`<stateDir>/project-work.db` plus content-addressed
+  blobs), partitioned by a stable `projectId`, never by session path
+  ([`project-lifecycle-leap.md`](project-lifecycle-leap.md), "Canonical
+  persistence"). The leap says this supersedes D-140 narrowly; this is the same
+  sentence read from the harness's side.
+- **A run is still a run.** A Project Task links to sessions, agent runs,
+  checkpoints, branches and Commands through *execution links*
+  (`ExecutionLinkKind` in `packages/protocol/src/project-work.ts`), which
+  transfer no ownership: deleting or archiving a session leaves the link as an
+  unavailable reference, and no agent run is ever promoted into project work.
+  `AgentRunOrigin` is still `agent` or `user` only, there are still no
+  schedules and no scored gate verdicts, and nothing above a run measures what
+  it spent (fleet R5).
+- **A worktree sees its project's work.** Identity resolves through the
+  repository's git common directory, so a child agent working in
+  `<project>/.worktrees/<slug>` reads and writes the same Specs and Tasks as
+  its parent (`packages/host/src/project-work/ids.ts`), while its execution
+  links keep the checkout and branch the work actually happened in. This is
+  invariant 5 and the leap's `projectId` rule agreeing.
+- **Project work is a destination, never a fleet row.** A Spec or a Task is
+  reached in the embedded workspace, through a transcript artifact card, a
+  mention chip, a slash command or the palette; what needs a person arrives in
+  the **Needs you** queue and the Approval Card above the composer. The fleet's
+  two kinds are unchanged, and the worker's new Commands (index build,
+  verification run) join the existing kind rather than adding a third
+  ([`ux-fleet.md`](ux-fleet.md), "The project lifecycle leap, as built").
+- **The word for background work is Command** (§6). D-147 is amended the same
+  way in `ux-fleet.md`: the column reads typed data, the panel bus stays gone,
+  and the new producers publish `BackgroundTask` rows with no process behind
+  them.
+
+Open, recorded rather than fixed by M21-T23: a Research run builds a
+`ResearchCommand` in the worker but nothing publishes it, so it has a budget
+line in the Research header and no fleet row or Stop; and `session/set_mode`
+(M17-T11, plan mode) is a schema entry the worker still refuses — see
+[`leap/m21-t23-reconciliation.md`](leap/m21-t23-reconciliation.md).
