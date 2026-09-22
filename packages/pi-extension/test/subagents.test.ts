@@ -1,6 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Extension, LoadExtensionsResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { AGENT_EVENT_MESSAGE_TYPE, INSTRUCTION_APP_ORIGIN, PRODUCT_DISPLAY_NAME, WIRE_NAMESPACE, type AgentRun } from "@lasercode/protocol";
+import {
+  AGENT_EVENT_MESSAGE_TYPE,
+  INSTRUCTION_APP_ORIGIN,
+  PRODUCT_DISPLAY_NAME,
+  TOOL_DESCRIPTION_MAX,
+  WIRE_NAMESPACE,
+  parseToolError,
+  toolContract,
+  toolError,
+  type AgentRun,
+  type ToolAnnotations,
+} from "@lasercode/protocol";
+import { laserToolRegistry } from "../src/register-tool.js";
 import type { AgentCatalogEntry, AgentHarnessBridge, AgentModelEvent, AgentRunSummary, HarnessSessionRole, InspectAgentResult, InspectFleetResult } from "../src/agents-bridge.js";
 import { createLaserExtension, createPromptProvenanceObserver } from "../src/index.js";
 import type { ModuleContext } from "../src/modules/index.js";
@@ -718,5 +730,78 @@ describe("subagents module: through the extension", () => {
 
   it("describes an empty catalog without inventing agents", () => {
     expect(startAgentDescription([])).toContain("Available agents: none are allowed for this session.");
+  });
+});
+
+describe("subagents module: the tool contract (M26-T2)", () => {
+  /** What each harness tool says about itself, and what the docs table must match. */
+  const ANNOTATIONS: Record<string, ToolAnnotations> = {
+    start_agent: { readOnly: false, idempotent: false, destructive: false, external: false },
+    send_agent_message: { readOnly: false, idempotent: false, destructive: false, external: false },
+    inspect_fleet: { readOnly: true, idempotent: true, destructive: false, external: false },
+    inspect_agent: { readOnly: true, idempotent: true, destructive: false, external: false },
+    stop_agent: { readOnly: false, idempotent: true, destructive: true, external: false },
+    remove_agent_worktree: { readOnly: false, idempotent: true, destructive: true, external: false },
+    complete_agent_run: { readOnly: false, idempotent: false, destructive: false, external: false },
+  };
+
+  it("registers every harness tool under the contract, annotations and all", () => {
+    moduleHarness(root, true);
+    moduleHarness(child, true);
+    for (const [name, annotations] of Object.entries(ANNOTATIONS)) {
+      const spec = laserToolRegistry().get(name);
+      expect(spec, `${name} is not registered through registerLaserTool`).toBeDefined();
+      expect(toolContract(spec!)).toEqual([]);
+      expect(spec!.annotations).toEqual(annotations);
+      expect(spec!.label).toBe(["start_agent", "complete_agent_run", "inspect_fleet"].includes(name) ? "exempt" : "injected");
+      expect(spec!.description.length).toBeLessThanOrEqual(TOOL_DESCRIPTION_MAX);
+    }
+  });
+
+  it("keeps start_agent's description inside the budget however many agents a project has", () => {
+    const many = Array.from({ length: 60 }, (_, index) => ({ agentName: `agent-${String(index)}`, description: "x".repeat(280) }));
+    const description = startAgentDescription(many);
+    expect(description.length).toBeLessThanOrEqual(TOOL_DESCRIPTION_MAX);
+    // What degrades is how much is said about each agent, never which agents
+    // exist: names stay, and anything cut is counted honestly.
+    expect(description).toContain("agent-0");
+    expect(description).toMatch(/and \d+ more you can start by name|agent-59/);
+  });
+
+  it("still spells out a small catalog in full", () => {
+    expect(startAgentDescription(catalog)).toContain("explorer — codebase research; worker — implementation");
+  });
+
+  it("turns a refusal into the contract's error shape, with the next call named", async () => {
+    const h = moduleHarness(root, true);
+    vi.mocked(h.bridge.inspectAgent).mockRejectedValueOnce(new Error('No run called "run_9" was started by this session.'));
+    const failure = await h.tools.get("inspect_agent")!.execute("call", { runId: "run_9" }).catch((error: unknown) => error);
+    expect(parseToolError((failure as Error).message)).toEqual({
+      code: "inspect_agent_failed",
+      message: 'No run called "run_9" was started by this session.',
+      committed: false,
+      next: expect.stringContaining("inspect_fleet"),
+    });
+  });
+
+  it("keeps a refusal's own code, recovery and committed fact when it carries them", async () => {
+    const h = moduleHarness(root, true);
+    const carried = toolError({
+      code: "worktree_partially_removed",
+      message: "The branch went; the directory did not.",
+      committed: true,
+      next: "remove the directory yourself, then carry on",
+    });
+    vi.mocked(h.bridge.removeAgentWorktree).mockRejectedValueOnce(Object.assign(new Error(carried.message), { toolError: carried }));
+    const failure = await h.tools.get("remove_agent_worktree")!.execute("call", { runId: "run_7" }).catch((error: unknown) => error);
+    expect(parseToolError((failure as Error).message)).toEqual(carried);
+  });
+
+  it("never lets a read-only tool claim it saved something", async () => {
+    const h = moduleHarness(root, true);
+    const dishonest = toolError({ code: "fleet_unreadable", message: "The tree could not be read.", committed: true, next: "try inspect_fleet again" });
+    vi.mocked(h.bridge.inspectFleet).mockRejectedValueOnce(Object.assign(new Error(dishonest.message), { toolError: dishonest }));
+    const failure = await h.tools.get("inspect_fleet")!.execute("call", {}).catch((error: unknown) => error);
+    expect(parseToolError((failure as Error).message)?.committed).toBe(false);
   });
 });

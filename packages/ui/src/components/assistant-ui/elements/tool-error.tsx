@@ -10,7 +10,13 @@
  * person, in danger ink on a code ground. `compact` is the three-line excerpt
  * a collapsed row shows; the full text lives in the expanded body.
  */
-import { CircleAlert } from "lucide-react";
+import {
+  TOOL_ERROR_COMMITTED_SENTENCE,
+  TOOL_ERROR_UNCOMMITTED_SENTENCE,
+  parseToolError,
+  type ToolError as ParsedToolError,
+} from "@lasercode/protocol";
+import { CircleAlert, CornerDownRight } from "lucide-react";
 import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/utils";
@@ -60,5 +66,87 @@ export function ToolError({ message, name, target, compact = false, className, .
         {text}
       </pre>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// A Laser tool's failure, in its own three parts (M26-T4, D-359.a)
+// ---------------------------------------------------------------------------
+
+export interface ToolErrorReportProps extends Omit<ComponentProps<"div">, "children"> {
+  /** The result text of the failed call, exactly as the transcript holds it. */
+  text: string;
+  /** The headline and the saved/not-saved fact only, for a collapsed row. */
+  compact?: boolean | undefined;
+}
+
+/**
+ * A failed tool row's body.
+ *
+ * A Laser tool fails with a rendered `ToolError` — `[code] message`, then
+ * whether anything was saved, then the next call (`docs/agent-tool-contract.md`
+ * §2, decision D-359.a). When `parseToolError` recognises that shape this
+ * draws the three parts as three things a person reads in order:
+ *
+ *   - the **message** as the headline, in primary ink beside the danger mark,
+ *     because a sentence written for a person is easier to read in ink than in
+ *     red; the row already carries the danger rail and the alert icon;
+ *   - what was **saved**, in its own tone: `attention` when some of the work
+ *     landed — that is the line that may need you — and the quiet danger tone
+ *     when nothing changed, which is a statement, not a task;
+ *   - the **next** step, quieter and marked as the suggestion it is.
+ *
+ * The `code` is never the headline. It is correlation for a bug report and for
+ * the evaluation harness, so it draws as a small typed chip.
+ *
+ * Anything that is not a Laser tool error — an engine tool, an MCP tool, a
+ * crash, a capture from before the contract — falls through to {@link ToolError}
+ * and looks exactly as it did before.
+ */
+export function ToolErrorReport({ text, compact = false, className, ...props }: ToolErrorReportProps) {
+  const parsed = parseToolError(text);
+  if (!parsed) return <ToolError message={text} compact={compact} className={className} {...props} />;
+  return (
+    <div
+      data-slot="tool-error-report"
+      data-committed={parsed.committed ? "true" : "false"}
+      role="alert"
+      className={cn("flex min-w-0 flex-col gap-1.5", className)}
+      {...props}
+    >
+      <div className="flex min-w-0 items-start gap-2">
+        <CircleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-danger" />
+        <p data-slot="tool-error-message" data-search-content className="min-w-0 flex-1 text-sm wrap-break-word text-ink">
+          {parsed.message}
+        </p>
+        {compact ? null : (
+          <code data-slot="tool-error-code" dir="ltr" className={cn(mono, "shrink-0 rounded-sm bg-surface-2 px-1.5 py-0.5 text-ink-3")}>
+            {parsed.code}
+          </code>
+        )}
+      </div>
+      <CommittedLine committed={parsed.committed} />
+      {compact ? null : (
+        <p data-slot="tool-error-next" className="flex min-w-0 items-start gap-1.5 text-sm text-ink-2">
+          <CornerDownRight aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-ink-3" />
+          <span className="min-w-0 flex-1 wrap-break-word">
+            <span className="eyebrow">Next </span>
+            <span data-search-content>{parsed.next}</span>
+          </span>
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The one line that says whether anything survived the failure. */
+function CommittedLine({ committed }: { committed: ParsedToolError["committed"] }) {
+  return (
+    <p
+      data-slot="tool-error-committed"
+      className={cn("ms-5.5 text-sm", committed ? "font-medium text-attention" : "text-danger-quiet")}
+    >
+      {committed ? TOOL_ERROR_COMMITTED_SENTENCE : TOOL_ERROR_UNCOMMITTED_SENTENCE}
+    </p>
   );
 }

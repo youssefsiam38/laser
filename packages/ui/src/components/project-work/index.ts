@@ -1,0 +1,22 @@
+/** The embedded project workspace (M21-T6, D-355). */
+export { ProjectWorkBridge } from "./ProjectWorkBridge.js";
+export { ProjectWorkControl, controlTooltip } from "./ProjectWorkControl.js";
+export { ProjectWorkspace } from "./Workspace.js";
+export { KeyTag, NeedsYouChip, StatusChip, TypeBadge, WorkIdentity } from "./KindBadge.js";
+/** Mentioning project work outside the workspace (M21-T9). */
+export { SessionTaskChip, WorkMentionChip } from "./MentionChip.js";
+export { WorkArtifactCard } from "./ArtifactCard.js";
+export { nextKeyFor } from "./CreateDialog.js";
+/** Import, export and publication (M21-T21). */
+export { ImportExportMenu } from "./ImportExportMenu.js";
+export { ExportDialog, ImportDialog, IMPORT_ADAPTERS, PublishDialog, type WorkDialogProps } from "./ImportExportDialogs.js";
+export {
+  clearWorkCreationRequest,
+  startProjectWork,
+  titleFromText,
+  useWorkCreationRequest,
+  WorkProjectPicker,
+} from "./create-work.js";
+export { useProjectWorkCommands, WORK_COMMAND_KINDS } from "./work-commands.js";
+/** Quote a finding into the conversation's composer (M21-T7). */
+export { onWorkQuote, quoteIntoComposer, WORK_QUOTE_EVENT, type WorkQuoteDetail } from "./quote.js";

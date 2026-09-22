@@ -1,0 +1,9 @@
+en:
+  products:
+    index:
+      title: "Products"
+      empty: "No results yet."
+    show:
+      edit: "Edit"
+  errors:
+    generic: "Something went wrong. Try again."

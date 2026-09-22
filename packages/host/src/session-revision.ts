@@ -39,8 +39,16 @@ export type RevisionAnswer =
 
 export interface ResolvedRevisionBase {
   base: RevisionBase;
-  /** Present only when the current file proves this exact state. */
+  /**
+   * Present only when the current file proves this exact state: on `current`
+   * and `prefix`, and on a `stale` answer whose only disqualification is a
+   * compaction/branch-summary barrier appended after it (`barrier`). Such a
+   * base cannot take a suffix merge, but the file is append-only, so every
+   * row before its count is unchanged and an older page against it is exact.
+   */
   state?: RevisionState;
+  /** Set when `state` is proved but a barrier forbids a delta. */
+  barrier?: true;
 }
 
 export class SessionRevisions {
@@ -131,10 +139,12 @@ export class SessionRevisions {
     for (const candidate of [...index.checkpoints].reverse()) {
       if (candidate.count > index.state.count) continue;
       if (sessionRevisionOf(nodeRevisionHasher, this.tag, candidate) !== baseRevision) continue;
-      if ((candidate.barrierCount ?? 0) !== (index.state.barrierCount ?? 0)) return { base: "stale" };
-      return candidate.leafId === null
-        ? (index.leafId === null ? { base: "prefix", state: candidate } : { base: "stale" })
-        : (branch.has(candidate.leafId) ? { base: "prefix", state: candidate } : { base: "stale" });
+      const onBranch = candidate.leafId === null ? index.leafId === null : branch.has(candidate.leafId);
+      if (!onBranch) return { base: "stale" };
+      // A barrier after the base: no suffix merge, but the prefix pages stay
+      // readable, so a person can still scroll up after a compaction.
+      if ((candidate.barrierCount ?? 0) !== (index.state.barrierCount ?? 0)) return { base: "stale", state: candidate, barrier: true };
+      return { base: "prefix", state: candidate };
     }
     return { base: "stale" };
   }

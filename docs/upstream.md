@@ -15,6 +15,8 @@ small and self-contained (`AGENTS.md` §6).
 | earendil-works/pi | `ExtensionAPI.sendMessage` / `sendUserMessage` return `void`, so neither an extension nor a host embedding the SDK can observe whether a send was accepted or refused; the underlying promise is swallowed and a rejection reaches only `emitError`. Fix: return the operation promise from the loader API and the core binding, and widen `SendMessageHandler` / `SendUserMessageHandler` to `Promise<void>`. Local patch: `patches/@earendil-works__pi-coding-agent@0.85.0.patch`. | M13-T93 | — | not filed |
 | earendil-works/pi | Opt-in durable zero-message sessions and append-scoped admission transactions: explicit `SessionManager.flush()`, deferred append commit/rollback, and saved runtime settings counting as existing session state. Local exact-version patch: `patches/@earendil-works__pi-coding-agent@0.85.0.patch`; generic proposal: `/tmp/laser-m13-t108-upstream-proposal.md`. | M13-T108 | — | pending parent review; not filed |
 | earendil-works/pi | `BashOperations.exec` never hands back the shell's pid, so a host that runs commands for a user cannot tell which of its descendants is which command (process accounting on a headless host or a desktop shell). The pid is already known inside `createLocalShellOperations` — it tracks and kills by it. Fix: an optional, guarded `onSpawn(pid)` in the exec options. Local exact-version patch: `patches/@earendil-works__pi-coding-agent@0.85.0.patch`. | M18-T6 | https://github.com/earendil-works/pi/pull/9604 | filed |
+| earendil-works/pi | An embedder cannot tell one admitted user message from another: `UserMessage` is `{ role, content, timestamp }`, the context transform receives a `structuredClone`, and the engine's own queue bookkeeping matches by text (`_steeringMessages.indexOf(messageText)`), so two identical messages are indistinguishable. Fix: an optional opaque `correlationId` on `prompt()`/`steer()`/`followUp()`, carried on the message the call creates and stripped from the persisted copy. Local exact-version patch: `patches/@earendil-works__pi-coding-agent@0.85.0.patch`. | M21-T9/T17 | — | pending parent review; not filed |
+| @legendapp/list | `sortDOMElements` re-sorts the row containers on a 500 ms debounce (`useDOMOrder`) and falls back to `insertBefore`/`appendChild` where `Element.moveBefore` is missing — which is every Safari and iOS Safari. That fallback insert is a removal: the browser blurs whatever had focus inside the moved row (focus lands on `<body>`) and collapses a selection with an endpoint in it, so a keyboard or assistive-technology reader is thrown out of the list half a second after any position update. Fix: in the fallback, hold the focused node (with its caret) and the selection's endpoints for the moved subtree, and restore them after the insert — same nodes, `preventScroll: true`, and never over a focus, caret or selection something else took while the move happened (one handover check gates both). The boundary the standard's removing/insertion steps leave behind is computed from the pre-move parent and indices and recognised as the move's own, and the held offsets are validated against their nodes' current text, so an impossible repair cannot throw inside the sort. Local exact-version patch: `patches/@legendapp__list@3.3.5.patch`, the `moveChildBefore` hunk. | M16-T62 | — | not filed |
 | pi-mcp-adapter | `index.ts`, `mcp-output-guard.ts` and others import `@earendil-works/pi-coding-agent` (and, through it, `@earendil-works/pi-ai`) as value imports without declaring either as a dependency or a peer; under pnpm they resolve only by accident of directory layout. Fix: declare them. Local workaround: `packageExtensions` in `pnpm-workspace.yaml`. | M14-T2 | — | not filed |
 | pi-mcp-adapter | The package entry is executable TypeScript (`"types"`/`"import"` → `./index.ts`) and only four small modules are compiled to `dist`. Node refuses type stripping under `node_modules`, so any consumer that is not itself running a TypeScript loader cannot `import("pi-mcp-adapter")`: `createMcpAdapter`, `McpServerManager` and the OAuth flow are unreachable. Fix: compile the public surface into `dist` and point `exports` at it (keeping `pi.extensions` on the source for the engine's own loader), and export `server-manager` and `mcp-auth-flow` as subpaths. Local workaround: `packages/worker/src/mcp/engine.ts` loads them through jiti, the same loader the engine uses for extensions. | M14-T2 | — | not filed |
 | pi-mcp-adapter | The host-config importers (`loadImportedConfig`, `extractServers`) are private, so only `findAvailableImportConfigs` (paths, no contents) is reusable. A host that offers its own import UI has to re-read Claude Code/Cursor/VS Code/Codex/OpenCode files itself. Fix: export a read-only `readImportedServers(kind, cwd)`. Local workaround: `packages/worker/src/mcp/import.ts` reads the files the engine located. | M14-T2 | — | not filed |
@@ -101,6 +103,44 @@ Written and reviewed here, **not filed**. Each is small, self-contained, and
 justified on the upstream project's own terms (extensibility, headless-host
 support) — never on ours. Nothing about laser appears in a patch, a commit
 message or a PR body.
+
+### pi-coding-agent · an opaque correlation id for an admitted message (M21-T9/T17)
+
+**Against:** `github.com/earendil-works/pi` @ 0.85.0. Local exact-version patch:
+`patches/@earendil-works__pi-coding-agent@0.85.0.patch`, applied through pnpm.
+
+A host that must put per-message context in front of the model has to know
+*which* admitted message a model call is reading. The pinned engine offers no
+such identity: `UserMessage` carries `{ role, content, timestamp }`, the
+context transform hands extensions a `structuredClone` (so object identity is
+gone), and the engine's own queue bookkeeping removes a queued message by
+`indexOf(messageText)` — text, which by definition cannot separate two
+identical messages sent as a prompt, a steer and a follow-up.
+
+The patch adds one optional opaque string, supplied by the caller and
+uninterpreted by the engine:
+
+- `PromptOptions.correlationId` and a new `QueuedMessageOptions` for
+  `steer(text, images?, options?)` and `followUp(text, images?, options?)`;
+- the id is set on the `UserMessage` those calls create — the direct message in
+  `prompt()`, and the queued messages in `_queueSteer`/`_queueFollowUp` — so it
+  rides through the queues, the agent loop and the context transform;
+- `SessionManager.appendMessage()` removes it from a **copy** before writing the
+  entry, so no session file, entry projection or reload ever sees it, while the
+  live message the agent still holds keeps its identity for the rest of the turn.
+
+Nothing else changes: no queue behaviour, no private state, no new event, and
+providers never see the field because every API module rebuilds its request
+messages explicitly.
+
+Pinned against the real engine and a stub provider in
+`packages/worker/test/pi-correlation-seam.live.test.ts`: three byte-identical
+messages (prompt, steer, follow-up) are told apart at each model call by id
+alone, and the id appears in neither the provider payload nor the session file.
+That test fails loudly if a pin bump drops the patch.
+
+**Status: pending parent review; not filed.** The parent owns any public issue or
+PR after reviewing this seam.
 
 ### pi-coding-agent · durable empty sessions and append admission (M13-T108)
 

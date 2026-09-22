@@ -24,6 +24,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useCopy } from "@/hooks";
 import { cn } from "@/lib/utils";
 
+import { GitChangePreview } from "./change-preview.js";
 import type { ChangedFile } from "./contract.js";
 import { getChangesAdapter } from "./data.js";
 import { personFacingChangesError } from "./errors.js";
@@ -101,37 +102,16 @@ function GitCopyableCommand({ copyable }: { copyable: GitActionCopyable }) {
   );
 }
 
+/**
+ * What this action would do, before it does it. The card itself is
+ * `change-preview.tsx`, shared with the transcript's preview row (M26-T4), so
+ * a tool's `preview: true` answer and this dialog show the person the same
+ * picture of the same kind of write.
+ */
 function GitConfirmation({ confirmation }: { confirmation: GitActionConfirmation }) {
   return (
-    <div data-slot="git-action-confirmation" className="flex flex-col gap-2">
-      <p className="text-sm text-ink">{confirmation.summary}</p>
-      <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-2">
-        <div>
-          <dt className="eyebrow inline">Repository </dt>
-          <dd className="typed inline text-ink">{repoLeafName(confirmation.repo)}</dd>
-        </div>
-        <div>
-          <dt className="eyebrow inline">Branch </dt>
-          <dd className="typed inline text-ink">{confirmation.branch}</dd>
-        </div>
-        {confirmation.remote ? (
-          <div>
-            <dt className="eyebrow inline">Remote </dt>
-            <dd className="typed inline text-ink">{confirmation.remote}</dd>
-          </div>
-        ) : null}
-      </dl>
-      {confirmation.files?.length ? (
-        /* One hairline above the list, not a box around it: the dialog is
-           already the card this sits in. */
-        <ul className="max-h-32 overflow-y-auto overscroll-contain hairline-t pt-2">
-          {confirmation.files.map((file) => (
-            <li key={file} className="typed truncate text-ink-2">
-              {file}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+    <div data-slot="git-action-confirmation">
+      <GitChangePreview confirmation={confirmation} />
     </div>
   );
 }

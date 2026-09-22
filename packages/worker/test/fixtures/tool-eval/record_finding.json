@@ -1,0 +1,71 @@
+{
+  "tool": "record_finding",
+  "task": "Record what the pdf-text guide declares about its licence, citing the passage.",
+  "expectedTool": "record_finding",
+  "allowedTools": [
+    "search_sources",
+    "read_source",
+    "record_finding"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 6,
+    "inputTokens": 70000,
+    "outputTokens": 500
+  },
+  "measures": [
+    "retry"
+  ],
+  "world": {
+    "role": "root",
+    "research": {
+      "project": "project"
+    }
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "read_source",
+        "args": {
+          "source_id": "https://docs.example.org/guides/pdf-text",
+          "adapter": "web",
+          "activity_label": "Reading the guide"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "record_finding",
+        "args": {
+          "expected_revision_id": "{{stale}}",
+          "idempotency_key": "record-licence-1",
+          "question_id": "q2",
+          "claim": "pdf-text is released under the MIT licence.",
+          "confidence": "declared",
+          "source_id": "https://docs.example.org/guides/pdf-text",
+          "excerpt": "It is released under the MIT licence and has no native dependencies.",
+          "licence": "permissive"
+        }
+      },
+      "fails": true
+    },
+    {
+      "toolCall": {
+        "name": "record_finding",
+        "args": {
+          "expected_revision_id": "{{revision}}",
+          "idempotency_key": "record-licence-1",
+          "question_id": "q2",
+          "claim": "pdf-text is released under the MIT licence.",
+          "confidence": "declared",
+          "source_id": "https://docs.example.org/guides/pdf-text",
+          "excerpt": "It is released under the MIT licence and has no native dependencies.",
+          "licence": "permissive"
+        }
+      }
+    },
+    {
+      "text": "Recorded: pdf-text is MIT licensed, declared by its own guide and quoted from the page I read."
+    }
+  ]
+}

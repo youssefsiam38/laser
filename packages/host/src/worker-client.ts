@@ -7,6 +7,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
+import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import { oldSpaceBytes, oldSpaceSizeFlag } from "./heap-ceiling.js";
 import { RuntimeGenerationGuard, runtimeReferenceFromEnvironment } from "./runtime-generation.js";
@@ -18,6 +19,7 @@ import {
   isNotification,
   isResponse,
   nodeLaunchEnvironment,
+  ProtocolError,
   type JsonRpcError,
   type JsonRpcMessage,
   type JsonRpcNotification,
@@ -80,6 +82,16 @@ export interface WorkerClientOptions {
   /** Extra environment for the worker, on top of the host's own. */
   env?: Readonly<Record<string, string>>;
   onNotification: (notification: JsonRpcNotification) => void;
+  /**
+   * A request *from* the worker (M21-T17, D-356.b).
+   *
+   * The link is bidirectional for exactly one family: the project-work
+   * bridge, which is how a model tool reaches the host's authority. The
+   * router decides which methods it answers; a client's method surface and a
+   * worker's are different authorities and never share a table. Absent means
+   * this host answers none, and the worker is told so.
+   */
+  onRequest?: (method: string, params: unknown) => Promise<unknown>;
   onExit: (code: number | null, signal: NodeJS.Signals | null, exit: WorkerExit) => void;
   onStderr?: (text: string) => void;
 }
@@ -193,6 +205,23 @@ export function nextWorkerGeneration(): number | undefined {
   return lastWorkerGeneration;
 }
 
+/**
+ * Where the worker's V8 compile cache lives: a directory under the host's own
+ * state, keyed by Node's version so an upgrade never reads another
+ * runtime's bytecode. A cold worker imports well over two thousand source
+ * files (Pi, its schema libraries, this package) before it can open a
+ * session; with the cache warm that import costs about a quarter less, and
+ * the person waits that much less for a project they had left idle. Node
+ * itself validates every entry against the source and its own build, and
+ * disables the cache silently when the directory cannot be written, so this
+ * is only ever a hint. An explicit setting in the launch environment wins.
+ */
+export const COMPILE_CACHE_DIR_NAME = "compile-cache";
+export function compileCacheEnvironment(base: NodeJS.ProcessEnv, stateDir: string | undefined): NodeJS.ProcessEnv {
+  if (!stateDir || base["NODE_COMPILE_CACHE"] !== undefined || base["NODE_DISABLE_COMPILE_CACHE"] !== undefined) return {};
+  return { NODE_COMPILE_CACHE: join(stateDir, COMPILE_CACHE_DIR_NAME, `node-${process.versions.node}`) };
+}
+
 export function defaultWorkerMain(): string {
   return createRequire(import.meta.url).resolve("@lasercode/worker/main");
 }
@@ -281,6 +310,11 @@ export class WorkerClient {
     if (options.stateDir) args.push("--state-dir", options.stateDir);
     if (options.projectTrusted !== undefined) args.push("--project-trusted", options.projectTrusted ? "yes" : "no");
     if (options.agentIsolation) args.push("--agent-isolation", options.agentIsolation);
+    // The worker's model tools reach the host's project-work authority over
+    // this link (M21-T17). Told rather than assumed: a worker whose host does
+    // not answer the bridge registers none of those tools instead of asking
+    // into a pipe nobody is listening on.
+    if (options.onRequest) args.push("--project-work", "yes");
     if (options.environmentId) args.push("--environment-id", options.environmentId);
     if (options.providerPayloads) args.push("--provider-payloads", options.providerPayloads);
     this.workerGeneration = options.workerGeneration;
@@ -288,7 +322,7 @@ export class WorkerClient {
 
     // Node reads this before our entry exists. An inherited value could raise,
     // lower or invalidate the explicit ceiling, so no spelling reaches a child.
-    const env = nodeLaunchEnvironment({ ...launchEnvironment, [ENV.workerFd]: "3" });
+    const env = nodeLaunchEnvironment({ ...launchEnvironment, [ENV.workerFd]: "3", ...compileCacheEnvironment(launchEnvironment, options.stateDir) });
     this.child = spawn(options.nodeBinary ?? process.execPath, args, {
       // --cwd configures the driver; it does not change the process directory.
       // Engine defaults and subprocesses must never inherit the host's state cwd.
@@ -342,6 +376,13 @@ export class WorkerClient {
           options.onNotification(message as JsonRpcNotification);
           continue;
         }
+        // A request from the worker: answered here, never routed into the
+        // client path (M21-T17).
+        const inbound = message as { id?: unknown; method?: unknown; params?: unknown };
+        if (inbound.id !== undefined && typeof inbound.method === "string") {
+          void this.answer(inbound.id as string | number, inbound.method, inbound.params);
+          continue;
+        }
         if (isResponse(message)) {
           const entry = this.pending.get(Number(message.id));
           if (!entry) continue;
@@ -392,6 +433,30 @@ export class WorkerClient {
       this.startError ??= error;
       this.settle(rejectReady, null, null, "spawn_error");
     });
+  }
+
+  /**
+   * Answer one worker request, with the error shape the worker's own
+   * `hostResponse` reads back. A handler that throws becomes an error
+   * response, never an unhandled rejection and never a dropped frame: the
+   * worker would wait for ever for an answer that is not coming.
+   */
+  private async answer(id: string | number, method: string, params: unknown): Promise<void> {
+    const handler = this.options.onRequest;
+    try {
+      if (!handler) throw new ProtocolError(ErrorCodes.Unsupported, "This app does not answer that request.");
+      const result = await handler(method, params);
+      this.writeLine(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
+    } catch (error) {
+      const rpc = error instanceof ProtocolError
+        ? { code: error.code, message: error.message, ...(error.data !== undefined ? { data: error.data } : {}) }
+        : { code: ErrorCodes.Internal, message: error instanceof Error ? error.message : String(error) };
+      try {
+        this.writeLine(`${JSON.stringify({ jsonrpc: "2.0", id, error: rpc })}\n`);
+      } catch {
+        // The link went while we were answering; the worker dies with it.
+      }
+    }
   }
 
   /**

@@ -1,0 +1,57 @@
+{
+  "tool": "inspect_agent",
+  "task": "How is the login-flow review going? Give me the short version.",
+  "expectedTool": "inspect_agent",
+  "allowedTools": [
+    "inspect_agent"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 2,
+    "inputTokens": 34000,
+    "outputTokens": 250
+  },
+  "measures": [
+    "truncation"
+  ],
+  "truncationBytes": 2000,
+  "world": {
+    "role": "root",
+    "agents": [
+      {
+        "agentName": "reviewer",
+        "subagentName": "Review login flow",
+        "sessionId": "ses_review",
+        "runId": "run_review",
+        "status": "running",
+        "task": "Review the login flow and report every problem you find.",
+        "messageCount": 10
+      }
+    ]
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "inspect_agent",
+        "args": {
+          "runId": "run_review",
+          "messages": 10,
+          "activity_label": "Reading the review"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "inspect_agent",
+        "args": {
+          "runId": "run_review",
+          "messages": 1,
+          "activity_label": "Reading its last word"
+        }
+      }
+    },
+    {
+      "text": "It is still working; its last message says it is partway through the session handling."
+    }
+  ]
+}

@@ -63,6 +63,8 @@ export class SessionProjection {
       // An older page is merged into a client-held window. Its base must still
       // be this exact state or a cryptographically proved canonical prefix;
       // an anchor/cursor alone cannot detect rewritten content with reused ids.
+      // A proved prefix behind a compaction barrier still carries its state:
+      // the rows before the cursor are unchanged, only a suffix merge is out.
       if (("before" in request || "beforeEntry" in request) && !base?.state) {
         return { kind: "refuse", error: unavailable("This conversation changed since that page was read. Reload it and try again.") };
       }

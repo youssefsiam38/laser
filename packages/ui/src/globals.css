@@ -190,6 +190,11 @@
   --fleet-agent-6: #602f4c;
   --fleet-agent-7: #4c4300;
   --on-fleet-agent: #e9e8e6;
+  --kind-spec: #85baff;
+  --kind-research: #1ad1d1;
+  --kind-design: #d79df0;
+  --kind-plan: #6cd092;
+  --kind-task: #ff987e;
   --on-accent: #000000;
   --font-sans: "Host Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Martian Mono", ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
@@ -580,6 +585,12 @@
   --color-fleet-agent-6: var(--fleet-agent-6);
   --color-fleet-agent-7: var(--fleet-agent-7);
   --color-on-fleet-agent: var(--on-fleet-agent);
+  /* Type identity for project work: one per kind, never a status (D-355). */
+  --color-kind-spec: var(--kind-spec);
+  --color-kind-research: var(--kind-research);
+  --color-kind-design: var(--kind-design);
+  --color-kind-plan: var(--kind-plan);
+  --color-kind-task: var(--kind-task);
 
   /* A shell command that ran and came back non-zero is a result, not a fault:
    * a `grep` that found nothing, a test run that failed, `git diff --quiet`.

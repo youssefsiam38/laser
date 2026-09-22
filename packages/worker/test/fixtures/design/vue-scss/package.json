@@ -1,0 +1,11 @@
+{
+  "name": "atlas-console",
+  "private": true,
+  "dependencies": {
+    "vue": "3.4.31"
+  },
+  "devDependencies": {
+    "sass": "1.77.0",
+    "vite": "5.3.1"
+  }
+}

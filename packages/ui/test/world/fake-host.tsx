@@ -11,7 +11,7 @@
  *     HostClient: (await import("../world/fake-host.js")).FakeHostClient,
  *   }));
  */
-import type { AgentsSnapshot, EnvironmentDescriptor, HostNotificationMethod, HostNotifications, ModelCatalogEntry, ModelProfile, ModelRef, ProfileAssignments, ProviderAuthInfo, SessionState, SessionSummary } from "@lasercode/protocol";
+import type { AgentsSnapshot, EnvironmentDescriptor, HostNotificationMethod, HostNotifications, ModelCatalogEntry, ModelProfile, ModelRef, ProfileAssignments, ProjectWorkCounts, ProjectWorkListItem, ProviderAuthInfo, SessionState, SessionSummary } from "@lasercode/protocol";
 import type { HostClientOptions } from "../../src/client.js";
 import { createTranscriptHoldLedger, type TranscriptHoldLedger } from "../../src/transcript-hold-ledger.js";
 import { agentInfo, sessionState, snapshot as agentsSnapshot, summary } from "../agents/fixtures.js";
@@ -34,6 +34,12 @@ export interface World {
   calls: Array<{ method: string; params: unknown }>;
   /** A handler a test wants to override or make fail. */
   overrides: Partial<Record<string, (params: never) => unknown>>;
+  /**
+   * The project-work store (M21), by stable project id. `paths` is the
+   * lookup `project/work/list { cwd }` performs; two paths of one project
+   * therefore answer with one id, as the real host's does.
+   */
+  projectWork: Record<string, { seq: number; paths: string[]; items: ProjectWorkListItem[]; entities: Record<string, unknown> }>;
 }
 
 let created = 0;
@@ -64,8 +70,33 @@ export function createWorld(over: Partial<World> = {}): World {
     ],
     calls: [],
     overrides: {},
+    projectWork: {},
     ...over,
   };
+}
+
+/** The project a directory belongs to, the way the host resolves one. */
+function projectIdOf(world: World, cwd: string | undefined): string {
+  if (!cwd) throw new Error("name the project by id, or the folder it is open at");
+  const found = Object.entries(world.projectWork).find(([, project]) => project.paths.some((path) => cwd === path || cwd.startsWith(`${path}/`)));
+  if (found) return found[0];
+  // A folder the store has never seen still resolves: the real host mints an
+  // id and answers with an empty page.
+  const projectId = `pw_${Object.keys(world.projectWork).length + 1}`;
+  world.projectWork[projectId] = { seq: 0, paths: [cwd], items: [], entities: {} };
+  return projectId;
+}
+
+function projectWorkCounts(items: readonly ProjectWorkListItem[]): ProjectWorkCounts {
+  const byKind = { spec: 0, research: 0, design: 0, plan: 0, task: 0 };
+  let total = 0;
+  let needsAttention = 0;
+  for (const item of items) {
+    byKind[item.kind] += 1;
+    total += 1;
+    if (item.needsAttention) needsAttention += 1;
+  }
+  return { total, needsAttention, byKind };
 }
 
 /** Add a persisted session to the world: listed by the catalog and loadable. */
@@ -305,6 +336,28 @@ function handle(world: World, method: string, params: Record<string, unknown>): 
     }
     case "pi/providers/list":
       return { providers: world.providers };
+    // The project lifecycle leap (M21): enough of the host's project-work
+    // authority for the workspace to read a project, create in it and move a
+    // task. A test that cares about the answers overrides the method.
+    case "project/work/list": {
+      const projectId = (params.projectId as string | undefined) ?? projectIdOf(world, params.cwd as string | undefined);
+      const project = world.projectWork[projectId];
+      if (!project) throw new Error("That project is not one this device can read.");
+      const items = project.items.filter((item) => (params.includeArchived === true ? true : !item.archived));
+      return { projectId, seq: project.seq, items, counts: projectWorkCounts(items) };
+    }
+    case "project/work/get": {
+      const projectId = params.projectId as string;
+      const entity = world.projectWork[projectId]?.entities[params.entityId as string];
+      if (!entity) throw new Error("That item is not in this project.");
+      return entity;
+    }
+    case "project/work/create":
+    case "project/work/revise":
+    case "project/work/archive":
+    case "project/work/delete":
+    case "project/task/action":
+      throw new Error(`The fake host has no handler for ${method}.`);
     default:
       throw new Error(`The fake host has no handler for ${method}.`);
   }

@@ -1,0 +1,6 @@
+{
+  "url": "https://crates.io/api/v1/crates/lopdf",
+  "status": 200,
+  "contentType": "application/json",
+  "body": "{\"crate\":{\"name\":\"lopdf\",\"description\":\"A Rust library for PDF document manipulation.\",\"repository\":\"https://github.com/example-org/lopdf\",\"documentation\":\"https://docs.rs/lopdf\",\"downloads\":4210000,\"max_stable_version\":\"0.34.0\"},\"versions\":[{\"num\":\"0.34.0\",\"license\":\"MIT\",\"created_at\":\"2025-12-01T00:00:00.000Z\"}]}"
+}

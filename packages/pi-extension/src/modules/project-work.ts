@@ -1,0 +1,214 @@
+/**
+ * project-work — the model-facing half of the project lifecycle (M21-T17).
+ *
+ * One module for the whole area, not three: AGENTS.md invariant 11 says glue
+ * for a capability is a module, and the lifecycle surface, the Design Index
+ * and Research are one capability — a person's project work — reached through
+ * one worker-supplied bridge. Modules never import each other, so everything
+ * this one needs arrives on `ctx.projectWork`.
+ *
+ * What only this module can do, because it runs inside the engine session:
+ *
+ *   1. **Register the tools.** Whatever the bridge offers, and nothing else:
+ *      a projectless chat gets `inspect_project_work` alone, a project
+ *      without a design index gets no `inspect_design_index`, and a session
+ *      whose research adapters are all switched off gets no research tools.
+ *      An absent tool is absent, never present-and-refusing
+ *      (`docs/agent-tool-contract.md` §3).
+ *   2. **Put the turn's context in front of the model**, at
+ *      `before_agent_start` — the same model-call boundary the agent role
+ *      block uses (D-140), so the implementation context packet is rebuilt
+ *      every turn and a `/design implement @Design` hand-off lands in the
+ *      turn that asked for it.
+ *   3. **Put what a message mentioned beside that message**, at `context` —
+ *      the transform the engine applies to the messages it is about to send,
+ *      whose result never returns to the conversation. That is what makes a
+ *      mention's projection *ephemeral*: the model reads it for the turn its
+ *      message is in, and the session file keeps only what the person wrote.
+ *      It is also the only boundary a queued steer or follow-up passes, since
+ *      a queued message never raises `before_agent_start` of its own.
+ *
+ * The two context capabilities are independent: a session with no project work
+ * of its own registers no tools and still shows the model what its messages
+ * mentioned (leap, "Cross-session mentions and context").
+ *
+ * The worker owns the rest: the typed bridge to the host authority, the
+ * Design Index builder, the Research run. Nothing here writes anything.
+ */
+import { INSTRUCTION_APP_ORIGIN, PRODUCT_DISPLAY_NAME, type LaserToolSpec } from "@lasercode/protocol";
+import type { ContextEvent, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { TSchema } from "typebox";
+import { recordInstructionWrite } from "../prompt-provenance.js";
+import { registerLaserTool } from "../register-tool.js";
+import type { ProjectMentionContextMessage, ProjectWorkBridge, ProjectWorkToolBinding } from "../project-work-bridge.js";
+import type { LaserModule, ModuleContext } from "./index.js";
+
+/**
+ * The engine's short UI label for a tool, from its own name:
+ * `inspect_project_work` → `Inspect project work`. The tools are named verb +
+ * object by the contract, so the name already is the label.
+ */
+export function toolLabel(name: string): string {
+  const words = name.split("_");
+  const first = words[0] ?? name;
+  return [first.charAt(0).toUpperCase() + first.slice(1), ...words.slice(1)].join(" ");
+}
+
+/**
+ * Register one worker-defined tool.
+ *
+ * The worker declares the tool as a contract-linted {@link LaserToolSpec} —
+ * plain JSON Schema, which is what TypeBox produces anyway — so the schema
+ * the model sees is the one the fixtures lint and the one the engine
+ * validates against. `registerLaserTool` re-lints it at registration, strips
+ * D-277's activity label and turns a failure into the contract's error shape.
+ */
+export function registerBinding(pi: ExtensionAPI, binding: ProjectWorkToolBinding): void {
+  const spec: LaserToolSpec = binding.spec;
+  registerLaserTool(
+    pi,
+    {
+      name: spec.name,
+      label: toolLabel(spec.name),
+      description: spec.description,
+      activityLabel: spec.label,
+      annotations: spec.annotations,
+      recovery: binding.recovery,
+      output: spec.output,
+      parameters: spec.input as unknown as TSchema,
+    },
+    async (_toolCallId, params) => {
+      const answer = await binding.run((params ?? {}) as Record<string, unknown>);
+      return { content: [{ type: "text" as const, text: JSON.stringify(answer, null, 2) }], details: answer };
+    },
+  );
+}
+
+/**
+ * The custom type a mention-context message carries. It exists only inside one
+ * model request: nothing appends it to the conversation, so no session file
+ * ever holds one.
+ */
+export const MENTION_CONTEXT_MESSAGE_TYPE = "lasercode/project-work-mentions";
+
+/** Every tool this session's bridge offers, in the order the docs list them. */
+export function bindingsOf(bridge: ProjectWorkBridge): ProjectWorkToolBinding[] {
+  return [...bridge.lifecycleTools(), ...bridge.designTools(), ...bridge.researchTools()];
+}
+
+export const projectWorkModule: LaserModule = {
+  name: "project-work",
+
+  detect: (ctx) => Boolean(ctx.projectWork ?? ctx.mentionContext),
+
+  register(ctx: ModuleContext) {
+    const bridge = ctx.projectWork;
+    if (!bridge) return;
+    for (const binding of bindingsOf(bridge)) {
+      try {
+        registerBinding(ctx.pi, binding);
+      } catch (error) {
+        // One tool that does not conform must not take the others with it:
+        // the failure is reported and the rest of the surface still loads.
+        ctx.send({
+          type: "lasercode/module/log",
+          module: "project-work",
+          level: "warn",
+          message: `could not register ${binding.spec.name}: ${describe(error)}`,
+        });
+      }
+    }
+  },
+
+  activate(ctx: ModuleContext) {
+    const bridge = ctx.projectWork;
+    const mentions = ctx.mentionContext;
+    if (!bridge && !mentions) return;
+    let disposed = false;
+
+    // What a message mentioned, beside that message. The engine hands this
+    // hook the messages it is about to send and uses what comes back for that
+    // request only, so nothing here is written, stored or replayed: the
+    // transcript keeps the person's words and the typed reference they sent,
+    // never a copy of the artifact.
+    if (mentions) {
+      ctx.pi.on("context", (event: ContextEvent) => {
+        if (disposed) return undefined;
+        const messages = event.messages as unknown as Array<{ role?: unknown; correlationId?: unknown }>;
+        const seen: ProjectMentionContextMessage[] = messages.map((message) => ({
+          role: typeof message.role === "string" ? message.role : "",
+          ...(typeof message.correlationId === "string" ? { correlationId: message.correlationId } : {}),
+        }));
+        let blocks;
+        try {
+          blocks = mentions.blocks(seen);
+        } catch (error) {
+          ctx.send({
+            type: "lasercode/module/log",
+            module: "project-work",
+            level: "warn",
+            message: `could not build this message's project-work context: ${describe(error)}`,
+          });
+          return undefined;
+        }
+        if (blocks.length === 0) return undefined;
+        const next = [...event.messages];
+        // Descending, so an earlier insertion cannot move a later one's place.
+        for (const block of [...blocks].sort((left, right) => right.afterIndex - left.afterIndex)) {
+          const at = Math.min(Math.max(block.afterIndex + 1, 0), next.length);
+          next.splice(at, 0, {
+            role: "custom",
+            customType: MENTION_CONTEXT_MESSAGE_TYPE,
+            content: [{ type: "text", text: block.text }],
+            timestamp: Date.now(),
+          } as unknown as (typeof next)[number]);
+        }
+        return { messages: next };
+      });
+    }
+    if (!bridge) {
+      return () => {
+        disposed = true;
+      };
+    }
+
+    // The model-call boundary. The packet is rebuilt here every turn, so it
+    // can never describe a state older than the turn reading it, and it goes
+    // into the system prompt rather than the transcript: it is context, not
+    // something the person said.
+    ctx.pi.on("before_agent_start", async (event) => {
+      if (disposed) return undefined;
+      let block: string | undefined;
+      try {
+        block = await bridge.turnContext({ prompt: event.prompt });
+      } catch (error) {
+        ctx.send({
+          type: "lasercode/module/log",
+          module: "project-work",
+          level: "warn",
+          message: `could not build this turn's project context: ${describe(error)}`,
+        });
+        return undefined;
+      }
+      if (!block) return undefined;
+      return recordInstructionWrite(
+        { systemPrompt: `${event.systemPrompt}\n\n${block}` },
+        {
+          kind: INSTRUCTION_APP_ORIGIN,
+          origin: INSTRUCTION_APP_ORIGIN,
+          label: `${PRODUCT_DISPLAY_NAME} · Project work`,
+          inline: true,
+          module: "project-work",
+        },
+      );
+    });
+
+    return () => {
+      disposed = true;
+    };
+  },
+};
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

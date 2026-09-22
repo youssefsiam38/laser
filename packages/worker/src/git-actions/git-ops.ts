@@ -2,7 +2,14 @@
  * Local git mutations: commit an explicit path set, push without force, create
  * a branch from an explicit base. Every user value is an argv element.
  */
-import type { GitActionConfirmation, GitActionCopyable, GitActionExpect, GitActionResult } from "@lasercode/protocol";
+import type {
+  GitActionConfirmation,
+  GitActionCopyable,
+  GitActionExpect,
+  GitActionHost,
+  GitActionLinkRef,
+  GitActionResult,
+} from "@lasercode/protocol";
 import {
   GitActionError,
   assertCommitish,
@@ -18,6 +25,39 @@ import { combinedOutput, looksUncertain, personFacingMessage, type ProcessRunner
 
 export async function readHead(run: ProcessRunner, repo: string): Promise<string> {
   return (await run("git", ["rev-parse", "HEAD"], { cwd: repo, timeoutMs: 5_000 })).stdout.trim();
+}
+
+/**
+ * What a finished action leaves for a repository link to name (M21-T18).
+ *
+ * The commit object id is read back from git after the action, in full: a
+ * short hash is what a person reads, and an object id is what a link *is*
+ * (leap, "Repository provenance"). The branch, the remote and the pull
+ * request travel beside it as display context, never as identity, and an
+ * action whose commit cannot be read back emits nothing rather than a
+ * plausible reference to the wrong thing.
+ */
+export async function linkRefFor(
+  run: ProcessRunner,
+  repo: string,
+  context: { branch?: string; remote?: string; pullRequest?: { number: number; host: GitActionHost; url?: string; title?: string } },
+  commitish = "HEAD",
+): Promise<GitActionLinkRef | undefined> {
+  const resolved = await run("git", ["rev-parse", "--verify", "--quiet", `${commitish}^{commit}`], { cwd: repo, timeoutMs: 5_000 }).catch(
+    () => undefined,
+  );
+  const commitObjectId = resolved?.code === 0 ? resolved.stdout.trim() : "";
+  if (!/^[0-9a-f]{7,64}$/.test(commitObjectId)) return undefined;
+  const format = await run("git", ["rev-parse", "--show-object-format"], { cwd: repo, timeoutMs: 5_000 }).catch(() => undefined);
+  const objectFormat = format?.stdout.trim() === "sha256" ? "sha256" : "sha1";
+  return {
+    repo,
+    objectFormat,
+    commitObjectId,
+    ...(context.branch ? { branch: context.branch } : {}),
+    ...(context.remote ? { remote: context.remote } : {}),
+    ...(context.pullRequest ? { pullRequest: context.pullRequest } : {}),
+  };
 }
 
 export async function currentBranch(run: ProcessRunner, repo: string): Promise<{ branch: string; detached: boolean }> {
@@ -121,7 +161,8 @@ export async function commitPaths(
   }
   const hash = (await run("git", ["rev-parse", "--short", "HEAD"], { cwd: repo, timeoutMs: 5_000 })).stdout.trim();
   const subject = (await run("git", ["log", "-1", "--format=%s"], { cwd: repo, timeoutMs: 5_000 })).stdout.trim();
-  return { outcome: "done", confirmation, copyable: copy, commit: { hash, subject } };
+  const linkRef = await linkRefFor(run, repo, { branch });
+  return { outcome: "done", confirmation, copyable: copy, commit: { hash, subject }, ...(linkRef ? { linkRef } : {}) };
 }
 
 export async function pushBranch(
@@ -160,7 +201,8 @@ export async function pushBranch(
   if (result.code !== 0) {
     return { outcome: "refused", message: personFacingMessage(combinedOutput(result), "Nothing was pushed."), confirmation, copyable: copy };
   }
-  return { outcome: "done", confirmation, copyable: copy, pushed: { remote, branch: local } };
+  const linkRef = await linkRefFor(run, repo, { branch: local, remote }, local);
+  return { outcome: "done", confirmation, copyable: copy, pushed: { remote, branch: local }, ...(linkRef ? { linkRef } : {}) };
 }
 
 export async function createBranch(

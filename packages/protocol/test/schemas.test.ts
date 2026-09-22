@@ -11,6 +11,7 @@ import {
   ProtocolError,
   MCP_KNOWN_SERVERS,
   METHOD_POLICY,
+  PROJECT_WORK_METHODS,
   mcpConversationContextSchema,
   type McpCatalogOption,
   agentMessageModeSchema,
@@ -28,6 +29,10 @@ import {
   type ClientMethod,
   type ClientRequests,
 } from "../src/index.js";
+import { sampleMethodParams as projectWorkSamples } from "./project-work-samples.js";
+import { sampleInteropMethodParams as projectWorkInteropSamples } from "./project-work-interop-samples.js";
+import { sampleContinuityMethodParams as projectWorkContinuitySamples } from "./project-work-continuity-samples.js";
+import { sampleDesignWorkspaceParams } from "./design-workspace-samples.js";
 
 /** One valid params sample per method. The compiler-checked `satisfies` in schemas.ts
  *  guarantees the map is complete; this table guarantees each schema accepts a real shape. */
@@ -174,6 +179,9 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/project/pr/checkout": { cwd: "/p", number: 12, confirm: true },
   "pi/project/pr/merge": { cwd: "/p", number: 12, method: "squash", confirm: true },
   "pi/project/pr/viewed": { cwd: "/p", number: 12, path: "src/a.ts", viewed: true },
+  "pi/project/verify/start": { cwd: "/p", key: "TASK-44" },
+  "pi/project/verify/state": { cwd: "/p", runId: "ver_0001" },
+  "pi/project/verify/stop": { cwd: "/p", runId: "ver_0001", reason: "you stopped it" },
   "pi/project/browse": { path: "~\\code", explorer: { mode: "explorer", cwd: "/home/me/code", prefix: "node", offset: 80, limit: 80 } },
   "pi/project/env/status": { cwd: "/home/me/code/app" },
   "pi/project/env/set": {
@@ -336,7 +344,24 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/worker/safety": {},
   "pi/worker/retire": { mode: "automatic" },
   "pi/worker/pressure": { level: "warning", epoch: 3, generation: 7 },
+  // M21 project lifecycle. The bodies and the full per-method round trip live
+  // in `project-work-methods.test.ts`; these are the envelope samples this
+  // table requires of every method.
+  ...projectWorkSamples,
+  // M21-T21 import, export and publication.
+  ...projectWorkInteropSamples,
+  // M21-T20 identity across relocation.
+  ...projectWorkContinuitySamples,
+  ...sampleDesignWorkspaceParams,
 };
+
+describe("project work methods", () => {
+  it("registers one sample for every method in the leap's inventory", () => {
+    for (const method of PROJECT_WORK_METHODS) {
+      expect(Object.prototype.hasOwnProperty.call(samples, method)).toBe(true);
+    }
+  });
+});
 
 describe("process inventory methods", () => {
   it("refuses a desktop report that tries to say more than pids and counters", () => {

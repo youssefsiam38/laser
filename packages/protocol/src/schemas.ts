@@ -31,6 +31,7 @@ import {
   PROFILE_NAME_MAX,
 } from "./fallback.js";
 import { PROVIDER_FAILURE_CLASSES } from "./provider-failure.js";
+import { PROJECT_WORK_MENTION_MAX, projectWorkMentionProjectionSchema } from "./project-work-mentions.js";
 import { WORKER_MODES } from "./runtime-recovery.js";
 import { runtimeActivationParamsSchemas } from "./runtime-activation.js";
 import { ErrorCodes, type JsonRpcRequest } from "./jsonrpc.js";
@@ -39,6 +40,10 @@ import { resourceParamsSchemas } from "./resources.js";
 import { sessionLifetimeParamsSchemas } from "./session-lifetime.js";
 import { memoryPressureParamsSchemas } from "./memory-pressure.js";
 import { environmentParamsSchemas } from "./environment-policy.js";
+import { projectWorkParamsSchemas } from "./project-work-methods.js";
+import { projectWorkInteropParamsSchemas } from "./project-work-interop.js";
+import { projectWorkContinuityParamsSchemas } from "./project-work-continuity.js";
+import { designWorkspaceParamsSchemas } from "./design-workspace.js";
 import { GIT_PR_MERGE_METHODS, GIT_PROSE_KINDS } from "./git-actions.js";
 import type { ClientMethod, ClientRequests } from "./messages.js";
 import { TASK_COMMAND_MAX, TASK_LINE_MAX, TASK_LOG_SEGMENTS_MAX } from "./tasks.js";
@@ -255,6 +260,13 @@ const environmentKey = z.string().regex(ENVIRONMENT_KEY_PATTERN);
 const content = z.array(contentBlockSchema).min(1);
 /** A pending-tray id, as the worker mints it: `p-` and hex. */
 const pendingId = z.string().regex(/^p-[0-9a-f]{8,32}$/);
+/**
+ * The bounded projection of what a message mentioned (M21-T9). Host-supplied
+ * on every verb that sends a person's words: accepted on the wire so a host can
+ * forward its own validated reading to the worker with the message it belongs
+ * to, and replaced host-side whenever a client puts anything there.
+ */
+const projectWorkMentions = z.array(projectWorkMentionProjectionSchema).max(PROJECT_WORK_MENTION_MAX).optional();
 
 // ---------- M4 values (settings, packages, providers, logs) ----------
 
@@ -785,6 +797,10 @@ export const clientParamsSchemas = {
         model: modelRefSchema.nullable().optional(),
         thinkingLevel: thinkingLevelSchema.optional(),
       }).strict().optional(),
+      // Host-supplied (M21-T9). Accepted on the wire so a host may forward its
+      // own validated projection to a worker with the prompt it belongs to;
+      // whatever a client sends here is replaced, never trusted.
+      projectWork: projectWorkMentions,
     })
     .strict(),
   "session/cancel": z.object({ path: sessionPath }).strict(),
@@ -822,15 +838,18 @@ export const clientParamsSchemas = {
   // destination file is the host's to choose (M13-T58).
   "pi/session/move": z.object({ path: sessionPath, cwd }).strict(),
   "pi/session/close": z.object({ path: sessionPath }).strict(),
-  "pi/session/steer": z.object({ path: sessionPath, content }).strict(),
-  "pi/session/follow_up": z.object({ path: sessionPath, content }).strict(),
+  // `projectWork` is host-supplied on every send verb (M21-T9); the schema
+  // accepts it so a host can forward its own reading, and the host drops
+  // whatever a client put there before it ever reaches a worker.
+  "pi/session/steer": z.object({ path: sessionPath, content, projectWork: projectWorkMentions }).strict(),
+  "pi/session/follow_up": z.object({ path: sessionPath, content, projectWork: projectWorkMentions }).strict(),
   "pi/session/clear_queue": z.object({ path: sessionPath }).strict(),
 
   // The pending tray (pending.ts). Laser's own list, so every operation names
   // one message by the id the worker minted for it.
   "session/pending/list": z.object({ path: sessionPath }).strict(),
-  "session/pending/add": z.object({ path: sessionPath, content }).strict(),
-  "session/pending/edit": z.object({ path: sessionPath, id: pendingId, content }).strict(),
+  "session/pending/add": z.object({ path: sessionPath, content, projectWork: projectWorkMentions }).strict(),
+  "session/pending/edit": z.object({ path: sessionPath, id: pendingId, content, projectWork: projectWorkMentions }).strict(),
   "session/pending/remove": z.object({ path: sessionPath, id: pendingId }).strict(),
   "session/pending/steer": z.object({ path: sessionPath, id: pendingId }).strict(),
   "session/pending/clear": z.object({ path: sessionPath }).strict(),
@@ -1006,6 +1025,23 @@ export const clientParamsSchemas = {
     message: z.string().min(1).max(64 * 1024),
     confirm: z.boolean().optional(),
     expect: gitActionExpect.optional(),
+  }).strict(),
+  // M21-T19 · verification run control. The Task is named by id or by key;
+  // which project it belongs to is resolved from `cwd`, never from the params.
+  "pi/project/verify/start": z.object({
+    cwd: z.string().min(1),
+    entityId: z.string().min(1).max(64).optional(),
+    key: z.string().min(1).max(40).optional(),
+    sessionPath: z.string().min(1).max(4096).optional(),
+  }).strict(),
+  "pi/project/verify/state": z.object({
+    cwd: z.string().min(1),
+    runId: z.string().min(1).max(64).optional(),
+  }).strict(),
+  "pi/project/verify/stop": z.object({
+    cwd: z.string().min(1),
+    runId: z.string().min(1).max(64),
+    reason: z.string().min(1).max(2000).optional(),
   }).strict(),
   "pi/project/git/push": z.object({
     cwd: z.string().min(1),
@@ -1290,6 +1326,17 @@ export const clientParamsSchemas = {
 
   // --- RP-13 environment descriptor. Shape lives in environment-policy.ts ---
   ...environmentParamsSchemas,
+
+  // --- M21 project lifecycle. Shapes live in project-work-methods.ts ---
+  ...projectWorkParamsSchemas,
+
+  // --- M21-T21 import, export and publication. Shapes live in project-work-interop.ts ---
+  ...projectWorkInteropParamsSchemas,
+
+  // --- M21-T20 project identity across relocation. Shapes live in project-work-continuity.ts ---
+  ...projectWorkContinuityParamsSchemas,
+  // --- M21 the design workspace. Shapes live in design-workspace.ts ---
+  ...designWorkspaceParamsSchemas,
 } satisfies Record<ClientMethod, z.ZodTypeAny>;
 
 export const clientMethods = Object.keys(clientParamsSchemas) as ClientMethod[];

@@ -78,10 +78,13 @@ then reports `laser/capabilities` to the worker. Modules:
 | --- | --- | --- |
 | `provider-log` | Pi's `before_provider_request` / `after_provider_response` hooks | always |
 | `subagents` | the agent harness tools — `start_agent`, `send_agent_message`, `inspect_fleet`, `inspect_agent`, `stop_agent`, `remove_agent_worktree` for a session that may delegate, `complete_agent_run` for a child; no waiting tool, and no list — `inspect_fleet` is the fleet column's tree, scoped to the caller (D-163) — the child's role block in its system prompt, and agent events delivered to the parent model as `lasercode/agent-event`; all from the worker-supplied `AgentHarnessBridge` (`src/agents-bridge.ts`, [`agents.md`](agents.md)) | the worker passed a bridge (Subagents feature enabled) |
-| `background-work` | long commands: `bash` with an explicit background flag, promotion to a background task after the foreground timeout, `task_output`/`task_stop` (no waiting tool: every exit wakes the model, D-162; no list: the harness's `inspect_fleet` shows every command in the tree, and `task_output` reads a child's through the worker, D-163), `lasercode/task/update` for the fleet and `lasercode/task-event` | the worker passed `BackgroundWorkOptions` |
+| `background-work` | Commands — long commands a conversation left running (`ux-fleet.md`; the wire keeps the word `task`): `bash` with an explicit background flag, promotion to a Command of its own after the foreground timeout, `task_output`/`task_stop` (no waiting tool: every exit wakes the model, D-162; no list: the harness's `inspect_fleet` shows every command in the tree, and `task_output` reads a child's through the worker, D-163), `lasercode/task/update` for the fleet and `lasercode/task-event` | the worker passed `BackgroundWorkOptions` |
 | `goal` | canonical durable goal state | Goals feature enabled |
 | `transcribe` | pi-gpt-transcribe desktop dictation | matching command registered |
 | `web-access` | registers the transcript-only search tool; the worker supplies its credential/policy-aware executor (M12-T64). The duplicate result list remains retired (D-61) | Web search feature enabled |
+| `mcp` | the project's MCP servers as engine tools, and the sign-in/inspection surface behind `mcp/*` ([`mcp.md`](mcp.md)) | MCP servers feature enabled |
+| `project-work` | the project lifecycle tools — Specs, Research, Designs, Plans and Project Tasks over the worker's bridge to the host-owned store, under the agent tool contract (D-350, [`project-lifecycle-leap.md`](project-lifecycle-leap.md)) | the worker passed a project-work bridge |
+| `account-usage`, `file-freshness`, `provider-log`, `task-log`, `task-messages`, `task-retention` | the small modules behind allowance snapshots, the `edit` freshness note (D-152), captured requests and a Command's bounded log and delivery | always, or with their own bridge |
 
 Adding support for engine behavior means a reusable Pi-native package plus one
 module that translates it to the product protocol. The agent harness is the
@@ -97,7 +100,7 @@ watcher.
 ACP-inspired JSON-RPC:
 
 - Product requests (client → host): `session/new`, `session/load`, `session/prompt`,
-  `session/cancel`, `session/set_mode`, plus `pi/*` extras such as
+  `session/cancel`, plus `pi/*` extras such as
   `pi/session/steer`, `pi/session/follow_up`, `pi/session/fork`,
   `pi/model/set`, `pi/thinking/set`, `pi/compact`, `pi/settings/*`,
   `pi/logs/*`. Legacy `pi/packages/*` requests are rejected;
@@ -115,6 +118,15 @@ ACP-inspired JSON-RPC:
   profiles Laser filled in for review — see
   [`model-profiles.md`](model-profiles.md). Remaining `pi/*` methods are
   internal wire compatibility and are not product vocabulary.
+- `session/set_mode` is in the schema, the message map and the method policy,
+  and **no worker implements it**: it answers `Unsupported`. It is the ACP
+  shape M17-T11 (plan mode) will fill; until that task lands, nothing above the
+  worker may present a session as having a mode. See
+  [`leap/m21-t23-reconciliation.md`](leap/m21-t23-reconciliation.md).
+- The project lifecycle family (`project/work/*`, `design/*`, `research/*`)
+  is engine-neutral like the rest and is specified by
+  [`project-lifecycle-leap.md`](project-lifecycle-leap.md); the host owns the
+  store, the worker owns the tools that write through it.
 - Every client method carries a scope and a reach in one compiler-complete
   table at the host boundary, and `environment/describe` tells each connection
   what this environment is and what that connection may do in it
@@ -197,6 +209,16 @@ in-memory engine overrides.
 
 - Host SQLite: provider round-trips, tool events, session index cache, attention
   state, device list, relay channel state.
+- `<Laser data>/state/project-work.db` (content-addressed blobs live in the
+  same database, chunked above a size bound): the
+  canonical project lifecycle store (Specs, Research, Designs, Plans, Project
+  Tasks, their immutable revisions, comments, approvals, decisions, evidence,
+  repository and execution links), partitioned by a stable `projectId` that a
+  worktree shares with its owner. The project directory stays source, never
+  lifecycle storage: an export to `<project>/.laser/work/` is a snapshot, never
+  a second authority.
+- `<project>/.laser/design/index.json` and `review.json`: the Design index and
+  its review state, written by the parse-only index build (D-353).
 - `<Laser data>/state/agents/*.md`: global custom agent definitions; project
   definitions live in `<project>/.laser/agents/*.md`.
   `<Laser data>/state/agents.json` keeps the default agent, durable rename

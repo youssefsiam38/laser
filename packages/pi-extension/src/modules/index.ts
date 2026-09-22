@@ -10,6 +10,8 @@ import { subagentsModule } from "./subagents.js";
 import { transcribeModule } from "./transcribe.js";
 import { goalModule } from "./goal.js";
 import { mcpModule, type McpModuleOptions } from "./mcp.js";
+import { projectWorkModule } from "./project-work.js";
+import type { ProjectMentionContext, ProjectWorkBridge } from "../project-work-bridge.js";
 import { webAccessModule, type WebSearchHandler } from "./web-access.js";
 export type { McpModuleOptions } from "./mcp.js";
 export type { WebSearchHandler } from "./web-access.js";
@@ -65,6 +67,19 @@ export interface ModuleContext {
    * least one enabled server (docs/mcp.md).
    */
   mcp?: McpModuleOptions;
+  /**
+   * This session's project work (`project-work` module, M21-T17): the typed
+   * bridge to the host authority, plus whichever of the Design Index and
+   * Research this session has. Absent when the worker has no project-work
+   * link at all, and the whole surface is then simply not registered.
+   */
+  projectWork?: ProjectWorkBridge;
+  /**
+   * What this session's messages mentioned (M21-T9), read-only. Present for
+   * every session that can receive a host-validated projection, including one
+   * with no project of its own; it registers nothing and changes nothing.
+   */
+  mentionContext?: ProjectMentionContext;
 }
 
 /**
@@ -127,4 +142,5 @@ export const modules: readonly LaserModule[] = [
   transcribeModule,
   webAccessModule,
   mcpModule,
+  projectWorkModule,
 ];

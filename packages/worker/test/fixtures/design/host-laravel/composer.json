@@ -1,0 +1,6 @@
+{
+  "name": "ledger/host-laravel",
+  "require": {
+    "laravel/framework": "11.9.0"
+  }
+}

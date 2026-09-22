@@ -1,0 +1,58 @@
+{
+  "tool": "build_design_index",
+  "task": "I want to design a new settings page in this project's own style. Get whatever you need first.",
+  "expectedTool": "build_design_index",
+  "allowedTools": [
+    "inspect_design_index",
+    "build_design_index"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 4,
+    "inputTokens": 70000,
+    "outputTokens": 300
+  },
+  "measures": [
+    "retry"
+  ],
+  "world": {
+    "role": "root",
+    "designIndex": {
+      "project": "vue-scss",
+      "built": false
+    }
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "inspect_design_index",
+        "args": {
+          "limit": 20,
+          "activity_label": "Reading the design index"
+        }
+      },
+      "fails": true
+    },
+    {
+      "toolCall": {
+        "name": "build_design_index",
+        "args": {
+          "activity_label": "Indexing the design system"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "inspect_design_index",
+        "args": {
+          "kind": "token",
+          "limit": 10,
+          "activity_label": "Reading the tokens"
+        }
+      }
+    },
+    {
+      "text": "I indexed the project: it is Vue with SCSS variables, and the tokens are brand, ink, spacing and radius. I will compose the settings page from those."
+    }
+  ]
+}

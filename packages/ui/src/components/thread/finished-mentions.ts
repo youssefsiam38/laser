@@ -1,4 +1,5 @@
 import type { Unstable_TriggerItem, Unstable_TriggerMatcher } from "@assistant-ui/react";
+import { projectWorkMentionSpans as workMentionSpans, type ProjectWorkKind } from "@lasercode/protocol";
 
 import {
   bareMentionEnd,
@@ -58,8 +59,8 @@ import {
  * Records are per composer: more than one can be on screen (a scoped surface
  * over the session's own), and each owns its own draft.
  */
-/** What a mention names. The picker has no fourth kind, and neither has a tag. */
-export type MentionKind = "file" | "directory" | "agent";
+/** What a mention names. The picker has no fifth kind, and neither has a tag. */
+export type MentionKind = "file" | "directory" | "agent" | "work";
 
 export type FinishedMention = {
   /** Index of the `@` that opens the token, in the current draft. */
@@ -70,6 +71,8 @@ export type FinishedMention = {
   readonly type: MentionKind;
   /** The readable identity, without the `@` or its `./` anchor. */
   readonly label: string;
+  /** For project work: which kind, so the tag carries the kind's own colour. */
+  readonly workKind?: ProjectWorkKind;
 };
 
 export type FinishedMentions = {
@@ -85,6 +88,16 @@ export type FinishedMentions = {
    * carries it — never for a second one.
    */
   noteInsertion(item: Unstable_TriggerItem): void;
+  /**
+   * Take a choice a picker wrote **itself** (M21-T9).
+   *
+   * A project-work mention is inserted by the picker's navigation rather than
+   * by the directive formatter, because its text depends on the draft it lands
+   * in: the same key mentioned twice at two revisions needs two labels. The
+   * insertion is still a choice, so it is finished the moment it is made, the
+   * same as every other.
+   */
+  noteChoice(choice: { token: string; type: MentionKind; label: string; workKind?: ProjectWorkKind }): void;
   /** `matchProjectMention`, minus every `@` that already belongs to a finished mention. */
   readonly matcher: Unstable_TriggerMatcher;
 };
@@ -149,6 +162,22 @@ function locateToken(text: string, token: string, hint: number | undefined, scan
 function arrivedMentions(text: string, from: number, to: number, anchoredToEnd: boolean): FinishedMention[] {
   const found: FinishedMention[] = [];
   const claimed = new Set<number>();
+  // Project work first: `@TASK-44` has the shape of a bare handle, and a draft
+  // that arrived with one is a mention of that Task, not of an agent nobody
+  // started (M21-T9). A key with no title is still a query while the caret is
+  // on it, exactly as a half-typed handle is.
+  for (const span of workMentionSpans(text)) {
+    if (span.start < from) continue;
+    claimed.add(span.start);
+    if (span.end >= to && !anchoredToEnd) continue;
+    found.push({
+      start: span.start,
+      token: text.slice(span.start, span.end),
+      type: "work",
+      label: span.key,
+      workKind: span.kind,
+    });
+  }
   for (const span of projectMentionSpans(text)) {
     if (span.start < from) continue;
     claimed.add(span.start);
@@ -176,7 +205,7 @@ export function createFinishedMentions(): FinishedMentions {
   /** What is a mention in the text as it stands: what the matcher and the tags read. */
   let mentions: readonly FinishedMention[] = Object.freeze([]);
   let lastMatch: { offset: number } | undefined;
-  let chosen: { token: string; type: MentionKind; label: string; at: number | undefined } | undefined;
+  let chosen: { token: string; type: MentionKind; label: string; workKind?: ProjectWorkKind; at: number | undefined } | undefined;
 
   /**
    * Put the waiting choice into `into` if `next` carries it. Before the new
@@ -192,7 +221,13 @@ export function createFinishedMentions(): FinishedMentions {
       if (settled) chosen = undefined;
       return;
     }
-    const mention = { start, token: chosen.token, type: chosen.type, label: chosen.label };
+    const mention: FinishedMention = {
+      start,
+      token: chosen.token,
+      type: chosen.type,
+      label: chosen.label,
+      ...(chosen.workKind ? { workKind: chosen.workKind } : {}),
+    };
     const existing = into.findIndex((other) => other.start === start);
     if (existing >= 0) into.splice(existing, 1, mention);
     else into.push(mention);
@@ -252,24 +287,31 @@ export function createFinishedMentions(): FinishedMentions {
     return mentions;
   };
 
+  /** One choice, whatever wrote it: record it and try to place it in the draft. */
+  const noteChoice = (choice: { token: string; type: MentionKind; label: string; workKind?: ProjectWorkKind }): void => {
+    chosen = { ...choice, at: lastMatch?.offset };
+    lastMatch = undefined;
+    if (text !== undefined) {
+      const next = [...records];
+      take(text, next, false);
+      records = next;
+      mentions = settle(text);
+    }
+  };
+
   return {
     advance,
+    noteChoice,
     noteInsertion: (item) => {
       // The picker has three kinds of row and the pagination rows never reach
       // an insertion (`explorerNavigation.select` answers those itself), so
       // anything else is read as the file it most likely is rather than
       // inventing a fourth kind of tag.
       const type: MentionKind = item.type === "directory" || item.type === "agent" ? item.type : "file";
-      chosen = { token: projectMentionFormatter.serialize(item), type, label: item.label, at: lastMatch?.offset };
-      lastMatch = undefined;
-      // The composer may already hold the new draft, or may be about to: try
-      // now, and let the next text through `advance` finish the job.
-      if (text !== undefined) {
-        const next = [...records];
-        take(text, next, false);
-        records = next;
-        mentions = settle(text);
-      }
+      // The composer may already hold the new draft, or may be about to:
+      // `noteChoice` tries now, and the next text through `advance` finishes
+      // the job.
+      noteChoice({ token: projectMentionFormatter.serialize(item), type, label: item.label });
     },
     matcher: (draft, char, caret) => {
       advance(draft);

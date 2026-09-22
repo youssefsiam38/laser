@@ -1,0 +1,6 @@
+{
+  "url": "https://registry.npmjs.org/-/v1/search?text=pdf%20text%20extraction&size=5",
+  "status": 200,
+  "contentType": "application/json",
+  "body": "{\"objects\":[{\"package\":{\"name\":\"pdf-text\",\"version\":\"3.2.0\",\"description\":\"Extract the text layer of a PDF in pure JavaScript.\",\"date\":\"2026-02-10T09:12:00.000Z\"}},{\"package\":{\"name\":\"pdf-reader\",\"version\":\"1.4.1\",\"description\":\"Streaming PDF reader.\",\"date\":\"2025-11-02T11:00:00.000Z\"}}]}"
+}

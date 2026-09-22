@@ -200,7 +200,9 @@ describe("rendering", () => {
     );
     await mount(<TaskEventNotice data={taskSummary} />);
     const line = container.querySelector<HTMLElement>('[data-slot="task-event"]')!;
-    expect(line.textContent).toContain("Background task");
+    // The person-facing word is Command (M21-T23); the data part stays `task`.
+    expect(line.textContent).toContain("Command");
+    expect(line.textContent).not.toContain("Background task");
     expect(line.querySelector('[data-search-content="command"]')?.textContent).toBe("pnpm test --filter ui");
     expect(line.textContent).toContain("exited with code 0");
     expect(line.textContent).toContain("2m 14s");

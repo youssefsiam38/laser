@@ -4,8 +4,8 @@ Status: **binding for M13 (D-140).** Agents are first-class in Laser: a
 person defines reusable agents on an Agents page, any session can start other
 agents through one `start_agent` tool, every child is a sub-session the person
 can chat with — in a worktree of its own unless its parent said otherwise — a
-live map shows each top-level session's agent tree, and long commands run as
-background tasks. Every agent on the Agents page is one a person wrote: the
+live map shows each top-level session's agent tree, and long commands keep
+running as Commands in the fleet (§6; the wire still calls them tasks). Every agent on the Agents page is one a person wrote: the
 product ships no agent of its own beyond the seeded, editable `default`
 (D-347, [`plain-chat.md`](plain-chat.md)).
 
@@ -140,17 +140,25 @@ The only identities are the four the reference names:
 | `runId` | one execution inside that session | `inspect_agent`, `stop_agent`, `remove_agent_worktree`, correlation |
 
 Model-facing tools, registered by the companion extension's `subagents`
-module from the worker-supplied `AgentHarnessBridge`:
+module from the worker-supplied `AgentHarnessBridge`. Every one of them goes
+through `registerLaserTool` and obeys the agent-facing tool contract
+([`agent-tool-contract.md`](agent-tool-contract.md), D-350): a closed, bounded,
+fully described input schema, a declared output, the annotations in the last
+column, and failures shaped `{ code, message, committed, next }`. The
+annotations are `readOnly` / `idempotent` / `destructive` / `external`, which
+map to MCP's `readOnlyHint` / `idempotentHint` / `destructiveHint` /
+`openWorldHint`; — means the flag is false. None of the harness tools is
+`external`: everything they touch is this machine's project.
 
-| Tool | Who gets it | Does |
-| --- | --- | --- |
-| `start_agent { agent_name, subagent_name, task, worktree? }` | a session whose definition permits delegation and whose depth allows another level | validates the name against the allowed list and depth, loads the child's full configuration, creates the child session and (when this workspace can isolate) its worktree, starts the child loop in the background, returns `{ agent_name, subagent_name, sessionId, runId, status: "running", working_directory, branch?, isolation, guidance, your_responsibility }` immediately. `isolation` is `{ mode, shape, reason }` — a sentence saying whether the child is in a worktree or sharing the checkout, and why. `guidance` is the sentence the parent reads at the moment it matters: *Do not wait for `<name>`. Carry on with your own work; when it ends, its result will be sent to you as a message. Use `inspect_agent` with runId `<runId>` to check on it meanwhile — a status of `needs_input` means it is paused on a question you can answer with `send_agent_message` mode `answer`.* |
-| `send_agent_message { sessionId, message, mode? }` | same | D-204 defines four modes. `interrupt` (the default) takes back both engine queues, cancels every pending question owned by the exact current invocation, waits for its prompt/abort fence, then delivers the redirect ahead of preserved ordinary work. `steer` reaches the next model-call boundary without cancellation; `queue` waits after current work; neither becomes an answer while a question is open. `answer` alone validates and settles an open `needs_input` select/confirm/input/editor question, and is refused when none is open. Idle interrupt/steer/queue starts a new run. Delivery is `queued` only after accepted ownership, `delivered` only after engine admission, `answered` only after exact dialog settlement, `refused` for admission/answer rejection, and `control_failed` when interruption control was not established. A terminal declaration still wins; its interrupt-priority redirect waits on the one successor ahead of preserved work. Detached background commands survive interruption. Explicit stop uses the same exact-dialog/prompt fence and commits queued-work/terminal cancellation only after queue takeover and abort both succeed; failure retains accepted work and publishes no false cancellation |
-| `inspect_fleet` | same | the tree of work under this session, as the person's fleet column draws it (D-163, below): the agents it started, theirs, and the background commands any of them — the caller included — left running or finished. One row per session, standing on its newest run, and one per command; every row carries its kind (`agent` or `command`), title, the fleet's status word, elapsed time, one line (what it is doing, or how it ended) and the id to follow it with (`runId`, `taskId`). At most `AGENT_FLEET_ROWS_MAX` = 50 rows, cut deepest-first with `omitted` saying how many. Read-only; never transcripts |
-| `inspect_agent { runId? \| sessionId?, messages? }` | same | one agent in depth — any agent row of the caller's tree, a child or a child's child (D-163): the run summary (identities, status, result, `endedBy`, the open `question`) plus the **whole** task, `origin`, `depth`, `model`, `cwd`, `isolation` (`mode`, `shape`, `reason`) and `branch` (only with a worktree), the worktree as it is now (`exists`, `unmergedCommits`, `uncommittedFiles`, `removedAt?`), `activity` (turns, tool calls, the tool running now, when it was last active), its last assistant messages excerpted (`messages`: default `AGENT_INSPECT_MESSAGES_DEFAULT` = 1, at most `AGENT_INSPECT_MESSAGES_MAX` = 10, each cut at `AGENT_INSPECT_MESSAGE_EXCERPT` = 1000 characters), the question it is paused on, a `what_it_needs` sentence when it is stalled, and its own children as run summaries. Read-only: it never wakes the child or delivers anything to it. A live child is read through its driver; an ended child whose driver is gone, from its session file |
-| `stop_agent { runId, reason? }` | same | ends one run now with `endedBy: { initiator: "parent", reason }`; the session stays addressable |
-| `remove_agent_worktree { sessionId? \| runId?, force? }` | same | removes a finished child's worktree and branch (M13-T42, §3 below) |
-| `complete_agent_run { status: "completed" \| "blocked", message }` | every child | the only successful ending; the tool result terminates the child turn. Inside the tool the harness records the declared result, empties the engine's steering and follow-up queues into one successor run, and keeps the run `running` until the engine's prompt promise resolves — see "Completion" |
+| Tool | Who gets it | Does | Annotations |
+| --- | --- | --- | --- |
+| `start_agent { agent_name, subagent_name, task, worktree? }` | a session whose definition permits delegation and whose depth allows another level | validates the name against the allowed list and depth, loads the child's full configuration, creates the child session and (when this workspace can isolate) its worktree, starts the child loop in the background, returns `{ agent_name, subagent_name, sessionId, runId, status: "running", working_directory, branch?, isolation, guidance, your_responsibility }` immediately. `isolation` is `{ mode, shape, reason }` — a sentence saying whether the child is in a worktree or sharing the checkout, and why. `guidance` is the sentence the parent reads at the moment it matters: *Do not wait for `<name>`. Carry on with your own work; when it ends, its result will be sent to you as a message. Use `inspect_agent` with runId `<runId>` to check on it meanwhile — a status of `needs_input` means it is paused on a question you can answer with `send_agent_message` mode `answer`.* | — (creates a session, a run and usually a worktree; two calls start two agents) |
+| `send_agent_message { sessionId, message, mode? }` | same | D-204 defines four modes. `interrupt` (the default) takes back both engine queues, cancels every pending question owned by the exact current invocation, waits for its prompt/abort fence, then delivers the redirect ahead of preserved ordinary work. `steer` reaches the next model-call boundary without cancellation; `queue` waits after current work; neither becomes an answer while a question is open. `answer` alone validates and settles an open `needs_input` select/confirm/input/editor question, and is refused when none is open. Idle interrupt/steer/queue starts a new run. Delivery is `queued` only after accepted ownership, `delivered` only after engine admission, `answered` only after exact dialog settlement, `refused` for admission/answer rejection, and `control_failed` when interruption control was not established. A terminal declaration still wins; its interrupt-priority redirect waits on the one successor ahead of preserved work. Detached background commands survive interruption. Explicit stop uses the same exact-dialog/prompt fence and commits queued-work/terminal cancellation only after queue takeover and abort both succeed; failure retains accepted work and publishes no false cancellation | — (not idempotent on purpose: a repeat is a second message, and in `interrupt` mode a second cancellation) |
+| `inspect_fleet` | same | the tree of work under this session, as the person's fleet column draws it (D-163, below): the agents it started, theirs, and the background commands any of them — the caller included — left running or finished. One row per session, standing on its newest run, and one per command; every row carries its kind (`agent` or `command`), title, the fleet's status word, elapsed time, one line (what it is doing, or how it ended) and the id to follow it with (`runId`, `taskId`). At most `AGENT_FLEET_ROWS_MAX` = 50 rows, cut deepest-first with `omitted` saying how many. Read-only; never transcripts | `readOnly`, `idempotent` |
+| `inspect_agent { runId? \| sessionId?, messages? }` | same | one agent in depth — any agent row of the caller's tree, a child or a child's child (D-163): the run summary (identities, status, result, `endedBy`, the open `question`) plus the **whole** task, `origin`, `depth`, `model`, `cwd`, `isolation` (`mode`, `shape`, `reason`) and `branch` (only with a worktree), the worktree as it is now (`exists`, `unmergedCommits`, `uncommittedFiles`, `removedAt?`), `activity` (turns, tool calls, the tool running now, when it was last active), its last assistant messages excerpted (`messages`: default `AGENT_INSPECT_MESSAGES_DEFAULT` = 1, at most `AGENT_INSPECT_MESSAGES_MAX` = 10, each cut at `AGENT_INSPECT_MESSAGE_EXCERPT` = 1000 characters), the question it is paused on, a `what_it_needs` sentence when it is stalled, and its own children as run summaries. Read-only: it never wakes the child or delivers anything to it. A live child is read through its driver; an ended child whose driver is gone, from its session file | `readOnly`, `idempotent` |
+| `stop_agent { runId, reason? }` | same | ends one run now with `endedBy: { initiator: "parent", reason }`; the session stays addressable | `idempotent`, `destructive` |
+| `remove_agent_worktree { sessionId? \| runId?, force? }` | same | removes a finished child's worktree and branch (M13-T42, §3 below) | `idempotent`, `destructive` |
+| `complete_agent_run { status: "completed" \| "blocked", message }` | every child | the only successful ending; the tool result terminates the child turn. Inside the tool the harness records the declared result, empties the engine's steering and follow-up queues into one successor run, and keeps the run `running` until the engine's prompt promise resolves — see "Completion" | — (ends this run; a second call is refused) |
 
 Children never block, and **parents never wait**: `start_agent` returns
 before the child has done anything, there is no foreground mode, and there
@@ -426,6 +434,20 @@ started has `origin: "user"`, one the parent started has `origin: "agent"`.
 The child's role block is re-read every turn, so a new task reaches its
 system prompt.
 
+**A released runtime is not a missing agent.** The host releases a loaded
+session nobody follows after a short quiet period, or when a worker holds
+too many (RP-4); a finished child is always the first candidate. Every agent
+verb resolves its target from the durable run record, never from what is
+loaded: `send_agent_message` to a cold child reopens it from its canonical
+record (`SessionHost.reopen`, the same path a person's return takes) and the
+message starts a new run there. The error taxonomy keeps the two cases
+apart: `no_such_agent_session` means no run under this session ever had that
+id; `agent_session_unavailable` means the record exists but the session
+cannot take a message now (file gone, engine refused, host cannot reopen),
+with `inspect_agent` as the next step. Neither ever advises `start_agent`
+for a session that is merely cold — a parent that respawns a finished agent
+loses its worktree, base commit and context for nothing.
+
 ### Removing a child's worktree (M13-T42, D-157)
 
 Merging is never a tool: it is the parent's own `git merge` in its own
@@ -602,7 +624,19 @@ arrangement — and a layout is recomputed only when the tree's structure
 changes, never on an output or status update. Reduced motion loses only the
 movement.
 
-## 6. Background tasks
+## 6. Commands (the wire calls them tasks)
+
+**The word a person reads is “Command”** (M21-T23,
+[`project-lifecycle-leap.md`](project-lifecycle-leap.md) “Outside the
+workspace”). M21 gave the project a kind of its own called **Task**
+(`TASK-44`), so what this section describes is a *Command* on every surface a
+person reads, and `task` everywhere the machine reads: `tasks/list`,
+`tasks/update`, `tasks/output`, `tasks/stop`, `BackgroundTask`, `task_output`,
+`task_stop`, `task:<id>` and the module's own name are unchanged, because
+renaming a wire method to settle a noun is how a release breaks. The agent-
+facing text is the wire's, not the person's, so the tool result an agent reads
+may still say `task`. `packages/ui/test/product-language.test.ts` guards the
+person-facing half.
 
 The `background-work` module (`packages/pi-extension/src/modules/background-work.ts`)
 owns long commands. It overrides the engine's `bash` with one that delegates
@@ -651,7 +685,25 @@ process-tree kill, output truncation stay the engine's) and adds:
   is recorded and shown with the next turn, never waking one. `notify`
   without `background` is ignored.
 
-Background tasks and child agents share the fleet's run vocabulary.
+Commands and child agents share the fleet's run vocabulary. Since M21 the
+module is no longer the only producer of one: the worker publishes a Design
+**index build** and a **verification run** as Commands on the same surface,
+with no process behind either ([`ux-fleet.md`](ux-fleet.md), “The project
+lifecycle leap, as built”).
+
+The two task tools are Laser's own and obey the agent-facing tool contract
+([`agent-tool-contract.md`](agent-tool-contract.md), D-350) like the harness
+tools: closed, bounded, described schemas, a declared output, annotations, and
+failures shaped `{ code, message, committed, next }`. `bash` is the engine's
+own tool with a Laser behaviour added — it keeps the engine's description,
+prompt text and renderers, and only D-277's label rule applies to it, so it is
+not re-declared through the contract:
+
+| Tool | Whose | Does | Annotations |
+| --- | --- | --- | --- |
+| `task_output { taskId, tail? }` | Laser | the last `tail` lines (default 100, at most 5 000) of any command in the caller's tree, with its status, exact `outputBytes`, `logState`, `retainedFromByte` and `outputDigest` | `readOnly`, `idempotent` |
+| `task_stop { taskId }` | Laser | ends one of this session's running commands by killing its process tree; a command that already ended is reported as it is | `idempotent`, `destructive` |
+| `bash { command, timeout?, background?, notify? }` | the engine's, overridden | runs a command, in the background by flag and by promotion (above) | not re-declared: an engine tool is not Laser's to reshape |
 
 ### Tools and time
 
@@ -979,3 +1031,54 @@ blockers, not advice.
   failure after the stop leaves the session stopped, unmoved and served, and
   the abandoned turn keeps its stop row. Never let the UI issue the stop and
   the move as two requests.
+
+## 12. As built after the project lifecycle leap (M21-T23)
+
+This section **amends D-140 without rewriting it**. D-140 stands as recorded:
+Laser owns the harness, one `start_agent` tool and four identities, every child
+an in-process session in a mandatory `.worktrees/` worktree of its project,
+`complete_agent_run` as the only successful ending, run state pushed as
+`agents/run` and persisted by the host, and a worktree read as part of its
+project and never as a second one (invariant 5). None of that moved.
+
+What M21 changed, and nothing else:
+
+- **Something does persist above runs now.** D-140's consequence "the harness
+  has runs and nothing above them" was true until the leap. The project now
+  owns five durable kinds — Spec, Research, Design, Plan and **Project Task** —
+  in a host-owned store (`<stateDir>/project-work.db` plus content-addressed
+  blobs), partitioned by a stable `projectId`, never by session path
+  ([`project-lifecycle-leap.md`](project-lifecycle-leap.md), "Canonical
+  persistence"). The leap says this supersedes D-140 narrowly; this is the same
+  sentence read from the harness's side.
+- **A run is still a run.** A Project Task links to sessions, agent runs,
+  checkpoints, branches and Commands through *execution links*
+  (`ExecutionLinkKind` in `packages/protocol/src/project-work.ts`), which
+  transfer no ownership: deleting or archiving a session leaves the link as an
+  unavailable reference, and no agent run is ever promoted into project work.
+  `AgentRunOrigin` is still `agent` or `user` only, there are still no
+  schedules and no scored gate verdicts, and nothing above a run measures what
+  it spent (fleet R5).
+- **A worktree sees its project's work.** Identity resolves through the
+  repository's git common directory, so a child agent working in
+  `<project>/.worktrees/<slug>` reads and writes the same Specs and Tasks as
+  its parent (`packages/host/src/project-work/ids.ts`), while its execution
+  links keep the checkout and branch the work actually happened in. This is
+  invariant 5 and the leap's `projectId` rule agreeing.
+- **Project work is a destination, never a fleet row.** A Spec or a Task is
+  reached in the embedded workspace, through a transcript artifact card, a
+  mention chip, a slash command or the palette; what needs a person arrives in
+  the **Needs you** queue and the Approval Card above the composer. The fleet's
+  two kinds are unchanged, and the worker's new Commands (index build,
+  verification run) join the existing kind rather than adding a third
+  ([`ux-fleet.md`](ux-fleet.md), "The project lifecycle leap, as built").
+- **The word for background work is Command** (§6). D-147 is amended the same
+  way in `ux-fleet.md`: the column reads typed data, the panel bus stays gone,
+  and the new producers publish `BackgroundTask` rows with no process behind
+  them.
+
+Open, recorded rather than fixed by M21-T23: a Research run builds a
+`ResearchCommand` in the worker but nothing publishes it, so it has a budget
+line in the Research header and no fleet row or Stop; and `session/set_mode`
+(M17-T11, plan mode) is a schema entry the worker still refuses — see
+[`leap/m21-t23-reconciliation.md`](leap/m21-t23-reconciliation.md).

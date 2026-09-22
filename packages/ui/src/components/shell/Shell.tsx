@@ -5,6 +5,9 @@ import { useCallback, useEffect, useMemo, useState, useRef, type ReactNode } fro
 import { AgentMapFullscreen, AgentMapView, useMapUi } from "@/components/agents/map";
 import { FleetPanel, FleetSheet } from "@/components/fleet";
 import { MobileSurfaces } from "@/components/mobile";
+// The project lifecycle leap (M21-T6): the embedded workspace and its client.
+import { ProjectWorkBridge, ProjectWorkspace, WorkProjectPicker } from "@/components/project-work";
+import { useWorkspaceUi } from "@/project-work";
 import { Thread } from "@/components/thread/Thread";
 import { GoalBar } from "@/components/thread/GoalBar";
 import { Workbench, WorkbenchProvider } from "@/components/workbench";
@@ -17,6 +20,7 @@ import { closeFleetSheet, setFleetSheetOpen, useFleetReconcile, useFleetSheetOpe
 // menus, run tabs and the live map through `requestEndAgent`.
 import { EndAgentDialog } from "@/components/agents/EndAgentDialog";
 import { RemoveWorktreeDialog } from "@/components/agents/RemoveWorktreeDialog";
+import { cn } from "@/lib/utils";
 import { mergeSessions, sessionTitle, useCapability, useLaserStable, useLaserState } from "@/runtime";
 import { currentView, samePresentationView } from "@/runtime/presentation-state";
 
@@ -155,6 +159,9 @@ function ShellFrame() {
   const fleetSheetOpen = useFleetSheetOpen();
   // Agent map (M13-T7): the top bar's toggle swaps the main column to the map.
   const mapOpen = useMapUi().open;
+  // The embedded workspace (D-355): it takes the main area and borrows the
+  // room the fleet and monitor hold, without touching what the person saved.
+  const workspaceOpen = useWorkspaceUi().open;
   // First run (M10-T6): the host says whether setup is still pending; the
   // flow takes the conversation's place until it is finished or skipped.
   const setup = useSetupPending();
@@ -181,8 +188,8 @@ function ShellFrame() {
   }, [fleetIsColumn]);
 
   const sessionsOpen = desktop ? (prefs.sessions ?? true) : sheets.sessions;
-  const fleetOpen = fleetIsColumn ? (prefs.fleet ?? true) : fleetSheetOpen;
-  const telemetryOpen = desktop ? (prefs.telemetry ?? isWide) : sheets.telemetry;
+  const fleetOpen = !workspaceOpen && (fleetIsColumn ? (prefs.fleet ?? true) : fleetSheetOpen);
+  const telemetryOpen = !workspaceOpen && (desktop ? (prefs.telemetry ?? isWide) : sheets.telemetry);
 
   const updatePrefs = useCallback((patch: ColumnPrefs) => {
     setPrefs((current) => {
@@ -443,7 +450,14 @@ function ShellFrame() {
                   (Thread.tsx); adding it here too lifted the composer twice. */}
               <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
                 {/* Agent map (M13-T7): the live map in place of the thread while toggled. */}
-                {mapOpen && view ? <AgentMapView /> : <Thread />}
+                {/* The conversation is never unmounted while the workspace is
+                    open (D-355): its scroll, draft, stream and approvals are
+                    all live state, and "← Back to the conversation" is a
+                    return, not a reload. It is hidden, not replaced. */}
+                <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", workspaceOpen && "hidden")} inert={workspaceOpen || undefined}>
+                  {mapOpen && view ? <AgentMapView /> : <Thread />}
+                </div>
+                {workspaceOpen ? <ProjectWorkspace /> : null}
               </div>
             </main>
             {/* The two right columns, outermost last: the fleet, then the
@@ -475,6 +489,9 @@ function ShellFrame() {
           </>
         )}
 
+        <ProjectWorkBridge />
+        {/* A projectless Chat's `/spec` asks which project first (D-352). */}
+        <WorkProjectPicker />
         <AddProjectDialog />
         <MoveSessionDialog />
         <CommandPaletteDialog open={paletteOpen} onOpenChange={setPaletteOpen} />

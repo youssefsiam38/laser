@@ -83,6 +83,28 @@ export interface GitActionResult {
   expect?: GitActionExpect;
 }
 
+/**
+ * What a finished git action leaves behind that a repository link can be built
+ * from (M21-T18).
+ *
+ * Emitted only on `outcome: "done"`, and only from what git itself reported:
+ * the **commit object id is the identity**, and the branch, the remote name
+ * and the pull request beside it are display context that may move, be
+ * renamed or be closed without changing what was delivered (leap, "Repository
+ * provenance"). A preview, a refusal and an uncertain outcome carry none of
+ * it — there is nothing exact to link to yet.
+ */
+export interface GitActionLinkRef {
+  /** The repository's work-tree root, so the caller knows which one this is. */
+  repo: string;
+  objectFormat: "sha1" | "sha256";
+  /** The full object id. Never the short hash a person reads. */
+  commitObjectId: string;
+  branch?: string;
+  remote?: string;
+  pullRequest?: { number: number; host: GitActionHost; url?: string; title?: string };
+}
+
 /** One repository's discovered host, from its remotes and the login on this machine. */
 export interface GitHostStatus {
   repo: string;
@@ -167,6 +189,8 @@ export interface GitCommitParams {
 }
 export interface GitCommitResult extends GitActionResult {
   commit?: { hash: string; subject: string };
+  /** The commit this wrote, as an exact object id a link can name (M21-T18). */
+  linkRef?: GitActionLinkRef;
 }
 
 export interface GitPushParams {
@@ -180,6 +204,8 @@ export interface GitPushParams {
 }
 export interface GitPushResult extends GitActionResult {
   pushed?: { remote: string; branch: string };
+  /** The exact commit that reached the remote, and where (M21-T18). */
+  linkRef?: GitActionLinkRef;
 }
 
 export interface GitBranchParams {
@@ -228,6 +254,12 @@ export interface GitPrCreateParams {
 }
 export interface GitPrCreateResult extends GitActionResult {
   pullRequest?: Pick<GitPullRequest, "number" | "url" | "title" | "host">;
+  /**
+   * The head commit the pull request was opened on, with the request itself
+   * as display context (M21-T18). The commit id is what a delivery link
+   * names; the number and the URL are how a person finds it.
+   */
+  linkRef?: GitActionLinkRef;
 }
 
 export interface GitPrReadParams {

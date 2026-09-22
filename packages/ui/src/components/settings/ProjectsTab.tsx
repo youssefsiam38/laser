@@ -306,7 +306,7 @@ function ProjectSection({
             />
           </label>
           <p className="text-xs leading-5 text-ink-3">
-            Runs in the same shell before every Bash command in this project, including child agents, worktrees and background commands. Leave it empty to disable it. If it fails, the requested Bash command does not run.
+            Runs in the same shell before every Bash command in this project, including child agents, worktrees and commands left running in the background. Leave it empty to disable it. If it fails, the requested Bash command does not run.
           </p>
           {olderConfig && (
             <div className="flex flex-col gap-1 text-xs leading-5 text-attention" role="status">

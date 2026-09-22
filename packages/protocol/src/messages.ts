@@ -18,6 +18,84 @@ import type { AgentIsolationDefault, WorkspaceShape } from "./workspace.js";
 import type { AccountUsageState, PiExtensionMessage, PiExtensionModuleName } from "./pi-extension.js";
 import type { FeatureScope, FeatureState, GoalAction, SessionGoal } from "./features.js";
 import type { PushConfig, PushDeviceInfo, PushSubscriptionJson } from "./push.js";
+import type { ProjectWorkMentionOutcome, ProjectWorkMentionProjection } from "./project-work-mentions.js";
+import type {
+  VerificationStartParams,
+  VerificationStartResult,
+  VerificationStateParams,
+  VerificationStateResult,
+  VerificationStopParams,
+  VerificationStopResult,
+} from "./project-work-verification.js";
+import type {
+  ProjectTaskActionParams,
+  ProjectTaskActionResult,
+  ProjectTaskLinkExecutionParams,
+  ProjectTaskLinkExecutionResult,
+  ProjectWorkApproveParams,
+  ProjectWorkApproveResult,
+  ProjectWorkArchiveParams,
+  ProjectWorkArchiveResult,
+  ProjectWorkAttentionNotification,
+  ProjectWorkBlobReadParams,
+  ProjectWorkBlobReadResult,
+  ProjectWorkCommentParams,
+  ProjectWorkCommentResult,
+  ProjectWorkCreateParams,
+  ProjectWorkDeleteParams,
+  ProjectWorkDeleteResult,
+  ProjectWorkGetParams,
+  ProjectWorkGetResult,
+  ProjectWorkLinkParams,
+  ProjectWorkLinkResult,
+  ProjectWorkListParams,
+  ProjectWorkListResult,
+  ProjectWorkResolveCommentParams,
+  ProjectWorkResolveCommentResult,
+  ProjectWorkReviewParams,
+  ProjectWorkReviewResult,
+  ProjectWorkReviseParams,
+  ProjectWorkSearchParams,
+  ProjectWorkSearchResults,
+  ProjectWorkUnlinkParams,
+  ProjectWorkUnlinkResult,
+  ProjectWorkUpdatedNotification,
+  ProjectWorkWriteResult,
+} from "./project-work-methods.js";
+import type {
+  WorkExportApplyParams,
+  WorkExportApplyResult,
+  WorkExportPreviewParams,
+  WorkExportPreviewResult,
+  WorkImportApplyParams,
+  WorkImportApplyResult,
+  WorkImportPreviewParams,
+  WorkImportPreviewResult,
+  WorkPublishApplyParams,
+  WorkPublishApplyResult,
+  WorkPublishPreviewParams,
+  WorkPublishPreviewResult,
+} from "./project-work-interop.js";
+import type {
+  ProjectIdentityParams,
+  ProjectIdentityResult,
+  ProjectRelinkParams,
+  ProjectRelinkResult,
+} from "./project-work-continuity.js";
+import type {
+  DesignHostGroundParams,
+  DesignHostGroundResult,
+  DesignIndexBuildParams,
+  DesignIndexBuildResult,
+  DesignIndexGetParams,
+  DesignIndexGetResult,
+  DesignIndexReviewParams,
+  DesignIndexReviewResult,
+  DesignIndexStopParams,
+  DesignIndexStopResult,
+  DesignSketchGroundParams,
+  DesignSketchGroundResult,
+} from "./design-workspace.js";
 // Type-only, and erased: `pending.ts` augments the interfaces below, so the
 // cycle exists in the type graph and never in the emitted modules.
 import type { PendingMessage } from "./pending.js";
@@ -1317,8 +1395,20 @@ export interface ClientRequests {
        * explicit composer choice.
        */
       firstTurn?: { agentName: string; model?: ModelRef | null; thinkingLevel?: ThinkingLevel };
+      /**
+       * The bounded projection of every project-work mention in `content`
+       * (M21-T9). **Host-supplied**: a client never sends this, and one that
+       * does has it replaced by what the host itself read and validated —
+       * project, revision, digest and read scope — before the worker sees it.
+       */
+      projectWork?: ProjectWorkMentionProjection[];
     };
-    result: { accepted: boolean; queued: boolean };
+    result: {
+      accepted: boolean;
+      queued: boolean;
+      /** What became of each project-work mention this message carried (M21-T9). */
+      projectWork?: ProjectWorkMentionOutcome[];
+    };
   };
   "session/cancel": { params: { path: string }; result: {} };
   "session/set_mode": { params: { path: string; mode: string }; result: {} };
@@ -1472,8 +1562,21 @@ export interface ClientRequests {
    * The last two address a turn that is already in flight, so they have nothing
    * to accept or queue and answer `{}`. They fail if nothing is running.
    */
-  "pi/session/steer": { params: { path: string; content: ContentBlock[] }; result: {} };
-  "pi/session/follow_up": { params: { path: string; content: ContentBlock[] }; result: {} };
+  /**
+   * `projectWork` on both is the same host-supplied field `session/prompt`
+   * carries (M21-T9): a client never sends it, and one that does has it
+   * replaced by what the host read and validated itself. A person's mention
+   * means the same thing whichever key they pressed, so the projection and the
+   * outcomes are the same on all three verbs.
+   */
+  "pi/session/steer": {
+    params: { path: string; content: ContentBlock[]; projectWork?: ProjectWorkMentionProjection[] };
+    result: { projectWork?: ProjectWorkMentionOutcome[] };
+  };
+  "pi/session/follow_up": {
+    params: { path: string; content: ContentBlock[]; projectWork?: ProjectWorkMentionProjection[] };
+    result: { projectWork?: ProjectWorkMentionOutcome[] };
+  };
   "pi/session/clear_queue": { params: { path: string }; result: { steering: string[]; followUp: string[] } };
   /**
    * Forks before `entryId` into a new session; `editorText` carries that
@@ -1711,6 +1814,20 @@ export interface ClientRequests {
    * ours locally on this machine.
    */
   "pi/project/pr/viewed": { params: GitPrViewedParams; result: GitPrViewedResult };
+  /**
+   * Verify one Project Task in this checkout (M21-T19).
+   *
+   * Run control only: the run is a bounded, stoppable Command in the worker
+   * that owns the directory, because that is the only place the Task's own
+   * verification commands can be executed. The *authority* — which criteria
+   * exist, what each one came out as, whether anything converged — stays with
+   * the host and is reached over the project-work bridge, never from here.
+   */
+  "pi/project/verify/start": { params: VerificationStartParams; result: VerificationStartResult };
+  /** Where a run has got to, and its report once it has one. */
+  "pi/project/verify/state": { params: VerificationStateParams; result: VerificationStateResult };
+  /** End a run. What it already proved is still reported. */
+  "pi/project/verify/stop": { params: VerificationStopParams; result: VerificationStopResult };
   /**
    * Subdirectories of `path` (the home directory when omitted), for picking a
    * project without typing a path (M10-T6). Directories only, hidden ones
@@ -1967,6 +2084,93 @@ export interface ClientRequests {
   /** `text` is "" when the phrase was claimed by a prompt while still in flight. */
   "pi/transcribe/end": { params: { id: string }; result: { text: string } };
   "pi/transcribe/cancel": { params: { id: string }; result: {} };
+
+  // ------------------------------------------------- M21 · project work --
+  // The project lifecycle (docs/project-lifecycle-leap.md). Every one of these
+  // is answered by the host from its own canonical store: a read never starts
+  // a worker, and a write is the host's authority, not a session's. Shapes,
+  // bounds and conflict behaviour live in `project-work-methods.ts`.
+
+  /** One page of the project's backlog, or everything after `sinceSeq`. */
+  "project/work/list": { params: ProjectWorkListParams; result: ProjectWorkListResult };
+  /** One entity at one exact revision, with its optional related records. */
+  "project/work/get": { params: ProjectWorkGetParams; result: ProjectWorkGetResult };
+  /** The value-only search projection. Keys match exactly and rank first. */
+  "project/work/search": { params: ProjectWorkSearchParams; result: ProjectWorkSearchResults };
+  /** A ranged read of one content-addressed blob. */
+  "project/work/blob/read": { params: ProjectWorkBlobReadParams; result: ProjectWorkBlobReadResult };
+  /** Create an entity and its first revision. Allocates the next key. */
+  "project/work/create": { params: ProjectWorkCreateParams; result: ProjectWorkWriteResult };
+  /** Append a child revision and move the current pointer after it commits. */
+  "project/work/revise": { params: ProjectWorkReviseParams; result: ProjectWorkWriteResult };
+  /** Archive or restore. Reversible, and every link is kept. */
+  "project/work/archive": { params: ProjectWorkArchiveParams; result: ProjectWorkArchiveResult };
+  /** Permanent deletion. Without `confirm` this is the preview and writes nothing. */
+  "project/work/delete": { params: ProjectWorkDeleteParams; result: ProjectWorkDeleteResult };
+  /** A review comment anchored to a revision and a semantic target. */
+  "project/work/comment": { params: ProjectWorkCommentParams; result: ProjectWorkCommentResult };
+  /** The review actions that are not approvals. */
+  "project/work/review": { params: ProjectWorkReviewParams; result: ProjectWorkReviewResult };
+  /** A gate decision binding an exact revision set (D-332). */
+  "project/work/approve": { params: ProjectWorkApproveParams; result: ProjectWorkApproveResult };
+  /** Mark a comment addressed (agent) or resolved/reopened (person). */
+  "project/work/resolve-comment": { params: ProjectWorkResolveCommentParams; result: ProjectWorkResolveCommentResult };
+  /** Add a dependency edge, repository link, evidence record or decision. */
+  "project/work/link": { params: ProjectWorkLinkParams; result: ProjectWorkLinkResult };
+  /** Remove one of those by its link id. */
+  "project/work/unlink": { params: ProjectWorkUnlinkParams; result: ProjectWorkUnlinkResult };
+  /** An explicit Task transition. A run ending is never one of these. */
+  "project/task/action": { params: ProjectTaskActionParams; result: ProjectTaskActionResult };
+  /** Join a Task to a session, run, checkpoint, branch or command. */
+  "project/task/link-execution": { params: ProjectTaskLinkExecutionParams; result: ProjectTaskLinkExecutionResult };
+
+  // --------------------------- M21-T21 · import, export and publication --
+  // Adapters read an external tool's files once and propose revisions; an
+  // export writes deterministic Markdown plus a manifest; publication records
+  // `published_as` against the exact commit. Shapes live in
+  // `project-work-interop.ts`; every apply carries its preview's digest.
+
+  /** What an adapter would create or update, and what needs a decision. */
+  "project/work/import/preview": { params: WorkImportPreviewParams; result: WorkImportPreviewResult };
+  /** Write those revisions, each with the source file it was derived from. */
+  "project/work/import/apply": { params: WorkImportApplyParams; result: WorkImportApplyResult };
+  /** The exact file set a deterministic export would write. */
+  "project/work/export/preview": { params: WorkExportPreviewParams; result: WorkExportPreviewResult };
+  /** Write the export to the project, replacing or as a new revision. */
+  "project/work/export/apply": { params: WorkExportApplyParams; result: WorkExportApplyResult };
+  /** What publishing that export into its repository would record. */
+  "project/work/publish/preview": { params: WorkPublishPreviewParams; result: WorkPublishPreviewResult };
+  /** Record `published_as` against the exact committed or checkpoint state. */
+  "project/work/publish/apply": { params: WorkPublishApplyParams; result: WorkPublishApplyResult };
+
+  // ------------------------------- M21-T20 · identity across relocation ---
+  // A project keeps its id when its folder moves. The host reads the marker
+  // in the folder's own configuration directory, reconnects what it can on
+  // its own, and asks when two live folders claim one history. Shapes live in
+  // `project-work-continuity.ts`.
+
+  /** What this folder's project is, what it holds, and any choice it offers. */
+  "project/work/identity": { params: ProjectIdentityParams; result: ProjectIdentityResult };
+  /** Take one of those choices: reconnect this folder, or start fresh. */
+  "project/work/relink": { params: ProjectRelinkParams; result: ProjectRelinkResult };
+  // ------------------------------------------- M21 · the design workspace --
+  // Answered by the project's own worker, not by the host: the index, the
+  // review document and the templates behind them are files in the project
+  // directory, and one worker owns one project directory. The host resolves
+  // the project and forwards (M21-T13, `docs/design-phase.md`).
+
+  /** The reviewed Design Index of one project, and the builds in flight. */
+  "design/index/get": { params: DesignIndexGetParams; result: DesignIndexGetResult };
+  /** Start (or re-run) indexing as a bounded, stoppable Command. */
+  "design/index/build": { params: DesignIndexBuildParams; result: DesignIndexBuildResult };
+  /** Ask a build to stop. It writes what it has parsed so far. */
+  "design/index/stop": { params: DesignIndexStopParams; result: DesignIndexStopResult };
+  /** Accept, rename, merge or reject one entry; persisted in `review.json`. */
+  "design/index/review": { params: DesignIndexReviewParams; result: DesignIndexReviewResult };
+  /** Resolve a route to a frozen `HostPage` outline, with a strategy proposal. */
+  "design/host/ground": { params: DesignHostGroundParams; result: DesignHostGroundResult };
+  /** Rebuild one sketch document as a Tree from the index. */
+  "design/sketch/ground": { params: DesignSketchGroundParams; result: DesignSketchGroundResult };
 }
 
 /** Answer to `pi/transcribe/status`. */
@@ -2037,6 +2241,15 @@ export interface HostNotifications {
   // ----------------------------------------------------------------- M11 --
   /** A host-owned preference namespace changed, on any device. */
   "pi/prefs/updated": PrefsEntry;
+
+  // ----------------------------------------------------------------- M21 --
+  /**
+   * One project-work change, with the project's event sequence number. A
+   * client that missed some reconciles with `project/work/list { sinceSeq }`.
+   */
+  "project/work/updated": ProjectWorkUpdatedNotification;
+  /** What is waiting on a person in this project, and how many things there are. */
+  "project/work/attention": ProjectWorkAttentionNotification;
 }
 
 export type ClientMethod = keyof ClientRequests;

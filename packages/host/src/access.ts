@@ -165,6 +165,7 @@ const SCOPE_REFUSAL: Record<MethodScope, string> = {
   work_control: "This connection is not allowed to start or stop work in this environment.",
   execution: "This connection is not allowed to run tools or project environment commands in this environment.",
   settings: "This connection is not allowed to change settings in this environment.",
+  project_write: "This connection is not allowed to change project work in this environment.",
   features: "This connection is not allowed to change features in this environment.",
   diagnostics: "This connection is not allowed to read diagnostics in this environment.",
   device: "This connection is not allowed to manage notifications in this environment.",

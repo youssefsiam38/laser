@@ -42,6 +42,11 @@ import type { HostNotifications } from "./messages.js";
  * - `settings` — configuration that outlives a turn: projects and trust,
  *   provider sign-in, MCP servers, keybindings, preferences, agent
  *   definitions, the shell's private environment overlay.
+ * - `project_write` — changing a project's own work: specs, research, designs,
+ *   plans and tasks, their comments, reviews, approvals and links. Separate
+ *   from `settings` because an environment may well want a phone that can
+ *   write and approve project work without being able to change how this
+ *   machine is configured, or the reverse (M21-T3, D-332).
  * - `features` — Laser's own feature enablement and the search connection.
  * - `diagnostics` — logs and resource inventory.
  * - `device` — the calling device's own push registration, so a read-only
@@ -55,6 +60,7 @@ export type MethodScope =
   | "work_control"
   | "execution"
   | "settings"
+  | "project_write"
   | "features"
   | "diagnostics"
   | "device";
@@ -67,6 +73,7 @@ export const METHOD_SCOPES: readonly MethodScope[] = [
   "work_control",
   "execution",
   "settings",
+  "project_write",
   "features",
   "diagnostics",
   "device",
@@ -171,6 +178,12 @@ export const METHOD_POLICY = {
   "pi/project/git/hosts": { scope: "read", reach: "any" },
   "pi/project/git/commit": { scope: "execution", reach: "any" },
   "pi/project/git/push": { scope: "execution", reach: "any" },
+  // A verification run executes the Task's declared commands in the checkout,
+  // which is an execution however it was started; reading where a run has got
+  // to is a read, and stopping one is the same authority that started it.
+  "pi/project/verify/start": { scope: "execution", reach: "any" },
+  "pi/project/verify/state": { scope: "read", reach: "any" },
+  "pi/project/verify/stop": { scope: "execution", reach: "any" },
   "pi/project/git/branch": { scope: "execution", reach: "any" },
   // session_write even though this does not write a session: it spends the
   // session's current model. `read` would let a read-only paired device burn
@@ -364,6 +377,74 @@ export const METHOD_POLICY = {
   // asking would be choosing which worker to make release something.
   "pi/worker/pressure": { scope: "work_control", reach: "native", refusal: NATIVE_SYNC_REFUSAL },
 
+  // ------------------------------------------------- M21 · project work ---
+  // Reading the project lifecycle is reading the product's own state, so it is
+  // `read` and reaches every authenticated connection: a phone reviews the
+  // same Specs and Designs a desktop does.
+  "project/work/list": { scope: "read", reach: "any" },
+  "project/work/get": { scope: "read", reach: "any" },
+  "project/work/search": { scope: "read", reach: "any" },
+  "project/work/blob/read": { scope: "read", reach: "any" },
+  // Every project-work mutation is `settings`: durable product state that
+  // outlives a turn, written by the host, and deliberately *not*
+  // `session_write` (it changes no conversation) and *not* `approval` — D-332
+  // requires that lifecycle approval does not borrow the authority to answer a
+  // session's questions. A dedicated `project_write` / `project_review` scope
+  // is the right long-term home (docs/leap/m21-spine-plan.md); it needs the
+  // environment-capabilities copy in the UI package, which M21-T1 does not own.
+  "project/work/create": { scope: "project_write", reach: "any" },
+  "project/work/revise": { scope: "project_write", reach: "any" },
+  "project/work/archive": { scope: "project_write", reach: "any" },
+  "project/work/delete": { scope: "project_write", reach: "any" },
+  "project/work/comment": { scope: "project_write", reach: "any" },
+  "project/work/review": { scope: "project_write", reach: "any" },
+  "project/work/approve": { scope: "project_write", reach: "any" },
+  "project/work/resolve-comment": { scope: "project_write", reach: "any" },
+  "project/work/link": { scope: "project_write", reach: "any" },
+  "project/work/unlink": { scope: "project_write", reach: "any" },
+  "project/task/action": { scope: "project_write", reach: "any" },
+  "project/task/link-execution": { scope: "project_write", reach: "any" },
+
+  // Import, export and publication (M21-T21). Every one of the six is
+  // `project_write`, previews included: a preview reads or writes the
+  // *project's own files* — the tree an adapter parses, the export root, the
+  // repository it would be published into — which is authority over the
+  // project, not the `read` of the product's own state the four rows above
+  // are. Reach stays `any`: nothing here is refused by where it was asked
+  // from, and every write is gated by an explicit `confirm` plus the digest
+  // of the preview it was decided from.
+  "project/work/import/preview": { scope: "project_write", reach: "any" },
+  "project/work/import/apply": { scope: "project_write", reach: "any" },
+  "project/work/export/preview": { scope: "project_write", reach: "any" },
+  "project/work/export/apply": { scope: "project_write", reach: "any" },
+  "project/work/publish/preview": { scope: "project_write", reach: "any" },
+  "project/work/publish/apply": { scope: "project_write", reach: "any" },
+
+  // Identity across relocation (M21-T20). Reading what a folder's project is
+  // and what it holds is `read`: it answers with counts and ids, no body and
+  // no project file. Relinking moves a folder from one project's history to
+  // another's, which is authority over the project, so it is `project_write`
+  // and carries `confirm` plus the digest of the preview it was decided from.
+  "project/work/identity": { scope: "read", reach: "any" },
+  "project/work/relink": { scope: "project_write", reach: "any" },
+  // ------------------------------------------ M21 · the design workspace ---
+  // Reading a project's Design Index is reading derived product state, so it
+  // is `read` and reaches every authenticated connection: a phone reviews the
+  // same index a desktop does (`docs/design-phase.md`, "What a person sees" —
+  // the phone is a read-only canvas plus review actions).
+  "design/index/get": { scope: "read", reach: "any" },
+  // Everything else changes this project's own design facts: a build writes
+  // `.laser/design/index.json`, a review writes `review.json`, and grounding
+  // reads the project's templates to produce a record a Design will carry.
+  // They are `project_write` for the same reason the lifecycle mutations are
+  // (D-332): an environment may grant editing project work without granting
+  // this machine's settings, or the reverse.
+  "design/index/build": { scope: "project_write", reach: "any" },
+  "design/index/stop": { scope: "project_write", reach: "any" },
+  "design/index/review": { scope: "project_write", reach: "any" },
+  "design/host/ground": { scope: "project_write", reach: "any" },
+  "design/sketch/ground": { scope: "project_write", reach: "any" },
+
   // ------------------------------------------------------------- device ---
   "pi/push/config": { scope: "device", reach: "any" },
   "pi/push/subscribe": { scope: "device", reach: "any" },
@@ -424,6 +505,11 @@ export const NOTIFICATION_SCOPE = {
   // Worker → host only as well (RP-8), consumed at ingress and never forwarded.
   "pi/resource/pressure": "diagnostics",
   "tasks/update": "read",
+  // Project-work news is readable by anything that may read the project: the
+  // workspace, a phone reviewing a gate and the sessions sidebar all draw from
+  // it. Acting on it still costs the mutation's own scope.
+  "project/work/updated": "read",
+  "project/work/attention": "read",
 } satisfies Record<keyof HostNotifications, MethodScope>;
 
 /** The scope that owns a notification, or `undefined` for an unknown method. */

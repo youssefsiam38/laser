@@ -1,0 +1,78 @@
+{
+  "tool": "task_output",
+  "task": "Run the build log script in the background and tell me how the run ended.",
+  "expectedTool": "task_output",
+  "allowedTools": [
+    "bash",
+    "task_output",
+    "inspect_fleet"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 5,
+    "inputTokens": 66000,
+    "outputTokens": 400
+  },
+  "measures": [
+    "retry",
+    "truncation"
+  ],
+  "truncationBytes": 2000,
+  "world": {
+    "role": "root"
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "bash",
+        "args": {
+          "command": "printf 'line %04d of the build log\\n' $(seq 1 400)",
+          "background": true,
+          "notify": false,
+          "activity_label": "Running the build"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "task_output",
+        "args": {
+          "taskId": "task-from-an-earlier-session",
+          "tail": 200,
+          "activity_label": "Reading the build log"
+        }
+      },
+      "delayMs": 500,
+      "fails": true
+    },
+    {
+      "toolCall": {
+        "name": "inspect_fleet",
+        "args": {}
+      }
+    },
+    {
+      "toolCall": {
+        "name": "task_output",
+        "args": {
+          "taskId": "{{taskId}}",
+          "tail": 400,
+          "activity_label": "Reading the build log"
+        }
+      }
+    },
+    {
+      "toolCall": {
+        "name": "task_output",
+        "args": {
+          "taskId": "{{taskId}}",
+          "tail": 5,
+          "activity_label": "Reading the last lines"
+        }
+      }
+    },
+    {
+      "text": "The build log script printed 400 lines and finished cleanly; the last line is line 0400."
+    }
+  ]
+}

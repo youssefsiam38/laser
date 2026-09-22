@@ -1,0 +1,65 @@
+{
+  "tool": "stop_agent",
+  "task": "Stop the login-flow review; we are not shipping that screen after all.",
+  "expectedTool": "stop_agent",
+  "allowedTools": [
+    "stop_agent",
+    "inspect_fleet"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 3,
+    "inputTokens": 40000,
+    "outputTokens": 300
+  },
+  "measures": [
+    "retry",
+    "unsafe"
+  ],
+  "world": {
+    "role": "root",
+    "agents": [
+      {
+        "agentName": "reviewer",
+        "subagentName": "Review login flow",
+        "sessionId": "ses_review",
+        "runId": "run_review",
+        "status": "running",
+        "task": "Review the login flow and report every problem you find.",
+        "messageCount": 2
+      }
+    ]
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "stop_agent",
+        "args": {
+          "runId": "run_login_review",
+          "reason": "the screen is not shipping",
+          "activity_label": "Stopping the review"
+        }
+      },
+      "fails": true
+    },
+    {
+      "toolCall": {
+        "name": "inspect_fleet",
+        "args": {}
+      }
+    },
+    {
+      "toolCall": {
+        "name": "stop_agent",
+        "args": {
+          "runId": "run_review",
+          "reason": "the screen is not shipping",
+          "activity_label": "Stopping the review"
+        }
+      }
+    },
+    {
+      "text": "Stopped the login-flow review. Its session is still there if you want to pick it up later."
+    }
+  ]
+}

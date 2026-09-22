@@ -1,0 +1,6 @@
+{
+  "url": "https://docs.example.org/guides/pdf-text.pdf",
+  "status": 200,
+  "contentType": "application/pdf",
+  "body": "%PDF-1.7 ..."
+}

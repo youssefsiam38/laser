@@ -44,10 +44,14 @@ import { motionMs } from "@/motion";
 import { toolDetailsDefaultOpen, toolDisplayResult, useActivityDetailLevel, useLaserState } from "@/runtime";
 import { useActivityDisclosureOverride } from "@/runtime/sessionPreferences";
 import { BodyOverflow } from "@/components/thread/BodyOverflow";
+import { ToolPreviewRow } from "@/components/thread/ToolPreviewRow";
+import { toolPreview } from "@/components/thread/tool-preview";
+import { resultText } from "@/components/thread/tool-summary";
+import { ToolErrorReport } from "./tool-error.js";
 import { JsonViewer, parseJsonText } from "./json-viewer.js";
 import type { BlockBodies } from "@/store";
 import { omittedBytes } from "@/runtime/body-excerpt";
-import { toolDisplayLabel, toolOutputText, withoutToolLabel } from "@lasercode/protocol";
+import { parseToolError, toolDisplayLabel, toolOutputText, withoutToolLabel } from "@lasercode/protocol";
 
 import { activityDisclosure, activityRow, activityRowLayout, collapsePanel, mono, pressable } from "./surfaces.js";
 
@@ -801,6 +805,13 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
     : undefined;
   const hasBody = Boolean(visibleArgsText) || result !== undefined || status?.type === "incomplete" || Boolean(resultFold) || Boolean(argsFold);
   const tone = state === "failed" ? "danger" : state === "awaiting" ? "attention" : undefined;
+  // A Laser tool fails with a rendered `ToolError` (D-359.a) and previews a
+  // write with a digest (`thread/tool-preview.ts`). Both are read from the
+  // result the transcript holds; anything else draws exactly as before. An
+  // excerpt of a folded body is not a whole error, so it is left alone.
+  const failureText = state === "failed" && !resultFold ? resultText(result) : "";
+  const failure = failureText ? parseToolError(failureText) : undefined;
+  const preview = state === "done" && !resultFold ? toolPreview(result) : undefined;
 
   return (
     <ToolFallbackRoot
@@ -823,9 +834,16 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
         <ToolFallbackContent>
           <ToolFallbackError status={status} />
           <ToolFallbackArgs argsText={visibleArgsText} overflow={argsFold} className={cn(state === "cancelled" && "opacity-60")} />
-          {state !== "cancelled" ? <ToolFallbackResult result={result} overflow={resultFold} /> : null}
+          {failure ? (
+            <ToolFallbackSection label="error">
+              <ToolErrorReport text={failureText} />
+            </ToolFallbackSection>
+          ) : state !== "cancelled" ? (
+            <ToolFallbackResult result={result} overflow={resultFold} />
+          ) : null}
         </ToolFallbackContent>
       ) : null}
+      {preview ? <ToolPreviewRow preview={preview} toolName={toolName} /> : null}
       {shouldRenderApproval ? (
         <ToolFallbackApproval
           addResult={addResult}

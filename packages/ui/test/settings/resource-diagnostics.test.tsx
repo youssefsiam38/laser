@@ -431,7 +431,7 @@ it("re-resolves navigation and native lifecycle ownership at click time without 
   delete fixture.state.tasks.tasks.t1;
   await act(async () => buttons.find((button) => button.textContent === "Stop")!.click());
   expect(fixture.actions.tasks.stop).not.toHaveBeenCalled();
-  expect(text()).toContain("This task is not currently known to the task registry");
+  expect(text()).toContain("This command is not currently known to the command register");
 
   for (const button of container!.querySelectorAll<HTMLButtonElement>('[data-slot="resource-diagnostics"] button')) {
     expect(button.className, button.textContent ?? button.getAttribute("aria-label") ?? "button").toContain("pointer-coarse:min-h-11");

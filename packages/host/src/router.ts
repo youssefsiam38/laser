@@ -24,7 +24,7 @@
  *   pi/ui/response       every live worker (the worker that owns the dialog id
  *                        answers; the others ignore it)
  */
-import { AGENT_ISOLATION_DEFAULTS, ENVIRONMENT_DESCRIBE_METHOD, ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, ProtocolError, decisionPushPayload, isCheckpointRetention, isTerminalRunStatus, parseClientRequest, type AgentIsolationDefault, type AgentRun, type AgentWorktreeStatus, type CheckpointRetention, type JsonRpcError, type JsonRpcResponse, type ProjectEnvStatus, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
+import { AGENT_ISOLATION_DEFAULTS, ENVIRONMENT_DESCRIBE_METHOD, ErrorCodes, PRODUCT_DISPLAY_NAME, PRODUCT_NAME, PRODUCT_VERSION, PROJECT_WORK_MENTION_MAX, ProtocolError, decisionPushPayload, isCheckpointRetention, isTerminalRunStatus, parseClientRequest, projectWorkMentionSpans, type AgentIsolationDefault, type AgentRun, type AgentWorktreeStatus, type CheckpointRetention, type ContentBlock, type JsonRpcError, type JsonRpcResponse, type ProjectEnvStatus, type ProjectWorkEntity, type ProjectWorkGetResult, type ProjectWorkMentionOutcome, type ProjectWorkMentionProjection, type ProjectWorkRef, type ProjectWorkRevision, type SessionAttention, type SessionState, type SessionSummary, type TypedClientRequest } from "@lasercode/protocol";
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { HOST_ENVIRONMENT_METHOD, applyHostEnvironment } from "./environment.js";
@@ -48,6 +48,8 @@ import { browseExplorer } from "./directory-explorer.js";
 import type { TaskRegister } from "./tasks/register.js";
 import { createPrivateSessionWorkspace, ensureWorkspace, isChatWorkspace, isWithinDirectory, projectRootOf } from "./paths.js";
 import type { PrefsStore } from "./prefs.js";
+import type { ProjectWorkMethods } from "./project-work/methods.js";
+import { mentionProblemSentence, mentionProjection, type MentionReading } from "./project-work/mention-projection.js";
 import type { FeatureService } from "./features.js";
 import type { ProjectRegistry } from "./projects.js";
 import type { PushService } from "./push.js";
@@ -142,6 +144,34 @@ export interface RouterDeps {
   /** The access audit (RP-13). Absent = decisions are not recorded. */
   audit?: AccessAudit | undefined;
   /**
+   * The project lifecycle authority (M21-T3): specs, research, designs, plans
+   * and tasks, answered from the host's own canonical store. Absent = the
+   * `project/work/*` methods are refused with the reason below rather than
+   * answered with an invented shape.
+   */
+  projectWork?: ProjectWorkMethods | undefined;
+  /** Why project work is missing, so a refusal can say so. */
+  projectWorkUnavailable?: string | undefined;
+  /**
+   * Where a project is open on this computer, newest path first (M21-T9).
+   *
+   * A mention's provenance names the project a person would recognise
+   * (`[from acme TASK-44@3]`), and only the store knows which folders an
+   * opaque project id has been opened at. Absent, provenance falls back to
+   * the id, which is true but harder to read.
+   */
+  projectPaths?: ((projectId: string) => readonly string[]) | undefined;
+  /**
+   * An opaque `projectId` → the directory it names (M21-T13).
+   *
+   * The design workspace's six methods are the only `project`-shaped methods
+   * a **worker** answers: the Design Index, the review document and the
+   * templates behind them are files in the project directory, and one worker
+   * owns one project directory. The router needs exactly this one fact to
+   * pick that worker, and it never reads the directory itself.
+   */
+  projectRootOfId?: ((projectId: string) => string | undefined) | undefined;
+  /**
    * Per-session route leases (RP-4c), shared with the pool that releases under
    * them. Absent, this Router owns a private one: routing is still serialized
    * against itself, but only the shared instance can see a release in flight.
@@ -209,6 +239,11 @@ const CWD_ROUTED = new Set([
   "pi/project/pr/checkout",
   "pi/project/pr/merge",
   "pi/project/pr/viewed",
+  // A verification run executes the Task's own commands in the checkout, so it
+  // is answered by the worker that owns that directory (M21-T19).
+  "pi/project/verify/start",
+  "pi/project/verify/state",
+  "pi/project/verify/stop",
   // The worker discovers user skills and supplies Laser's default
   // instructions; both name the answering cwd.
   "agents/skills",
@@ -388,6 +423,54 @@ export class Router {
   }
 
   /**
+   * One design workspace call, on the worker that owns the project.
+   *
+   * Three refusals before anything is forwarded, each a sentence: this host
+   * has no project work at all, this project id is not one it knows, or the
+   * folder behind it is no longer a project this app may open. A design build
+   * is bounded work in a worker, so it is started the same way any
+   * project-scoped worker call is — `pool.get(cwd)`, never a session.
+   */
+  private async designWorkspace(
+    req: Extract<TypedClientRequest, { method: "design/index/get" | "design/index/build" | "design/index/stop" | "design/index/review" | "design/host/ground" | "design/sketch/ground" }>,
+  ): Promise<unknown> {
+    const resolve_ = this.deps.projectRootOfId;
+    if (!resolve_) {
+      throw new ProtocolError(
+        ErrorCodes.Unsupported,
+        this.deps.projectWorkUnavailable
+          ? `Project work is not available right now: ${this.deps.projectWorkUnavailable}. Restart the app; nothing you saved was lost.`
+          : "This app is running without its project work, so a project's design system cannot be read here.",
+      );
+    }
+    const cwd = resolve_(req.params.projectId);
+    if (cwd === undefined) {
+      throw new ProtocolError(
+        ErrorCodes.InvalidParams,
+        "That project is not one this app knows, so its design system cannot be read. Open the project and try again.",
+      );
+    }
+    const root = projectRootOf(cwd);
+    this.deps.projects.assertProject(root);
+    const worker = await this.pool.get(root);
+    // The directory is the host's answer, never the caller's: whatever `cwd`
+    // arrived on the params is replaced, and the worker refuses any directory
+    // but its own on top of that.
+    return await worker.request(req.method, { ...req.params, cwd: root });
+  }
+
+  /** The project lifecycle authority (M21-T3), or why this host has none. */
+  private projectWork(): ProjectWorkMethods {
+    if (this.deps.projectWork) return this.deps.projectWork;
+    throw new ProtocolError(
+      ErrorCodes.Unsupported,
+      this.deps.projectWorkUnavailable
+        ? `Project work is not available right now: ${this.deps.projectWorkUnavailable}. Restart the app; nothing you saved was lost.`
+        : "This app is running without its project work, so specs, plans and tasks cannot be opened here.",
+    );
+  }
+
+  /**
    * Catalog rows with attention (and `seenAt`) filled in, plus sessions no
    * worker has persisted yet, plus — for a session an agent runs — the latest
    * run's id and status from the registry.
@@ -538,8 +621,23 @@ export class Router {
         // separate thing on disk, and it is kept unless this request asked for
         // it to go (M13-T42): a caller that omits the field never destroys work.
         const runs = this.deps.runs;
-        if (!runs) return {};
-        const owned = runs.byChildPath(path);
+        const owned = runs?.byChildPath(path) ?? [];
+        // Project work is never cascaded by a conversation going away (D-329):
+        // the attempts this session made keep their identity, their evidence
+        // and their commits, and the links that named it are marked so the
+        // workspace says the conversation is gone rather than implying the
+        // work was not done (M21-T20).
+        try {
+          this.deps.projectWork?.sessionDeleted({
+            cwd: entry.cwd,
+            sessionId: entry.id,
+            runIds: owned.map((run) => run.runId),
+          });
+        } catch {
+          // Marking is bookkeeping: a store that cannot take it must not turn
+          // deleting a conversation into a failure.
+        }
+        if (!runs) return before ? { worktree: before.status } : {};
         runs.forgetSession(path);
         if (wanted !== "delete") return before ? { worktree: before.status } : {};
         const worktrees = new Map<string, AgentRun>();
@@ -770,14 +868,21 @@ export class Router {
       case "pi/project/list":
         return { projects: this.deps.projects.list() };
 
-      case "pi/project/add":
-        return { project: this.deps.projects.add(req.params.cwd) };
+      case "pi/project/add": {
+        const project = this.deps.projects.add(req.params.cwd);
+        // Adding a project back stops hiding the work that was kept for it.
+        this.deps.projectWork?.projectRestored(project.cwd);
+        return { project };
+      }
 
       case "pi/project/reorder":
         return { projects: this.deps.projects.reorder(req.params.cwds) };
 
       case "pi/project/remove": {
         this.deps.projects.remove(req.params.cwd);
+        // Its project work is hidden, not deleted: it is kept until an
+        // explicit Delete project work (leap, "Relationship graph").
+        this.deps.projectWork?.projectRemoved(req.params.cwd);
         return {};
       }
 
@@ -1136,6 +1241,69 @@ export class Router {
       case "pi/worker/pressure":
         throw new ProtocolError(ErrorCodes.Unsupported, "The app manages its own session runtimes.");
 
+      // A prompt is the one place a person's words carry a reference to
+      // something the host owns (M21-T9): the mentions in it are validated
+      // here, projected here, and only then does the worker see them.
+      case "session/prompt":
+      // The other four doors a person's words go through (M21-T9). A mention
+      // means the same thing whichever one the person used: Cmd+Enter while
+      // the agent works, Enter into the waiting tray, or an edit of a message
+      // still waiting there. Same validation, same projection, same sentences.
+      case "pi/session/steer":
+      case "pi/session/follow_up":
+      case "session/pending/add":
+      case "session/pending/edit":
+        return this.sendWithMentions(req, actor);
+      // The design workspace (M21-T13). The opposite rule to the lifecycle
+      // methods below, and for one reason: these read and write **files in
+      // the project**, which is the worker's authority, not the store's. The
+      // host resolves the project from its opaque id, refuses a project it
+      // does not know, and forwards to that project's worker with the
+      // directory it resolved — the caller's `cwd`, if it sent one, is
+      // discarded rather than trusted.
+      case "design/index/get":
+      case "design/index/build":
+      case "design/index/stop":
+      case "design/index/review":
+      case "design/host/ground":
+      case "design/sketch/ground":
+        return await this.designWorkspace(req);
+
+      // The project lifecycle (M21-T3). Every one of these is answered by the
+      // host's own authority over the canonical store — reads *and* writes —
+      // so nothing here starts, prepares or touches a worker. The rules live
+      // in `project-work/methods.ts`; this switch only delegates.
+      case "project/work/list":
+      case "project/work/get":
+      case "project/work/search":
+      case "project/work/blob/read":
+      case "project/work/create":
+      case "project/work/revise":
+      case "project/work/archive":
+      case "project/work/delete":
+      case "project/work/comment":
+      case "project/work/review":
+      case "project/work/approve":
+      case "project/work/resolve-comment":
+      case "project/work/link":
+      case "project/work/unlink":
+      case "project/task/action":
+      case "project/task/link-execution":
+      // Import, export and publication (M21-T21) are the same authority over
+      // the same store, and equally worker-free: an adapter reads the
+      // project's own files, an export writes them, and publication reads git.
+      case "project/work/import/preview":
+      case "project/work/import/apply":
+      case "project/work/export/preview":
+      case "project/work/export/apply":
+      case "project/work/publish/preview":
+      case "project/work/publish/apply":
+      case "project/work/identity":
+      case "project/work/relink":
+        // A client connection is always a person: only the worker bridge
+        // (M21-T17) presents an agent, and it does not come through here.
+        return this.projectWork().handle(req, { actor, source: "client" });
+
       default:
         break;
     }
@@ -1372,6 +1540,149 @@ export class Router {
    * false), so the retry opens the worker that replaces it. That is why even a
    * `session/prompt` is safe to send again here: it was never delivered.
    */
+  /**
+   * A prompt, with the project work it mentions validated and projected
+   * (M21-T9, leap "Cross-session mentions and context").
+   *
+   * The message carries the identity of everything it mentions — project,
+   * kind, entity, revision and the digest the sender pinned. This is where
+   * those claims meet the authority: the connection has to be allowed to read
+   * project work at all, the project has to exist here, the exact revision
+   * has to still be stored, and the digest has to be the one the store holds.
+   * What the worker receives is never the client's claim; it is the bounded
+   * projection the host built from what it read itself.
+   *
+   * Nothing here can stop a message being sent. A mention that cannot be read
+   * keeps its identity in the transcript and comes back as an outcome the
+   * sender can show; the words the person wrote go out either way.
+   */
+  private async sendWithMentions(
+    req: Extract<TypedClientRequest, { method: "session/prompt" | "pi/session/steer" | "pi/session/follow_up" | "session/pending/add" | "session/pending/edit" }>,
+    actor: ActorIdentity,
+  ): Promise<unknown> {
+    // Whatever a client put here is dropped: a projection is the host's word,
+    // never a caller's (the schema accepts the field so a host can forward it).
+    const { projectWork: _claimed, ...params } = req.params;
+    const pinned = promptMentionRefs(params.content);
+    if (pinned.length === 0) return this.forwardToWorker({ ...req, params } as TypedClientRequest);
+    const read = await this.readMentions(pinned, actor);
+    const forwarded = await this.forwardToWorker({
+      ...req,
+      params: { ...params, ...(read.projections.length > 0 ? { projectWork: read.projections } : {}) },
+    } as TypedClientRequest);
+    const result = (forwarded ?? {}) as Record<string, unknown>;
+    return { ...result, projectWork: read.outcomes };
+  }
+
+  /** Validate every mention once, in the order the message named them. */
+  private async readMentions(
+    refs: readonly ProjectWorkRef[],
+    actor: ActorIdentity,
+  ): Promise<{ projections: ProjectWorkMentionProjection[]; outcomes: ProjectWorkMentionOutcome[] }> {
+    // Reading a mention is a project-work read, so it is admitted by the same
+    // scope a `project/work/get` would need. A connection that may prompt but
+    // may not read project work sends its words without the content.
+    const mayRead = this.deps.access.authorize("project/work/get", actor).ok && this.deps.projectWork !== undefined;
+    const projections: ProjectWorkMentionProjection[] = [];
+    const outcomes: ProjectWorkMentionOutcome[] = [];
+    for (const ref of refs) {
+      const found = mayRead ? await this.readMention(ref, actor) : { problem: "unreadable" as const };
+      if ("problem" in found) {
+        const detail = mentionProblemSentence(found.problem, ref.key);
+        projections.push(
+          mentionProjection({
+            ref,
+            entity: unreadableEntity(ref),
+            revision: unreadableRevision(ref),
+            body: undefined,
+            projectName: this.projectDisplayName(ref.projectId),
+            unavailable: { reason: found.problem, detail },
+          }),
+        );
+        outcomes.push({ ref, status: "unavailable", note: detail });
+        continue;
+      }
+      const reading = found.reading;
+      projections.push(mentionProjection(reading));
+      // The digest is the sender's proof that it pinned what the store holds.
+      // When they disagree the store wins and the sender is told which
+      // revision was actually read, rather than a mention quietly standing
+      // for content nobody saw.
+      if (reading.ref.digest !== ref.digest) {
+        outcomes.push({
+          ref: reading.ref,
+          status: "repinned",
+          note: `${ref.key} was re-read from this computer's copy, which differs from the one this message pinned.`,
+        });
+      } else {
+        outcomes.push({ ref: reading.ref, status: "sent" });
+      }
+    }
+    return { projections, outcomes };
+  }
+
+  /**
+   * One mention, read at the exact revision it names.
+   *
+   * A stale revision is not a refusal: the message said which revision it
+   * meant, so that is the one that is read, even when the entity has moved on
+   * (the projection says so). Only a revision that is no longer stored, an
+   * entity that is gone, or a project this computer does not have becomes a
+   * problem — and each of those is named separately, because "it did not work"
+   * is not something a person can act on.
+   */
+  private async readMention(
+    ref: ProjectWorkRef,
+    actor: ActorIdentity,
+  ): Promise<{ reading: MentionReading } | { problem: "unknown_project" | "unknown_entity" | "unknown_revision" | "released" }> {
+    const work = this.projectWork();
+    const caller = { actor, source: "client" as const };
+    const base = {
+      projectId: ref.projectId,
+      entityId: ref.entityId,
+      body: { mode: "full" as const },
+      include: { comments: false, approvals: false, evidence: false, links: false, history: false },
+    };
+    let detail;
+    try {
+      detail = (await work.handle({ method: "project/work/get", params: { ...base, revisionId: ref.revisionId } }, caller)) as ProjectWorkGetResult;
+    } catch {
+      try {
+        await work.handle({ method: "project/work/get", params: base }, caller);
+        return { problem: "unknown_revision" };
+      } catch {
+        try {
+          await work.handle({ method: "project/work/list", params: { projectId: ref.projectId, limit: 1 } }, caller);
+          return { problem: "unknown_entity" };
+        } catch {
+          return { problem: "unknown_project" };
+        }
+      }
+    }
+    const page = detail.body;
+    if (page?.released) {
+      return { problem: "released" };
+    }
+    return {
+      reading: {
+        ref: detail.ref,
+        entity: detail.entity,
+        revision: detail.revision,
+        body: page?.body,
+        projectName: this.projectDisplayName(ref.projectId),
+      },
+    };
+  }
+
+  /** The name a person calls this project, for a mention's provenance. */
+  private projectDisplayName(projectId: string): string {
+    const paths = this.deps.projectPaths?.(projectId) ?? [];
+    const current = paths[0];
+    if (!current) return projectId;
+    const known = this.deps.projects.list().find((project) => canonical(project.cwd) === canonical(current));
+    return known?.name ?? current.split(/[\\/]/u).filter(Boolean).at(-1) ?? projectId;
+  }
+
   private async forwardToWorker(req: TypedClientRequest): Promise<unknown> {
     try {
       return await this.forwardOnce(req);
@@ -1468,6 +1779,15 @@ export class Router {
             // nobody serves, and every later lifetime question about this worker
             // would disagree with it for ever.
             this.pool.rekeySession(path, moved, owner);
+            // The same move, for the host's memory of that session's commands.
+            // One authority decides a session moved — this validated state
+            // change, inside this lease — and every record keyed by the path
+            // follows it here. A register left behind would keep a *running*
+            // row under a path no runtime serves, and a client that re-listed
+            // the old session would be handed it back over the live one.
+            // Optional because a host may run without a register; a fork is
+            // not refused for it.
+            this.deps.tasks?.rekeySession(path, moved);
             if (state) this.noteUnwritten(state);
           }
           return { result: answer, cwd: owner, forked: moved };
@@ -1757,4 +2077,71 @@ function toRpcError(error: unknown): JsonRpcError {
   }
   if (error instanceof WorkerRpcError) return error.rpc;
   return { code: ErrorCodes.Internal, message: error instanceof Error ? error.message : String(error) };
+}
+
+/**
+ * Every project-work mention a prompt pins, in the order it names them
+ * (M21-T9).
+ *
+ * The identities live at the foot of the message, where a person never reads
+ * them and the transcript never draws them; the prose carries the human form.
+ * A token with no definition is a key somebody typed and is left alone — this
+ * never guesses a revision for it.
+ */
+function promptMentionRefs(content: readonly ContentBlock[]): ProjectWorkRef[] {
+  const refs: ProjectWorkRef[] = [];
+  const seen = new Set<string>();
+  for (const block of content) {
+    if (block.type !== "text") continue;
+    for (const span of projectWorkMentionSpans(block.text)) {
+      const ref = span.ref;
+      if (!ref) continue;
+      const identity = `${ref.projectId}\u0000${ref.entityId}\u0000${ref.revisionId}`;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      refs.push(ref);
+      if (refs.length >= PROJECT_WORK_MENTION_MAX) return refs;
+    }
+  }
+  return refs;
+}
+
+/**
+ * The identity a mention keeps when its body cannot be read.
+ *
+ * The chip in the transcript says what it always said; the projection carries
+ * the same name with the reason beside it. Nothing here pretends to know a
+ * state or a title the store did not give up — the key is the whole claim.
+ */
+function unreadableEntity(ref: ProjectWorkRef): ProjectWorkEntity {
+  return {
+    projectId: ref.projectId,
+    entityId: ref.entityId,
+    kind: ref.kind,
+    key: ref.key,
+    keyNumber: 0,
+    title: ref.label,
+    state: "draft",
+    currentRevisionId: ref.revisionId,
+    currentDigest: ref.digest,
+    revisionCount: 1,
+    createdAt: "",
+    updatedAt: "",
+  };
+}
+
+function unreadableRevision(ref: ProjectWorkRef): ProjectWorkRevision {
+  return {
+    projectId: ref.projectId,
+    entityId: ref.entityId,
+    revisionId: ref.revisionId,
+    kind: ref.kind,
+    index: 1,
+    title: ref.label,
+    digest: ref.digest,
+    bodyBytes: 0,
+    createdAt: "",
+    origin: { actor: { kind: "person", label: "" } },
+    state: "draft",
+  };
 }

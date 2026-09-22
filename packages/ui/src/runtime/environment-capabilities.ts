@@ -29,6 +29,7 @@ const SCOPE_EXPLANATION: Readonly<Record<MethodScope, string>> = {
   work_control: "You can follow this work here, but it must be started or stopped from a connection with control access.",
   execution: "This environment does not allow this device to run tools or project setup commands.",
   settings: "You can read these settings here, but changes must be made from a connection with settings access.",
+  project_write: "You can read this project's work here, but changes must be made from a connection allowed to edit project work.",
   features: "This environment does not allow this device to change built-in features.",
   diagnostics: "Resource diagnostics are not available to this connection.",
   device: "This environment does not allow this device to manage notifications.",

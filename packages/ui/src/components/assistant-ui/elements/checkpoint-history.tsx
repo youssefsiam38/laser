@@ -19,8 +19,8 @@
  *   - The current entry is the live colour; nothing "ahead" is dimmed, since
  *     in a tree the leaf is not the last row.
  */
-import { CornerDownRight, GitFork, Milestone, Tag } from "lucide-react";
-import type { ComponentProps } from "react";
+import { CornerDownRight, GitBranch, GitFork, Milestone, Tag } from "lucide-react";
+import type { ComponentProps, ReactNode } from "react";
 
 import { HISTORY_KIND_LABEL, type HistoryRow } from "@/components/shell/model";
 import { Badge } from "@/components/ui/badge";
@@ -52,6 +52,78 @@ export function CheckpointHistory({ rows, currentId, onFork, onJump, busy, class
     <ol data-slot="checkpoint-history" role="list" className={cn("pb-2", className)} {...props}>
       {rows.map((row) => (
         <Row key={row.id} row={row} current={row.id === current} busy={busy} onFork={onFork} onJump={onJump} />
+      ))}
+    </ol>
+  );
+}
+
+/**
+ * The second form: **checkpoints from git**, for a Project Task's recorded
+ * work (M21-T16, D-355 "Detail, by kind" → Task).
+ *
+ * Same element, same grammar — a spine, a mark per row, the typed identity and
+ * the time — and deliberately none of the session tree's verbs: a commit or a
+ * Laser checkpoint has neither a fork nor a jump here, and offering one would
+ * be a button that cannot work. "Checkpoints and git determine changed files"
+ * (leap, "Execution and convergence"), so every row is a link the host
+ * recorded; one whose object is gone keeps what it recorded and says so,
+ * rather than resolving to whatever `HEAD` is now.
+ */
+export interface CheckpointTrailRow {
+  id: string;
+  /** What the link is: `based on`, `implemented by`, `verified at`… */
+  relation: string;
+  /** The commit, or `base → head`. Typed, because it is an identity. */
+  commit: string;
+  checkpointId?: string | undefined;
+  path?: string | undefined;
+  at: string;
+  actor?: string | undefined;
+  /** The git object is no longer reachable on this machine. */
+  unavailable?: boolean | undefined;
+}
+
+export function CheckpointTrail({
+  rows,
+  empty,
+  className,
+  ...props
+}: Omit<ComponentProps<"ol">, "children"> & { rows: readonly CheckpointTrailRow[]; empty?: ReactNode }) {
+  if (rows.length === 0) return <p className="text-sm leading-5 text-ink-3">{empty}</p>;
+  return (
+    <ol data-slot="checkpoint-trail" role="list" className={cn("flex flex-col", className)} {...props}>
+      {rows.map((row) => (
+        <li key={row.id} className="relative flex gap-2 py-1.5" style={{ paddingInlineStart: GUTTER }}>
+          <span aria-hidden="true" className="absolute top-0 bottom-0 w-px bg-line" style={{ insetInlineStart: 5 }} />
+          <span className="relative mt-0.5 flex size-3 shrink-0 items-center justify-center">
+            <GitBranch className={cn("size-3", row.unavailable ? "text-ink-3" : "text-live")} aria-hidden="true" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <span className="eyebrow leading-xs">{row.relation}</span>
+              <span className={cn(mono, "text-ink-2")}>{row.commit}</span>
+              {row.checkpointId ? (
+                <Badge variant="outline" className="h-4.5 gap-1 px-1.5 text-xs leading-none">
+                  <Tag className="size-2.5" aria-hidden="true" />
+                  checkpoint
+                </Badge>
+              ) : null}
+              <time dateTime={row.at} title={dateTime(row.at)} className={cn(mono, "ms-auto text-ink-3")}>
+                {clockTime(row.at)}
+              </time>
+            </div>
+            <p className="mt-0.5 text-xs leading-xs break-words text-ink-3">
+              {row.path ? <span className={cn(mono, "text-ink-2")}>{row.path}</span> : null}
+              {row.path && row.actor ? " · " : null}
+              {row.actor}
+              {row.unavailable ? (
+                <span className="block text-attention">
+                  This state is no longer on this machine. What it recorded is kept; it is not resolved to anything current.
+                </span>
+              ) : null}
+            </p>
+          </div>
+        </li>
       ))}
     </ol>
   );

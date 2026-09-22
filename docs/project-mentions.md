@@ -58,3 +58,44 @@ Directory IO is asynchronous. CPU work also cooperates: cached collators sort ch
 There is no scan ceiling or snapshot cache: every request examines the immediate directory, retaining all matching entries plus a merge buffer (O(matches) memory, O(matches log matches) sort work). Pagination bounds the response, not the scan; later pages re-scan once in-flight work has settled. Queued distinct requests are not cancelled when the UI moves on, so a sustained request flood can grow the queue and delay later explorer replies; it cannot start overlapping scans/sorts. Filesystem edits between pages can still shift results. No matches or tail pages are silently discarded.
 
 UI reads are debounced and keyed by session directory, query, page and retry attempt. Superseded replies cannot publish stale rows. Local path refusals explain how to change the path without a dead retry button or no-match advice; read/transport failures offer retry. Neither disables the composer. The shared tokenized picker retains its phone/touch, focus, reduced-motion and theme behavior.
+
+## Project work in the same picker (M21-T9)
+
+One adapter, not two. `@` still offers this session's child handles and the host's directory listing; project work joins them in the same list, and nothing about the explorer's behaviour changes.
+
+| Typed after `@` | What it finds |
+| --- | --- |
+| `TASK-44` | that exact key, above everything else in the list |
+| `spec:`, `research:`, `design:`, `plan:`, `task:` | that kind only, in every project this device can read |
+| `footer` | keys that start with it and titles that contain it |
+| `./server/`, `~/x`, a space | nothing from project work; the explorer answers, as before |
+
+The current project's rows come first; every other project is a labelled block under its own name, because a key is unique inside one project and a row that did not say where it came from would be a trap. Each project is read through **its own** `project/work/search` — no store is merged with another — and the rows this window already holds appear without waiting for a round trip. A projectless Chat has no "current" project and simply reads them all.
+
+### What a pick writes, and what the message carries
+
+Picking finishes the query (D-299/D-304) and writes the **human form** into the draft: `@TASK-44 "Rework the picker"`. That is what the person sees, selects and copies, and it is drawn as a tag behind the textarea in the kind's own colour token (`--kind-task` and its four siblings), the same tag layer the paths use.
+
+The identity rides at the foot of the sent message, as a Markdown link-reference definition:
+
+```text
+Compare @TASK-44 "Rework the picker" with the spec.
+
+[TASK-44]: laser://work/p_a1/task/e_9/r_3 "sha256-8f1c…"
+```
+
+A conversation stores text and images and nothing else, so this is the only durable place an identity can live — and it survives a reload, an edit, a fork and a second device, none of which can carry a side channel. The transcript never draws those lines, the search index and the sidebar's first-message preview never store them (`projectWorkMentionProse`), and the composer's send path never writes a second copy of one it already has. The same key pinned twice at two revisions in one message becomes `@TASK-44` and `@TASK-44#2`, and both survive.
+
+A key somebody simply types (`@SPEC-7`, no picker) is resolved at send time against the project they are writing in, at the revision this window has read. A key nothing can resolve stays ordinary words: a mention nobody can resolve is a sentence, not a broken chip.
+
+### Send time, and what the worker gets
+
+The host — never the client — decides what a mention means. At send time it parses the message's own definitions and, for each one: checks that this connection may read project work at all (the scope a `project/work/get` needs), that the project exists here, that the **exact** revision it names is still stored, and that the digest matches what the store holds. Then it builds a bounded projection per kind — key, title, state, which revision, a few summary fields, one bounded excerpt, and a `[from acme TASK-44@3]` provenance line — and hands *that* to the worker as `session/prompt`'s host-supplied `projectWork`. Whatever a client puts in that field is dropped.
+
+Nothing stops the message. A stale revision is sent as the revision it names, with "not the current revision" in the projection. A digest that disagrees is re-pinned to what the host read, and the sender is told. A project, entity or revision this computer does not have, and a connection that may not read project work, each leave the chip's identity intact and say why — in the projection for the model, and as one sentence for the person.
+
+### Outside the composer
+
+A mention in the transcript is a chip: the key in the kind's colour, the type badge, the title when there is room. It opens the embedded workspace on the exact revision the message pinned, never on whatever is current. A message that *is* a reference — what a `/spec` hand-off and a model tool's answer look like — reads as a compact card instead: key, badge, title, which revision, and the state when this window has read the project. Neither ever shows a body.
+
+A conversation that is an attempt at a Task wears that Task's key in the sessions sidebar, found by the session's own opaque id through the project's execution links (one bounded read per project sequence, shared by every row), never by its title. The global "Search all sessions" dialog answers with project work above the conversations, keys first.

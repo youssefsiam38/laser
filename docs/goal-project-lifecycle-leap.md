@@ -16,7 +16,8 @@ regenerated.
    `docs/agent-tool-contract.md`, `docs/research-phase.md`,
    `docs/design-phase.md`.
 4. Area docs before touching their code: `docs/architecture.md`,
-   `docs/agents.md`, `docs/source-control-leap.md`, `docs/ux-elements.md`,
+   `docs/agents.md`, `docs/ux-fleet.md` (binding for anything that shows work
+   in flight), `docs/source-control-leap.md`, `docs/ux-elements.md`,
    `docs/model-fallback-chains.md` (runtime record only).
 5. Decisions D-329–D-333 and D-345–D-355 in `STATUS_DETAILED.md` are binding.
 

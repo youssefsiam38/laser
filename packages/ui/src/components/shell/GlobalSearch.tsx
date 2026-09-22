@@ -7,6 +7,9 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { useWorkbench } from "@/components/workbench";
 import { openConversationFind } from "@/components/thread/search-state";
 import { sessionTitle, useCapability, useLaserStable, useLaserState } from "@/runtime";
+import { WorkIdentity } from "@/components/project-work";
+import { landWorkLink } from "@/project-work";
+import { useWorkMentions } from "@/project-work/mentions";
 import { shortCwd } from "@/format";
 import { sessionStatus } from "./model.js";
 import { SessionSearchProgress } from "./SessionSearchProgress.js";
@@ -14,6 +17,50 @@ import { useSessionSearch } from "./use-session-search.js";
 import { groupNameOf, workspaceKindOf, workspacesOf } from "./session-groups.js";
 
 export function openGlobalSearch() { window.dispatchEvent(new Event("global-session-search")); }
+
+/**
+ * Project work in the one search that crosses everything (M21-T9, D-355
+ * "Outside the workspace").
+ *
+ * Keys match exactly and rank first: `TASK-44` finds TASK-44 above every
+ * conversation that merely says those characters. Each project is read
+ * through its own `project/work/search`, the current one first, and a result
+ * opens the workspace at that revision rather than a conversation.
+ */
+function WorkResults({ query, onOpen }: { query: string; onOpen: () => void }) {
+  const { currentProject, projects, projectInfo } = useLaserStable();
+  const sources = useMemo(
+    () => projects.map((cwd) => ({ cwd, name: projectInfo[cwd]?.name ?? shortCwd(cwd) })),
+    [projects, projectInfo],
+  );
+  const work = useWorkMentions(query.trim(), true, { currentCwd: currentProject, projects: sources, freeText: true });
+  if (work.candidates.length === 0) return null;
+  return (
+    <section aria-label="Project work" className="flex flex-col gap-1 px-4 py-3 hairline-b">
+      <h3 className="eyebrow">Project work</h3>
+      {work.candidates.map((candidate) => (
+        <button
+          key={`${candidate.ref.projectId}:${candidate.ref.entityId}`}
+          type="button"
+          data-slot="global-search-work"
+          onClick={() => {
+            landWorkLink({
+              projectId: candidate.ref.projectId,
+              kind: candidate.kind,
+              entityId: candidate.ref.entityId,
+              revisionId: candidate.ref.revisionId,
+            });
+            onOpen();
+          }}
+          className="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-start transition-colors duration-(--motion-instant) hover:bg-surface-2 focus-visible:outline focus-visible:outline-live"
+        >
+          <WorkIdentity workKey={candidate.key} kind={candidate.kind} title={candidate.title} className="flex-1" />
+          <span className="shrink-0 text-xs text-ink-3">{candidate.project.current ? "This project" : candidate.project.name}</span>
+        </button>
+      ))}
+    </section>
+  );
+}
 
 export function GlobalSearch() {
   const [open, setOpen] = useState(false);
@@ -68,6 +115,7 @@ function GlobalSearchBody({ close }: { close: () => void }) {
   return <>
     <div className="px-4 py-3"><ThreadListSearch autoFocus maxLength={200} value={query} onValueChange={setQuery} placeholder="Search every conversation…" aria-label="Search all sessions" aria-controls="global-search-results" aria-activedescendant={activeId ? `global-search-results-${activeId}` : undefined} role="combobox" aria-expanded={Boolean(query.trim())} onKeyDown={threadSearchKeys(rows, activeId, setActiveId, id => void select(id))} /></div>
     <div className="min-h-0 flex-1 overflow-y-auto" aria-busy={search.busy || opening}>
+      {query.trim() ? <WorkResults query={query} onOpen={close} /> : null}
       {query.trim() ? <ThreadSearch id="global-search-results" grouped={false} loading={search.busy} threads={rows} query={query} activeId={activeId} onActiveChange={setActiveId} onSelect={id => void select(id)} /> : <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-ink-3"><Search className="size-6" /><p>A phrase, an error, an idea.<br />Start with the last 30 days, then explore older history.</p></div>}
     </div>
     {query.trim() && <SessionSearchProgress search={search} />}

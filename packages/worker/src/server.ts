@@ -22,7 +22,7 @@
  * growing the process.
  */
 
-import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, isLiveEdgeWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, WIRE_NAMESPACE, AGENT_ISOLATION_DEFAULT, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type ModelIdentity, type ModelProfile, type ModelProfileInput, type ProfileAssignments, type SettingChange, validateModelProfiles, MODEL_PROFILES_SETTING, DEFAULT_PROFILE_SETTING, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TelemetryContext, type TelemetrySection, type TypedClientRequest, type WorkerActivationState, type AgentIsolationDefault } from "@lasercode/protocol";
+import { AGENT_MAX_DEPTH_LIMIT, EDITABLE_TEXT_MAX_BYTES, ENV, ErrorCodes, isVerificationFleetTaskId, createBodyRangeReader, entryRegionsPage, utf8ByteLength, PRODUCT_NAME, ProtocolError, SESSION_SAFETY_MAX, isSessionWorkPin, boundedHistoryWindow, isLiveEdgeWindow, methodStartsWork, parseClientRequest, projectEnvFingerprint, projectEnvWorkerConfig, WIRE_NAMESPACE, AGENT_ISOLATION_DEFAULT, type AgentDefinition, type AgentRun, type SessionPin, type SessionSafety, type WorkerRetireMode, type WorkerRetireRefusal, type ModelIdentity, type ModelProfile, type ModelProfileInput, type ProfileAssignments, type SettingChange, validateModelProfiles, MODEL_PROFILES_SETTING, DEFAULT_PROFILE_SETTING, type ClientRequests, type CommandInfo, type ContentBlock, type FeatureId, type HostNotifications, type JsonRpcMessage, type JsonRpcResponse, type PiExtensionModuleName, type SessionAgentRecord, type SessionState, type MemoryPressureStores, type SessionUpdateParams, type ProjectEnvStatus, type ProjectEnvWorkerConfig, type ProviderCaptureLink, type SettingsScope, type TelemetryContext, type TelemetrySection, type TypedClientRequest, type WorkerActivationState, type AgentIsolationDefault } from "@lasercode/protocol";
 import { CaptureReservations } from "./capture-reservations.js";
 import {
   PRESSURE_MAX_REPLAY_DROPS,
@@ -65,7 +65,7 @@ import type {
   SessionDriver,
 } from "./driver.js";
 import { ProjectFilesService } from "./files.js";
-import { RevisionCanonicalisationError, type SessionRevisionHeader } from "@lasercode/protocol";
+import { RevisionCanonicalisationError, type ProjectWorkMentionProjection, type SessionRevisionHeader } from "@lasercode/protocol";
 import { SessionRevisionTracker } from "./history-revision.js";
 import { ChildTelemetryCache, computeLiveTelemetry, liveOverlay, telemetryUpdateKind } from "./telemetry.js";
 import { TelemetryFold } from "@lasercode/protocol";
@@ -80,7 +80,28 @@ import { SourceControlService } from "./source-control/index.js";
 import { excerptFromEntries, GitActionError, GitActionsService, type GitActionsFetcher, type GitProseRuntime, type ProcessRunner } from "./git-actions/index.js";
 import { KeybindingsAdapter } from "./keybindings.js";
 import { ModelsAdapter, PackagesAdapter } from "./packages.js";
-import { SettingsAdapter, readProfileSettings, resolveProfile } from "./settings.js";
+import { SettingsAdapter, readEffectiveProductSettings, readProfileSettings, researchSourcesFrom, resolveProfile } from "./settings.js";
+import { ProjectHostGrounding } from "./design/host/ground.js";
+import { ProjectDesignIndex } from "./design/index/bridge.js";
+import type { DesignIndexBridge } from "./design/index/tools.js";
+import { designModelAccess, type DesignModelAccess } from "./design/profile.js";
+import { DesignWorkspace, isDesignCommandTaskId } from "./design/workspace.js";
+import { ProjectResearch } from "./research/bridge.js";
+import { enabledResearchAdapters, isResearchFleetTaskId, type ResearchAdapterId } from "@lasercode/protocol";
+import { ResearchRunService } from "./research/runs.js";
+import type { ResearchLedger } from "./research/budget.js";
+import type { ResearchBridge } from "./research/tools.js";
+import { createProcessRunner } from "./git-actions/index.js";
+import {
+  HostProjectWorkBridge,
+  ProjectWorkSession,
+  VerificationService,
+  type ProjectWorkBridge,
+  type ProjectWorkExecutionShape,
+} from "./project-work/index.js";
+import { SessionMentionContext } from "./project-work/mentions.js";
+import { bridgeResearchStore } from "./project-work/research-store.js";
+import { projectInstructions } from "./project-work/instructions.js";
 import { migrateModelProfiles } from "./profiles/migrate.js";
 import { WebSearchService } from "./web-search.js";
 import { McpService } from "./mcp/service.js";
@@ -108,6 +129,12 @@ export interface WorkerServerOptions {
   stateDir?: string;
   /** Host-resolved Pi project trust for `cwd`; see `DriverOpenOptions.projectTrusted`. */
   projectTrusted?: boolean;
+  /**
+   * True when this worker's host answers the project-work bridge (M21-T17).
+   * Without it the whole project-work tool surface is absent: a worker with
+   * nobody to ask registers no tool that would have to ask.
+   */
+  projectWork?: boolean;
   /** Per-project isolation default for `start_agent`. */
   agentIsolation?: AgentIsolationDefault;
   /**
@@ -142,6 +169,8 @@ export interface WorkerServerOptions {
   npmCommand?: string[];
   /** Test seam: the model runtime a naming request completes through. Defaults to the engine's. */
   namingModels?: () => Promise<CompletionRuntime>;
+  /** Test seam: the model runtime design work completes through. Defaults to the engine's. */
+  designModels?: () => Promise<CompletionRuntime>;
   /** Test seam for git actions (L6). */
   gitActions?: {
     run?: ProcessRunner;
@@ -179,6 +208,13 @@ export interface WorkerServerOptions {
   configuredOldSpaceBytes?: number;
 }
 
+/**
+ * How long a session open waits for the host to say which project it is in
+ * (M21-T17). One local request over a pipe; past this the session opens with
+ * the read-only project-work surface rather than waiting on the app.
+ */
+const PROJECT_WORK_RESOLVE_MS = 2_000;
+
 /** Bytes of replay one worker may hold across every session it serves (RP-4). */
 const REPLAY_BYTES_PER_SESSION = 16 * 1024 * 1024;
 const REPLAY_BUDGET_BYTES = 4 * REPLAY_BYTES_PER_SESSION;
@@ -213,6 +249,13 @@ interface Live {
   historyEpoch: string;
   /** Durable revision fold for this session (RP-9), kept across reads. */
   revisions: SessionRevisionTracker;
+  /**
+   * What this conversation's messages mentioned (M21-T9), for as long as the
+   * engine is still holding those messages. Ephemeral, per session, and given
+   * to every session rather than only to one with project work: a projectless
+   * chat may mention another project's work and must be able to read it.
+   */
+  mentions: SessionMentionContext;
   /** Incremental whole-session telemetry fold (L3). */
   telemetry: TelemetryFold;
   /** True after this session has been asked for `pi/session/telemetry`. */
@@ -342,6 +385,25 @@ export class WorkerServer {
   private readonly pressure: WorkerPressureController;
   /** Exact update fence; absent until this worker acknowledges park. */
   private activationGate: { updateId: string; generationId: string } | undefined;
+  /** Requests this worker has asked the host and not yet had answered (M21-T17). */
+  private readonly hostPending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  private hostRequestSeq = 0;
+  /** The verification runs this worker holds, once one has been started. */
+  private verificationRuns: VerificationService | undefined;
+  /** This project's design index (M21-T10), built once and read on demand. */
+  private projectHostGrounding: ProjectHostGrounding | undefined;
+  private projectDesignIndex: ProjectDesignIndex | undefined;
+  /** The design workspace's six methods over those two engines (M21-T13). */
+  private projectDesignWorkspace: DesignWorkspace | undefined;
+  /**
+   * The research runs this worker holds, once a loop has started one
+   * (M21-T26).
+   *
+   * One registry for the whole worker, the way the verification runs have
+   * one: a research loop is a Command with a fleet row under the conversation
+   * it runs in, and Stop from that row is answered here.
+   */
+  private researchRunsService: ResearchRunService | undefined;
 
   constructor(private readonly options: WorkerServerOptions) {
     this.environmentId = options.environmentId ?? UNCONFIGURED_ENVIRONMENT;
@@ -356,6 +418,7 @@ export class WorkerServer {
       runtimes: this.runtimes,
       safetySnapshot: (live, releasing) => this.safetySnapshot(live, releasing),
       withFirstTurnLease: (path, work) => this.firstTurnLock.run(path, work),
+      detachedWork: () => this.detachedWork(),
     });
     // Configured by the host, machine-local and non-secret: the executable, its
     // arguments, and whether a person approved exactly that pair.
@@ -377,6 +440,10 @@ export class WorkerServer {
     const host: SessionHost = {
       openChild: (open) => this.openChild(open),
       driver: (path) => this.runtimes.get(path)?.driver,
+      // The same path a person's return takes (RP-4): settle any release in
+      // flight, recover the agent role from the record, open and attach. The
+      // host learns the session is loaded again from the updates this emits.
+      reopen: async (path) => { await this.sessionLoad({ path }); },
       notify: (method, params) => this.notify(method, params),
       modelAvailable: (model) => this.modelAvailable(model),
       resolveProfile: (profileId) => this.resolveAgentProfile(profileId),
@@ -463,6 +530,41 @@ export class WorkerServer {
 
   notify<M extends keyof HostNotifications>(method: M, params: HostNotifications[M]): void {
     this.options.send({ jsonrpc: "2.0", method, params });
+  }
+
+  /**
+   * Ask the host something (M21-T17, D-356.b).
+   *
+   * The fd-3 link used to go one way for requests: the host asked, the worker
+   * answered. A model tool that reads or writes project work needs the other
+   * direction, because the authority is the host's and nothing above the
+   * worker may be bypassed. Ids are strings (`w1`, `w2`, …) so a worker's own
+   * request can never be confused with a host request id, which is a number.
+   *
+   * A pending call is rejected if the host answers with an error, and simply
+   * never settles if the link dies — the process goes with it.
+   */
+  hostRequest<R = unknown>(method: string, params: unknown): Promise<R> {
+    const id = `w${String(++this.hostRequestSeq)}`;
+    return new Promise<R>((resolve_, reject) => {
+      this.hostPending.set(id, { resolve: resolve_ as (value: unknown) => void, reject });
+      this.options.send({ jsonrpc: "2.0", id, method, params } as unknown as JsonRpcMessage);
+    });
+  }
+
+  /**
+   * One inbound response to a {@link hostRequest}. Returns false when the id
+   * is not one of ours, so the transport can fall through to the request path.
+   */
+  hostResponse(raw: unknown): boolean {
+    const message = raw as { id?: unknown; result?: unknown; error?: { code?: number; message?: string } };
+    if (typeof message.id !== "string") return false;
+    const entry = this.hostPending.get(message.id);
+    if (!entry) return false;
+    this.hostPending.delete(message.id);
+    if (message.error) entry.reject(new ProtocolError(message.error.code ?? ErrorCodes.Internal, message.error.message ?? "the app refused that"));
+    else entry.resolve(message.result);
+    return true;
   }
 
   /** Handle one inbound raw JSON-RPC value. Never throws; errors become responses. */
@@ -573,16 +675,25 @@ export class WorkerServer {
         // transcribed. Doing it here keeps the three send paths identical.
         const live = this.live(req.params.path);
         const content = await this.withDictation(req.params.path, req.params.content);
-        if (this.harness.roleOf(live.path)?.kind === "child") await this.queueIntoChild(live, content, "steer");
-        else await this.firstTurnLock.run(live.path, () => live.driver.steer(content));
-        return {};
+        // A person's mention means the same whichever key they pressed, so the
+        // host's projection reaches the model on this verb too — refused here,
+        // before the engine is told anything, when too many already wait.
+        const projectWork = req.params.projectWork;
+        live.mentions.refuseIfFull(projectWork);
+        const options = projectWork?.length ? { projectWork } : undefined;
+        if (this.harness.roleOf(live.path)?.kind === "child") await this.queueIntoChild(live, content, "steer", options);
+        else await this.firstTurnLock.run(live.path, () => live.driver.steer(content, options));
+        return {} satisfies Result<"pi/session/steer">;
       }
       case "pi/session/follow_up": {
         const live = this.live(req.params.path);
         const content = await this.withDictation(req.params.path, req.params.content);
-        if (this.harness.roleOf(live.path)?.kind === "child") await this.queueIntoChild(live, content, "followUp");
-        else await this.firstTurnLock.run(live.path, () => live.driver.followUp(content));
-        return {};
+        const projectWork = req.params.projectWork;
+        live.mentions.refuseIfFull(projectWork);
+        const options = projectWork?.length ? { projectWork } : undefined;
+        if (this.harness.roleOf(live.path)?.kind === "child") await this.queueIntoChild(live, content, "followUp", options);
+        else await this.firstTurnLock.run(live.path, () => live.driver.followUp(content, options));
+        return {} satisfies Result<"pi/session/follow_up">;
       }
       case "pi/session/clear_queue": {
         // A child's queue is emptied through the harness, which also forgets
@@ -635,6 +746,25 @@ export class WorkerServer {
           if (live.driver.state().isStreaming) {
             throw new ProtocolError(ErrorCodes.SessionBusy, "This chat is still answering. Wait for it to finish, or stop it, then move it.");
           }
+          // Work this conversation owns is still running. Closing here means
+          // the file is about to move, and a command runs against the
+          // checkout and publishes rows under this exact path: disposing now
+          // would either lose its ending or re-create the row under a path
+          // nobody serves. The same running-command count `unload` and
+          // `pi/worker/safety` already pin on, read under the same lock that
+          // serializes the move, plus verification runs that are winding up
+          // and have not published their ending yet.
+          const running = this.tasks.tasksOf(live.path).filter((task) => task.status === "running").length;
+          if (
+            running > 0 ||
+            this.verificationRuns?.hasUnsettled(live.path) === true ||
+            this.researchRunsService?.hasUnsettled(live.path) === true
+          ) {
+            throw new ProtocolError(
+              ErrorCodes.SessionBusy,
+              "This chat still has work running in it. Stop it and wait for it to finish, then move it.",
+            );
+          }
           await live.driver.dispose();
           this.runtimes.drop(live.path);
           return { closed: true } satisfies Result<"pi/session/close">;
@@ -648,11 +778,19 @@ export class WorkerServer {
         // long first-turn preflight, not a frozen preparation-time copy.
         return { messages: this.tray(req.params.path).list() } satisfies Result<"session/pending/list">;
       case "session/pending/add":
+        // The row keeps what the host read for it; it is handed to the engine
+        // with this row's own message when the tray delivers it, and it is
+        // never part of the row a client sees.
         return {
-          message: this.tray(req.params.path).add(await this.withDictation(req.params.path, req.params.content)),
+          message: this.tray(req.params.path).add(
+            await this.withDictation(req.params.path, req.params.content),
+            req.params.projectWork,
+          ),
         } satisfies Result<"session/pending/add">;
       case "session/pending/edit":
-        return { message: this.tray(req.params.path).edit(req.params.id, req.params.content) } satisfies Result<"session/pending/edit">;
+        return {
+          message: this.tray(req.params.path).edit(req.params.id, req.params.content, req.params.projectWork),
+        } satisfies Result<"session/pending/edit">;
       case "session/pending/remove":
         return { message: this.tray(req.params.path).remove(req.params.id) } satisfies Result<"session/pending/remove">;
       case "session/pending/steer":
@@ -745,7 +883,10 @@ export class WorkerServer {
             // Older pages merge into rows the client already holds. Require the
             // existing revision service to prove those rows are still the
             // current state or a byte-identical prefix; cursor/entry identity
-            // alone cannot detect a same-id rewrite or compaction barrier.
+            // alone cannot detect a same-id rewrite. A base behind a compaction
+            // barrier still resolves to its proved state (`barrier`): the rows
+            // before the cursor are unchanged, so the page is exact even though
+            // the same base can no longer take a suffix merge.
             if (("before" in req.params.window || "beforeEntry" in req.params.window)
               && !resolved?.state) {
               throw new ProtocolError(
@@ -990,6 +1131,27 @@ export class WorkerServer {
         return (await this.pressure.directive(req.params)) satisfies Result<"pi/worker/pressure">;
 
       case "pi/task/stop": {
+        // A verification run is a Command with no companion process behind it
+        // (M21-T19): it is this worker's own loop, so Stop from the fleet row
+        // is answered here rather than delivered to the extension. The id is
+        // namespaced, so it can never be mistaken for a shell command's.
+        if (isVerificationFleetTaskId(req.params.id)) {
+          return { delivered: this.verification().stopByTaskId(req.params.id) } satisfies Result<"pi/task/stop">;
+        }
+        // An index build is a Command with no process (D-353): it is this
+        // worker's own loop, so Stop from the fleet row is answered here
+        // rather than delivered to the companion extension.
+        if (isDesignCommandTaskId(req.params.id)) {
+          return { delivered: this.designWorkspace().stopByTaskId(req.params.id) } satisfies Result<"pi/task/stop">;
+        }
+        // A research loop is the agent's own turn (D-351), not a process: Stop
+        // from its row sets the run's stop, so the loop's next tool call is
+        // refused with the sentence that tells it to report what it found.
+        // The field, not a getter: a worker nothing has researched in holds no
+        // registry, and a stop cannot mint one.
+        if (isResearchFleetTaskId(req.params.id)) {
+          return { delivered: this.researchRunsService?.stopByTaskId(req.params.id) ?? false } satisfies Result<"pi/task/stop">;
+        }
         // The companion extension owns the process, so Stop is a command to
         // the session that started it. `delivered: false` means nobody in
         // this session holds that id any more, which the host turns into a
@@ -1078,6 +1240,44 @@ export class WorkerServer {
       case "pi/project/pr/merge":
       case "pi/project/pr/viewed":
         return await this.dispatchGitAction(req);
+
+      // ------------------------------------- M21-T19 verification runs ---
+      // Run control only: a verification run executes the Task's own declared
+      // commands, which needs the checkout this worker owns. Which criteria
+      // exist and what each one came out as is the host's, over the bridge.
+      case "pi/project/verify/start": {
+        this.assertCwd(req.params.cwd);
+        try {
+          return { run: this.verification().start(req.params) } satisfies Result<"pi/project/verify/start">;
+        } catch (error) {
+          // A refusal is a sentence a person can act on — which conversation
+          // to run it in, and how to get one — never a bare failure.
+          throw new ProtocolError(
+            ErrorCodes.InvalidParams,
+            error instanceof Error ? error.message : "That task could not be verified from here.",
+          );
+        }
+      }
+      case "pi/project/verify/state": {
+        this.assertCwd(req.params.cwd);
+        return { runs: this.verification().state(req.params) } satisfies Result<"pi/project/verify/state">;
+      }
+      case "pi/project/verify/stop": {
+        this.assertCwd(req.params.cwd);
+        return this.verification().stop(req.params) satisfies Result<"pi/project/verify/stop">;
+      }
+      // --------------------------------- M21-T13 the design workspace ---
+      // The index, its review, its builds and the grounding of a page are
+      // files inside this project directory, and this process is the one that
+      // owns it. The host resolved the project and forwarded; the `cwd` it
+      // added has to be this worker's own.
+      case "design/index/get":
+      case "design/index/build":
+      case "design/index/stop":
+      case "design/index/review":
+      case "design/host/ground":
+      case "design/sketch/ground":
+        return await this.dispatchDesignWorkspace(req);
 
       // ------------------------------------------- M16-T17 project env ---
       case "pi/project/env/status": {
@@ -2046,6 +2246,399 @@ export class WorkerServer {
    * report at `session_start`) while `open()` is still running. Those events
    * are queued and flushed once the session path is known.
    */
+  /**
+   * This session's project-work surface (M21-T17).
+   *
+   * One per session, because the tools it registers depend on what this
+   * session is: which project it belongs to (the host's answer, not ours),
+   * whether it has a design index, which research adapters the person left
+   * on, and whether it was opened to work on a Task.
+   */
+  /**
+   * This worker's verification runs (M21-T19).
+   *
+   * One registry for the whole worker, so a run a person started from the
+   * Task detail and a run a model started with `verify_project_task` are the
+   * same run: watchable and stoppable from either side. Each run reaches the
+   * host authority over a bridge for its own checkout, with no session behind
+   * it — a person verifying a Task is not a conversation.
+   */
+  private verification(): VerificationService {
+    this.verificationRuns ??= new VerificationService({
+      bridgeFor: (cwd, sessionPath) =>
+        new HostProjectWorkBridge({
+          link: (method, params) => this.hostRequest(method, params),
+          identity: () => ({ label: "Verification" }),
+          // The conversation that admitted this run, at the address it lives
+          // at now: what the host records about a verification write names
+          // the owner it was actually started by, never "whatever session is
+          // current" and never nothing at all.
+          execution: () => this.executionShape(cwd, undefined, sessionPath),
+        }),
+      // A run belongs to a conversation this worker is actually holding: a
+      // path nobody here has open could not be watched or stopped, and a row
+      // under it would be a row nobody can find.
+      holdsSession: (path) => this.runtimes.get(path) !== undefined,
+      // The row travels the road every Command row already travels: an
+      // extension message the host's task register folds into its own. A
+      // person stops it from the fleet exactly as they stop a shell command.
+      publishTask: (path, task) => {
+        const { logPath: _logPath, ...rest } = task as typeof task & { logPath?: string };
+        const message = { type: "lasercode/task/update", task: rest } as const;
+        // This worker's own fleet index first, then the host's. A verification
+        // run is a Command of that session like any other: an agent reading
+        // `inspect_fleet` sees it, and — because a session with a running
+        // command is pinned (`session-safety.ts`) — the conversation that owns
+        // it cannot be released, and therefore cannot be unloaded or retired
+        // out from under it, while it runs. That is how "no invisible running
+        // work" is kept: through the rules that already exist, not a second
+        // set for verification.
+        this.tasks.observe(path, message);
+        this.notify("pi/extension/message", { path, message });
+      },
+    });
+    return this.verificationRuns;
+  }
+
+  private projectWorkSession(live: Live, openOptions: Parameters<SessionDriver["open"]>[0]): ProjectWorkSession | undefined {
+    if (this.options.projectWork !== true) return undefined;
+    const agent = openOptions.agent;
+    const label = agent?.role.subagentName ?? agent?.role.agentName ?? agent?.definition?.name ?? "Agent";
+    const bridge = new HostProjectWorkBridge({
+      link: (method, params) => this.hostRequest(method, params),
+      // Resolved at call time: a new session learns its own id while it
+      // opens, and a run exists only once the harness has started one.
+      identity: () => ({
+        label,
+        ...(live.path ? { sessionId: this.sessionIdOf(live) } : {}),
+        ...(agent?.role.runId !== undefined ? { runId: agent.role.runId } : {}),
+      }),
+      // The attempt records the Model Profile as *intent* (leap, "Execution
+      // and convergence"): an agent run started for a Task runs on the
+      // session's own profile, and the link says which one, never a model.
+      execution: () => this.executionShape(openOptions.cwd, () => live.driver.state().profile?.id, () => live.path),
+    });
+    const research = this.researchRun(bridge, openOptions.cwd);
+    return new ProjectWorkSession({
+      bridge,
+      cwd: openOptions.cwd,
+      // Bound to *this* session: the model never names an owner for a build,
+      // and the one it gets is the conversation it is speaking in, read when
+      // the tool is called rather than when the session was opened.
+      design: this.designSurface(live),
+      hostGrounding: this.hostGrounding(),
+      // Foundation mode proposes on the Design profile (`docs/design-phase.md`,
+      // "Model profiles"), read per call so a profile assigned while this
+      // session is open counts.
+      foundationModels: () => this.designModels(),
+      // Built once for this session: a second call would mint a second
+      // budget, and the row a person watches has to be the ledger the tools
+      // are really spending.
+      ...(research ? { research } : {}),
+      projectInstructions: () => projectInstructions(this.options.cwd),
+      // A run a model starts belongs to the conversation it ran in, and shows
+      // in the fleet under it (M21-T19).
+      sessionPath: () => live.path,
+      reviewActor: { kind: "agent", label },
+      // The same registry the person's own verify surface uses, so one run is
+      // one run whoever started it (M21-T19).
+      verification: this.verification(),
+    });
+  }
+
+  /**
+   * What an attempt started in this session would be running in: its shape,
+   * its checkout, the branch it is on and the commit it started from. Read
+   * from git rather than remembered, and never fatal: an attempt in a
+   * directory that is not a repository records its shape and no branch.
+   */
+  private async executionShape(cwd: string, profileId?: () => string | undefined, sessionPath?: () => string | undefined): Promise<ProjectWorkExecutionShape> {
+    let profile: string | undefined;
+    try {
+      profile = profileId?.();
+    } catch {
+      // A session that is not open yet has no profile; the attempt records none
+      // rather than a guess.
+      profile = undefined;
+    }
+    const shape: ProjectWorkExecutionShape = {
+      // A session whose directory is not the worker's own project directory
+      // is working in a worktree of it (AGENTS.md invariant 5).
+      workspace: cwd === this.options.cwd ? "shared" : "worktree",
+      checkout: cwd,
+      ...(profile !== undefined ? { profileId: profile } : {}),
+      // The session file names the checkpoints this attempt made (M21-T18):
+      // by session key, not by a clock, so two sessions in one checkout stay apart.
+      ...(sessionPath?.() ? { sessionPath: sessionPath()! } : {}),
+    };
+    try {
+      const run = createProcessRunner();
+      const [branch, head] = await Promise.all([
+        run("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, timeoutMs: 5_000 }),
+        run("git", ["rev-parse", "HEAD"], { cwd, timeoutMs: 5_000 }),
+      ]);
+      const branchName = branch.code === 0 ? branch.stdout.trim() : "";
+      const commit = head.code === 0 ? head.stdout.trim() : "";
+      return {
+        ...shape,
+        ...(branchName && branchName !== "HEAD" ? { branch: branchName } : {}),
+        ...(/^[0-9a-f]{7,64}$/.test(commit) ? { baseCommitObjectId: commit } : {}),
+      };
+    } catch {
+      return shape;
+    }
+  }
+
+  /**
+   * Laser's own state directory for this installation: where the design
+   * index's parse cache and the research cache live. The host passes its own;
+   * a worker run by hand derives one beside the agent directory.
+   */
+  private stateDir(): string {
+    return this.options.stateDir ?? join(this.options.agentDir ?? this.options.cwd, "..", "state");
+  }
+
+  /** Static grounding of this project's pages (M21-T12), sharing the index's eras. */
+  private hostGrounding(): ProjectHostGrounding {
+    this.projectHostGrounding ??= new ProjectHostGrounding({
+      projectCwd: this.options.cwd,
+      index: async () => (await this.designIndex().index()) ?? undefined,
+    });
+    return this.projectHostGrounding;
+  }
+
+  /**
+   * The design workspace (M21-T13): the six `design/*` methods over the index
+   * and the grounding engines, with the fleet row an index build takes.
+   */
+  private designWorkspace(): DesignWorkspace {
+    this.projectDesignWorkspace ??= new DesignWorkspace({
+      projectCwd: this.options.cwd,
+      index: () => this.designIndex(),
+      grounding: () => this.hostGrounding(),
+      // The row travels the road every Command row already travels: an
+      // extension message the host's task register folds into `tasks/update`.
+      // Nothing new is invented for it, and a person stops it from the fleet
+      // exactly as they stop a shell command.
+      publishTask: (path, task) => {
+        const { logPath: _logPath, ...rest } = task as typeof task & { logPath?: string };
+        const message = { type: "lasercode/task/update", task: rest } as const;
+        // This worker's own fleet index first, then the host's. An index build
+        // is a Command of that session like any other: an agent reading
+        // `inspect_fleet` sees it, and — because a session with a running
+        // command is pinned (`session-safety.ts`) — the conversation that owns
+        // it cannot be released, and therefore cannot be deleted, while it
+        // runs. That is how "no invisible running work" is kept: through the
+        // rules that already exist, not a second set for design.
+        this.tasks.observe(path, message);
+        this.notify("pi/extension/message", { path, message });
+      },
+      // A build may only be owned by a conversation this worker holds open.
+      // The worker opens sessions of its own project and nothing else
+      // (`session/new` and `session/load` refuse another directory; a child is
+      // opened by the harness in a worktree of this project), so this is also
+      // the check that a session of another project can never own a build
+      // here.
+      holdsSession: (path) => this.runtimes.has(path),
+    });
+    return this.projectDesignWorkspace;
+  }
+
+  /** One `design/*` call, after the host resolved the project it belongs to. */
+  private async dispatchDesignWorkspace(
+    req: Extract<TypedClientRequest, { method: "design/index/get" | "design/index/build" | "design/index/stop" | "design/index/review" | "design/host/ground" | "design/sketch/ground" }>,
+  ): Promise<Result<(typeof req)["method"]>> {
+    if (req.params.cwd !== undefined) this.assertCwd(req.params.cwd);
+    const workspace = this.designWorkspace();
+    switch (req.method) {
+      case "design/index/get":
+        return (await workspace.get(req.params)) satisfies Result<"design/index/get">;
+      case "design/index/build":
+        return (await workspace.build(req.params)) satisfies Result<"design/index/build">;
+      case "design/index/stop":
+        return workspace.stop(req.params) satisfies Result<"design/index/stop">;
+      case "design/index/review":
+        // A `design/*` call arrives from a client connection, which the host
+        // proves is a person (M21-T3); a model reviews through its own tool,
+        // and the review document records which of the two decided.
+        return (await workspace.review(req.params, { kind: "person", label: "You" })) satisfies Result<"design/index/review">;
+      case "design/host/ground":
+        return (await workspace.ground(req.params)) satisfies Result<"design/host/ground">;
+      case "design/sketch/ground":
+        return (await workspace.groundSketchDocument(req.params)) satisfies Result<"design/sketch/ground">;
+    }
+  }
+
+  /**
+   * The models and the profile design work runs on right now
+   * (`designIndexProfileId`, `docs/model-profiles.md`).
+   *
+   * Read per use, exactly like the naming profile, and never substituted: an
+   * explicitly assigned profile with nothing in it leaves design work on the
+   * parse and the neutral foundation with the reason, rather than quietly
+   * spending a profile the person did not choose for this.
+   */
+  private designModels(): DesignModelAccess {
+    return designModelAccess({
+      agentDir: this.settings().agentDir,
+      models: this.options.designModels ?? (() => this.modelCatalog().modelRuntime()),
+    });
+  }
+
+  /**
+   * This session's design surface: the project's one index, with builds bound
+   * to this conversation (M21-T10/T13 follow-up).
+   *
+   * Reading and reviewing are the project's, so they go straight to the index.
+   * Starting a build is not: it is admitted by the design workspace, which
+   * decides whether this session may own one and publishes the Command row
+   * before the first file is opened. The person's `design/index/build` and the
+   * model's `build_design_index` therefore reach the same admission, and
+   * neither can start work nobody can see.
+   */
+  private designSurface(live: Live): DesignIndexBridge {
+    return {
+      index: () => this.designIndex().index(),
+      review: (input) => this.designIndex().review(input),
+      startBuild: async (input) => {
+        // At invocation, not at construction: a session learns its path while
+        // it opens, and this is the conversation the tool call is happening in.
+        const started = await this.designWorkspace().startBuild({
+          sessionPath: this.sessionPathOf(live),
+          rebuild: input.rebuild,
+          ...(input.appRoot !== undefined ? { appRoot: input.appRoot } : {}),
+          ...(input.maxFiles !== undefined ? { maxFiles: input.maxFiles } : {}),
+        });
+        return { commandId: started.command.commandId, title: started.command.title, appRoot: started.appRoot };
+      },
+    };
+  }
+
+  /** This session's file path, from the driver when the record has not landed yet. */
+  private sessionPathOf(live: Live): string {
+    if (live.path) return live.path;
+    try {
+      return live.driver.state().path;
+    } catch {
+      return "";
+    }
+  }
+
+  /** This project's design index, built once per worker and read on demand. */
+  private designIndex(): ProjectDesignIndex {
+    this.projectDesignIndex ??= new ProjectDesignIndex({
+      projectCwd: this.options.cwd,
+      stateDir: this.stateDir(),
+      projectKey: createHash("sha256").update(this.options.cwd).digest("hex").slice(0, 16),
+      // A build is a Command a person can watch and stop (M21-T13): the
+      // workspace turns these two reports into the fleet row. A build a model
+      // started through `build_design_index` takes the same road.
+      // L1 synthesis runs on the Design profile, read when a build starts.
+      synthesis: () => {
+        const access = this.designModels();
+        return {
+          models: access.models,
+          profile: access.profile,
+          ...(access.unavailable !== undefined ? { unavailable: access.unavailable } : {}),
+          ...(access.profile ? { profileId: access.profile.id } : {}),
+        };
+      },
+      // The one thing the index cannot report through a row: a settlement
+      // observer that threw, which loses a build's terminal row. Bounded,
+      // content-free, and on the channel every other worker diagnostic uses.
+      log: (line) => console.error(`${PRODUCT_NAME} worker: ${line}`),
+      onCommand: (command, owner) => this.designWorkspace().observeCommand(command, owner),
+      onProgress: (commandId, progress) => this.designWorkspace().observeProgress(commandId, progress),
+      // How a build ended, published as its last row before the index lets go
+      // of it: the fleet learns *failed*, *stopped* or *completed* from the one
+      // answer the engine gave, and never from a phase that arrived first.
+      onSettled: (command, owner, outcome) => this.designWorkspace().observeSettled(command, owner, outcome),
+    });
+    return this.projectDesignIndex;
+  }
+
+  /**
+   * The research runs this worker holds (M21-T26).
+   *
+   * A research loop is a Command: it takes a fleet row under the conversation
+   * it runs in, it pins that conversation while it is going — because a
+   * session with a running command is pinned (`session-safety.ts`) — and a
+   * person stops it from that row. One registry for the whole worker, so one
+   * loop is one run whichever session it is in.
+   */
+  private researchRuns(): ResearchRunService {
+    this.researchRunsService ??= new ResearchRunService({
+      // A run belongs to a conversation this worker is actually holding: a
+      // path nobody here has open could not be watched or stopped, and a row
+      // under it would be a row nobody can find.
+      holdsSession: (path) => this.runtimes.get(path) !== undefined,
+      // The row travels the road every Command row already travels: an
+      // extension message the host's task register folds into its own. This
+      // worker's own fleet index first, then the host's — an agent reading
+      // `inspect_fleet` sees the run, and the conversation that owns it cannot
+      // be released, unloaded or retired out from under it while it runs.
+      publishTask: (path, task) => {
+        const { logPath: _logPath, ...rest } = task as typeof task & { logPath?: string };
+        const message = { type: "lasercode/task/update", task: rest } as const;
+        this.tasks.observe(path, message);
+        this.notify("pi/extension/message", { path, message });
+      },
+      // The one thing the registry cannot report through a row: an observer
+      // that threw and lost one. Bounded and content-free.
+      log: (line) => console.error(`${PRODUCT_NAME} worker: ${line}`),
+    });
+    return this.researchRunsService;
+  }
+
+  /**
+   * The research run this session may use, or nothing.
+   *
+   * One per session, because a research run's budget is its own
+   * (`docs/research-phase.md`: "Budgets are per research run") and so is the
+   * fleet row that shows it: two conversations researching at once are two
+   * runs, two rows and two budgets, not one shared ledger whose numbers
+   * neither of them can account for.
+   *
+   * The adapters come from Settings → Research sources, merged global then
+   * project, so a source the person switched off is not a tool the model can
+   * pick; with every source off, the research tools are simply absent.
+   */
+  private researchRun(
+    bridge: ProjectWorkBridge,
+    cwd: string,
+  ):
+    | { bridge: ResearchBridge; adapters: ResearchAdapterId[]; runs: ResearchRunService; ledger: ResearchLedger; abort: () => void }
+    | undefined {
+    let sources;
+    try {
+      sources = researchSourcesFrom(readEffectiveProductSettings(this.options.cwd, this.settings().agentDir, this.options.projectTrusted));
+    } catch {
+      return undefined;
+    }
+    const adapters = enabledResearchAdapters(sources);
+    if (adapters.length === 0) return undefined;
+    const search = new WebSearchService(this.settings().agentDir);
+    // A person's Stop reaches the fetches that are already in the air through
+    // this, and the ledger's own stop refuses the calls that come after it.
+    const stopping = new AbortController();
+    const research = new ProjectResearch({
+      projectCwd: cwd,
+      stateDir: this.stateDir(),
+      projectKey: createHash("sha256").update(this.options.cwd).digest("hex").slice(0, 16),
+      sources,
+      store: bridgeResearchStore(bridge),
+      webSearch: (query) => search.search(query),
+      signal: stopping.signal,
+    });
+    return {
+      bridge: research,
+      adapters,
+      runs: this.researchRuns(),
+      ledger: research.ledger,
+      abort: () => stopping.abort(),
+    };
+  }
+
   private async openAndAttach(openOptions: Parameters<SessionDriver["open"]>[0], handle?: SessionHandle): Promise<Live> {
     // Resolve the project's environment before a session exists to run anything
     // in. Failing here never blocks opening the conversation: the refusal, if
@@ -2053,13 +2646,25 @@ export class WorkerServer {
     // have used it, where a person can read it.
     await this.ensureProjectEnv().catch(() => {});
     const driver = this.options.createDriver();
-    const live: Live = { driver, historyEpoch: randomUUID(), revisions: new SessionRevisionTracker(this.environmentId), telemetry: TelemetryFold.create(), seq: 0, touchedAtMs: Date.now(), buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? REPLAY_BYTES_PER_SESSION, this.replayBudget), unsubscribe: () => {}, path: "" };
+    const live: Live = { driver, historyEpoch: randomUUID(), revisions: new SessionRevisionTracker(this.environmentId), mentions: new SessionMentionContext(), telemetry: TelemetryFold.create(), seq: 0, touchedAtMs: Date.now(), buffer: new ReplayBuffer(this.replayBuffer, this.options.replayBytes ?? REPLAY_BYTES_PER_SESSION, this.replayBudget), unsubscribe: () => {}, path: "" };
     driver.setExtensionModelWorkHandler?.((request) => this.admitExtensionModelWork(live, request));
+    // The project this session belongs to is the host's answer, and the tools
+    // it registers depend on it, so it is asked for before the engine starts
+    // collecting tool definitions. Bounded and never fatal: a host that has
+    // no project work for this folder leaves the session with the read-only
+    // surface a projectless chat has.
+    const projectWork = this.projectWorkSession(live, openOptions);
+    if (projectWork) {
+      await Promise.race([
+        projectWork.resolveProject().catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, PROJECT_WORK_RESOLVE_MS)),
+      ]);
+    }
     const queued: DriverEvent[] = [];
     let ready = false;
     live.unsubscribe = driver.subscribe((event) => (ready ? this.onDriverEvent(live, event) : queued.push(event)));
     try {
-      const state = await driver.open(openOptions);
+      const state = await driver.open({ ...openOptions, mentionContext: live.mentions, ...(projectWork ? { projectWork } : {}) });
       const already = this.runtimes.get(state.path);
       if (already && already !== live) {
         // Someone else got there first (a `session/new` that landed on an
@@ -2261,6 +2866,62 @@ export class WorkerServer {
   }
 
   /**
+   * Work this worker still owes under a conversation it no longer holds
+   * (M21-T19, RP-4).
+   *
+   * A driver that closed unexpectedly takes its runtime out of every
+   * per-session table here, and a verification run it owned is detached so
+   * nothing republishes a path nobody serves. The run itself does not stop
+   * existing: its command is still draining and the report it owes may be
+   * mid-flight to the host. Ending this process there would cut a project's
+   * own record in half, so the lifetime hears about it as a pin, in the one
+   * vocabulary that decides both release and retirement. Nothing is published,
+   * reopened or re-created to say it: the registry is read, and a run this
+   * worker's own fleet index already counts is left to that session's pins.
+   *
+   * Which is the whole of the deduplication, and why it is by identity: a
+   * conversation can be **open again at the same path** after an unexpected
+   * close — a person clicked back into it, or the host reloaded it — and that
+   * new runtime's fleet index is empty, because a detached run publishes
+   * nothing. "This path is loaded" therefore says nothing about whether the
+   * work is accounted for. Each owed run is matched against the exact row id
+   * the index is holding for that path: the ones it is already pinning the
+   * session for are dropped here, so nothing is counted twice, and the ones it
+   * has never heard of are reported, so nothing is silently unpinned.
+   */
+  private detachedWork(): SessionSafety[] {
+    const out: SessionSafety[] = [];
+    const owedWork: Array<{ owed: { sessionPath: string; taskIds: string[] }; what: string }> = [
+      ...(this.verificationRuns?.unsettledWork() ?? []).map((owed) => ({ owed, what: "verification run" })),
+      // A research loop writes findings to the host as it goes, so the same
+      // rule holds for it (M21-T26): a run whose conversation closed while a
+      // write was in flight is work this worker still owes, and the process
+      // must not end in the middle of it.
+      ...(this.researchRunsService?.unsettledWork() ?? []).map((owed) => ({ owed, what: "research run" })),
+    ];
+    // One row per path, whatever kind of work is owed under it: the lifetime
+    // adds a row for a path it holds no runtime for only once, so two rows
+    // for one conversation would drop the second pin entirely.
+    const byPath = new Map<string, SessionSafety>();
+    for (const { owed, what } of owedWork) {
+      const counted = new Set(
+        this.tasks
+          .tasksOf(owed.sessionPath)
+          .filter((task) => task.status === "running")
+          .map((task) => task.id),
+      );
+      const unaccounted = owed.taskIds.filter((id) => !counted.has(id)).length;
+      if (unaccounted === 0) continue;
+      const pin = { kind: "task" as const, detail: `${String(unaccounted)} ${what}(s) still settling` };
+      const row = byPath.get(owed.sessionPath);
+      if (row) row.pins = [...row.pins, pin];
+      else byPath.set(owed.sessionPath, { path: owed.sessionPath, pins: [pin] });
+    }
+    out.push(...byPath.values());
+    return out;
+  }
+
+  /**
    * What this worker is holding, for the host's diagnostics (RP-3) and for its
    * own pressure reports (RP-8).
    *
@@ -2424,10 +3085,11 @@ export class WorkerServer {
         // A child's tray row goes through the harness fence like the chat's own
         // steer (M13-T98): during a declared completion it waits on the
         // successor instead of entering a queue the engine is about to drop.
-        steer: (content) => this.harness.roleOf(live.path)?.kind === "child"
-          ? this.queueIntoChild(live, content, "steer")
-          : this.firstTurnLock.run(live.path, () => live.driver.steer(content)),
-        prompt: (content, onAccepted) => this.promptWithFence(live, content, undefined, onAccepted, true),
+        steer: (content, extras) => this.harness.roleOf(live.path)?.kind === "child"
+          ? this.queueIntoChild(live, content, "steer", extras)
+          : this.firstTurnLock.run(live.path, () => live.driver.steer(content, extras)),
+        prompt: (content, onAccepted, extras) =>
+          this.promptWithFence(live, content, undefined, onAccepted, true, extras?.projectWork),
         admitNewWork: () => this.admitNewWork(),
         streaming: () => live.driver.state().isStreaming,
         publish: (pending) => this.onDriverEvent(live, { type: "update", update: { kind: "pending_update", pending } }),
@@ -2498,10 +3160,13 @@ export class WorkerServer {
     params: ClientRequests["session/prompt"]["params"],
   ): Promise<Result<"session/prompt">> {
     const firstTurn = params.firstTurn;
+    // A message that mentions project work is refused before the engine is
+    // asked anything, never accepted with its context quietly dropped.
+    live.mentions.refuseIfFull(params.projectWork);
     if (!firstTurn) {
       // A bare concurrent prompt keeps its refusal semantics. The lease closes
       // the check/use race with a first-turn runtime replacement.
-      return this.promptWithFence(live, params.content, params.streamingBehavior, undefined, false);
+      return this.promptWithFence(live, params.content, params.streamingBehavior, undefined, false, params.projectWork);
     }
     const lease = (await this.firstTurnLock.acquireLease(live.path, true))!;
 
@@ -2565,7 +3230,7 @@ export class WorkerServer {
       if (effectiveModel && !(await this.modelAvailable(effectiveModel))) {
         throw new ProtocolError(ErrorCodes.InvalidParams, modelUnavailableMessage(effectiveModel));
       }
-      const result = await this.promptLive(live, params.content, params.streamingBehavior, () => {
+      const result = await this.promptLive(live, params.content, params.streamingBehavior, params.projectWork, () => {
         accepted = true;
         if (live.preAcceptance === hydration) delete live.preAcceptance;
         previousHandle.discard();
@@ -2602,6 +3267,7 @@ export class WorkerServer {
     streamingBehavior: "steer" | "followUp" | undefined,
     onAccepted: (() => void) | undefined,
     wait: boolean,
+    projectWork?: readonly ProjectWorkMentionProjection[],
   ): Promise<{ accepted: boolean; queued: boolean }> {
     // Preserve the bare concurrent refusal before a fake/alternate driver can
     // turn it into a never-settling call. Stable re-checks under its own slot.
@@ -2610,7 +3276,7 @@ export class WorkerServer {
     if (!lease) return { accepted: false, queued: false };
     const finish = () => lease.release();
     try {
-      return await this.promptLive(live, content, streamingBehavior, () => {
+      return await this.promptLive(live, content, streamingBehavior, projectWork, () => {
         finish();
         onAccepted?.();
       }, lease);
@@ -2638,6 +3304,7 @@ export class WorkerServer {
     live: Live,
     content: ContentBlock[],
     streamingBehavior?: "steer" | "followUp",
+    projectWork?: readonly ProjectWorkMentionProjection[],
     onAccepted?: () => void,
     admissionLease?: SessionAdmissionLease,
   ): Promise<{ accepted: boolean; queued: boolean }> {
@@ -2649,6 +3316,9 @@ export class WorkerServer {
     if (!streamingBehavior && idle) await this.sourceControl().awaitBaseline(live.path);
     return this.harness.promptUser(live.path, content, {
       ...(streamingBehavior ? { streamingBehavior } : {}),
+      // Carried on the options the harness parks and replays, so a message
+      // held for a child's successor reaches the model with what it mentioned.
+      ...(projectWork?.length ? { projectWork } : {}),
       ...(onAccepted ? { onAccepted } : {}),
       ...(admissionLease ? { admissionLease } : {}),
     });
@@ -2668,14 +3338,24 @@ export class WorkerServer {
    * harness's sentence. Root sessions keep the driver's direct verbs: the
    * harness owns no run there.
    */
-  private queueIntoChild(live: Live, content: ContentBlock[], lane: "steer" | "followUp"): Promise<void> {
+  private queueIntoChild(
+    live: Live,
+    content: ContentBlock[],
+    lane: "steer" | "followUp",
+    extras?: { projectWork?: readonly ProjectWorkMentionProjection[] },
+  ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let accepted = false;
       const onAccepted = () => {
         accepted = true;
         resolve();
       };
-      this.harness.promptUser(live.path, content, { streamingBehavior: lane, expandPromptTemplates: true, onAccepted }).then(
+      this.harness.promptUser(live.path, content, {
+        streamingBehavior: lane,
+        expandPromptTemplates: true,
+        ...(extras?.projectWork?.length ? { projectWork: extras.projectWork } : {}),
+        onAccepted,
+      }).then(
         (result) => {
           if (accepted || result.accepted) resolve();
           else reject(new ProtocolError(ErrorCodes.SessionBusy, "The agent's chat could not take this message right now. Try again in a moment."));
@@ -2753,6 +3433,13 @@ export class WorkerServer {
         // in the order they wrote it. Fire and forget — a delivery that fails
         // keeps its message and its reason in the tray, and says so there.
         if (update.kind === "agent_settled" && live.pending) void live.pending.drain();
+        // And the research loop that turn was running is over: the agent runs
+        // the loop itself (D-351), so when its turn ends the loop has ended
+        // too, and its row says how far it got instead of staying `running`
+        // for ever under a conversation nobody is working in (M21-T26). The
+        // field, not a getter: a worker nothing has researched in holds no
+        // registry. A later turn that goes back to it opens the next run.
+        if (update.kind === "agent_settled") this.researchRunsService?.turnEnded(live.path);
         // Snapshot at Send, keyed by this prompt's id. Settles (including extra
         // wakes from children) must not mint another numbered checkpoint.
         if (update.kind === "message_end" && update.entry?.id) {
@@ -2815,6 +3502,16 @@ export class WorkerServer {
         // allowance (RP-4); a released session keeps no replay.
         live.buffer.dispose();
         this.mcpService?.sessionClosed(live.path);
+        // Before the index is swept: a verification run of this conversation
+        // stops and publishes nothing further, so its own settlement cannot
+        // re-create the row the sweep below is about to close — or the closed
+        // session itself. The field, not the getter: a conversation that
+        // never verified must not acquire a service because it closed.
+        this.verificationRuns?.sessionClosed(live.path);
+        // A research loop of this conversation on the same terms (M21-T26):
+        // it stops, it publishes nothing further, and what it had already
+        // recorded stays in the project's record.
+        this.researchRunsService?.sessionClosed(live.path);
         this.tasks.sessionClosed(live.path);
         // One holder fewer: the rest of this worker's sessions may keep more.
         this.applyLogBudgets();
@@ -2880,6 +3577,31 @@ export class WorkerServer {
       this.namingInFlight.delete(oldPath);
       this.namingInFlight.set(newPath, naming);
     }
+    // An index build is a Command of the conversation that started it, so it
+    // moves with the conversation exactly like a shell command's row does.
+    // Its *owner* is unchanged and is never re-derived here: the same
+    // conversation still owns the same builds, and only the file it lives in
+    // has moved. Without this the workspace would keep publishing under a path
+    // no runtime serves, and the row the task index just moved to the new path
+    // would stay `running` for ever — pinning the moved conversation against
+    // an unload that should have been allowed.
+    //
+    // The fields, deliberately, and not the getters: a conversation that never
+    // asked for anything about design must not acquire an index and a
+    // workspace because its file moved. After `tasks.rekeySession` above, so
+    // the republished row lands in the moved task index rather than under it.
+    this.projectDesignIndex?.rekeySession(oldPath, newPath);
+    this.projectDesignWorkspace?.rekeySession(oldPath, newPath);
+    // A verification run is a Command of the conversation that started it, on
+    // the same terms: its owner is unchanged and never re-derived, its rows
+    // follow the conversation, and the host requests it makes from here on
+    // name the address it now lives at. The field, not the getter.
+    this.verificationRuns?.rekeySession(oldPath, newPath);
+    // A research loop is a Command of the conversation it runs in, so it
+    // follows the same fork: the owner is unchanged, only its address moved,
+    // and the row is republished there so the moved conversation sees the
+    // Command it owns (M21-T26).
+    this.researchRunsService?.rekeySession(oldPath, newPath);
   }
 
   /** Re-send accepted updates after `fromSeq`, then any dialogs still waiting. */

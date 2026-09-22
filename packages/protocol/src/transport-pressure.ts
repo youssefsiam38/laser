@@ -129,6 +129,12 @@ export const NOTIFICATION_PRESSURE = {
   "models/profiles/seeded": "state",
   "mcp/changed": "state",
   "tasks/update": "state",
+  // Project work is state. `project/work/list { sinceSeq }` can reconcile a
+  // client that missed events, but that path is the recovery from a fenced
+  // connection, not a licence to drop a gate request or a Task transition out
+  // of a queue that is merely behind.
+  "project/work/updated": "state",
+  "project/work/attention": "state",
 } satisfies Record<keyof HostNotifications, NotificationPressureClass>;
 
 /** True only for the notifications a client can read back explicitly. */

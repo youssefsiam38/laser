@@ -70,6 +70,13 @@ export interface WorkerPoolOptions {
    */
   onNotification: (cwd: string, notification: JsonRpcNotification, source: { generation: string }) => void;
   /**
+   * A request from a worker (M21-T17): the project-work bridge, and nothing
+   * else the router chooses to answer. `cwd` is the directory this host
+   * spawned that worker for, which is what the host resolves the calling
+   * session's project from — never anything in the params (D-356.c).
+   */
+  onWorkerRequest?: (cwd: string, method: string, params: unknown) => Promise<unknown>;
+  /**
    * A worker's own memory-pressure report (RP-8).
    *
    * Its own callback, not the general notification stream, because it is not a
@@ -976,6 +983,9 @@ export class WorkerPool {
       oldSpaceMiB: configuredWorkerOldSpaceMiB,
       mode: entry.mode,
       onNotification: (n) => this.onWorkerNotification(entry, client, n),
+      ...(this.options.onWorkerRequest
+        ? { onRequest: (method: string, params: unknown) => this.options.onWorkerRequest!(entry.cwd, method, params) }
+        : {}),
       onExit: (code, signal, exit) => this.onExit(entry, client, code, signal, exit),
       ...(this.options.onStderr ? { onStderr: (t: string) => { if (!entry.warm) this.options.onStderr?.(entry.cwd, t); } } : {}),
     };

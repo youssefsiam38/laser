@@ -39,7 +39,7 @@ import {
   readBitbucketPr,
   type BitbucketActionContext,
 } from "./bitbucket.js";
-import { commitPaths, createBranch, pushBranch } from "./git-ops.js";
+import { commitPaths, createBranch, linkRefFor, pushBranch } from "./git-ops.js";
 import {
   checkoutGithubPr,
   createGithubPr,
@@ -153,20 +153,56 @@ export class GitActionsService {
   async createPr(params: GitPrCreateParams): Promise<GitPrCreateResult> {
     const located = await this.locate(params.repo, params.runId);
     if (!located.ok) return located.result;
-    if (located.host === "github") {
-      return createGithubPr(this.run, this.githubCtx(located), params.title, params.body, params.base, params.head, params.confirm, params.expect);
-    }
-    return createBitbucketPr(
-      this.fetch,
-      bitbucketAuthFrom(this.env()),
-      this.bitbucketCtx(located),
-      params.title,
-      params.body,
-      params.base,
-      params.head,
-      params.confirm,
-      params.expect,
+    const result =
+      located.host === "github"
+        ? await createGithubPr(this.run, this.githubCtx(located), params.title, params.body, params.base, params.head, params.confirm, params.expect)
+        : await createBitbucketPr(
+            this.fetch,
+            bitbucketAuthFrom(this.env()),
+            this.bitbucketCtx(located),
+            params.title,
+            params.body,
+            params.base,
+            params.head,
+            params.confirm,
+            params.expect,
+          );
+    return this.withLinkRef(result, located, params.head);
+  }
+
+  /**
+   * An opened pull request, as something a delivery link can name (M21-T18).
+   *
+   * The **head commit** is read back from the local repository and is the
+   * identity; the request's number and URL ride along as display context, so a
+   * request that is later closed, renumbered or retargeted changes nothing
+   * about what was recorded as delivered (leap, "Repository provenance").
+   * Both hosts go through here, because the rule is the product's, not
+   * GitHub's or Bitbucket's.
+   */
+  private async withLinkRef(
+    result: GitPrCreateResult,
+    located: Extract<Located, { ok: true }>,
+    head: string,
+  ): Promise<GitPrCreateResult> {
+    if (result.outcome !== "done" || !result.pullRequest) return result;
+    const pullRequest = result.pullRequest;
+    const linkRef = await linkRefFor(
+      this.run,
+      located.repo,
+      {
+        branch: head,
+        remote: located.remoteName,
+        pullRequest: {
+          number: pullRequest.number,
+          host: pullRequest.host,
+          ...(pullRequest.url ? { url: pullRequest.url } : {}),
+          ...(pullRequest.title ? { title: pullRequest.title } : {}),
+        },
+      },
+      head,
     );
+    return linkRef ? { ...result, linkRef } : result;
   }
 
   async readPr(params: GitPrReadParams): Promise<GitPrReadResult> {

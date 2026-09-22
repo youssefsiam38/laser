@@ -1,0 +1,29 @@
+{
+  "tool": "complete_agent_run",
+  "task": "You have finished the review. Publish your result and end the run.",
+  "expectedTool": "complete_agent_run",
+  "allowedTools": [
+    "complete_agent_run"
+  ],
+  "wrongToolThreshold": 0,
+  "budget": {
+    "calls": 1,
+    "inputTokens": 8000,
+    "outputTokens": 200
+  },
+  "measures": [],
+  "world": {
+    "role": "child"
+  },
+  "steps": [
+    {
+      "toolCall": {
+        "name": "complete_agent_run",
+        "args": {
+          "status": "completed",
+          "message": "Reviewed the login flow: three findings, each with file and line, in the branch's own notes file. Nothing was merged."
+        }
+      }
+    }
+  ]
+}
