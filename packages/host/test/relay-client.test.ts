@@ -599,12 +599,16 @@ describe("RelayClient", () => {
     // Four attempts at most before it gives the relay room: the first plus the
     // three cookies it is willing to answer.
     await until(() => states.includes("backoff"), 2000, "the client to stop answering cookies");
+    // Counted at the moment it gave up, not at the end: backoff is 10-20ms
+    // here, so the client goes on retrying while the rest of this test waits,
+    // and a loaded machine would otherwise be asserted to have been slower.
+    const answered = seen.length;
     // The refusal is reported around the state change, and stopping can add an
     // error of its own: wait for the refusal itself rather than assuming it is
     // the last event a loaded machine happened to record.
     await until(() => errors.some(error => /HTTP 429/.test(error.message)), 2000, "the relay's refusal to be reported");
     await client.stop("test over");
-    expect(seen.length).toBeLessThanOrEqual(4);
+    expect(answered).toBeLessThanOrEqual(4);
     expect(errors.some(error => /HTTP 429/.test(error.message))).toBe(true);
   });
 
