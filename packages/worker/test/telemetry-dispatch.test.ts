@@ -93,13 +93,26 @@ describe("pi/session/telemetry through WorkerServer.handle", () => {
     await h.call(1, "session/new", { cwd: "/tmp/fake" });
     const driver = h.drivers[0]!;
     driver.history = { entries: [user, assistant], leafId: "a1" };
-    const answer = await h.call(2, "pi/session/telemetry", { path: "/tmp/fake/s1.jsonl" });
+    const answer = await h.call(2, "pi/session/telemetry/with-sources", {
+      path: "/tmp/fake/s1.jsonl",
+      snapshot: {
+        scopeSessionPath: "/tmp/fake/s1.jsonl",
+        generation: 1,
+        sources: [],
+        coverage: { knownChildren: 0, includedChildren: 0, unavailableChildren: 0 },
+      },
+      subscribe: true,
+    });
     expect(answer.error).toBeUndefined();
     expect(answer.result).toMatchObject({
-      authority: "live",
-      scope: "session",
-      history: { prompts: 1, records: 2 },
-      spend: { billing: "api" },
+      telemetry: {
+        authority: "live",
+        scope: "session",
+        history: { prompts: 1, records: 2 },
+        spend: { billing: "api", coverage: { knownChildren: 0, includedChildren: 0, unavailableChildren: 0 } },
+      },
+      generation: 1,
+      applied: true,
     });
 
     const unnamed = await h.call(3, "pi/session/telemetry", { path: "/tmp/fake/s1.jsonl", scope: "turn" });
@@ -125,9 +138,22 @@ describe("pi/session/telemetry through WorkerServer.handle", () => {
     driver.emit({ type: "update", update: { kind: "message_end" } });
     expect(h.updates().at(-1)?.params.telemetry).toBeUndefined();
 
-    await h.call(2, "pi/session/telemetry", { path: "/tmp/fake/s1.jsonl" });
+    await h.call(2, "pi/session/telemetry/with-sources", {
+      path: "/tmp/fake/s1.jsonl",
+      snapshot: {
+        scopeSessionPath: "/tmp/fake/s1.jsonl",
+        generation: 1,
+        sources: [],
+        coverage: { knownChildren: 0, includedChildren: 0, unavailableChildren: 0 },
+      },
+      subscribe: true,
+    });
     driver.emit({ type: "update", update: { kind: "message_end" } });
-    expect(h.updates().at(-1)?.params.telemetry).toMatchObject({ authority: "live", history: { records: 2 } });
+    expect(h.updates().at(-1)?.params.telemetry).toMatchObject({
+      authority: "live",
+      history: { records: 2 },
+      spend: { coverage: { knownChildren: 0, includedChildren: 0, unavailableChildren: 0 } },
+    });
     await h.server.dispose();
   });
 });

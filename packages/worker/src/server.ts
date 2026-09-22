@@ -67,7 +67,7 @@ import type {
 import { ProjectFilesService } from "./files.js";
 import { RevisionCanonicalisationError, type ProjectWorkMentionProjection, type SessionRevisionHeader } from "@lasercode/protocol";
 import { SessionRevisionTracker } from "./history-revision.js";
-import { ChildTelemetryCache, computeLiveTelemetry, liveOverlay, telemetryUpdateKind } from "./telemetry.js";
+import { ChildTelemetryCache, computeLiveTelemetry, liveOverlay, telemetryUpdateKind, type ResolvedChildSpend } from "./telemetry.js";
 import { TelemetryFold } from "@lasercode/protocol";
 import { ReplayBudget, ReplayBuffer } from "./replay-buffer.js";
 import { sessionPins, type SessionSafetySnapshot } from "./session-safety.js";
@@ -936,38 +936,51 @@ export class WorkerServer {
         // available so a no-signal question can be answered after reconnect.
         return (await live.driver.entries()) satisfies Result<"pi/session/entries">;
       }
+      case "pi/session/telemetry/fence": {
+        const live = this.live(req.params.path);
+        const snapshot = live.preAcceptance ?? await live.driver.entries();
+        const fence = this.assertTelemetryFence(live, snapshot, req.params);
+        return fence satisfies Result<"pi/session/telemetry/fence">;
+      }
+      case "pi/session/telemetry/invalidate": {
+        this.live(req.params.path);
+        return { generation: this.childTelemetry.invalidate(req.params.path, req.params.generation) } satisfies Result<"pi/session/telemetry/invalidate">;
+      }
+      case "pi/session/telemetry/with-sources": {
+        const live = this.live(req.params.path);
+        const snapshot = live.preAcceptance ?? await live.driver.entries();
+        const fence = this.assertTelemetryFence(live, snapshot, req.params);
+        const wantedBefore = live.telemetryWanted === true;
+        const resolved = this.childTelemetry.resolve(
+          req.params.snapshot,
+          this.harness.runs(),
+          (path) => this.runtimes.get(path)?.driver.entriesNow?.()?.entries,
+        );
+        const telemetry = this.telemetryResult(live, snapshot, req.params, fence, resolved);
+        const applied = this.childTelemetry.apply(req.params.snapshot);
+        if (req.params.subscribe) live.telemetryWanted = true;
+        const publish = req.params.publishIfWanted === true && wantedBefore && applied.generation === req.params.snapshot.generation;
+        if (publish) this.onDriverEvent(
+          live,
+          { type: "update", update: { kind: "state", state: live.driver.state() } },
+          req.params.snapshot.generation,
+        );
+        return { telemetry, generation: applied.generation, applied: applied.applied, published: publish } satisfies Result<"pi/session/telemetry/with-sources">;
+      }
       case "pi/session/telemetry": {
         const live = this.live(req.params.path);
         const snapshot = live.preAcceptance ?? await live.driver.entries();
-        if (this.runtimes.get(live.path) !== live) throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation was closed. Open it again.");
-        const { revision, environmentKey } = this.revisionOf(live, snapshot);
-        if (req.params.environmentKey !== undefined && req.params.environmentKey !== environmentKey) {
-          throw new ProtocolError(ErrorCodes.InvalidParams, "That conversation belongs to a different connection.");
+        const fence = this.assertTelemetryFence(live, snapshot, req.params);
+        const scope = req.params.scope ?? "session";
+        const wantsSpend = req.params.include === undefined || req.params.include.includes("spend");
+        const children = scope === "session" && wantsSpend
+          ? this.childTelemetry.streaming(live.path, this.harness.runs(), (path) => this.runtimes.get(path)?.driver.entriesNow?.()?.entries)
+          : undefined;
+        if (scope === "session" && wantsSpend && !children) {
+          throw new ProtocolError(ErrorCodes.Unsupported, "The app must supply canonical child spend before this live telemetry read.");
         }
-        if (req.params.revision !== undefined && req.params.revision !== revision) {
-          throw new ProtocolError(
-            ErrorCodes.RevisionUnavailable,
-            "This conversation moved on since that reading. Open it again to see the rest.",
-          );
-        }
-        try {
-          live.telemetryWanted = true;
-          return this.sessionTelemetry(live, snapshot, {
-            revision,
-            environmentKey,
-            ...(req.params.include ? { include: req.params.include } : {}),
-            ...(req.params.scope ? { scope: req.params.scope } : {}),
-            ...(req.params.turnId ? { turnId: req.params.turnId } : {}),
-          }) satisfies Result<"pi/session/telemetry">;
-        } catch (error) {
-          if (error instanceof Error && error.message === "turn") {
-            throw new ProtocolError(ErrorCodes.InvalidParams, "A turn-scoped telemetry read names the turn.");
-          }
-          if (error instanceof Error && error.message === "turn-missing") {
-            throw new ProtocolError(ErrorCodes.InvalidParams, "That turn is not part of this conversation any more.");
-          }
-          throw error;
-        }
+        if (scope === "session" && wantsSpend) live.telemetryWanted = true;
+        return this.telemetryResult(live, snapshot, req.params, fence, children) satisfies Result<"pi/session/telemetry">;
       }
       // RP-5b: one body of one entry, from the authority that owns this
       // session right now. The revision is computed from the very snapshot the
@@ -1936,20 +1949,67 @@ export class WorkerServer {
     snapshot: { entries: unknown[]; leafId: string | null },
     options: { revision: string; environmentKey: string; include?: TelemetrySection[]; scope?: "session" | "turn"; turnId?: string },
   ) {
-    const state = this.decorate(live, live.driver.state());
-    return computeLiveTelemetry(live.telemetry, snapshot.entries, snapshot.leafId, {
+    const scope = options.scope ?? "session";
+    const wantsSpend = options.include === undefined || options.include.includes("spend");
+    const children = scope === "session" && wantsSpend
+      ? this.childTelemetry.streaming(live.path, this.harness.runs(), (path) => this.runtimes.get(path)?.driver.entriesNow?.()?.entries)
+      : undefined;
+    if (scope === "session" && wantsSpend && !children) return undefined;
+    return this.telemetryResult(live, snapshot, options, {
       revision: options.revision,
       environmentKey: options.environmentKey,
-    }, {
-      ...(options.include ? { include: options.include } : {}),
-      ...(options.scope ? { scope: options.scope } : {}),
-      ...(options.turnId ? { turnId: options.turnId } : {}),
-      overlay: liveOverlay(state, {
-        ...(live.contextComposition ? { composition: live.contextComposition } : {}),
-        reserveTokens: this.compactionReserveTokens(),
-      }),
-      children: this.childTelemetry.sources(live.path, this.harness.runs(), (path) => this.runtimes.get(path)?.driver.entriesNow?.()?.entries),
-    });
+    }, children);
+  }
+
+  private telemetryResult(
+    live: Live,
+    snapshot: { entries: unknown[]; leafId: string | null },
+    params: { include?: TelemetrySection[]; scope?: "session" | "turn"; turnId?: string },
+    fence: { revision: string; environmentKey: string },
+    children?: ResolvedChildSpend,
+  ) {
+    try {
+      const state = this.decorate(live, live.driver.state());
+      return computeLiveTelemetry(live.telemetry, snapshot.entries, snapshot.leafId, fence, {
+        ...(params.include ? { include: params.include } : {}),
+        ...(params.scope ? { scope: params.scope } : {}),
+        ...(params.turnId ? { turnId: params.turnId } : {}),
+        overlay: liveOverlay(state, {
+          ...(live.contextComposition ? { composition: live.contextComposition } : {}),
+          reserveTokens: this.compactionReserveTokens(),
+        }),
+        ...(children ? { children } : {}),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "turn") {
+        throw new ProtocolError(ErrorCodes.InvalidParams, "A turn-scoped telemetry read names the turn.");
+      }
+      if (error instanceof Error && error.message === "turn-missing") {
+        throw new ProtocolError(ErrorCodes.InvalidParams, "That turn is not part of this conversation any more.");
+      }
+      throw error;
+    }
+  }
+
+  private assertTelemetryFence(
+    live: Live,
+    snapshot: { entries: unknown[]; leafId: string | null },
+    params: { environmentKey?: string; revision?: string },
+  ): { revision: string; environmentKey: string } {
+    if (this.runtimes.get(live.path) !== live) {
+      throw new ProtocolError(ErrorCodes.SessionNotFound, "This conversation was closed. Open it again.");
+    }
+    const fence = this.revisionOf(live, snapshot);
+    if (params.environmentKey !== undefined && params.environmentKey !== fence.environmentKey) {
+      throw new ProtocolError(ErrorCodes.InvalidParams, "That conversation belongs to a different connection.");
+    }
+    if (params.revision !== undefined && params.revision !== fence.revision) {
+      throw new ProtocolError(
+        ErrorCodes.RevisionUnavailable,
+        "This conversation moved on since that reading. Open it again to see the rest.",
+      );
+    }
+    return fence;
   }
 
   private compactionReserveTokens(): number {
@@ -3389,7 +3449,7 @@ export class WorkerServer {
     return blindCount === 1 ? blind : undefined;
   }
 
-  private onDriverEvent(live: Live, event: DriverEvent): void {
+  private onDriverEvent(live: Live, event: DriverEvent, telemetryGeneration?: number): void {
     // The harness sees every event of every session; it ignores paths it
     // does not know. Before `closed` removes the session, so a live run is
     // recorded as failed rather than left running.
@@ -3423,7 +3483,11 @@ export class WorkerServer {
           if (snapshot) {
             try {
               const { revision, environmentKey } = this.revisionOf(live, snapshot);
-              params.telemetry = this.sessionTelemetry(live, snapshot, { revision, environmentKey });
+              const telemetry = this.sessionTelemetry(live, snapshot, { revision, environmentKey });
+              if (telemetry) {
+                params.telemetry = telemetry;
+                if (telemetryGeneration !== undefined) params.telemetryGeneration = telemetryGeneration;
+              }
             } catch { /* a turn still streams; the next fold will carry numbers */ }
           }
         }
@@ -3520,6 +3584,8 @@ export class WorkerServer {
         // to a session that is open. A closed session leaves none behind, so
         // nothing can serve its bytes afterwards and nothing keeps its memory.
         this.bodyRanges.forget();
+        this.childTelemetry.dropScope(live.path);
+        this.childTelemetry.dropChild(live.path);
         // The runtime a naming attempt would have renamed is gone, so the
         // attempt can no longer finish its work: its entry goes with the
         // session rather than being left to pin whatever opens this path next.
@@ -3565,6 +3631,7 @@ export class WorkerServer {
   private rekeySessionState(oldPath: string, newPath: string): void {
     if (oldPath === newPath) return;
     this.harness.rekeySession(oldPath, newPath);
+    this.childTelemetry.rekey(oldPath, newPath);
     this.tasks.rekeySession(oldPath, newPath);
     this.mcpService?.rekeySession(oldPath, newPath);
     this.gitService?.rekey(oldPath, newPath);

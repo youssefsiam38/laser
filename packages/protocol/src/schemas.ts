@@ -57,7 +57,12 @@ import {
   RESTORE_TARGETS,
 } from "./source-control.js";
 import { HISTORY_PAGE_BYTE_LIMIT, HISTORY_PAGE_TURN_MAX } from "./history-window.js";
-import { TELEMETRY_SECTIONS } from "./telemetry.js";
+import {
+  TELEMETRY_CHILD_MODEL_LINE_MAX,
+  TELEMETRY_CHILD_SNAPSHOT_MAX_BYTES,
+  TELEMETRY_CHILD_SOURCE_MAX,
+  TELEMETRY_SECTIONS,
+} from "./telemetry.js";
 import { AGENT_ISOLATION_DEFAULTS } from "./workspace.js";
 
 const gitActionExpect = z
@@ -245,6 +250,83 @@ export const uiDialogResponseSchema = z.union([
 ]);
 
 const sessionPath = z.string().min(1);
+
+const telemetryTotalsSchema = z.object({
+  input: z.number().finite().nonnegative(),
+  output: z.number().finite().nonnegative(),
+  cacheRead: z.number().finite().nonnegative(),
+  cacheWrite: z.number().finite().nonnegative(),
+  total: z.number().finite().nonnegative(),
+  cost: z.number().finite().nonnegative(),
+  turns: z.number().int().nonnegative(),
+}).strict();
+const telemetryModelLineSchema = z.object({
+  model: z.string().min(1).max(1024),
+  input: z.number().finite().nonnegative(),
+  output: z.number().finite().nonnegative(),
+  cost: z.number().finite().nonnegative(),
+}).strict();
+const telemetryChildSpendSchema = z.object({
+  billingApi: z.boolean(),
+  billingAccount: z.boolean(),
+  all: telemetryTotalsSchema,
+  api: telemetryTotalsSchema,
+  byModelAll: z.array(telemetryModelLineSchema).max(TELEMETRY_CHILD_MODEL_LINE_MAX),
+  byModelApi: z.array(telemetryModelLineSchema).max(TELEMETRY_CHILD_MODEL_LINE_MAX),
+}).strict().superRefine((value, context) => {
+  const models = new Set([...value.byModelAll, ...value.byModelApi].map((line) => line.model));
+  if (models.size > TELEMETRY_CHILD_MODEL_LINE_MAX) {
+    context.addIssue({ code: "custom", message: "A child spend source has too many model lines." });
+  }
+});
+const telemetryCoverageSchema = z.object({
+  knownChildren: z.number().int().nonnegative(),
+  includedChildren: z.number().int().nonnegative(),
+  unavailableChildren: z.number().int().nonnegative(),
+}).strict().superRefine((value, context) => {
+  if (value.includedChildren + value.unavailableChildren !== value.knownChildren) {
+    context.addIssue({ code: "custom", message: "Child coverage counts must add up." });
+  }
+});
+const telemetryChildSnapshotSchema = z.object({
+  scopeSessionPath: sessionPath,
+  generation: z.number().int().nonnegative(),
+  sources: z.array(z.object({
+    sessionPath,
+    model: z.string().min(1).max(2048).optional(),
+    spend: telemetryChildSpendSchema.optional(),
+  }).strict()).max(TELEMETRY_CHILD_SOURCE_MAX),
+  coverage: telemetryCoverageSchema,
+}).strict().superRefine((value, context) => {
+  const paths = new Set<string>();
+  for (let index = 0; index < value.sources.length; index += 1) {
+    const path = value.sources[index]!.sessionPath;
+    if (paths.has(path)) context.addIssue({ code: "custom", path: ["sources", index, "sessionPath"], message: "Child paths are unique." });
+    paths.add(path);
+  }
+  const contributed = value.sources.filter((source) => source.spend !== undefined).length;
+  if (contributed !== value.coverage.includedChildren || value.sources.length > value.coverage.knownChildren) {
+    context.addIssue({ code: "custom", path: ["coverage"], message: "Child coverage must exactly describe the serialized sources." });
+  }
+  if (new TextEncoder().encode(JSON.stringify(value)).byteLength > TELEMETRY_CHILD_SNAPSHOT_MAX_BYTES) {
+    context.addIssue({ code: "custom", message: "Child telemetry snapshot is too large." });
+  }
+});
+
+const telemetryParamShape = {
+  path: sessionPath,
+  scope: z.enum(["session", "turn"]).optional(),
+  turnId: z.string().min(1).max(256).optional(),
+  include: z.array(z.enum(TELEMETRY_SECTIONS)).max(TELEMETRY_SECTIONS.length).optional(),
+  environmentKey: z.string().min(1).max(256).optional(),
+  revision: z.string().min(1).max(1024).optional(),
+};
+const requireTelemetryTurn = (value: { scope?: string | undefined; turnId?: string | undefined }, context: z.RefinementCtx) => {
+  if (value.scope === "turn" && value.turnId === undefined) {
+    context.addIssue({ code: "custom", path: ["turnId"], message: "A turn-scoped telemetry read names the turn." });
+  }
+};
+const sessionTelemetryParamsSchema = z.object(telemetryParamShape).strict().superRefine(requireTelemetryTurn);
 
 /**
  * Which surface of one connection holds a session's transcript delivery
@@ -886,18 +968,27 @@ export const clientParamsSchemas = {
       context.addIssue({ code: "custom", path: ["baseRevision"], message: "Older history pages require the revision already held by the caller." });
     }
   }),
-  "pi/session/telemetry": z.object({
-    path: sessionPath,
-    scope: z.enum(["session", "turn"]).optional(),
-    turnId: z.string().min(1).max(256).optional(),
-    include: z.array(z.enum(TELEMETRY_SECTIONS)).max(TELEMETRY_SECTIONS.length).optional(),
-    environmentKey: z.string().min(1).max(256).optional(),
-    revision: z.string().min(1).max(1024).optional(),
+  "pi/session/telemetry": sessionTelemetryParamsSchema,
+  "pi/session/telemetry/with-sources": z.object({
+    ...telemetryParamShape,
+    snapshot: telemetryChildSnapshotSchema,
+    subscribe: z.boolean(),
+    publishIfWanted: z.boolean().optional(),
   }).strict().superRefine((value, context) => {
-    if (value.scope === "turn" && value.turnId === undefined) {
-      context.addIssue({ code: "custom", path: ["turnId"], message: "A turn-scoped telemetry read names the turn." });
+    requireTelemetryTurn(value, context);
+    if (value.snapshot.scopeSessionPath !== value.path) {
+      context.addIssue({ code: "custom", path: ["snapshot", "scopeSessionPath"], message: "Child sources must belong to the requested session." });
     }
   }),
+  "pi/session/telemetry/invalidate": z.object({
+    path: sessionPath,
+    generation: z.number().int().nonnegative(),
+  }).strict(),
+  "pi/session/telemetry/fence": z.object({
+    path: sessionPath,
+    environmentKey: z.string().min(1).max(256).optional(),
+    revision: z.string().min(1).max(1024).optional(),
+  }).strict(),
   // RP-5b: one body of one entry, bound to the revision the caller read it at.
   "session/entry_range": z.object({
     path: sessionPath,
