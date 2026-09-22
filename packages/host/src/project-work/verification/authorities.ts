@@ -549,8 +549,18 @@ export function blockersOf(gathered: GatheredAuthorities): VerificationBlocker[]
         reference: comment.commentId,
       });
     }
+    // A gate that was decided again after the change is not a stale approval:
+    // the lifecycle's own path (approve the Brief, write the full Spec,
+    // approve it again) always leaves the superseded decision behind, and
+    // treating that history as a blocker would make every revised Spec
+    // permanently unconvergeable. What blocks is a gate whose *only*
+    // decisions are invalidated ones.
+    const decidedAgain = new Set(
+      detail.approvals.filter((row) => row.decision === "approved" && row.invalidatedAt === undefined).map((row) => row.gate),
+    );
     for (const approval of detail.approvals) {
       if (approval.decision !== "approved" || approval.invalidatedAt === undefined) continue;
+      if (decidedAgain.has(approval.gate)) continue;
       blockers.push({
         kind: "stale_approval",
         detail: `The ${approval.gate} approval on ${detail.entity.key} was invalidated by a later change, so what it covered is no longer approved.`,

@@ -500,6 +500,60 @@ describe("a run that does not converge", () => {
     expect(verify.report!.blockers.some((row) => row.kind === "stale_approval")).toBe(true);
     expect(verify.taskState).toBe("in_progress");
   });
+
+  it("stops calling it stale once the same gate has been decided again (M21-T24)", async () => {
+    const w = await world();
+    // The lifecycle's own path: the Brief is approved, the full Spec replaces
+    // it, and the Brief gate is decided again on the revision that replaced
+    // it. The superseded decision stays on the record as history — it is not
+    // a blocker, or no Spec that was ever revised could converge.
+    const approveBrief = async (revisionId: string, digest: string, key: string): Promise<void> => {
+      const entity = (await current(w.spec.entity.entityId)).entity;
+      if (entity.state === "draft") {
+        ok(
+          await h.call("project/work/review", {
+            projectId: h.projectId,
+            entityId: w.spec.entity.entityId,
+            expectedRevisionId: revisionId,
+            action: "request_review",
+            idempotencyKey: `rr-${key}`,
+          }),
+        );
+      }
+      ok(
+        await h.call("project/work/approve", {
+          projectId: h.projectId,
+          entityId: w.spec.entity.entityId,
+          expectedRevisionId: revisionId,
+          gate: "brief",
+          decision: "approved",
+          covers: [{ entityId: w.spec.entity.entityId, kind: "spec", key: w.spec.entity.key, revisionId, digest }],
+          idempotencyKey: `ap-${key}`,
+        }),
+      );
+    };
+
+    await approveBrief(w.spec.revision.revisionId, w.spec.revision.digest, "first");
+    const fuller = specBody();
+    (fuller as { spec: { brief: string } }).spec.brief = "An export that fails says why, and what to do next.";
+    const revised = ok<ProjectWorkWriteResult>(
+      await h.call("project/work/revise", {
+        projectId: h.projectId,
+        entityId: w.spec.entity.entityId,
+        expectedRevisionId: w.spec.revision.revisionId,
+        body: fuller,
+        idempotencyKey: "rev-full-spec",
+      }),
+    );
+    await approveBrief(revised.revision.revisionId, revised.revision.digest, "again");
+
+    const task = await current(w.task.entity.entityId);
+    const answer = await report(w.task.entity.entityId, task.revision.revisionId, [commandRun("pnpm -F exports test", true)]);
+    const verify = answer.verifyResult!;
+    expect(verify.report!.blockers.filter((row) => row.kind === "stale_approval")).toEqual([]);
+    expect(verify.report!.converged).toBe(true);
+    expect(verify.taskState).toBe("needs_review");
+  });
 });
 
 describe("native visual evidence", () => {
