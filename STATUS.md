@@ -39,7 +39,7 @@
 - T10/T13: done; reviewed source merged `b4ed1003` + correction `d408e8ea`. Parent450 focused tests and merged full verify/identity pass.
 - T2/T18/T19: done; final batch `c8d20389` merged (`f10501a0`).
 - T22: done, merged (D-369, `docs/leap/m21-threat-model.md`); host415 post-merge.
-- T24: deterministic acceptance owner active (`run_261766ac`); browser matrix stays person-owned.
+- T24: deterministic half done and merged (8 scenarios, `docs/leap/m21-acceptance.md`); **the person's browser matrix B1–B12 is the one open acceptance item**.
 - T2: quota accounting reviewed (`472b1347`) and final batch `ad09bb38` integrated; host 374 tests.
 - T20: done, merged `c3c64337` (D-368); host453/protocol768/UI241.
 - T23: done, merged; two T20 UI regressions fixed by parent. M17-T11 is absorbed by D-330 (dropped), not reopened.
