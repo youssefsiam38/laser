@@ -31,7 +31,7 @@
 | M22 Model profiles | done |
 | M23 Plain Chat | done |
 | M24 Ask Oracle | built, unmerged (awaiting M21 release) |
-| M25 External work links | in-progress (building, unmerged) |
+| M25 External work links | built, unmerged (awaiting M21 release) |
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |
 

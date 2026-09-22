@@ -6509,11 +6509,11 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M25-T0 | Binding contract | done | codex-2026-09-21-model-profiles | `docs/external-work-links.md`; `PLAN.md` M25; D-349 | see notes |
-| M25-T1 | Protocol: links, export methods, integration methods | in-progress | leap integration (jira owner) | — | `PLAN.md` M25 |
-| M25-T2 | Host Jira client and store | in-progress | leap integration (jira owner) | — | `PLAN.md` M25 |
-| M25-T3 | UI: chip, dialogs, integrations tab | in-progress | leap integration (jira owner) | — | `PLAN.md` M25 |
-| M25-T4 | Agent export tool | in-progress | leap integration (jira owner) | — | `PLAN.md` M25 |
-| M25-T5 | Security review, docs and release | in-progress | leap integration (jira owner) | — | `PLAN.md` M25 |
+| M25-T1 | Protocol: links, export methods, integration methods | done | leap integration | `e410e9ed`; `protocol/src/external-work-links.ts`, ten methods with policy rows and samples, `ErrorCodes.ExternalWorkRefused`; protocol 793 pass | `PLAN.md` M25 |
+| M25-T2 | Host Jira client and store | done | leap integration | `b46d51f4` (+`742ede18`, `2ac7ae92`); `host/src/integrations/{secrets,jira/*}`, OAuth 3LO+PKCE with `read:jira-work write:jira-work` only, keychain-only tokens, create-meta forms, best-effort property/remote link, schema 6→7 migration with charged rows; host project-work+integrations 450 pass | `PLAN.md` M25 |
+| M25-T3 | UI: chip, dialogs, integrations tab | done | leap integration | `e5a70ea3`; chip, three previewed dialogs (Enter never creates), Integrations tab, "Has Jira issue" filter, four empty states; UI project-work+settings 506 pass | `PLAN.md` M25 |
+| M25-T4 | Agent export tool | done | leap integration | `f60ca7f5`; `export_project_work` over the bridge with preview + idempotency key required, `external: true`, no Jira code in the worker, tool absent unless a tracker is connected; worker 190 pass | `PLAN.md` M25 |
+| M25-T5 | Security review, docs and release | done | leap integration | `1ff0f2dc`; `docs/leap/m25-threat-model.md` (gaps J1–J5), leap/environment-policy cross-references, `laser doctor` tracker check without secrets. Release gated behind M21 (D-370) | `PLAN.md` M25 |
 
 #### M25-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/external-work-links.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M25 tasks added; D-349 recorded. Implementation not started.
@@ -6541,6 +6541,7 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 - Claimed: publish the missing M26 milestone required by `docs/goal-project-lifecycle-leap.md`. Prepare a source containing only the already-reviewed M26 implementation and review fixes, not unfinished M21. Base `f0267525` (M26 before lifecycle store merge), apply exact `13b310f7` M26-only review-fix patch; verify patch identity and run full gate. Routine release orchestrator owns isolated versioning, exact-source CI, tag and publication. Preserve parent/active worker state.
 
 #### M24/M25 owners
+- M25 handed off at `2ac7ae92`: parent reproduced host 450, protocol 793, worker 190, UI 506, build/identity (`/tmp/laser-m25-parent.log`) and read the token path — keychain only, no file fallback, `offline_access` and `manage:jira-project` never requested. Five deviations recorded in `docs/external-work-links.md`; the material ones are method names one segment deeper (M21-T21 already owns `project/work/export/preview`) and the person bringing their own Atlassian app. Gap J3 stays open and documented: Laser cannot roll back an issue somebody else's tracker already created. A live Jira site has never been exercised — every test uses an inert fetch double. Branch unmerged until M21 publishes (D-370).
 - M24 handed off at `1021d6a6`: parent reproduced protocol 792, worker 386, host project-work 439, UI thread 842, build/identity (`/tmp/laser-m24-parent.log`) and read the prompt assembly — one user message, no history, no tool catalogue. Six contract deviations are recorded in `docs/ask-oracle.md` "As built"; the material one is a new read method `project/work/context/render` inside the existing bridge family. Branch stays unmerged until M21 publishes (D-370).
 - M24 Ask Oracle: run_4a596c3f (session 01a0c6f4-427b-7358-a82e-60b92f624588), branch agents/build-ask-oracle-4a596c3f, base 611ccab7.
 - M25 External work links: run_f195d12e (session 01a0c6f4-e393-7358-a82e-60bebafbee6b), branch agents/build-external-work-links-f195d12e, base 611ccab7.
