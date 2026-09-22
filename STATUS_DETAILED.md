@@ -6051,7 +6051,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T19 | Verification and convergence | done | leap integration | reviewed source `f846a90f` (review `f09544ef` approve) + final batch `c8d20389` merged; host376/worker172/protocol757/identity (`/tmp/laser-t19-final-parent.log`); integrated `pnpm verify` green `t-daeb8c05` (pre-batch) | see notes; person-owned visual/round-trip acceptance in T24 |
 | M21-T20 | Cross-session continuity and recovery | in-progress | leap integration (continuity owner) | — | see notes |
 | M21-T21 | Import, export and repository publication | done | leap integration | merged `23a3fa45`; build/typecheck/host224/UI34/identity; final strict UTF-8 correction interop61 + host typecheck/identity | see notes |
-| M21-T22 | Security, privacy, relay and resource hardening | todo | — | — | `PLAN.md` M21 |
+| M21-T22 | Security, privacy, relay and resource hardening | in-progress | leap integration (hardening owner) | — | see notes |
 | M21-T23 | Product-language and element reconciliation | todo | — | — | `PLAN.md` M21 |
 | M21-T24 | End-to-end project lifecycle acceptance | todo | — | — | `PLAN.md` M21 |
 | M21-T25 | Release the project lifecycle leap | todo | — | — | `PLAN.md` M21 |
@@ -6137,6 +6137,9 @@ live work holding its row when a snapshot thins — because both are real hazard
 #### M21-T8 notes
 - 2026-09-21 done (`98a01428`): host `gates.ts` `GateEngine` (Brief/Design/Build subjects and requirements, complete digest set, person-only, blocking comments named, invalidation on material revise via covers ∪ `propagateStale`), comments with semantic anchors re-decided orphaned per revision; protocol gate report/anchor helpers, `SpecBody.gated` opt-in (decision 1); UI `GateCard` (Approve disabled with the host's reason, typed key confirmation, Enter never approves), `CommentsPanel` (threads, anchors, blocking, batched one-revision request), `ApprovalRequestCard` above the composer opening the workspace at the exact revision.
 - 2026-09-21 claimed by claude-2026-09-21-leap: host gate rules (`project-work/gates.ts` + the store's comment/review/approve paths) and the UI comments/gate card/Approval Card; write set disjoint from T16 (plan/task/board files) and T17 (bridge/methods wiring).
+
+#### M21-T22 notes
+- Claimed. Owner audits the whole leap surface (host methods/policy, tools, relay/phone capability matrix, quotas, hostile payloads, credential/source-markup leakage) and writes docs/leap/m21-threat-model.md before hardening code; write set disjoint from T20 (identity/relocation) — T22 does not touch project identity/relocation code.
 
 #### M21-T20 notes
 - Owner run_653dbf50 (session 01a0c65b-2c2b-7358-a82e-608c82b7700a), branch agents/deliver-cross-session-continuity-653dbf50, base c6fd51e6: plan doc first, then marker-based person-confirmed reconnect, unavailable-link projection, restart/retirement/worktree proofs.
