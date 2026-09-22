@@ -25,7 +25,7 @@ import { useShellOptional } from "@/components/shell/shell-context";
 import { shortCwd } from "@/format";
 import { cn } from "@/lib/utils";
 import { useLaserStable } from "@/runtime";
-import { openWorkCreate, openWorkspace, resolveProjectWork, selectWork, setWorkspaceTab } from "@/project-work";
+import { firstBody, openWorkCreate, openWorkspace, resolveProjectWork, selectWork, setWorkspaceTab } from "@/project-work";
 import { KIND_ICON, KIND_LABEL } from "@/project-work/vocabulary";
 
 /**
@@ -108,9 +108,8 @@ export async function startProjectWork(options: StartWorkOptions): Promise<void>
   }
 
   const outcome = await store.create({
-    kind,
     title: titleFromText(brief),
-    text: brief,
+    body: firstBody(kind, brief),
     ...(options.sessionId ? { sessionId: options.sessionId } : {}),
   });
   if (!outcome.ok) {

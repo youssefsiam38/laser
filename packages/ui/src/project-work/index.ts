@@ -16,6 +16,14 @@ export {
 } from "./deep-link.js";
 export { attentionQueue, attentionReasonOf, byRecency, compareKeys, kindsPresent } from "./model.js";
 export {
+  bodyFromCreateDraft,
+  createDraftId,
+  newCreateDrafts,
+  validateCreateDraft,
+  type CreateDraft,
+  type CreateDrafts,
+} from "./create-draft.js";
+export {
   bindProjectWork,
   knownProjectWork,
   observeProjectWork,
