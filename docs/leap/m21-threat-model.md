@@ -6,6 +6,12 @@ falsifiable: every control names the file and line that implements it, every gap
 names the test that will prove it, and a control that does not exist is written
 down as a gap rather than as prose.
 
+**State.** §0–§9 are the audit, written before any hardening code. §10 is the
+gap register, and each row now carries what was done about it: seven gaps were
+closed in this task, one was proved not to be a gap, and one is reported to its
+owner because the fix is outside this task's write set. Where a gap is closed,
+the control's file and line are updated in place.
+
 Scope: the project lifecycle surfaces only — the host's `project/work/*`,
 `project/task/*` and `design/*` methods, the worker bridge and its tools, the
 Research adapters, the Design Index and Sketch, interop (import/export/publish),
@@ -86,8 +92,8 @@ never granted, or a caller asserts its own identity in a request body.
 
 | # | Gap | Proof |
 | --- | --- | --- |
-| G1 | `PROJECT_WORK_METHOD_LIMITS` and `PROJECT_WORK_BODY_MAX_BYTES` (`packages/protocol/src/project-work-methods.ts:118,1250-1274`) document a per-method and per-body ceiling the host "refuses above" — **nothing reads either constant**. The only real ceiling is the 64 MB frame, so one `project/work/create` may store a body sixteen times the documented maximum and spend a sixteenth of the project's 512 MB budget in one call. | `grep -rn PROJECT_WORK_METHOD_LIMITS packages/*/src` → declaration only |
-| G2 | No test asserts the *documented* remote subset: the compiler proves a row exists, nothing proves the row is the right one. A future leap method typed `scope: "read"` for a mutation would compile and ship. | no test references `METHOD_POLICY` for `project/*` |
+| G1 | `PROJECT_WORK_METHOD_LIMITS` and `PROJECT_WORK_BODY_MAX_BYTES` (`packages/protocol/src/project-work-methods.ts:118,1250-1274`) document a per-method and per-body ceiling the host "refuses above" — **nothing read either constant**. The only real ceiling was the 64 MB frame, so one `project/work/create` stored a body sixteen times the documented maximum and spent a sixteenth of the project's 512 MB budget in one call. **Closed:** `refuseOversized` in `packages/host/src/project-work/methods.ts` measures the body, then the request, against both tables (interop included) before anything is looked up or charged. | red: a 5.6 MB body was accepted and stored (`bodyBytes: 5648232`) |
+| G2 | No test asserted the *documented* remote subset: the compiler proves a row exists, nothing proved the row is the right one. A future leap method typed `scope: "read"` for a mutation would compile and ship. **Closed:** `packages/protocol/test/leap-policy.test.ts` holds the matrix as data and checks it against the table. | proved to bite: retyping `project/work/approve` as `read` fails two of its cases |
 
 **Tests that prove them.** `packages/host/test/project-work/hostile-payloads.test.ts`
 (over-ceiling body refused as a typed refusal, nothing stored) and
@@ -153,8 +159,8 @@ pointing at other projects, script-bearing Markdown, deep nesting.
 
 | # | Gap | Proof |
 | --- | --- | --- |
-| G3 | `z.record` fields (`project-work-bodies.ts:414,1136,1139,1224`) have no entry-count cap and accept arbitrary key names, including `__proto__`. No test proves what the store does with them. | inspection |
-| G4 | No end-to-end hostile-payload suite exists for the leap: traversal in `export/apply` and `import/preview` paths, NUL/lone-surrogate text, oversized and deeply nested bodies, cross-project mention refs, script-bearing Markdown and Sketch text. Individual controls exist; nothing proves them together at the method door. | `ls packages/host/test/project-work` |
+| G3 | `z.record` fields (`project-work-bodies.ts:414,1136,1139,1224`) have no entry-count cap and accept arbitrary key names, including `__proto__`. **Not a gap, now proved:** zod drops a `__proto__` key rather than assigning it (zod 3.25.76), so nothing reaches a prototype; the uncapped entry count is what made an unbounded body possible, and the G1 ceiling bounds it. | the prototype case in `hostile-payloads.test.ts`, plus a direct probe of `z.record` |
+| G4 | No end-to-end hostile-payload suite existed for the leap: traversal in `export/apply` and `import/preview` paths, NUL/lone-surrogate text, oversized and deeply nested bodies, script-bearing Markdown and source text. Individual controls exist; nothing proved them together at the method door. **Closed:** `packages/host/test/project-work/hostile-payloads.test.ts` and `packages/ui/test/project-work/untrusted-text.test.tsx`. | red: the oversized body above; the others pass and now stay proved |
 
 **Test.** `packages/host/test/project-work/hostile-payloads.test.ts` — one file
 per §3 row, each asserting a refusal or a stored-as-text outcome plus "nothing
@@ -193,8 +199,8 @@ body, or laundering an unlicensed source into a finding.
 
 | # | Gap | Proof |
 | --- | --- | --- |
-| G5 | `fetch.ts:76` passes `redirect: "follow"`. The private-address floor is applied to the **first** URL only, so a public page that answers `302 Location: http://127.0.0.1:41441/...` (or `169.254.169.254`) is fetched and its body returned to the model. The documented floor does not hold across a hop. | `fetch.ts:73` vs `fetch.ts:54-63` |
-| G6 | The repository adapter builds a git remote from any host (`packages/worker/src/research/adapters/repository.ts:52-79`) and never applies the floor: `read_source` on `https://127.0.0.1/x` makes git connect to loopback. Egress through git is not covered by the fetch guard at all. | `repository.ts:78` |
+| G5 | `fetch.ts` passed `redirect: "follow"`. The private-address floor was applied to the **first** URL only, so a public page answering `302 Location: http://127.0.0.1:41441/…` (or `169.254.169.254`) was fetched and its body returned to the model. **Closed:** redirects are followed by the module itself, one hop at a time, each hop through `checkFetchTarget`, bounded by `RESEARCH_FETCH_MAX_REDIRECTS`. | red: the redirect cases answered instead of refusing |
+| G6 | The repository adapter built a git remote from any host and never applied the floor: `read_source` on `https://127.0.0.1/x` made git connect to loopback. Egress through git was not covered by the fetch guard at all. **Closed:** `resolveRepositoryInput` goes through the shared `isPrivateResearchHost`. | red: `resolveRepositoryInput("https://127.0.0.1/acme/widgets")` returned a remote |
 
 **Test.** `packages/worker/test/research/egress.test.ts` — an inert fetch double
 that answers a redirect chain, and `resolveRepositoryInput` over private hosts.
@@ -228,11 +234,11 @@ escapes its frame or phones home; grounding runs a route.
 
 | # | Gap | Proof |
 | --- | --- | --- |
-| G7 | `sketchSrcDoc` finds the insertion point with `/<head[^>]*>/i` (`sketch.ts:60-61`). A Sketch containing `<!-- <head> -->` before its real head has the CSP meta inserted **inside that comment**, so the document loads with no policy: `default-src 'none'` is gone and the frame may open connections. The sandbox still denies same-origin access, so this is egress and beaconing from model-written markup, not access to Laser's state — but the documented control is defeated by a payload a model can write. | reproduced against the function's own logic; see the regression test |
+| G7 | `sketchSrcDoc` found the insertion point with `/<head[^>]*>/i`. A Sketch containing `<!-- <head> -->` before its real head had the CSP meta inserted **inside that comment**, so the document loaded with no policy: `default-src 'none'` was gone and the frame could open connections. The sandbox still denied same-origin access, so this was egress and beaconing from model-written markup, not access to Laser's state — but the documented control was defeated by a payload a model can write. **Closed:** the insertion point is found by a comment-aware scan (`packages/ui/src/design/sketch.ts`), and a document with no live `<head>`/`<html>` gets the policy in front of everything. | red: the injected meta landed between `<!--` and `-->` |
 
-**Test.** `packages/ui/test/design/sketch.test.tsx` gains the comment,
-attribute-text and fragment cases: the injected policy must be live markup in
-every one.
+**Test.** `packages/ui/test/design/model.test.ts`, "puts the policy in live
+markup, whatever a hostile sketch writes before its head": the commented head,
+the textual `&lt;head&gt;`, the commented root and the unterminated comment.
 
 ---
 
@@ -300,12 +306,16 @@ disk, a helper process nobody owns.
 
 | # | Gap | Proof |
 | --- | --- | --- |
-| G8 | Nothing asserts the caps as a set. Each is written at its call site, and a new read added without one would pass every existing test. | inspection |
-| G1 (repeat) | The per-body ceiling is the largest missing resource bound: quota accounting charges a 60 MB body rather than refusing it. | §1 |
+| G8 | Nothing asserted the caps as a set. Each is written at its call site, and a new read added without one would pass every existing test. **Closed:** `packages/host/test/project-work/resource-guards.test.ts`. | the suite itself |
+| G10 | `runGit` (`packages/protocol/src/git-run.ts:8,57`) starts git with `execFile` and registers **nothing** with the worker's process inventory, so every git child a Research repository read, a publication or a capture starts is an `unknown_descendant` in the fleet's process view. Every helper this task's own area starts *is* registered (`verification/commands.ts:449`, `agents/worktrees.ts:323`, `project-env.ts:392`). **Not fixed here:** `git-run.ts` is shared with the source-control leap (M20) and outside this task's write set. Low severity — the host still measures the process and attributes it by ancestry — but it is the one "owned helper" hole the audit found. | `grep -rn noteWorkerProcess packages/worker/src` |
 
 **Test.** `packages/host/test/project-work/resource-guards.test.ts`: every
 project-work read answers within its documented cap when asked for more, and the
 body ceiling refuses before anything is charged.
+`packages/worker/test/project-work/owned-helpers.test.ts`: the one thing a
+verification run executes is registered as this worker's helper, runs the
+declared line in the declared checkout with `CI=1`, and registers nothing when
+nothing was started.
 
 ---
 
@@ -327,7 +337,13 @@ person did not intend; a UI surface offers an action the connection cannot make.
 - Phone output is escaped and never raw HTML (invariant 9, §3).
 
 **The matrix.** Derived from `METHOD_POLICY`; this table is the documented
-expectation and the test in §1 asserts the table matches it.
+expectation, and two tests hold the product to it:
+`packages/protocol/test/leap-policy.test.ts` (every row's scope and reach, and
+no leap method missing from the matrix) and
+`packages/host/test/project-work/capability-matrix.test.ts` (a real paired
+device: writes and approvals by default, and under an environment that
+withholds `project_write`, every mutation refused on the method name with the
+store untouched while every read still answers).
 
 | Leap action | Method | Scope | Reach | Phone by default | Phone when the environment withholds the scope |
 | --- | --- | --- | --- | --- | --- |
@@ -343,7 +359,7 @@ expectation and the test in §1 asserts the table matches it.
 | Read a verification run | `pi/project/verify/state` | `read` | any | yes | explained |
 | Accept a checkpoint preview as Native evidence | `project/work/link` with `verifiedAt.acceptance` | `project_write` | any | yes — **person actor only** | explained |
 
-**Two properties this matrix asserts, and one open question.**
+**Two properties this matrix asserts, and one open question for the ledger.**
 
 1. No leap method is `reach: "native"`. That is deliberate: the leap's product
    contract says a phone reviews and approves the same work a desktop does
@@ -381,8 +397,9 @@ agent text reaches a renderer as markup.
   scanned key-by-key as it arrives (`packages/protocol/src/credential-scan.ts`).
 - Git-actions output is redacted before it can reach a result or a log
   (`packages/worker/src/git-actions/runner.ts:46-80`).
-- Research refuses credentials in a URL (`fetch.ts:45-52`) and never adds an
-  `Authorization` header (`fetch.ts:6-8`).
+- Research refuses credentials in a URL (`checkFetchTarget` in
+  `packages/worker/src/research/adapters/fetch.ts`) and never adds an
+  `Authorization` header (`fetch.ts`, module comment).
 - Project configuration lives in `<project>/.laser`; `auth.json` and provider
   settings are not project work and no leap writer reads them.
 - Source markup: no `rehype-raw` anywhere (§3), Sketch only inside its frame
@@ -392,33 +409,68 @@ agent text reaches a renderer as markup.
 
 | # | Gap | Proof |
 | --- | --- | --- |
-| G9 | Nothing proves the negative. There is no test that runs the leap's artefact producers — export files and manifest, capture blobs, the verification report, the audit rows — with a known secret present in the environment and in a `.laser` credential file, and asserts the sentinel appears in none of them. | `grep -rn "auth.json" packages/host/test/project-work` → nothing |
+| G9 | Nothing proved the negative: no test ran the leap's artefact producers with a known secret present in the environment and in a `.laser` credential file. **Closed, and nothing was found leaking:** the guard passes on the first run, which is the result worth recording — the producers were already clean, and they now stay clean. | the guard itself |
 
-**Test.** `packages/host/test/project-work/leak-guard.test.ts`: a sentinel in
-`process.env`, in `<project>/.laser/auth.json` and in a provider-shaped token
-string; export, publish preview, capture, verification report and every audit row
-are scanned for the sentinel and for common secret shapes.
+**Test.** `packages/host/test/project-work/leak-guard.test.ts`: a provider-shaped
+sentinel in `process.env`, a second in `<project>/.laser/auth.json`, and a third
+in the person's own body text. Every exported file and manifest, every audit
+row, every notification and the read answers a phone would get are scanned. The
+person's words appear in the export (that is what an export is) and in nothing
+else.
 
 ---
 
 ## 10. Gap register
 
-| # | Area | Gap | Fix | Test |
-| --- | --- | --- | --- | --- |
-| G1 | host | documented body/method byte ceilings unenforced | enforce both in the project-work authority before the store is touched | `hostile-payloads.test.ts`, `resource-guards.test.ts` |
-| G2 | protocol | no guard on the leap's scope/reach assignment or the phone matrix | table-driven test over `METHOD_POLICY` | `leap-policy.test.ts` |
-| G3 | protocol | `z.record` bodies uncapped, prototype-shaped keys untested | assert behaviour; cap entries if unbounded | `hostile-payloads.test.ts` |
-| G4 | host | no hostile-payload suite at the method door | one suite over traversal, NUL, nesting, mentions, markup | `hostile-payloads.test.ts` |
-| G5 | worker | research fetch follows redirects without re-checking the floor | manual redirects, floor on every hop, bounded chain | `research/egress.test.ts` |
-| G6 | worker | repository adapter reaches any host, floor never applied | apply the same floor when resolving a repository | `research/egress.test.ts` |
-| G7 | ui | Sketch CSP can be injected into a comment | comment-aware insertion point | `design/sketch.test.tsx` |
-| G8 | host | read caps asserted nowhere as a set | one guard over every project-work read | `resource-guards.test.ts` |
-| G9 | host | no leak guard over produced artefacts | sentinel scan across export, capture, report, audit | `leak-guard.test.ts` |
+| # | Area | Gap | What was done | Test | State |
+| --- | --- | --- | --- | --- | --- |
+| G1 | host | documented body/method byte ceilings unenforced | `refuseOversized` measures body then request against both limit tables, before any lookup or charge | `hostile-payloads.test.ts`, `resource-guards.test.ts` | closed |
+| G2 | protocol | no guard on the leap's scope/reach assignment or the phone matrix | the matrix as data, checked against `METHOD_POLICY` | `leap-policy.test.ts` | closed |
+| G3 | protocol | `z.record` bodies uncapped, prototype-shaped keys untested | proved: the key is dropped, never assigned; size is bounded by G1 | `hostile-payloads.test.ts` | not a gap |
+| G4 | host, ui | no hostile-payload suite at the method door | traversal, NUL and lone surrogates, nesting, oversize, markup | `hostile-payloads.test.ts`, `untrusted-text.test.tsx` | closed |
+| G5 | worker | research fetch followed redirects without re-checking the floor | manual redirects, the floor on every hop, a bounded chain | `research/egress.test.ts` | closed |
+| G6 | worker | repository adapter reached any host, floor never applied | the same floor when a repository is resolved | `research/egress.test.ts` | closed |
+| G7 | ui | Sketch CSP could be injected into a comment | comment-aware insertion point, policy always live markup | `design/model.test.ts` | closed |
+| G8 | host | read caps asserted nowhere as a set | one guard over every project-work read and the write ceiling | `resource-guards.test.ts` | closed |
+| G9 | host | no leak guard over produced artefacts | sentinel scan across exports, audit rows, notifications, reads | `leak-guard.test.ts` | closed, nothing found |
+| G10 | protocol/worker | git children are started unregistered | reported to the source-control owner; `git-run.ts` is outside this write set | — | open, reported |
+| — | host | phone capability matrix unproved end to end | a paired device under a narrowed environment: reads answered, every mutation refused on the method name with nothing written | `capability-matrix.test.ts` | closed |
 
 Out of this task's hands, recorded for the owners:
 
 - Project identity and relocation (`store.ts` identity section, `projects.ts`)
   belong to M21-T20; nothing here touches them.
+- G10's fix belongs with `packages/protocol/src/git-run.ts`, shared with the
+  source-control leap.
 - Person-owned acceptance in a browser (D-342) is unchanged by this task: the
   Sketch fix is proved by unit tests over the injected document, not by opening
   a frame.
+
+## 11. What was run
+
+Frozen install, recursive build, then the focused suites for everything this
+task touched, each with `env -i PATH HOME`:
+
+| Command | Result |
+| --- | --- |
+| `pnpm install --frozen-lockfile && pnpm -r build` | pass |
+| `vitest run --root packages/protocol` | 763 pass, type errors none |
+| `vitest run test/project-work --root packages/host` | 400 pass (26 files) |
+| `vitest run test/research test/project-work test/design --root packages/worker` | 473 pass (31 files) |
+| `vitest run test/design test/project-work test/elements --root packages/ui` | 432 pass (37+ files) |
+| `pnpm -F @lasercode/{protocol,worker,host,ui} typecheck` | pass |
+| `pnpm identity:check` | pass |
+
+Red evidence, taken before each fix:
+
+| Gap | Red |
+| --- | --- |
+| G1 | `project/work/create` stored a 5.6 MB design body (`bodyBytes: 5648232`) with no refusal |
+| G5 | the redirect cases in `research/egress.test.ts` answered instead of refusing; 7 of 8 red |
+| G6 | `resolveRepositoryInput("https://127.0.0.1/acme/widgets")` returned a git remote |
+| G7 | the CSP meta was inserted between `<!--` and `-->` for a sketch whose comment mentions `<head>` |
+| G2 | proved to bite by retyping `project/work/approve` as `read`: two cases fail |
+
+No browser was opened, no external network was contacted, and no limit was
+raised: every ceiling in this task is the one the protocol already documented.
+`pnpm verify` is the integrator's, not this task's.

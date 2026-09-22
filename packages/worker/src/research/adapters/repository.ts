@@ -22,6 +22,7 @@ import { PROJECT_DIR_NAME, researchAdapter, type RepositoryStateRef, type Source
 import type { ProcessResult, ProcessRunner } from "../../git-actions/index.js";
 import { digestOf } from "../cache.js";
 import { ResearchRefused } from "../errors.js";
+import { isPrivateResearchHost, refusePrivateHost } from "./fetch.js";
 import { serveSource } from "./serve.js";
 import { licenceClass, type ResearchAdapter, type ResearchAdapterContext, type ResearchHit, type ResearchReadInput, type ResearchReadResult, type ResearchSearchInput, type ResearchSearchResult } from "./types.js";
 
@@ -57,7 +58,7 @@ export function resolveRepositoryInput(value: string): ResolvedRepository {
   }
   const ssh = /^(?:ssh:\/\/)?git@([\w.-]+)[:/](.+?)(?:\.git)?$/.exec(trimmed);
   if (ssh) {
-    return { url: `https://${ssh[1]!}/${ssh[2]!}.git`, host: ssh[1]!, slug: ssh[2]! };
+    return publicRepository({ url: `https://${ssh[1]!}/${ssh[2]!}.git`, host: ssh[1]!, slug: ssh[2]! });
   }
   let url: URL;
   try {
@@ -76,7 +77,21 @@ export function resolveRepositoryInput(value: string): ResolvedRepository {
   if (path === "") {
     throw new ResearchRefused("bad_repository", `${url.host} on its own is a host, not a repository.`, "give the full address, including the owner and the repository name");
   }
-  return { url: `https://${url.host}/${path}.git`, host: url.host, slug: path };
+  return publicRepository({ url: `https://${url.host}/${path}.git`, host: url.host, slug: path });
+}
+
+/**
+ * The same private-network floor the fetch guard applies (M21-T22).
+ *
+ * This adapter does not fetch: it hands a remote to **git**, which is egress
+ * the fetch guard never sees. Without this, `read_source` on a loopback or
+ * RFC1918 address would make git connect to this machine's own network on a
+ * model's say-so.
+ */
+function publicRepository(repository: ResolvedRepository): ResolvedRepository {
+  const hostname = repository.host.replace(/:\d+$/, "");
+  if (isPrivateResearchHost(hostname)) throw refusePrivateHost(hostname);
+  return repository;
 }
 
 function repositoryRef(repository: ResolvedRepository, commit?: string, title?: string): SourceRef {

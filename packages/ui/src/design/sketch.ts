@@ -50,23 +50,52 @@ export const SKETCH_CSP = [
 const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${SKETCH_CSP}">`;
 
 /**
+ * Where a tag really opens, ignoring anything inside a comment.
+ *
+ * A Sketch is markup somebody else wrote, so the search for the insertion
+ * point has to read it the way a parser would rather than the way a regular
+ * expression does. `<!-- <head> -->` is text, not a head: inserting the policy
+ * there would put it inside the comment, and the document would load with no
+ * policy at all (M21-T22, threat model §5).
+ *
+ * Returns the index just past the opening tag, or `undefined` when the tag
+ * does not really open anywhere — including when the document has an
+ * unterminated comment, where there is no position that is provably live.
+ */
+function afterOpenTag(html: string, tag: "head" | "html"): number | undefined {
+  const opener = new RegExp(`<${tag}(?=[\\s/>])[^>]*>|<${tag}>`, "i");
+  let cursor = 0;
+  for (;;) {
+    const comment = html.indexOf("<!--", cursor);
+    const segment = comment === -1 ? html.slice(cursor) : html.slice(cursor, comment);
+    const found = opener.exec(segment);
+    if (found?.index !== undefined) return cursor + found.index + found[0].length;
+    if (comment === -1) return undefined;
+    const end = html.indexOf("-->", comment + 4);
+    // An unterminated comment swallows the rest of the document: nothing after
+    // it is live markup, so there is no insertion point inside it.
+    if (end === -1) return undefined;
+    cursor = end + 3;
+  }
+}
+
+/**
  * The document the frame actually loads: the Sketch, with the policy first.
  *
  * It is inserted after `<head>` when there is one, after `<html>` when there
- * is not, and in front of everything when the document is a fragment — in
- * every case *before* anything that could load. A parser that moves it is
- * still fine: a meta CSP applies to the whole document it appears in.
+ * is not, and in front of everything when the document is a fragment or when
+ * neither tag opens outside a comment — in every case *before* anything that
+ * could load, and always as live markup. A parser that moves it is still
+ * fine: a meta CSP applies to the whole document it appears in.
  */
 export function sketchSrcDoc(html: string): string {
-  const head = /<head[^>]*>/i.exec(html);
-  if (head?.index !== undefined) {
-    const at = head.index + head[0].length;
-    return `${html.slice(0, at)}${CSP_META}${html.slice(at)}`;
+  const head = afterOpenTag(html, "head");
+  if (head !== undefined) {
+    return `${html.slice(0, head)}${CSP_META}${html.slice(head)}`;
   }
-  const htmlTag = /<html[^>]*>/i.exec(html);
-  if (htmlTag?.index !== undefined) {
-    const at = htmlTag.index + htmlTag[0].length;
-    return `${html.slice(0, at)}<head>${CSP_META}</head>${html.slice(at)}`;
+  const htmlTag = afterOpenTag(html, "html");
+  if (htmlTag !== undefined) {
+    return `${html.slice(0, htmlTag)}<head>${CSP_META}</head>${html.slice(htmlTag)}`;
   }
   const doctype = /^\s*<!doctype[^>]*>/i.exec(html);
   const at = doctype ? doctype[0].length : 0;
