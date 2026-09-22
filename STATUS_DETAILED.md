@@ -6053,7 +6053,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 | M21-T21 | Import, export and repository publication | done | leap integration | merged `23a3fa45`; build/typecheck/host224/UI34/identity; final strict UTF-8 correction interop61 + host typecheck/identity | see notes |
 | M21-T22 | Security, privacy, relay and resource hardening | done | leap integration | merged `fd77dfb9` (threat model `fd4f263f`, `docs/leap/m21-threat-model.md`); host400/worker232/UI359/protocol763/identity (`/tmp/laser-t22-parent.log`); G1/G5/G6/G7 red-before-fix; D-369 | see notes; G10 git-run registration deferred to M20 |
 | M21-T23 | Product-language and element reconciliation | in-progress | leap integration (reconciliation owner) | — | see notes |
-| M21-T24 | End-to-end project lifecycle acceptance | todo | — | — | `PLAN.md` M21 |
+| M21-T24 | End-to-end project lifecycle acceptance | in-progress | leap integration (acceptance owner) | — | see notes |
 | M21-T25 | Release the project lifecycle leap | todo | — | — | `PLAN.md` M21 |
 | M21-T26 | Research phase: adapters, tools and loop | done | claude-2026-09-21-leap | `331962d4` (merged `170b1457`); `pnpm -F @lasercode/worker test` (1452 passed; `test/research/*` 100) · protocol 619 | see notes |
 
@@ -6137,6 +6137,9 @@ live work holding its row when a snapshot thins — because both are real hazard
 #### M21-T8 notes
 - 2026-09-21 done (`98a01428`): host `gates.ts` `GateEngine` (Brief/Design/Build subjects and requirements, complete digest set, person-only, blocking comments named, invalidation on material revise via covers ∪ `propagateStale`), comments with semantic anchors re-decided orphaned per revision; protocol gate report/anchor helpers, `SpecBody.gated` opt-in (decision 1); UI `GateCard` (Approve disabled with the host's reason, typed key confirmation, Enter never approves), `CommentsPanel` (threads, anchors, blocking, batched one-revision request), `ApprovalRequestCard` above the composer opening the workspace at the exact revision.
 - 2026-09-21 claimed by claude-2026-09-21-leap: host gate rules (`project-work/gates.ts` + the store's comment/review/approve paths) and the UI comments/gate card/Approval Card; write set disjoint from T16 (plan/task/board files) and T17 (bridge/methods wiring).
+
+#### M21-T24 notes
+- Claimed. Deterministic half (owner): established React and non-React projects, greenfield, backend-only skip, design revision during Build, multiple sessions, cross-project mention — real host+worker+git fixtures, no browser. The browser matrix is the person's (D-342) and is listed as the open acceptance item with exact steps.
 
 #### M21-T23 notes
 - Owner run_3230568d (session 01a0c686-598d-7358-a82e-60a6583b95e8), branch agents/reconcile-product-language-and-elements-3230568d, base 257b175a.
