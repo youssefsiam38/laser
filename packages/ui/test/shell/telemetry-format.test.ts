@@ -5,6 +5,7 @@ import {
   autoCompactText,
   autoCompactThresholdUnknownText,
   noApiCostText,
+  partialApiSubtotalText,
   pathDisplay,
   compositionMissingText,
   contextHeader,
@@ -88,6 +89,29 @@ describe("telemetry format", () => {
     expect(spendHeader({ ...zero, billing: "mixed" })).toBe("Account");
     expect(noApiCostText(zero)).toBe("No API cost");
     expect(noApiCostText({ ...zero, billing: "mixed" })).toBe("No API cost — account billed");
+  });
+
+  it("labels incomplete API figures as partial instead of exact zero", () => {
+    const incomplete: TelemetrySpend = {
+      billing: "none",
+      coverage: { knownChildren: 2, includedChildren: 1, unavailableChildren: 1 },
+    };
+    expect(spendHeader(incomplete)).toBe("Partial");
+    expect(noApiCostText(incomplete)).toBe("Partial · API cost is incomplete · 1 child session unavailable.");
+    expect(partialApiSubtotalText(incomplete)).toBe("Partial · Known API subtotal · 1 child session unavailable.");
+
+    const subtotal: TelemetrySpend = {
+      billing: "mixed",
+      coverage: { knownChildren: 4, includedChildren: 2, unavailableChildren: 2 },
+      api: {
+        totals: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2, cost: 1.25, turns: 1 },
+        byModel: [{ model: "anthropic/opus", input: 1, output: 1, cost: 1.25 }],
+        series: [1.25],
+      },
+    };
+    expect(spendHeader(subtotal)).toBe("$1.25 · partial");
+    expect(partialApiSubtotalText(subtotal)).toBe("Partial · Known API subtotal · 2 child sessions unavailable.");
+    expect(spendHeader({ ...incomplete, billing: "account" })).toBe("Account · partial");
   });
 
   it("truncates the middle of a path and never its name", () => {

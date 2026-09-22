@@ -22,6 +22,11 @@ export const TELEMETRY_TOOL_HISTOGRAM_TOP = 8;
 /** Sparkline series cap. Full turn arrays are downsampled to this many points. */
 export const TELEMETRY_SERIES_MAX = 64;
 
+/** Independent transport bounds for one host-canonical child-spend snapshot. */
+export const TELEMETRY_CHILD_SOURCE_MAX = 512;
+export const TELEMETRY_CHILD_MODEL_LINE_MAX = 128;
+export const TELEMETRY_CHILD_SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024;
+
 export type SessionBillingMode = "api" | "account" | "mixed" | "none";
 
 export function isAccountProvider(provider: string | undefined): boolean {
@@ -69,8 +74,19 @@ export interface TelemetryContext {
   };
 }
 
+export interface TelemetrySpendCoverage {
+  /** Distinct descendant session paths still represented by the host run registry. */
+  knownChildren: number;
+  /** Registry-known children whose spend contributed to this response. */
+  includedChildren: number;
+  /** Registry-known children omitted because their data or bounded projection was unavailable. */
+  unavailableChildren: number;
+}
+
 export interface TelemetrySpend {
   billing: SessionBillingMode;
+  /** Present on current session-scope responses; absence is fixture compatibility only. */
+  coverage?: TelemetrySpendCoverage;
   /**
    * API-billed totals. Absent when there is no API cost — a session with no
    * API spend is one line (`billing`), not five empty meters.
@@ -162,6 +178,32 @@ export interface TelemetryChildSource {
   /** `provider/id` when the run recorded a model. Sets billing even with no usage. */
   model?: string;
   fold?: TelemetryFoldState;
+}
+
+/** Only fields consumed while merging child spend; no history/series cross the pipe. */
+export interface TelemetryChildSpendFold {
+  billingApi: boolean;
+  billingAccount: boolean;
+  all: TelemetryUsageTotals;
+  api: TelemetryUsageTotals;
+  byModelAll: TelemetryModelLine[];
+  byModelApi: TelemetryModelLine[];
+}
+
+export interface TelemetryChildSpendSource {
+  /** Internal deduplication identity. Never projected into public telemetry. */
+  sessionPath: string;
+  /** `provider/id` from the standing run, even when its file is unavailable. */
+  model?: string;
+  /** Absent means this registry-known child did not contribute spend. */
+  spend?: TelemetryChildSpendFold;
+}
+
+export interface TelemetryChildSpendSnapshot {
+  scopeSessionPath: string;
+  generation: number;
+  sources: TelemetryChildSpendSource[];
+  coverage: TelemetrySpendCoverage;
 }
 
 /** The run fields both authorities need to decide which children to fold. */
@@ -315,6 +357,17 @@ function ranked(counts: Record<string, number>, top: number): { ranked: Telemetr
 
 function cloneTotals(value: TelemetryUsageTotals): TelemetryUsageTotals {
   return { ...value };
+}
+
+export function childSpendFoldOf(fold: TelemetryFoldState): TelemetryChildSpendFold {
+  return {
+    billingApi: fold.billingApi,
+    billingAccount: fold.billingAccount,
+    all: cloneTotals(fold.all),
+    api: cloneTotals(fold.api),
+    byModelAll: Object.values(fold.byModelAll).map((line) => ({ ...line })),
+    byModelApi: Object.values(fold.byModelApi).map((line) => ({ ...line })),
+  };
 }
 
 function cloneLines(value: Record<string, TelemetryModelLine>): Record<string, TelemetryModelLine> {
@@ -556,34 +609,44 @@ export class TelemetryFold {
   }
 }
 
-function mergeChild(state: TelemetryFoldState, child: TelemetryChildSource): void {
+function mergeChildSpend(
+  state: TelemetryFoldState,
+  child: { model?: string; spend?: TelemetryChildSpendFold },
+): void {
   const model = child.model;
   if (model) {
     if (isAccountProvider(providerOfModel(model))) state.billingAccount = true;
     else state.billingApi = true;
   }
-  const fold = child.fold;
-  if (!fold) return;
-  if (fold.billingAccount) state.billingAccount = true;
-  if (fold.billingApi) state.billingApi = true;
-  addTotals(state.all, fold.all, false);
-  state.all.turns += fold.all.turns;
-  addTotals(state.api, fold.api, false);
-  state.api.turns += fold.api.turns;
-  for (const [name, line] of Object.entries(fold.byModelAll)) {
-    const into = state.byModelAll[name] ?? { model: name, input: 0, output: 0, cost: 0 };
+  const spend = child.spend;
+  if (!spend) return;
+  if (spend.billingAccount) state.billingAccount = true;
+  if (spend.billingApi) state.billingApi = true;
+  addTotals(state.all, spend.all, false);
+  state.all.turns += spend.all.turns;
+  addTotals(state.api, spend.api, false);
+  state.api.turns += spend.api.turns;
+  for (const line of spend.byModelAll) {
+    const into = state.byModelAll[line.model] ?? { model: line.model, input: 0, output: 0, cost: 0 };
     into.input += line.input;
     into.output += line.output;
     into.cost += line.cost;
-    state.byModelAll[name] = into;
+    state.byModelAll[line.model] = into;
   }
-  for (const [name, line] of Object.entries(fold.byModelApi)) {
-    const into = state.byModelApi[name] ?? { model: name, input: 0, output: 0, cost: 0 };
+  for (const line of spend.byModelApi) {
+    const into = state.byModelApi[line.model] ?? { model: line.model, input: 0, output: 0, cost: 0 };
     into.input += line.input;
     into.output += line.output;
     into.cost += line.cost;
-    state.byModelApi[name] = into;
+    state.byModelApi[line.model] = into;
   }
+}
+
+function mergeChild(state: TelemetryFoldState, child: TelemetryChildSource): void {
+  mergeChildSpend(state, {
+    ...(child.model ? { model: child.model } : {}),
+    ...(child.fold ? { spend: childSpendFoldOf(child.fold) } : {}),
+  });
 }
 
 function billingOf(state: TelemetryFoldState, overlay?: TelemetryLiveOverlay): SessionBillingMode {
@@ -623,10 +686,13 @@ export function sessionTelemetryOf(
     turnId?: string;
     overlay?: TelemetryLiveOverlay;
     children?: readonly TelemetryChildSource[];
+    childSpend?: readonly TelemetryChildSpendSource[];
+    coverage?: TelemetrySpendCoverage;
   } = {},
 ): SessionTelemetry {
   const state = cloneState(fold);
   for (const child of options.children ?? []) mergeChild(state, child);
+  for (const child of options.childSpend ?? []) mergeChildSpend(state, child);
   const include = options.include;
   const overlay = options.overlay;
   const result: SessionTelemetry = {
@@ -641,7 +707,10 @@ export function sessionTelemetryOf(
 
   if (wanted(include, "spend")) {
     const billing = billingOf(state, overlay);
-    const spend: TelemetrySpend = { billing };
+    const spend: TelemetrySpend = {
+      billing,
+      ...(options.coverage ? { coverage: { ...options.coverage } } : {}),
+    };
     if (billing === "api" || billing === "mixed") {
       if (state.api.turns > 0 || state.api.cost > 0 || state.api.total > 0) {
         spend.api = {

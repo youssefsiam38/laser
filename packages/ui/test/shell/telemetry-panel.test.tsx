@@ -234,6 +234,43 @@ describe("telemetry sections", () => {
     expect(spendHeader(zero)).toBe("None");
   });
 
+  it("shows incomplete zero and nonzero spend as partial in both collapsed and expanded figures", async () => {
+    const incompleteZero: TelemetrySpend = {
+      billing: "account",
+      coverage: { knownChildren: 2, includedChildren: 1, unavailableChildren: 1 },
+    };
+    await render(<SpendSection spend={incompleteZero} open onOpenChange={() => {}} onOpenUsage={() => {}} />);
+    expect(numberOf("spend")).toBe("Account · partial");
+    expect(container.querySelector("[data-slot='telemetry-no-api-cost']")?.textContent).toBe(
+      "Partial · API cost is incomplete · 1 child session unavailable.",
+    );
+    expect(container.textContent).not.toContain("No API cost");
+    expect(container.querySelector("[data-slot='account-usage']")).not.toBeNull();
+
+    await render(
+      <SpendSection
+        spend={{
+          billing: "mixed",
+          coverage: { knownChildren: 3, includedChildren: 1, unavailableChildren: 2 },
+          api: {
+            totals: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, total: 15, cost: 2, turns: 1 },
+            byModel: [{ model: "anthropic/opus", input: 10, output: 5, cost: 2 }],
+            series: [2],
+          },
+        }}
+        open
+        onOpenChange={() => {}}
+        onOpenUsage={() => {}}
+      />,
+    );
+    expect(numberOf("spend")).toBe("$2.00 · partial");
+    expect(container.querySelector("[data-slot='telemetry-partial-spend']")?.textContent).toBe(
+      "Partial · Known API subtotal · 2 child sessions unavailable.",
+    );
+    expect(container.querySelector("[data-slot='cost-meter']")).not.toBeNull();
+    expect(container.querySelector("[data-slot='account-usage']")).not.toBeNull();
+  });
+
   it("keeps the tail of a long model id in the spend roll-up", async () => {
     const long = "anthropic/claude-opus-4-20250514-preview";
     await render(

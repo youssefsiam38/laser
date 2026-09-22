@@ -1,6 +1,6 @@
 # M20-T3 — restart-safe child spend correction plan
 
-Status: revised after review; implementation intentionally blocked on brief approval.
+Status: implemented on the approved design; focused validation passed, parent release gate pending.
 
 Base investigated: `917f5840db4e28973acf4853914b0059f5c506d0`.
 Plan revisions: correct concurrent route semantics, make partial coverage visible, define streaming propagation, and state registry retention honestly.
@@ -274,3 +274,24 @@ Before the first plan revision, base `917f5840` passed:
 - protocol telemetry/schema tests: 54/54, no type errors.
 
 Those helper tests establish current arithmetic only. They do not cover real restart membership, concurrent reader interleaving, pre-bootstrap notifications, or partial UI behavior.
+
+## Implementation evidence
+
+Implemented the approved host-canonical seam without changing public telemetry params:
+
+- protocol: bounded compact child folds, strict additive coverage, internal request/fence/invalidation contracts, and a private notification-generation marker removed by the host before broadcast;
+- host: one shared descendant source builder for durable and live reads, request-scoped generation snapshots, dirty/coalesced refresh coordination, cross-worker owner lookup, lifecycle cleanup/rekey, and stale-notification stripping;
+- worker: canonical fresh/dirty/uninitialized baselines, request-attached live overlays, stale-generation rejection, pre-bootstrap suppression, and corrected numbered state publication;
+- UI: collapsed and expanded partial-spend states, including incomplete zero and separate account allowance.
+
+The production `HostServer` + built real worker regression was recorded red before implementation (`billing: account`, expected `mixed`). It now covers cold durable totals, live open, worker restart/reopen, child-root descendant filtering, duplicate run rows, account/API separation, inactive-child append/reopen publication, deletion/unreadability, and partial coverage.
+
+Focused validation after implementation:
+
+- protocol build and telemetry/schema/policy tests: 72 passed, type errors none;
+- worker build and telemetry/dispatch tests: 8 passed;
+- host build and telemetry/router/coordinator/access/restart tests: 45 passed;
+- UI test typecheck and telemetry/capability tests: 39 passed;
+- UI production build passed with the repository's existing CSS/chunk warnings.
+
+Additional package evidence: the full protocol suite passed (778 tests). The full worker suite produced one unrelated timing-sensitive MCP authorization failure; its isolated retry passed 56/56. Broad host/UI runs were attempted concurrently and were invalidated by process saturation plus newly exhaustive policy/capability inventories; the directly affected inventories were corrected and all focused reruns pass. `pnpm verify` remains parent-owned as approved.

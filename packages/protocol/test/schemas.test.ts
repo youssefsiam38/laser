@@ -146,6 +146,18 @@ const samples: Record<ClientMethod, unknown> = {
   "pi/session/delete": { path: "/s.jsonl", worktree: "delete" },
   "pi/session/entries": { path: "/s.jsonl", window: { beforeEntry: "entry-40", limit: 40 }, baseRevision: "r1.test" },
   "pi/session/telemetry": { path: "/s.jsonl", scope: "session", include: ["spend", "work", "history"], environmentKey: "e1.AAAAAAAAAAAAAAAAAAAAAA", revision: "r1.AAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBB" },
+  "pi/session/telemetry/fence": { path: "/s.jsonl", environmentKey: "e1.AAAAAAAAAAAAAAAAAAAAAA", revision: "r1.AAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBB" },
+  "pi/session/telemetry/invalidate": { path: "/s.jsonl", generation: 2 },
+  "pi/session/telemetry/with-sources": {
+    path: "/s.jsonl",
+    snapshot: {
+      scopeSessionPath: "/s.jsonl",
+      generation: 2,
+      sources: [],
+      coverage: { knownChildren: 0, includedChildren: 0, unavailableChildren: 0 },
+    },
+    subscribe: true,
+  },
   "pi/session/detach": { path: "/s.jsonl" },
   "pi/session/move": { path: "/s.jsonl", cwd: "/p" },
   "pi/session/close": { path: "/s.jsonl" },
@@ -482,6 +494,36 @@ describe("client request schemas", () => {
       expect(req.method).toBe(method);
       expect(req.params).toEqual(samples[method]);
     }
+  });
+
+  it("requires strict, additive child coverage and unique request-scoped paths", () => {
+    const schema = clientParamsSchemas["pi/session/telemetry/with-sources"];
+    const base = samples["pi/session/telemetry/with-sources"];
+    expect(schema.safeParse({
+      ...base,
+      snapshot: { ...base.snapshot, coverage: { knownChildren: 2, includedChildren: 1, unavailableChildren: 0 } },
+    }).success).toBe(false);
+    expect(schema.safeParse({
+      ...base,
+      snapshot: { ...base.snapshot, coverage: { knownChildren: -1, includedChildren: 0, unavailableChildren: -1 } },
+    }).success).toBe(false);
+    expect(schema.safeParse({
+      ...base,
+      snapshot: {
+        ...base.snapshot,
+        sources: [{ sessionPath: "/missing.jsonl" }],
+        coverage: { knownChildren: 1, includedChildren: 1, unavailableChildren: 0 },
+      },
+    }).success).toBe(false);
+    expect(schema.safeParse({
+      ...base,
+      snapshot: {
+        ...base.snapshot,
+        sources: [{ sessionPath: "/child.jsonl" }, { sessionPath: "/child.jsonl" }],
+        coverage: { knownChildren: 2, includedChildren: 0, unavailableChildren: 2 },
+      },
+    }).success).toBe(false);
+    expect(schema.safeParse({ ...base, path: "/other.jsonl" }).success).toBe(false);
   });
 
   it("distinguishes absent, follow-agent, and explicit first-turn model intent", () => {
