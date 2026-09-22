@@ -61,12 +61,12 @@ export function IdentityNotice({ store, work, className }: { store: ProjectWorkS
         <span className="ms-auto flex shrink-0 items-center gap-1.5">
           {identity.choices.includes("reconnect") ? (
             <Button size="xs" variant="outline" disabled={busy !== undefined} onClick={() => choose("reconnect")}>
-              {busy === "reconnect" ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : null}
+              {busy === "reconnect" ? <Loader2 aria-hidden="true" className="motion-safe:animate-busy" /> : null}
               Continue {identity.marked?.name ?? "the other project"} here
             </Button>
           ) : null}
           <Button size="xs" variant="ghost" disabled={busy !== undefined} onClick={() => choose("fresh")}>
-            {busy === "fresh" ? <Loader2 className="animate-spin motion-reduce:animate-none" /> : null}
+            {busy === "fresh" ? <Loader2 aria-hidden="true" className="motion-safe:animate-busy" /> : null}
             Keep this folder separate
           </Button>
         </span>
