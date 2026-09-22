@@ -10,7 +10,7 @@ interface SchemaIssue {
   code?: string;
   maximum?: number | bigint;
   minimum?: number | bigint;
-  origin?: string;
+  type?: string;
 }
 
 export interface WorkFieldError {
@@ -86,7 +86,7 @@ export function workFieldError(kind: ProjectWorkKind, issue: SchemaIssue | undef
     const maximum = Number(issue.maximum);
     return {
       path: issue.path,
-      message: issue.origin === "array" ? `${label} can have at most ${maximum} entries.` : `${label} must be ${maximum} characters or fewer.`,
+      message: issue.type === "array" ? `${label} can have at most ${maximum} entries.` : `${label} must be ${maximum} characters or fewer.`,
     };
   }
   return { path: issue.path, message: `${label} is not valid. Check it and try again.` };
