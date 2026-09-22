@@ -6139,6 +6139,7 @@ live work holding its row when a snapshot thins — because both are real hazard
 - 2026-09-21 claimed by claude-2026-09-21-leap: host gate rules (`project-work/gates.ts` + the store's comment/review/approve paths) and the UI comments/gate card/Approval Card; write set disjoint from T16 (plan/task/board files) and T17 (bridge/methods wiring).
 
 #### M21-T23 notes
+- Owner run_3230568d (session 01a0c686-598d-7358-a82e-60a6583b95e8), branch agents/reconcile-product-language-and-elements-3230568d, base 257b175a.
 - Claimed. Owner reconciles docs (D-140/D-147/goal/fleet), absorbs M17-T11, makes person surfaces say Command, and audits every claimed assistant-ui element row in docs/ux-elements.md as installed/mapped or rejected with reason. Write set: docs + UI copy/element mapping only; no host/protocol/worker source.
 
 #### M21-T22 notes
