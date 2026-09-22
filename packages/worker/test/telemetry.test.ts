@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { TelemetryFold } from "@lasercode/protocol";
-import type { AgentRun, SessionState } from "@lasercode/protocol";
-import { ChildTelemetryCache, childSources, computeLiveTelemetry, liveOverlay, telemetryUpdateKind } from "../src/telemetry.js";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { TelemetryFold, childSpendFoldOf, clientParamsSchemas } from "@lasercode/protocol";
+import type { AgentRun, SessionState, TelemetryChildSpendSnapshot } from "@lasercode/protocol";
+import { ChildTelemetryCache, computeLiveTelemetry, liveOverlay, telemetryUpdateKind } from "../src/telemetry.js";
 
 const user = (id: string, parentId: string | null) => ({
   type: "message", id, parentId, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: id },
@@ -47,19 +44,20 @@ describe("live telemetry", () => {
     const first = [user("u1", null), assistant("a1", "u1")];
     const snapshot = computeLiveTelemetry(fold, first, "a1", fence, {
       overlay: liveOverlay(state()),
-      children: [],
+      children: { sources: [], coverage: { knownChildren: 0, includedChildren: 0, unavailableChildren: 0 } },
     });
     expect(fold.recordsFolded).toBe(2);
     expect(snapshot.authority).toBe("live");
     expect(snapshot.context).toMatchObject({ tokens: 1200, contextWindow: 200000, autoCompact: { enabled: true, state: "idle", thresholdTokens: 200000 - 16384 } });
     expect(snapshot.spend?.api?.totals.turns).toBe(1);
+    expect(snapshot.spend?.coverage).toEqual({ knownChildren: 0, includedChildren: 0, unavailableChildren: 0 });
     expect(snapshot.model?.id).toBe("claude");
 
-    computeLiveTelemetry(fold, first, "a1", fence, { overlay: liveOverlay(state()), children: [] });
+    computeLiveTelemetry(fold, first, "a1", fence, { overlay: liveOverlay(state()) });
     expect(fold.recordsFolded).toBe(2);
 
     const next = [...first, user("u2", "a1"), assistant("a2", "u2")];
-    const grown = computeLiveTelemetry(fold, next, "a2", fence, { overlay: liveOverlay(state()), children: [] });
+    const grown = computeLiveTelemetry(fold, next, "a2", fence, { overlay: liveOverlay(state()) });
     expect(fold.recordsFolded).toBe(4);
     expect(grown.work?.turns).toBe(2);
   });
@@ -90,133 +88,193 @@ function run(partial: Partial<AgentRun> & Pick<AgentRun, "runId" | "sessionPath"
   };
 }
 
-describe("childSources", () => {
-  it("does not merge another root's children into this session's spend", () => {
-    const aChild = [
-      { type: "message", id: "u", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: "a" } },
-      {
-        type: "message",
-        id: "a",
-        parentId: "u",
-        timestamp: "2026-01-01T00:00:01.000Z",
-        message: {
-          role: "assistant",
-          provider: "anthropic",
-          model: "claude",
-          content: [{ type: "text", text: "ok" }],
-          usage: { input: 8, output: 2, totalTokens: 10, cost: { total: 0.2 } },
-        },
-      },
-    ];
-    const bChild = [
-      { type: "message", id: "u", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: "b" } },
-      {
-        type: "message",
-        id: "a",
-        parentId: "u",
-        timestamp: "2026-01-01T00:00:01.000Z",
-        message: {
-          role: "assistant",
-          provider: "anthropic",
-          model: "claude",
-          content: [{ type: "text", text: "ok" }],
-          usage: { input: 90, output: 10, totalTokens: 100, cost: { total: 9 } },
-        },
-      },
-    ];
+const childEntries = (cost: number, model = "claude", suffix = "") => [
+  user(`c-u${suffix}`, null),
+  {
+    ...assistant(`c-a${suffix}`, `c-u${suffix}`),
+    message: {
+      ...assistant(`c-a${suffix}`, `c-u${suffix}`).message,
+      model,
+      usage: { input: 8, output: 2, totalTokens: 10, cost: { total: cost } },
+    },
+  },
+];
+
+function spendSource(path: string, cost: number) {
+  const fold = TelemetryFold.create();
+  fold.ingest(childEntries(cost));
+  return { sessionPath: path, spend: childSpendFoldOf(fold.state) };
+}
+
+function expectStrictSnapshot(
+  baseline: TelemetryChildSpendSnapshot,
+  resolved: ReturnType<ChildTelemetryCache["resolve"]>,
+) {
+  expect(clientParamsSchemas["pi/session/telemetry/with-sources"].safeParse({
+    path: baseline.scopeSessionPath,
+    snapshot: { ...baseline, sources: resolved.sources, coverage: resolved.coverage },
+    subscribe: true,
+  }).success).toBe(true);
+}
+
+const emptySnapshot = (path: string, generation = 1): TelemetryChildSpendSnapshot => ({
+  scopeSessionPath: path,
+  generation,
+  sources: [],
+  coverage: { knownChildren: 0, includedChildren: 0, unavailableChildren: 0 },
+});
+
+describe("host baseline plus live child overlay", () => {
+  it("adds only a live descendant of the requested root", () => {
+    const cache = new ChildTelemetryCache();
     const runs = [
-      run({ runId: "a1", sessionPath: "/a-child.jsonl", rootSessionPath: "/a.jsonl", model: { provider: "anthropic", id: "claude" } }),
-      run({ runId: "b1", sessionPath: "/b-child.jsonl", rootSessionPath: "/b.jsonl", model: { provider: "anthropic", id: "claude" } }),
+      run({ runId: "a1", sessionPath: "/a-child.jsonl", rootSessionPath: "/a.jsonl", status: "running", model: { provider: "anthropic", id: "claude" } }),
+      run({ runId: "b1", sessionPath: "/b-child.jsonl", rootSessionPath: "/b.jsonl", status: "running", model: { provider: "anthropic", id: "claude" } }),
     ];
-    const live = new Map<string, unknown[]>([
-      ["/a-child.jsonl", aChild],
-      ["/b-child.jsonl", bChild],
-    ]);
-    const sources = childSources("/a.jsonl", runs, (path) => live.get(path));
-    expect(sources).toHaveLength(1);
-    const fold = TelemetryFold.create();
-    fold.ingest([user("u1", null), assistant("a1", "u1")]);
-    const snapshot = computeLiveTelemetry(fold, [user("u1", null), assistant("a1", "u1")], "a1", fence, {
+    const live = new Map<string, unknown[]>([["/a-child.jsonl", childEntries(0.2)], ["/b-child.jsonl", childEntries(9)]]);
+    const resolved = cache.resolve(emptySnapshot("/a.jsonl"), runs, (path) => live.get(path));
+    expect(resolved.sources).toHaveLength(1);
+    expect(resolved.coverage).toEqual({ knownChildren: 1, includedChildren: 1, unavailableChildren: 0 });
+    const parent = [user("u1", null), assistant("a1", "u1")];
+    const snapshot = computeLiveTelemetry(TelemetryFold.create(), parent, "a1", fence, {
       overlay: liveOverlay(state()),
-      children: sources,
+      children: resolved,
     });
     expect(snapshot.spend?.api?.totals.cost).toBeCloseTo(0.21);
   });
 
-  it("asked about a child, merges only runs beneath it", () => {
-    const grand = [
-      { type: "message", id: "u", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: "g" } },
-      {
-        type: "message",
-        id: "a",
-        parentId: "u",
-        timestamp: "2026-01-01T00:00:01.000Z",
-        message: {
-          role: "assistant",
-          provider: "anthropic",
-          model: "claude",
-          content: [{ type: "text", text: "ok" }],
-          usage: { input: 3, output: 1, totalTokens: 4, cost: { total: 0.03 } },
-        },
-      },
-    ];
-    const sibling = [
-      { type: "message", id: "u", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: "s" } },
-      {
-        type: "message",
-        id: "a",
-        parentId: "u",
-        timestamp: "2026-01-01T00:00:01.000Z",
-        message: {
-          role: "assistant",
-          provider: "anthropic",
-          model: "claude",
-          content: [{ type: "text", text: "ok" }],
-          usage: { input: 50, output: 10, totalTokens: 60, cost: { total: 5 } },
-        },
-      },
-    ];
+  it("asked about a child, overlays only its grandchild", () => {
+    const cache = new ChildTelemetryCache();
     const runs = [
-      run({ runId: "c", sessionPath: "/a-child.jsonl", rootSessionPath: "/a.jsonl" }),
-      run({ runId: "g", sessionPath: "/a-grand.jsonl", rootSessionPath: "/a.jsonl", parent: { sessionPath: "/a-child.jsonl", sessionId: "c" }, depth: 2 }),
-      run({ runId: "s", sessionPath: "/a-sib.jsonl", rootSessionPath: "/a.jsonl" }),
+      run({ runId: "c", sessionPath: "/a-child.jsonl", rootSessionPath: "/a.jsonl", status: "running" }),
+      run({ runId: "g", sessionPath: "/a-grand.jsonl", rootSessionPath: "/a.jsonl", parent: { sessionPath: "/a-child.jsonl", sessionId: "c" }, depth: 2, status: "running" }),
+      run({ runId: "s", sessionPath: "/a-sib.jsonl", rootSessionPath: "/a.jsonl", status: "running" }),
     ];
-    const live = new Map<string, unknown[]>([["/a-grand.jsonl", grand], ["/a-sib.jsonl", sibling]]);
-    const sources = childSources("/a-child.jsonl", runs, (path) => live.get(path));
-    expect(sources).toHaveLength(1);
-    expect(sources[0]?.fold?.api.cost).toBeCloseTo(0.03);
+    const live = new Map<string, unknown[]>([["/a-grand.jsonl", childEntries(0.03)], ["/a-sib.jsonl", childEntries(5)]]);
+    const resolved = cache.resolve(emptySnapshot("/a-child.jsonl"), runs, (path) => live.get(path));
+    expect(resolved.sources.map((source) => source.sessionPath)).toEqual(["/a-grand.jsonl"]);
+    expect(resolved.sources[0]?.spend?.api.cost).toBeCloseTo(0.03);
   });
 
-  it("holds a fold per child path instead of re-reading the file every call", () => {
-    const dir = mkdtempSync(join(tmpdir(), "child-fold-"));
-    try {
-      const path = join(dir, "child.jsonl");
-      writeFileSync(path, [
-        JSON.stringify({ type: "session", version: 3, id: "c", cwd: "/p" }),
-        JSON.stringify({ type: "message", id: "u", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: "hi" } }),
-        JSON.stringify({
-          type: "message",
-          id: "a",
-          parentId: "u",
-          timestamp: "2026-01-01T00:00:01.000Z",
-          message: {
-            role: "assistant",
-            provider: "anthropic",
-            model: "claude",
-            content: [{ type: "text", text: "ok" }],
-            usage: { input: 4, output: 2, totalTokens: 6, cost: { total: 0.01 } },
-          },
-        }),
-      ].join("\n") + "\n");
-      const cache = new ChildTelemetryCache();
-      const runs = [run({ runId: "c", sessionPath: path, rootSessionPath: "/root.jsonl" })];
-      const first = cache.sources("/root.jsonl", runs, () => undefined);
-      const second = cache.sources("/root.jsonl", runs, () => undefined);
-      expect(first[0]?.fold?.records).toBe(2);
-      expect(second[0]?.fold?.records).toBe(2);
-      expect(first[0]?.fold).toEqual(second[0]?.fold);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it("rejects an older baseline after a newer dirty generation", () => {
+    const cache = new ChildTelemetryCache();
+    expect(cache.apply(emptySnapshot("/root.jsonl", 2))).toEqual({ applied: true, generation: 2 });
+    expect(cache.invalidate("/root.jsonl", 4)).toBe(4);
+    expect(cache.apply(emptySnapshot("/root.jsonl", 3))).toEqual({ applied: false, generation: 4 });
+    expect(cache.streaming("/root.jsonl", [], () => undefined)).toBeUndefined();
+    expect(cache.apply(emptySnapshot("/root.jsonl", 4))).toEqual({ applied: true, generation: 4 });
+    expect(cache.streaming("/root.jsonl", [], () => undefined)?.coverage).toEqual({
+      knownChildren: 0,
+      includedChildren: 0,
+      unavailableChildren: 0,
+    });
+  });
+
+  it("keeps an incomplete host membership baseline conservative for unknown live paths", () => {
+    const cache = new ChildTelemetryCache();
+    const snapshot: TelemetryChildSpendSnapshot = {
+      scopeSessionPath: "/root.jsonl",
+      generation: 1,
+      sources: [spendSource("/serialized.jsonl", 0.2)],
+      coverage: { knownChildren: 2, includedChildren: 1, unavailableChildren: 1 },
+    };
+    const runs = [
+      run({ runId: "omitted", sessionPath: "/omitted.jsonl", rootSessionPath: "/root.jsonl", status: "running" }),
+      run({ runId: "new", sessionPath: "/new.jsonl", rootSessionPath: "/root.jsonl", status: "running" }),
+    ];
+    const live = new Map<string, unknown[]>([
+      ["/omitted.jsonl", childEntries(4)],
+      ["/new.jsonl", childEntries(8)],
+    ]);
+
+    const resolved = cache.resolve(snapshot, runs, (path) => live.get(path));
+
+    expect(resolved.sources.map((source) => source.sessionPath)).toEqual(["/serialized.jsonl"]);
+    expect(resolved.coverage).toEqual({ knownChildren: 2, includedChildren: 1, unavailableChildren: 1 });
+    expectStrictSnapshot(snapshot, resolved);
+  });
+
+  it("keeps live overlays inside source, model-line, and encoded snapshot bounds", () => {
+    const root = "/root.jsonl";
+    const sourceBounded = new ChildTelemetryCache({ sources: 1 });
+    const sourceBaseline: TelemetryChildSpendSnapshot = {
+      scopeSessionPath: root,
+      generation: 1,
+      sources: [{ sessionPath: "/known.jsonl" }],
+      coverage: { knownChildren: 1, includedChildren: 0, unavailableChildren: 1 },
+    };
+    const sourceResolved = sourceBounded.resolve(sourceBaseline, [
+      run({ runId: "new", sessionPath: "/new.jsonl", rootSessionPath: root, status: "running" }),
+    ], () => childEntries(5));
+    expect(sourceResolved.sources).toEqual(sourceBaseline.sources);
+    expect(sourceResolved.coverage).toEqual({ knownChildren: 2, includedChildren: 0, unavailableChildren: 2 });
+    expectStrictSnapshot(sourceBaseline, sourceResolved);
+
+    const modelBounded = new ChildTelemetryCache({ modelLines: 1 });
+    const unavailableBaseline: TelemetryChildSpendSnapshot = {
+      scopeSessionPath: root,
+      generation: 2,
+      sources: [{ sessionPath: "/child.jsonl" }],
+      coverage: { knownChildren: 1, includedChildren: 0, unavailableChildren: 1 },
+    };
+    const twoModels = [...childEntries(1, "claude", "-one"), ...childEntries(2, "gemini", "-two")];
+    const modelResolved = modelBounded.resolve(unavailableBaseline, [
+      run({ runId: "child", sessionPath: "/child.jsonl", rootSessionPath: root, status: "running" }),
+    ], () => twoModels);
+    expect(modelResolved.sources).toEqual(unavailableBaseline.sources);
+    expect(modelResolved.coverage).toEqual({ knownChildren: 1, includedChildren: 0, unavailableChildren: 1 });
+    expectStrictSnapshot(unavailableBaseline, modelResolved);
+
+    const staleBaseline: TelemetryChildSpendSnapshot = {
+      scopeSessionPath: root,
+      generation: 3,
+      sources: [spendSource("/child.jsonl", 0.1)],
+      coverage: { knownChildren: 1, includedChildren: 1, unavailableChildren: 0 },
+    };
+    const byteBudget = new TextEncoder().encode(JSON.stringify(staleBaseline)).byteLength;
+    const byteBounded = new ChildTelemetryCache({ bytes: byteBudget });
+    const byteResolved = byteBounded.resolve(staleBaseline, [
+      run({ runId: "child", sessionPath: "/child.jsonl", rootSessionPath: root, status: "running" }),
+    ], () => childEntries(9, "model-name-that-makes-the-live-replacement-larger"));
+    expect(byteResolved.sources).toEqual([{ sessionPath: "/child.jsonl" }]);
+    expect(byteResolved.coverage).toEqual({ knownChildren: 1, includedChildren: 0, unavailableChildren: 1 });
+    expect(new TextEncoder().encode(JSON.stringify({
+      ...staleBaseline,
+      sources: byteResolved.sources,
+      coverage: byteResolved.coverage,
+    })).byteLength).toBeLessThanOrEqual(byteBudget);
+    expectStrictSnapshot(staleBaseline, byteResolved);
+  });
+
+  it("replaces one unavailable canonical child once across duplicate active runs", () => {
+    const cache = new ChildTelemetryCache();
+    const snapshot: TelemetryChildSpendSnapshot = {
+      scopeSessionPath: "/root.jsonl",
+      generation: 1,
+      sources: [{ sessionPath: "/child.jsonl", model: "anthropic/claude" }],
+      coverage: { knownChildren: 1, includedChildren: 0, unavailableChildren: 1 },
+    };
+    const runs = [
+      run({ runId: "one", sessionPath: "/child.jsonl", rootSessionPath: "/root.jsonl", status: "running" }),
+      run({ runId: "two", sessionPath: "/child.jsonl", rootSessionPath: "/root.jsonl", status: "needs_input" }),
+    ];
+    const first = cache.resolve(snapshot, runs, () => childEntries(0.4));
+    const second = cache.resolve(snapshot, runs, () => childEntries(0.4));
+    expect(first.sources).toHaveLength(1);
+    expect(first.coverage).toEqual({ knownChildren: 1, includedChildren: 1, unavailableChildren: 0 });
+    expect(second.sources[0]?.spend).toEqual(first.sources[0]?.spend);
+
+    const durableFold = TelemetryFold.create();
+    durableFold.ingest(childEntries(0.4));
+    const newer: TelemetryChildSpendSnapshot = {
+      scopeSessionPath: "/root.jsonl",
+      generation: 2,
+      sources: [{ sessionPath: "/child.jsonl", spend: childSpendFoldOf(durableFold.state) }],
+      coverage: { knownChildren: 1, includedChildren: 1, unavailableChildren: 0 },
+    };
+    cache.apply(newer);
+    const terminal = runs.map((item) => ({ ...item, status: "completed" as const }));
+    const settled = cache.streaming("/root.jsonl", terminal, () => childEntries(9));
+    expect(settled?.sources[0]?.spend?.api.cost).toBeCloseTo(0.4);
   });
 });

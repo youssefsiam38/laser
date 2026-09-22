@@ -7,7 +7,7 @@ import { AgentRunRegistry } from "../src/agents/runs.js";
 import { SessionIndexCache } from "../src/session-index.js";
 import { SessionRevisions } from "../src/session-revision.js";
 import { SessionTelemetryReader } from "../src/session-telemetry.js";
-import { childSources, computeLiveTelemetry } from "../../worker/src/telemetry.js";
+import { computeLiveTelemetry } from "../../worker/src/telemetry.js";
 
 const ENVIRONMENT = "11111111-2222-3333-4444-555555555555";
 const CWD = "/project";
@@ -82,7 +82,7 @@ describe("durable telemetry", () => {
         revision: durable.result.revision,
         environmentKey: durable.result.environmentKey,
         authority: "live",
-      });
+      }, { coverage: { knownChildren: 0, includedChildren: 0, unavailableChildren: 0 } });
       const { authority: _da, ...durableBody } = durable.result;
       const { authority: _la, ...liveBody } = live;
       expect(liveBody).toEqual(durableBody);
@@ -220,6 +220,64 @@ function runAt(sessionPath: string, root: string, runId: string): AgentRun {
 }
 
 describe("live and durable authorities", () => {
+  it("keeps overflow explicit under independent child-source bounds", async () => {
+    const { dir, cleanup } = workspace();
+    const registry = new AgentRunRegistry({ now: () => new Date("2026-01-02T00:00:00.000Z") });
+    try {
+      const parent = longSession(dir, 1);
+      const paths = [childFile(dir, "one.jsonl", 1), childFile(dir, "two.jsonl", 2), childFile(dir, "three.jsonl", 3)];
+      registry.upsert({ ...runAt(paths[0]!, parent, "one"), status: "running" });
+      registry.upsert(runAt(paths[1]!, parent, "two"));
+      registry.upsert(runAt(paths[2]!, parent, "three"));
+      let folded = 0;
+      const index = new SessionIndexCache();
+      const revisions = new SessionRevisions({ index, environmentId: ENVIRONMENT });
+      const reader = new SessionTelemetryReader({
+        index,
+        revisions,
+        runs: registry,
+        childLimits: { sources: 1 },
+        onChildFold: () => { folded += 1; },
+      });
+      const answer = await reader.read(parent, { path: parent, include: ["spend"] });
+      expect(answer.kind).toBe("answer");
+      if (answer.kind !== "answer") return;
+      expect(answer.result.spend?.coverage).toEqual({ knownChildren: 3, includedChildren: 1, unavailableChildren: 2 });
+      expect(answer.result.spend?.api?.totals.cost).toBeCloseTo(1.01);
+      expect(folded).toBe(1);
+
+      const noBytes = new SessionTelemetryReader({ index, revisions, runs: registry, childLimits: { bytes: 1 } });
+      const bounded = await noBytes.read(parent, { path: parent, include: ["spend"] });
+      expect(bounded.kind).toBe("answer");
+      if (bounded.kind === "answer") {
+        expect(bounded.result.spend?.coverage).toEqual({ knownChildren: 3, includedChildren: 0, unavailableChildren: 3 });
+      }
+
+      const multiModel = childFile(dir, "multi.jsonl", 4);
+      appendFileSync(multiModel, [
+        JSON.stringify({ type: "message", id: "u2", parentId: "a", timestamp: "2026-01-01T00:00:03.000Z", message: { role: "user", content: "again" } }),
+        JSON.stringify({
+          type: "message", id: "a2", parentId: "u2", timestamp: "2026-01-01T00:00:04.000Z",
+          message: {
+            role: "assistant", provider: "google", model: "gemini", content: [{ type: "text", text: "ok" }],
+            usage: { input: 8, output: 2, totalTokens: 10, cost: { total: 5 } },
+          },
+        }),
+      ].join("\n") + "\n");
+      registry.upsert(runAt(multiModel, parent, "multi"));
+      const oneModel = new SessionTelemetryReader({ index, revisions, runs: registry, childLimits: { modelLines: 1 } });
+      const modelBounded = await oneModel.read(parent, { path: parent, include: ["spend"] });
+      expect(modelBounded.kind).toBe("answer");
+      if (modelBounded.kind === "answer") {
+        expect(modelBounded.result.spend?.coverage).toEqual({ knownChildren: 4, includedChildren: 3, unavailableChildren: 1 });
+        expect(modelBounded.result.spend?.api?.totals.cost).toBeCloseTo(6.01);
+      }
+    } finally {
+      registry.close();
+      cleanup();
+    }
+  });
+
   it("agree on a compacted parent with two child runs", async () => {
     const { dir, cleanup } = workspace();
     const registry = new AgentRunRegistry({ now: () => new Date("2026-01-02T00:00:00.000Z") });
@@ -251,12 +309,13 @@ describe("live and durable authorities", () => {
       if (durable.kind !== "answer") return;
 
       const fold = TelemetryFold.create();
+      const childSnapshot = await reader.childSnapshot(parent, 1);
       const live = computeLiveTelemetry(fold, entriesOf(parent), "c1", {
         revision: durable.result.revision,
         environmentKey: durable.result.environmentKey,
       }, {
         overlay: {},
-        children: childSources(parent, registry.list(parent), (path) => entriesOf(path)),
+        children: { sources: childSnapshot.sources, coverage: childSnapshot.coverage },
       });
       expect(stripLiveOnly(live)).toEqual(stripLiveOnly(durable.result));
       expect(durable.result.history?.compactions).toBe(1);

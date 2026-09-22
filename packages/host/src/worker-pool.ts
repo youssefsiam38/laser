@@ -102,6 +102,9 @@ export interface WorkerPoolOptions {
   onWorkerLoss?: (loss: { cwd: string; generation: string; exit: WorkerExit; message: string }) => void;
   /** After the successor has reopened every canonical session it could. */
   onReopened?: (client: WorkerClient, cwd: string, paths: readonly string[]) => Promise<void>;
+  /** Session-scoped caches leave with the runtime, not with the worker process. */
+  onSessionForgotten?: (path: string) => void;
+  onSessionRekey?: (oldPath: string, newPath: string) => void;
   onStderr?: (cwd: string, text: string) => void;
   /** Called for every lifecycle change, after the notification is sent. */
   onStatus?: (info: WorkerInfo) => void;
@@ -671,6 +674,7 @@ export class WorkerPool {
    * to move: nothing here may reopen it after a restart or route to it again.
    */
   forgetSession(path: string): void {
+    this.options.onSessionForgotten?.(path);
     const cwd = this.sessionCwd.get(path);
     this.sessionCwd.delete(path);
     this.sessionActivity.delete(path);
@@ -819,6 +823,7 @@ export class WorkerPool {
     }
     // A collision means the destination is already known — the fork landed on
     // a path this worker serves. One row wins, and it is the new one.
+    this.options.onSessionRekey?.(oldPath, newPath);
     this.bindSession(newPath, key);
     if (activity !== undefined) this.sessionActivity.set(newPath, activity);
   }

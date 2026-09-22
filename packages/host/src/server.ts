@@ -75,6 +75,7 @@ import { SessionIndexCache } from "./session-index.js";
 import { SessionProjection } from "./session-projection.js";
 import { SessionBodyRange } from "./session-body-range.js";
 import { SessionTelemetryReader } from "./session-telemetry.js";
+import { SessionTelemetryCoordinator } from "./session-telemetry-coordinator.js";
 import { SessionRevisions } from "./session-revision.js";
 import { environmentIdentity, type EnvironmentIdentity } from "./environment-identity.js";
 import { ViewCache } from "./views.js";
@@ -219,6 +220,8 @@ export interface HostRelayDevice {
 
 /** Update kinds after which Pi may have appended to the session file. */
 const PERSISTING_UPDATES = new Set(["message_end", "compaction_end", "entry_appended", "agent_end", "agent_settled"]);
+/** Persisted child signals only; synthetic telemetry `state` updates must not recurse. */
+const TELEMETRY_CHILD_CHANGE_KINDS = new Set(["message_end", "tool_execution_end", "compaction_end", "agent_settled", "entry_appended"]);
 
 /**
  * The stamp that makes the D-347 naming carry a once-ever migration, beside
@@ -294,6 +297,7 @@ export class HostServer {
   /** Bounded, read-only slices of one body of one stored entry (RP-5b). */
   readonly bodyRange: SessionBodyRange;
   readonly telemetry: SessionTelemetryReader;
+  readonly telemetryCoordinator: SessionTelemetryCoordinator;
   /** M4 log store, or undefined when it could not be opened (see `logsUnavailable`). */
   readonly logs: LogStore | undefined;
   readonly logsUnavailable: string | undefined;
@@ -776,7 +780,7 @@ export class HostServer {
       },
       onNotification: (cwd, n, source) => {
         this.observe(cwd, n, source);
-        this.broadcast(n);
+        this.broadcast(this.telemetryCoordinator.withoutStaleTelemetry(n));
       },
       // The project-work bridge, and nothing else (M21-T17, D-356.b). The
       // worker's model tools reach the host's own authority here; the
@@ -813,12 +817,19 @@ export class HostServer {
       onWorkerGone: ({ cwd, generation }) => {
         this.captures.generationGone(generation);
         this.memoryPressure.forgetWorker(cwd, generation);
+        this.telemetryCoordinator.forgetWorker(generation);
       },
       onWorkerLoss: ({ cwd, message }) => {
         const changed = this.runs.workerLost(cwd, message);
+        for (const run of changed) this.telemetryCoordinator.childChanged(run.sessionPath);
         this.agentFailureRecovery.note(cwd, changed);
       },
       onReopened: (client, cwd, paths) => this.agentFailureRecovery.deliver(client, cwd, paths),
+      onSessionForgotten: (path) => {
+        this.telemetryCoordinator.childChanged(path);
+        this.telemetryCoordinator.forgetScope(path);
+      },
+      onSessionRekey: (oldPath, newPath) => this.telemetryCoordinator.rekey(oldPath, newPath),
       onStderr: (cwd, text) => {
         const safe = this.privateLogText(text);
         this.log(`[worker ${cwd}] ${safe.trimEnd()}`);
@@ -876,6 +887,11 @@ export class HostServer {
       },
     };
     this.pool = new WorkerPool(poolOptions);
+    this.telemetryCoordinator = new SessionTelemetryCoordinator({
+      reader: this.telemetry,
+      runs: this.runs,
+      owner: (path) => this.pool.ownerOfSession(path),
+    });
     // Runtime lifetime, ahead of worker retirement (RP-4). Membership is read,
     // never written: `holders` is RP-6's one authority on who is following what.
     this.sessionLifetime = new SessionLifetime(
@@ -930,6 +946,7 @@ export class HostServer {
       projection: this.projection,
       bodyRange: this.bodyRange,
       telemetry: this.telemetry,
+      telemetryCoordinator: this.telemetryCoordinator,
       access: this.access,
       audit: this.audit,
       routeLeases: this.routeLeases,
@@ -1088,6 +1105,7 @@ export class HostServer {
     this.pendingLogRows = [];
     this.audit.close();
     this.logs?.close();
+    this.telemetryCoordinator.close();
     this.projectWork?.close();
     this.projects.close();
     this.attention.close();
@@ -1189,6 +1207,9 @@ export class HostServer {
           this.catalog.invalidate(params.sessionPath);
           this.revisions.invalidate(params.sessionPath);
         }
+        if (params.telemetryGeneration === undefined && TELEMETRY_CHILD_CHANGE_KINDS.has(params.update.kind)) {
+          this.telemetryCoordinator.childChanged(params.sessionPath);
+        }
         return;
       }
       case "pi/ui/request": {
@@ -1263,6 +1284,7 @@ export class HostServer {
         const before = this.runs.get(run.runId);
         const stored = this.runs.upsert(run);
         if (before?.status !== stored.status) this.logs?.observeAgentRun(stored);
+        this.telemetryCoordinator.childChanged(stored.sessionPath);
         return;
       }
       case "pi/providers/login/event": {
