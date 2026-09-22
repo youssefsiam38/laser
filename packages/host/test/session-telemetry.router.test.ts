@@ -64,10 +64,13 @@ function harness(options: { path: string; open?: string[]; liveResult?: unknown 
     }
     return options.liveResult;
   };
-  const owner = options.open?.includes(options.path)
-    ? { generation: "worker-1", request }
-    : undefined;
-  const spawned = vi.fn(async () => ({ generation: "worker-2", request }));
+  const liveWorker = { generation: "worker-1", request };
+  const spawnedWorker = { generation: "worker-2", request };
+  let owner = options.open?.includes(options.path) ? liveWorker : undefined;
+  const spawned = vi.fn(async () => {
+    owner = spawnedWorker;
+    return spawnedWorker;
+  });
   const pool = {
     openSessions: () => options.open ?? [],
     ownerOfSession: (path: string) => (path === options.path ? owner : undefined),

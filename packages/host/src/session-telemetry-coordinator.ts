@@ -14,6 +14,7 @@ import type { WorkerClient } from "./worker-client.js";
 
 interface ScopeState {
   nextGeneration: number;
+  acceptedGeneration: number;
   dirtyGeneration?: number;
   ownerGeneration: string;
   knownPaths: Set<string>;
@@ -62,6 +63,7 @@ export class SessionTelemetryCoordinator {
     const state = this.scope(params.path, worker);
     const generation = ++state.nextGeneration;
     const snapshot = await this.options.reader.childSnapshot(params.path, generation);
+    if (!this.isCurrent(params.path, state, worker)) throw scopeChanged();
     const publishIfWanted = state.dirtyGeneration !== undefined && generation >= state.dirtyGeneration;
     const answer = await worker.request<WithSourcesResult>("pi/session/telemetry/with-sources", {
       ...params,
@@ -69,7 +71,7 @@ export class SessionTelemetryCoordinator {
       subscribe: true,
       ...(publishIfWanted ? { publishIfWanted: true } : {}),
     });
-    this.accept(params.path, worker, snapshot, answer);
+    this.accept(params.path, state, worker, snapshot, answer);
     return answer.telemetry;
   }
 
@@ -152,6 +154,7 @@ export class SessionTelemetryCoordinator {
     if (existing?.timer) clearTimeout(existing.timer);
     const created: ScopeState = {
       nextGeneration: existing?.nextGeneration ?? 0,
+      acceptedGeneration: existing?.acceptedGeneration ?? -1,
       ownerGeneration: worker.generation,
       knownPaths: new Set<string>(),
     };
@@ -203,7 +206,7 @@ export class SessionTelemetryCoordinator {
         subscribe: false,
         publishIfWanted: true,
       });
-      this.accept(path, worker, snapshot, answer);
+      this.accept(path, state, worker, snapshot, answer);
     } catch {
       // A dead generation cannot publish through its successor. The next
       // signal or public read rebuilds; failures never create a retry loop.
@@ -216,15 +219,23 @@ export class SessionTelemetryCoordinator {
     }
   }
 
+  private isCurrent(path: string, state: ScopeState, worker: WorkerClient): boolean {
+    return this.scopes.get(path) === state
+      && state.ownerGeneration === worker.generation
+      && this.options.owner(path) === worker;
+  }
+
   private accept(
     path: string,
+    state: ScopeState,
     worker: WorkerClient,
     snapshot: TelemetryChildSpendSnapshot,
     answer: WithSourcesResult,
   ): void {
-    const state = this.scopes.get(path);
-    if (!state || state.ownerGeneration !== worker.generation) return;
+    if (!this.isCurrent(path, state, worker)) return;
     if (!answer.applied || answer.generation !== snapshot.generation) return;
+    if (snapshot.generation <= state.acceptedGeneration) return;
+    state.acceptedGeneration = snapshot.generation;
     state.knownPaths = new Set(snapshot.sources.map((source) => source.sessionPath));
     if (state.dirtyGeneration !== undefined && snapshot.generation >= state.dirtyGeneration) {
       delete state.dirtyGeneration;
@@ -234,4 +245,11 @@ export class SessionTelemetryCoordinator {
       }
     }
   }
+}
+
+function scopeChanged(): ProtocolError {
+  return new ProtocolError(
+    ErrorCodes.RevisionUnavailable,
+    "This conversation moved while its spend was being read. Open it again and try once more.",
+  );
 }

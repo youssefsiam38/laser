@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TelemetryFold, childSpendFoldOf } from "@lasercode/protocol";
+import { TelemetryFold, childSpendFoldOf, clientParamsSchemas } from "@lasercode/protocol";
 import type { AgentRun, SessionState, TelemetryChildSpendSnapshot } from "@lasercode/protocol";
 import { ChildTelemetryCache, computeLiveTelemetry, liveOverlay, telemetryUpdateKind } from "../src/telemetry.js";
 
@@ -88,16 +88,34 @@ function run(partial: Partial<AgentRun> & Pick<AgentRun, "runId" | "sessionPath"
   };
 }
 
-const childEntries = (cost: number) => [
-  user("c-u", null),
+const childEntries = (cost: number, model = "claude", suffix = "") => [
+  user(`c-u${suffix}`, null),
   {
-    ...assistant("c-a", "c-u"),
+    ...assistant(`c-a${suffix}`, `c-u${suffix}`),
     message: {
-      ...assistant("c-a", "c-u").message,
+      ...assistant(`c-a${suffix}`, `c-u${suffix}`).message,
+      model,
       usage: { input: 8, output: 2, totalTokens: 10, cost: { total: cost } },
     },
   },
 ];
+
+function spendSource(path: string, cost: number) {
+  const fold = TelemetryFold.create();
+  fold.ingest(childEntries(cost));
+  return { sessionPath: path, spend: childSpendFoldOf(fold.state) };
+}
+
+function expectStrictSnapshot(
+  baseline: TelemetryChildSpendSnapshot,
+  resolved: ReturnType<ChildTelemetryCache["resolve"]>,
+) {
+  expect(clientParamsSchemas["pi/session/telemetry/with-sources"].safeParse({
+    path: baseline.scopeSessionPath,
+    snapshot: { ...baseline, sources: resolved.sources, coverage: resolved.coverage },
+    subscribe: true,
+  }).success).toBe(true);
+}
 
 const emptySnapshot = (path: string, generation = 1): TelemetryChildSpendSnapshot => ({
   scopeSessionPath: path,
@@ -150,6 +168,82 @@ describe("host baseline plus live child overlay", () => {
       includedChildren: 0,
       unavailableChildren: 0,
     });
+  });
+
+  it("keeps an incomplete host membership baseline conservative for unknown live paths", () => {
+    const cache = new ChildTelemetryCache();
+    const snapshot: TelemetryChildSpendSnapshot = {
+      scopeSessionPath: "/root.jsonl",
+      generation: 1,
+      sources: [spendSource("/serialized.jsonl", 0.2)],
+      coverage: { knownChildren: 2, includedChildren: 1, unavailableChildren: 1 },
+    };
+    const runs = [
+      run({ runId: "omitted", sessionPath: "/omitted.jsonl", rootSessionPath: "/root.jsonl", status: "running" }),
+      run({ runId: "new", sessionPath: "/new.jsonl", rootSessionPath: "/root.jsonl", status: "running" }),
+    ];
+    const live = new Map<string, unknown[]>([
+      ["/omitted.jsonl", childEntries(4)],
+      ["/new.jsonl", childEntries(8)],
+    ]);
+
+    const resolved = cache.resolve(snapshot, runs, (path) => live.get(path));
+
+    expect(resolved.sources.map((source) => source.sessionPath)).toEqual(["/serialized.jsonl"]);
+    expect(resolved.coverage).toEqual({ knownChildren: 2, includedChildren: 1, unavailableChildren: 1 });
+    expectStrictSnapshot(snapshot, resolved);
+  });
+
+  it("keeps live overlays inside source, model-line, and encoded snapshot bounds", () => {
+    const root = "/root.jsonl";
+    const sourceBounded = new ChildTelemetryCache({ sources: 1 });
+    const sourceBaseline: TelemetryChildSpendSnapshot = {
+      scopeSessionPath: root,
+      generation: 1,
+      sources: [{ sessionPath: "/known.jsonl" }],
+      coverage: { knownChildren: 1, includedChildren: 0, unavailableChildren: 1 },
+    };
+    const sourceResolved = sourceBounded.resolve(sourceBaseline, [
+      run({ runId: "new", sessionPath: "/new.jsonl", rootSessionPath: root, status: "running" }),
+    ], () => childEntries(5));
+    expect(sourceResolved.sources).toEqual(sourceBaseline.sources);
+    expect(sourceResolved.coverage).toEqual({ knownChildren: 2, includedChildren: 0, unavailableChildren: 2 });
+    expectStrictSnapshot(sourceBaseline, sourceResolved);
+
+    const modelBounded = new ChildTelemetryCache({ modelLines: 1 });
+    const unavailableBaseline: TelemetryChildSpendSnapshot = {
+      scopeSessionPath: root,
+      generation: 2,
+      sources: [{ sessionPath: "/child.jsonl" }],
+      coverage: { knownChildren: 1, includedChildren: 0, unavailableChildren: 1 },
+    };
+    const twoModels = [...childEntries(1, "claude", "-one"), ...childEntries(2, "gemini", "-two")];
+    const modelResolved = modelBounded.resolve(unavailableBaseline, [
+      run({ runId: "child", sessionPath: "/child.jsonl", rootSessionPath: root, status: "running" }),
+    ], () => twoModels);
+    expect(modelResolved.sources).toEqual(unavailableBaseline.sources);
+    expect(modelResolved.coverage).toEqual({ knownChildren: 1, includedChildren: 0, unavailableChildren: 1 });
+    expectStrictSnapshot(unavailableBaseline, modelResolved);
+
+    const staleBaseline: TelemetryChildSpendSnapshot = {
+      scopeSessionPath: root,
+      generation: 3,
+      sources: [spendSource("/child.jsonl", 0.1)],
+      coverage: { knownChildren: 1, includedChildren: 1, unavailableChildren: 0 },
+    };
+    const byteBudget = new TextEncoder().encode(JSON.stringify(staleBaseline)).byteLength;
+    const byteBounded = new ChildTelemetryCache({ bytes: byteBudget });
+    const byteResolved = byteBounded.resolve(staleBaseline, [
+      run({ runId: "child", sessionPath: "/child.jsonl", rootSessionPath: root, status: "running" }),
+    ], () => childEntries(9, "model-name-that-makes-the-live-replacement-larger"));
+    expect(byteResolved.sources).toEqual([{ sessionPath: "/child.jsonl" }]);
+    expect(byteResolved.coverage).toEqual({ knownChildren: 1, includedChildren: 0, unavailableChildren: 1 });
+    expect(new TextEncoder().encode(JSON.stringify({
+      ...staleBaseline,
+      sources: byteResolved.sources,
+      coverage: byteResolved.coverage,
+    })).byteLength).toBeLessThanOrEqual(byteBudget);
+    expectStrictSnapshot(staleBaseline, byteResolved);
   });
 
   it("replaces one unavailable canonical child once across duplicate active runs", () => {

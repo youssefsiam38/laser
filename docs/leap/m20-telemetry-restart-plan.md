@@ -182,6 +182,14 @@ Required copy behavior:
 
 Complete coverage keeps today's compact “None”, “Account”, and no-API states.
 
+## Pre-review correction checkpoint
+
+- Treat `coverage.knownChildren === sources.length` as the only proof that serialized paths cover canonical membership. When it is false, an active live path absent from `sources` is not added or counted again; the response keeps the host's partial baseline until a rebuild can prioritize that path. When it is true, a genuinely new distinct live child may be added once. A serialized unavailable path may always be filled by its matching live fold.
+- Apply the same source-count, distinct-model-line, and full encoded-snapshot byte limits after every live replacement/addition. A replacement that cannot fit becomes the same serialized path with no spend and coverage moves from included to unavailable; a new path that cannot fit increments known/unavailable once and remains unserialized. Never retain stale canonical spend after choosing a live replacement.
+- Fence coordinator acceptance by both scope object identity and monotonically increasing accepted generation. Recheck scope identity and current worker ownership after an asynchronous source build and before send; a delayed settlement can answer its already-valid request but cannot mutate newer interest.
+
+This deliberately leaves an active child omitted from an already partial membership snapshot as a temporary partial subtotal. It adds no unbounded path list, hash membership approximation, second registry, global lock, or polling.
+
 ## Production call flow
 
 ### Public whole-session spend read
@@ -295,3 +303,21 @@ Focused validation after implementation:
 - UI production build passed with the repository's existing CSS/chunk warnings.
 
 Additional package evidence: the full protocol suite passed (778 tests). The full worker suite produced one unrelated timing-sensitive MCP authorization failure; its isolated retry passed 56/56. Broad host/UI runs were attempted concurrently and were invalidated by process saturation plus newly exhaustive policy/capability inventories; the directly affected inventories were corrected and all focused reruns pass. `pnpm verify` remains parent-owned as approved.
+
+## Pre-review correction evidence
+
+The correction regressions were red on merged `949dd49f` after rebuilding protocol output:
+
+- worker overlay test: 2 failed / 6 passed — a partial membership snapshot added both absent live paths, and an injected source cap was bypassed;
+- host coordinator test: 3 failed / 2 passed — a delayed acknowledgement regressed membership, a build still sent after scope/owner loss, and a settled old request mutated recreated interest.
+
+After the correction:
+
+- `pnpm install --frozen-lockfile`: lockfile current, no changes;
+- protocol build plus telemetry/schema/policy tests: 72/72 passed, no type errors;
+- worker build plus telemetry/dispatch tests: 10/10 passed;
+- host build plus telemetry/coordinator/router/access/real restart tests: 48/48 passed; the production `HostServer` + built `WorkerClient` restart case passed;
+- UI test types plus telemetry/capability tests: 39/39 passed; UI typecheck and production build passed with the existing CSS highlight and chunk-size warnings;
+- `pnpm identity:check`: passed.
+
+One focused host run initially exposed that the router fallback test double did not publish the worker it had just spawned through `ownerOfSession`; the double now models production ownership, and the complete 48-test host command passes. The conservative partial-baseline limitation above remains intentional. The parent still owns `pnpm verify`, release validation, and publication.

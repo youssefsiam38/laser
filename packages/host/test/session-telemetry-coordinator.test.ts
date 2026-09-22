@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
-import type {
-  AgentRun,
-  SessionTelemetry,
-  TelemetryChildSpendSnapshot,
+import { describe, expect, it, vi } from "vitest";
+import {
+  ErrorCodes,
+  type AgentRun,
+  type SessionTelemetry,
+  type TelemetryChildSpendSnapshot,
 } from "@lasercode/protocol";
 import { AgentRunRegistry } from "../src/agents/runs.js";
 import { SessionTelemetryCoordinator } from "../src/session-telemetry-coordinator.js";
@@ -15,11 +16,13 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-const snapshot = (path: string, generation: number): TelemetryChildSpendSnapshot => ({
+const snapshot = (path: string, generation: number, childPath?: string): TelemetryChildSpendSnapshot => ({
   scopeSessionPath: path,
   generation,
-  sources: [],
-  coverage: { knownChildren: 0, includedChildren: 0, unavailableChildren: 0 },
+  sources: childPath ? [{ sessionPath: childPath }] : [],
+  coverage: childPath
+    ? { knownChildren: 1, includedChildren: 0, unavailableChildren: 1 }
+    : { knownChildren: 0, includedChildren: 0, unavailableChildren: 0 },
 });
 
 const telemetry = (cost: number): SessionTelemetry => ({
@@ -99,6 +102,124 @@ describe("SessionTelemetryCoordinator", () => {
       expect((await first).spend?.api?.totals.cost).toBe(1);
       expect(requests).toEqual([2, 1]);
       expect(currentGeneration).toBe(2);
+    } finally {
+      coordinator.close();
+      runs.close();
+    }
+  });
+
+  it("does not let a delayed accepted generation regress canonical membership", async () => {
+    const parent = "/parent.jsonl";
+    const replies = new Map<number, ReturnType<typeof deferred<unknown>>>();
+    let invalidations = 0;
+    const reader = {
+      environmentKey: "e1.test",
+      childSnapshot: async (path: string, generation: number) => snapshot(path, generation, generation === 1 ? "/old.jsonl" : "/new.jsonl"),
+    } as unknown as SessionTelemetryReader;
+    const worker = {
+      generation: "worker-1",
+      request: (method: string, params: unknown) => {
+        if (method === "pi/session/telemetry/invalidate") {
+          invalidations += 1;
+          return Promise.resolve({ generation: (params as { generation: number }).generation });
+        }
+        const source = (params as { snapshot: TelemetryChildSpendSnapshot }).snapshot;
+        const gate = deferred<unknown>();
+        replies.set(source.generation, gate);
+        return gate.promise;
+      },
+    } as unknown as WorkerClient;
+    const runs = new AgentRunRegistry();
+    const coordinator = new SessionTelemetryCoordinator({ reader, runs, owner: () => worker, coalesceMs: 1 });
+    try {
+      const first = coordinator.read(worker, { path: parent, include: ["spend"] });
+      const second = coordinator.read(worker, { path: parent, include: ["spend"] });
+      await vi.waitFor(() => expect(replies.size).toBe(2));
+      replies.get(2)!.resolve({ telemetry: telemetry(2), generation: 2, applied: true, published: false });
+      await second;
+      replies.get(1)!.resolve({ telemetry: telemetry(1), generation: 1, applied: true, published: false });
+      await first;
+
+      coordinator.childChanged("/old.jsonl");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(invalidations).toBe(0);
+    } finally {
+      coordinator.close();
+      runs.close();
+    }
+  });
+
+  it("abandons a delayed public build after scope forget, rekey, or owner replacement", async () => {
+    for (const lifecycle of ["forget", "rekey", "replace-owner"] as const) {
+      const parent = "/parent.jsonl";
+      const build = deferred<TelemetryChildSpendSnapshot>();
+      let requests = 0;
+      const reader = {
+        environmentKey: "e1.test",
+        childSnapshot: () => build.promise,
+      } as unknown as SessionTelemetryReader;
+      const oldWorker = {
+        generation: "worker-1",
+        request: async () => {
+          requests += 1;
+          return { telemetry: telemetry(1), generation: 1, applied: true, published: false };
+        },
+      } as unknown as WorkerClient;
+      const newWorker = { ...oldWorker, generation: "worker-2" } as unknown as WorkerClient;
+      let owner: WorkerClient | undefined = oldWorker;
+      const runs = new AgentRunRegistry();
+      const coordinator = new SessionTelemetryCoordinator({ reader, runs, owner: () => owner });
+      try {
+        const pending = coordinator.read(oldWorker, { path: parent, include: ["spend"] });
+        if (lifecycle === "forget") coordinator.forgetScope(parent);
+        if (lifecycle === "rekey") coordinator.rekey(parent, "/moved.jsonl");
+        if (lifecycle === "replace-owner") owner = newWorker;
+        build.resolve(snapshot(parent, 1));
+        await expect(pending).rejects.toMatchObject({ code: ErrorCodes.RevisionUnavailable });
+        expect(requests).toBe(0);
+      } finally {
+        coordinator.close();
+        runs.close();
+      }
+    }
+  });
+
+  it("lets a settled request answer but not mutate interest recreated while it was in flight", async () => {
+    const parent = "/parent.jsonl";
+    const firstReply = deferred<unknown>();
+    let builds = 0;
+    let requests = 0;
+    let invalidations = 0;
+    const reader = {
+      environmentKey: "e1.test",
+      childSnapshot: async (path: string, generation: number) => snapshot(path, generation, ++builds === 1 ? "/old.jsonl" : "/new.jsonl"),
+    } as unknown as SessionTelemetryReader;
+    const worker = {
+      generation: "worker-1",
+      request: (method: string, params: unknown) => {
+        if (method === "pi/session/telemetry/invalidate") {
+          invalidations += 1;
+          return Promise.resolve({ generation: (params as { generation: number }).generation });
+        }
+        requests += 1;
+        const source = (params as { snapshot: TelemetryChildSpendSnapshot }).snapshot;
+        if (requests === 1) return firstReply.promise;
+        return Promise.resolve({ telemetry: telemetry(2), generation: source.generation, applied: true, published: false });
+      },
+    } as unknown as WorkerClient;
+    const runs = new AgentRunRegistry();
+    const coordinator = new SessionTelemetryCoordinator({ reader, runs, owner: () => worker, coalesceMs: 1 });
+    try {
+      const first = coordinator.read(worker, { path: parent, include: ["spend"] });
+      await vi.waitFor(() => expect(requests).toBe(1));
+      coordinator.forgetScope(parent);
+      await coordinator.read(worker, { path: parent, include: ["spend"] });
+      firstReply.resolve({ telemetry: telemetry(1), generation: 1, applied: true, published: false });
+      expect((await first).spend?.api?.totals.cost).toBe(1);
+
+      coordinator.childChanged("/old.jsonl");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(invalidations).toBe(0);
     } finally {
       coordinator.close();
       runs.close();

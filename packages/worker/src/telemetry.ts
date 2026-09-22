@@ -3,6 +3,9 @@
  * from the host; this worker contributes only current-generation live folds.
  */
 import {
+  TELEMETRY_CHILD_MODEL_LINE_MAX,
+  TELEMETRY_CHILD_SNAPSHOT_MAX_BYTES,
+  TELEMETRY_CHILD_SOURCE_MAX,
   TelemetryFold,
   childSpendFoldOf,
   isTerminalRunStatus,
@@ -87,9 +90,17 @@ export interface ResolvedChildSpend {
  * Host-canonical baselines are per interested scope. Live folds are eligible
  * only while their child runtime and nonterminal run both exist.
  */
+export interface ChildTelemetryLimits {
+  sources?: number;
+  modelLines?: number;
+  bytes?: number;
+}
+
 export class ChildTelemetryCache {
   private readonly baselines = new Map<string, Baseline>();
   private readonly liveFolds = new Map<string, TelemetryFold>();
+
+  constructor(private readonly limits: ChildTelemetryLimits = {}) {}
 
   invalidate(path: string, generation: number): number {
     const current = this.baselines.get(path);
@@ -193,10 +204,18 @@ export class ChildTelemetryCache {
   ): ResolvedChildSpend {
     const sources = new Map(snapshot.sources.map((source) => [source.sessionPath, structuredClone(source)]));
     const coverage = { ...snapshot.coverage };
+    const serializedMembershipComplete = snapshot.coverage.knownChildren === snapshot.sources.length;
+    const sourceLimit = this.limits.sources ?? TELEMETRY_CHILD_SOURCE_MAX;
+    const modelLineLimit = this.limits.modelLines ?? TELEMETRY_CHILD_MODEL_LINE_MAX;
+    const byteLimit = this.limits.bytes ?? TELEMETRY_CHILD_SNAPSHOT_MAX_BYTES;
     const seen = new Set<string>();
     for (const run of runsBeneathSession(snapshot.scopeSessionPath, runs)) {
       if (seen.has(run.sessionPath) || isTerminalRunStatus(run.status)) continue;
       seen.add(run.sessionPath);
+      const canonical = sources.get(run.sessionPath);
+      // An absent path in a partial membership snapshot may be a host-known
+      // child omitted by a bound. Adding it would count that child twice.
+      if (!canonical && !serializedMembershipComplete) continue;
       const entries = liveEntries(run.sessionPath);
       if (!entries) continue;
       const fold = this.liveFolds.get(run.sessionPath) ?? TelemetryFold.create();
@@ -208,17 +227,87 @@ export class ChildTelemetryCache {
         ...(model ? { model } : {}),
         spend: childSpendFoldOf(fold.state),
       };
-      const canonical = sources.get(run.sessionPath);
-      if (!canonical) {
-        coverage.knownChildren += 1;
-        coverage.includedChildren += 1;
-      } else if (!canonical.spend) {
-        coverage.includedChildren += 1;
-        coverage.unavailableChildren -= 1;
+      const models = new Set([
+        ...replacement.spend!.byModelAll.map((line) => line.model),
+        ...replacement.spend!.byModelApi.map((line) => line.model),
+      ]);
+
+      if (canonical) {
+        let filledCanonical = false;
+        if (models.size <= modelLineLimit) {
+          sources.set(run.sessionPath, replacement);
+          if (!canonical.spend) {
+            coverage.includedChildren += 1;
+            coverage.unavailableChildren -= 1;
+            filledCanonical = true;
+          }
+          if (encodedSnapshotBytes(snapshot, sources, coverage) <= byteLimit) continue;
+        }
+        // A live source supersedes its durable source. If the replacement does
+        // not fit, retaining the old spend would present stale data as exact.
+        sources.set(run.sessionPath, unavailableSource(canonical));
+        if (canonical.spend || filledCanonical) {
+          coverage.includedChildren -= 1;
+          coverage.unavailableChildren += 1;
+        }
+        continue;
+      }
+
+      coverage.knownChildren += 1;
+      if (models.size > modelLineLimit || sources.size >= sourceLimit) {
+        coverage.unavailableChildren += 1;
+        trimSnapshotToBytes(snapshot, sources, coverage, byteLimit);
+        continue;
       }
       sources.set(run.sessionPath, replacement);
+      coverage.includedChildren += 1;
+      if (encodedSnapshotBytes(snapshot, sources, coverage) <= byteLimit) continue;
+      sources.delete(run.sessionPath);
+      coverage.includedChildren -= 1;
+      coverage.unavailableChildren += 1;
+      trimSnapshotToBytes(snapshot, sources, coverage, byteLimit);
     }
     return { sources: [...sources.values()], coverage };
+  }
+}
+
+function unavailableSource(source: TelemetryChildSpendSource): TelemetryChildSpendSource {
+  return {
+    sessionPath: source.sessionPath,
+    ...(source.model ? { model: source.model } : {}),
+  };
+}
+
+function encodedSnapshotBytes(
+  snapshot: TelemetryChildSpendSnapshot,
+  sources: ReadonlyMap<string, TelemetryChildSpendSource>,
+  coverage: TelemetrySpendCoverage,
+): number {
+  return new TextEncoder().encode(JSON.stringify({
+    scopeSessionPath: snapshot.scopeSessionPath,
+    generation: snapshot.generation,
+    sources: [...sources.values()],
+    coverage,
+  })).byteLength;
+}
+
+/** Keep truthful coverage while freeing serialized detail for its envelope. */
+function trimSnapshotToBytes(
+  snapshot: TelemetryChildSpendSnapshot,
+  sources: Map<string, TelemetryChildSpendSource>,
+  coverage: TelemetrySpendCoverage,
+  byteLimit: number,
+): void {
+  while (encodedSnapshotBytes(snapshot, sources, coverage) > byteLimit && sources.size > 0) {
+    const entries = [...sources.entries()];
+    const contributed = entries.findLast(([, source]) => source.spend !== undefined);
+    if (contributed) {
+      sources.set(contributed[0], unavailableSource(contributed[1]));
+      coverage.includedChildren -= 1;
+      coverage.unavailableChildren += 1;
+      continue;
+    }
+    sources.delete(entries.at(-1)![0]);
   }
 }
 
