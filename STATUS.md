@@ -30,7 +30,7 @@
 | M21 Project lifecycle leap | in-progress (T24 acceptance and T25 release are the person's) |
 | M22 Model profiles | done |
 | M23 Plain Chat | done |
-| M24 Ask Oracle | in-progress (building, unmerged) |
+| M24 Ask Oracle | built, unmerged (awaiting M21 release) |
 | M25 External work links | in-progress (building, unmerged) |
 | M26 Tool contract conformance | done |
 | MX Cross-cutting | in-progress |

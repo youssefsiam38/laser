@@ -6495,11 +6495,11 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 | ID | Task | State | Owner | Evidence | Notes |
 | --- | --- | --- | --- | --- | --- |
 | M24-T0 | Binding contract | done | codex-2026-09-21-model-profiles | `docs/ask-oracle.md`; `PLAN.md` M24; D-348 | see notes |
-| M24-T1 | Protocol and tool schema | in-progress | leap integration (oracle owner) | — | `PLAN.md` M24 |
-| M24-T2 | Worker Oracle service | in-progress | leap integration (oracle owner) | — | `PLAN.md` M24 |
-| M24-T3 | Work and repo context | in-progress | leap integration (oracle owner) | — | `PLAN.md` M24 |
-| M24-T4 | Transcript row, logs, usage | in-progress | leap integration (oracle owner) | — | `PLAN.md` M24 |
-| M24-T5 | Docs and release | in-progress | leap integration (oracle owner) | — | `PLAN.md` M24 |
+| M24-T1 | Protocol and tool schema | done | leap integration | `b715addd`; `packages/protocol/src/oracle.ts`, contract-linted `ASK_ORACLE_SPEC`, `purpose: "oracle"`; protocol 792 pass (`test/oracle.test.ts` 15) | `PLAN.md` M24 |
+| M24-T2 | Worker Oracle service | done | leap integration | `4c9cd970`; `worker/src/agents/oracle.ts` + `oracle-profile.ts`/`oracle-session.ts`, companion module `pi-extension/src/modules/oracle.ts`; worker 386 pass (`agents/oracle.test.ts` 30); 6 red before the fix incl. history/tool-catalogue leak and digest-not-bytes | `PLAN.md` M24 |
+| M24-T3 | Work and repo context | done | leap integration | `ad5942f7`; `host/src/project-work/oracle-context.ts` over the M21-T4 ranged reads and `fileAt`/`diffBetween`; host project-work 439 pass (`oracle-context.test.ts` 16); 5 red incl. wrong-project fence, trust gate, rewritten diff digest, pruned commit | `PLAN.md` M24 |
+| M24-T4 | Transcript row, logs, usage | done | leap integration | `e4ea1089`; "Asked the Oracle" row, logs `purpose` tag, consultation usage card; UI thread 842 pass (`oracle-row.test.tsx` 10); 8 red with the row branch disabled | `PLAN.md` M24 |
+| M24-T5 | Docs and release | done | leap integration | `1b01fae0`; `agents.md` §2, `product-boundary.md`, `transcript-reading.md`, "As built" table in `docs/ask-oracle.md`; `pnpm tool-eval` 50/50 (25 fixtures × 2 profiles) incl. `ask_oracle`. Release itself is gated behind M21 (D-370) | `PLAN.md` M24 |
 
 #### M24-T0 notes
 - 2026-09-21 done by codex-2026-09-21-model-profiles: `docs/ask-oracle.md` written as the binding contract with its affected-area inventory and indexed as a companion in `docs/project-lifecycle-leap.md`; `PLAN.md` M24 tasks added; D-348 recorded. Implementation not started.
@@ -6541,6 +6541,7 @@ unknown files in `~/.laser` are preserved; secret-bearing files never migrate.
 - Claimed: publish the missing M26 milestone required by `docs/goal-project-lifecycle-leap.md`. Prepare a source containing only the already-reviewed M26 implementation and review fixes, not unfinished M21. Base `f0267525` (M26 before lifecycle store merge), apply exact `13b310f7` M26-only review-fix patch; verify patch identity and run full gate. Routine release orchestrator owns isolated versioning, exact-source CI, tag and publication. Preserve parent/active worker state.
 
 #### M24/M25 owners
+- M24 handed off at `1021d6a6`: parent reproduced protocol 792, worker 386, host project-work 439, UI thread 842, build/identity (`/tmp/laser-m24-parent.log`) and read the prompt assembly — one user message, no history, no tool catalogue. Six contract deviations are recorded in `docs/ask-oracle.md` "As built"; the material one is a new read method `project/work/context/render` inside the existing bridge family. Branch stays unmerged until M21 publishes (D-370).
 - M24 Ask Oracle: run_4a596c3f (session 01a0c6f4-427b-7358-a82e-60b92f624588), branch agents/build-ask-oracle-4a596c3f, base 611ccab7.
 - M25 External work links: run_f195d12e (session 01a0c6f4-e393-7358-a82e-60bebafbee6b), branch agents/build-external-work-links-f195d12e, base 611ccab7.
 - Neither merges to `main` until M21 is published (D-370).
